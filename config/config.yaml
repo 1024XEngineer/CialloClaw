@@ -1,0 +1,32 @@
+# Minimal Agent Configuration
+
+# LLM Provider Settings (OpenAI-compatible)
+provider:
+  # API Key - can also use environment variable API_KEY
+  api_key: "${API_KEY_API_KEY}"                      
+  # API Base URL - 阿里云百炼需要 /v1
+  api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  # Model name
+  model: "qwen-plus"
+
+# Agent Settings
+agent:
+  name: "minimal-agent"
+  system_prompt: |
+    You are a helpful AI assistant.
+    You are concise and friendly.
+
+# Tools Settings
+tools:
+  shell:
+    enabled: true
+    description: "Execute shell commands"
+
+# Memory Settings
+memory:
+  type: "text"
+  workspace: "./workspace"
+
+# Workspace
+workspace:
+  path: "./workspace"
