@@ -1,0 +1,239 @@
+:root {
+  color-scheme: dark;
+  --bg: #08131d;
+  --bg-2: #0d1a26;
+  --line: rgba(145, 204, 203, 0.14);
+  --text: #e7f7f4;
+  --subtle: rgba(209, 230, 229, 0.72);
+  --accent: #67d8cb;
+  --warm: #efbc77;
+  --shadow: 0 24px 64px rgba(2, 7, 11, 0.38);
+  --font-ui: "Microsoft YaHei UI", "Segoe UI Variable Display", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  font-family: var(--font-ui);
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(103, 216, 203, 0.1), transparent 28%),
+    linear-gradient(180deg, #07131c, #0a1621 52%, #0b1722);
+}
+
+.panel-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  width: 100%;
+  height: 100%;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(9, 19, 28, 0.78);
+  backdrop-filter: blur(14px);
+}
+
+.panel-header strong {
+  display: block;
+  font-size: 18px;
+}
+
+.panel-header span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.panel-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.panel-body {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  min-height: 0;
+}
+
+.side-nav {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  background: rgba(9, 18, 28, 0.46);
+}
+
+.tab-button,
+.ghost-button {
+  border: 1px solid rgba(164, 222, 218, 0.14);
+  background: rgba(13, 27, 39, 0.92);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab-button {
+  padding: 12px 14px;
+  border-radius: 16px;
+  text-align: left;
+}
+
+.tab-button.active {
+  background: rgba(103, 216, 203, 0.16);
+  border-color: rgba(103, 216, 203, 0.32);
+}
+
+.content {
+  padding: 20px;
+  overflow: auto;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: rgba(11, 22, 32, 0.86);
+  box-shadow: var(--shadow);
+}
+
+.full-card {
+  margin-top: 16px;
+}
+
+.card h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
+.card p {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--subtle);
+}
+
+.switch-row,
+.radio-row label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  font-size: 14px;
+}
+
+.radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+input[type="range"] {
+  width: 100%;
+}
+
+.log-list {
+  display: grid;
+  gap: 10px;
+}
+
+.log-item {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(15, 28, 39, 0.9);
+  border: 1px solid rgba(145, 204, 203, 0.1);
+}
+
+.log-item strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.log-item span {
+  display: block;
+  font-size: 12px;
+  color: var(--subtle);
+  line-height: 1.5;
+}
+
+.task-slot-list {
+  display: grid;
+  gap: 10px;
+}
+
+.task-slot-list.compact {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.slot-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(15, 28, 39, 0.9);
+  border: 1px solid rgba(145, 204, 203, 0.1);
+}
+
+.slot-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: rgba(103, 216, 203, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.slot-copy strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.slot-copy span {
+  display: block;
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.ghost-button {
+  padding: 10px 14px;
+  border-radius: 999px;
+}
+
+.ghost-button.block {
+  width: 100%;
+  margin-bottom: 10px;
+}

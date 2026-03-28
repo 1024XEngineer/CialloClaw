@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Chat</title>
+    <link rel="stylesheet" href="./chat.css" />
+  </head>
+  <body>
+    <div class="chat-shell">
+      <header class="chat-header">
+        <div class="header-main">
+          <div class="avatar-wrap">
+            <canvas id="chatAvatar" width="48" height="48"></canvas>
+          </div>
+          <div class="header-copy">
+            <strong>像素伙伴</strong>
+            <span id="statusLabel">空闲</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="pinButton" class="icon-button" type="button" title="固定">钉</button>
+          <button id="historyButton" class="icon-button" type="button" title="最近记录">史</button>
+          <button id="closeButton" class="icon-button" type="button" title="关闭">关</button>
+        </div>
+      </header>
+
+      <aside id="historyPanel" class="history-panel hidden"></aside>
+
+      <div id="taskStatus" class="task-status hidden">
+        <div class="task-status-copy">
+          <strong id="taskStatusLabel">正在执行</strong>
+          <span id="taskStatusMeta">准备中</span>
+        </div>
+        <div class="task-progress">
+          <div id="taskProgressBar" class="task-progress-bar"></div>
+        </div>
+        <button id="cancelTaskButton" class="ghost-button" type="button">取消</button>
+      </div>
+
+      <main id="messageList" class="message-list"></main>
+
+      <section class="chip-strip">
+        <div id="quickChips" class="quick-chips"></div>
+      </section>
+
+      <footer class="composer">
+        <div class="composer-tools">
+          <button id="selectionButton" class="ghost-button" type="button">选区</button>
+          <button id="clipboardButton" class="ghost-button" type="button">剪贴板</button>
+        </div>
+        <textarea id="composerInput" rows="1" maxlength="280" placeholder="输入一句短问题，或让它继续处理某个动作"></textarea>
+        <button id="sendButton" class="send-button" type="button">发送</button>
+      </footer>
+    </div>
+
+    <script src="./chat.js"></script>
+  </body>
+</html>
