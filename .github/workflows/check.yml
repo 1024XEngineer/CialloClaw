@@ -1,20 +1,28 @@
-name: Check Go Project
+name: Test
 
 on:
   push:
-    branches: [ "test","main" ]
   pull_request:
-    branches: [ "test","main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-
-  build:
-
+  test:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-      - name: Check Go Project
-        run: |
-          cd ./cmd
-          go mod tidy && go build
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Test Go code
+        run: go test -v  ./...
