@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+    <link rel="stylesheet" href="styles.css">
+    <title>CialloClaw - Chat</title>
+    <style>
+        body {
+            background: transparent;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container glass">
+        <div class="chat-header">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div class="chat-avatar">C</div>
+                <div class="chat-header-info">
+                    <h3>CialloClaw</h3>
+                    <span><span class="status-dot"></span> Online</span>
+                </div>
+            </div>
+            <div class="chat-header-actions">
+                <button onclick="clearChat()" title="Clear chat">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                </button>
+                <button onclick="window.electronAPI.closeWindow()" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-area">
+            <div class="input-wrapper">
+                <input type="text" class="chat-input" id="chatInput" placeholder="Message CialloClaw..." rows="1">
+                <div class="input-actions">
+                    <button class="input-action-btn" title="Emoji" onclick="toggleEmojiPanel()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                            <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                            <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <button class="send-button" id="sendButton" onclick="sendMessage()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const chatInput = document.getElementById('chatInput');
+        const chatMessages = document.getElementById('chatMessages');
+        const sendButton = document.getElementById('sendButton');
+        let chatHistory = [];
+        let isLoading = false;
+
+        function formatTime(date) {
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        async function loadHistory() {
+            try {
+                chatHistory = await window.electronAPI.getChatHistory();
+                renderHistory();
+            } catch (e) {
+                console.error('Failed to load chat history:', e);
+            }
+        }
+
+        function renderHistory() {
+            chatMessages.innerHTML = '';
+            if (chatHistory.length === 0) {
+                addMessage('Hello! I\'m CialloClaw, your AI assistant. How can I help you today?', 'assistant');
+                return;
+            }
+            chatHistory.forEach(msg => {
+                addMessage(msg.text, msg.type, msg.time);
+            });
+        }
+
+        function addMessage(text, type, time = new Date()) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const timeStr = time instanceof Date ? formatTime(time) : formatTime(new Date(time));
+            
+            messageDiv.innerHTML = `
+                <div class="message-content">${escapeHtml(text)}</div>
+                <span class="message-time">${timeStr}</span>
+                <div class="message-actions">
+                    <button class="message-action-btn" onclick="copyMessage(this)" title="Copy">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                </div>
+            `;
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showTyping() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'typing-indicator';
+            typingDiv.id = 'typingIndicator';
+            typingDiv.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
+            chatMessages.appendChild(typingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function hideTyping() {
+            const typing = document.getElementById('typingIndicator');
+            if (typing) typing.remove();
+        }
+
+        async function sendMessage() {
+            const message = chatInput.value.trim();
+            if (!message || isLoading) return;
+
+            isLoading = true;
+            sendButton.disabled = true;
+            
+            addMessage(message, 'user');
+            chatInput.value = '';
+            
+            const userMsg = { text: message, type: 'user', time: new Date().toISOString() };
+            chatHistory.push(userMsg);
+            
+            showTyping();
+            
+            setTimeout(async () => {
+                hideTyping();
+                
+                const responses = [
+                    "I understand your message. This is a demo response - in production, I'd connect to an AI API like Claude or OpenAI to provide intelligent responses.",
+                    "Thanks for reaching out! I'm currently running in demo mode. Configure your AI API in the Dashboard settings to enable full functionality.",
+                    "Got it! I'm CialloClaw, your desktop AI assistant. I can help with tasks, answer questions, and more. Check the Dashboard for more features!",
+                    "Interesting question! For full AI capabilities, you'll need to add your API key in Settings. Until then, I'm here to demonstrate the UI!",
+                    "Hello! I'm responding from the demo mode. Explore the Dashboard to see what I can do when properly configured!"
+                ];
+                
+                const response = responses[Math.floor(Math.random() * responses.length)];
+                addMessage(response, 'assistant');
+                
+                const assistantMsg = { text: response, type: 'assistant', time: new Date().toISOString() };
+                chatHistory.push(assistantMsg);
+                
+                try {
+                    await window.electronAPI.saveChatHistory(chatHistory);
+                    window.electronAPI.sendNotification('CialloClaw', 'New message received');
+                } catch (e) {
+                    console.error('Failed to save chat history:', e);
+                }
+                
+                isLoading = false;
+                sendButton.disabled = false;
+            }, 1500);
+        }
+
+        function copyMessage(btn) {
+            const msgDiv = btn.closest('.message');
+            const text = msgDiv.querySelector('.message-content').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                btn.title = 'Copied!';
+                setTimeout(() => btn.title = 'Copy', 1500);
+            });
+        }
+
+        async function clearChat() {
+            if (confirm('Clear all chat history?')) {
+                chatHistory = [];
+                await window.electronAPI.saveChatHistory([]);
+                renderHistory();
+            }
+        }
+
+        function toggleEmojiPanel() {
+            chatInput.focus();
+        }
+
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        chatInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+        });
+
+        loadHistory();
+    </script>
+</body>
+</html>

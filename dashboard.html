@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+    <link rel="stylesheet" href="styles.css">
+    <title>CialloClaw - Dashboard</title>
+    <style>
+        body { background: transparent; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container glass">
+        <div class="dashboard-header">
+            <div class="dashboard-brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C9.5 2 7.5 4 7.5 6.5C7.5 8.5 9 10 11 10C12.5 10 13.5 9 14 8C14.5 7 16 7 16.5 8C17 9 18 10 19.5 10C20.5 10 21.5 9.5 22 8.5C22.5 7.5 22.5 6 22 5C21.5 4 20.5 3 19.5 3C18.5 3 17.5 3.5 17 4C16.5 4.5 16 5 15 5C14 5 13.5 4.5 13 4C12.5 3.5 12 3.5 11.5 4C11 4.5 10.5 5 9.5 5C9 5 8.5 4.8 8 4.5C7.5 4.2 7 4 6.5 4.5L6 5C5.5 5.5 5.5 6 5.5 6.5C5.5 7.5 6 8 7 8.5C8 9 8.5 9.5 8.5 10.5C8.5 11.5 8 12.5 7 13.5C6 14.5 5.5 15.5 5.5 16.5C5.5 18 6.5 19.5 8 20C9.5 20.5 11 20 12 19C13 18 14 17 14 15.5C14 14 13.5 13 13 12C12.5 11 12.5 10 13 9C13.5 8 14 7.5 14.5 7C15 6.5 15.5 6 16 6C16.5 6 17 6.5 17.5 7.5L18 8.5C18.5 9.5 18.5 10.5 18 11.5C17.5 12.5 16.5 13 15.5 13C14.5 13 14 12.5 13.5 12C13 11.5 12.5 11 12 11C11.5 11 11 11.5 10.5 12C10 12.5 9.5 13 9 13.5C8.5 14 8 14 7.5 13.5C7 13 6.5 12.5 6.5 11.5C6.5 10.5 7 9.5 8 8.5C9 7.5 9.5 6.5 9.5 5.5C9.5 4 9 2.5 7.5 2L12 2Z"/>
+                    </svg>
+                </div>
+                <span class="dashboard-title">CialloClaw</span>
+            </div>
+            <div class="dashboard-controls">
+                <button onclick="window.electronAPI.minimizeWindow()" title="Minimize">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
+                <button class="close" onclick="window.electronAPI.closeWindow()" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="dashboard-tabs">
+            <button class="tab active" onclick="switchTab('overview')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+                Overview
+            </button>
+            <button class="tab" onclick="switchTab('tasks')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 11l3 3L22 4"></path>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                </svg>
+                Tasks
+                <span class="tab-badge" id="taskBadge" style="display: none;">0</span>
+            </button>
+            <button class="tab" onclick="switchTab('memory')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                </svg>
+                Memory
+            </button>
+            <button class="tab" onclick="switchTab('settings')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+                Settings
+            </button>
+        </div>
+
+        <div class="dashboard-content">
+            <!-- Overview Tab -->
+            <div class="tab-content active" id="overview">
+                <div class="stat-card glass-card">
+                    <div class="stat-icon primary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <h4 id="statChats">0</h4>
+                        <p>Total Chats</p>
+                    </div>
+                </div>
+                <div class="stat-card glass-card">
+                    <div class="stat-icon secondary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 11l3 3L22 4"></path>
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <h4 id="statTasks">0</h4>
+                        <p>Tasks Completed</p>
+                    </div>
+                </div>
+                <div class="stat-card glass-card">
+                    <div class="stat-icon accent">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <h4 id="statActive">0</h4>
+                        <p>Active Tasks</p>
+                    </div>
+                </div>
+                <div class="about-card glass-card" style="grid-column: 1 / -1;">
+                    <div class="about-logo">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C9.5 2 7.5 4 7.5 6.5C7.5 8.5 9 10 11 10C12.5 10 13.5 9 14 8C14.5 7 16 7 16.5 8C17 9 18 10 19.5 10C20.5 10 21.5 9.5 22 8.5C22.5 7.5 22.5 6 22 5C21.5 4 20.5 3 19.5 3C18.5 3 17.5 3.5 17 4C16.5 4.5 16 5 15 5C14 5 13.5 4.5 13 4C12.5 3.5 12 3.5 11.5 4C11 4.5 10.5 5 9.5 5C9 5 8.5 4.8 8 4.5C7.5 4.2 7 4 6.5 4.5L6 5C5.5 5.5 5.5 6 5.5 6.5C5.5 7.5 6 8 7 8.5C8 9 8.5 9.5 8.5 10.5C8.5 11.5 8 12.5 7 13.5C6 14.5 5.5 15.5 5.5 16.5C5.5 18 6.5 19.5 8 20C9.5 20.5 11 20 12 19C13 18 14 17 14 15.5C14 14 13.5 13 13 12C12.5 11 12.5 10 13 9C13.5 8 14 7.5 14.5 7C15 6.5 15.5 6 16 6C16.5 6 17 6.5 17.5 7.5L18 8.5C18.5 9.5 18.5 10.5 18 11.5C17.5 12.5 16.5 13 15.5 13C14.5 13 14 12.5 13.5 12C13 11.5 12.5 11 12 11C11.5 11 11 11.5 10.5 12C10 12.5 9.5 13 9 13.5C8.5 14 8 14 7.5 13.5C7 13 6.5 12.5 6.5 11.5C6.5 10.5 7 9.5 8 8.5C9 7.5 9.5 6.5 9.5 5.5C9.5 4 9 2.5 7.5 2L12 2Z"/>
+                        </svg>
+                    </div>
+                    <h3 class="about-name">CialloClaw</h3>
+                    <p class="about-version">Version 1.0.0</p>
+                    <p class="about-desc">Your AI Desktop Agent. Low-friction interaction, powerful capabilities.</p>
+                </div>
+            </div>
+
+            <!-- Tasks Tab -->
+            <div class="tab-content" id="tasks">
+                <div class="tasks-section" style="grid-column: 1 / -1;">
+                    <div class="section-header">
+                        <h3 class="section-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="12" y1="5" x2="12" y2="19"></line>
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                            Add New Task
+                        </h3>
+                    </div>
+                    <div class="add-task-form">
+                        <input type="text" class="add-task-input" id="newTaskInput" placeholder="What needs to be done?">
+                        <select class="add-task-select" id="newTaskTag">
+                            <option value="work">Work</option>
+                            <option value="life">Life</option>
+                            <option value="learn">Learn</option>
+                        </select>
+                        <button class="add-task-btn" onclick="addTask()">Add</button>
+                    </div>
+                    <div class="task-list" id="taskList"></div>
+                </div>
+            </div>
+
+            <!-- Memory Tab -->
+            <div class="tab-content" id="memory">
+                <div class="tasks-section" style="grid-column: 1 / -1;">
+                    <div class="section-header">
+                        <h3 class="section-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="12" y1="5" x2="12" y2="19"></line>
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                            Add New Memory
+                        </h3>
+                    </div>
+                    <div class="add-task-form">
+                        <input type="text" class="add-task-input" id="newMemoryTitle" placeholder="Title">
+                        <input type="text" class="add-task-input" id="newMemoryContent" placeholder="Content">
+                        <button class="add-task-btn" onclick="addMemory()">Save</button>
+                    </div>
+                    <div class="memory-grid" id="memoryGrid"></div>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div class="tab-content" id="settings">
+                <div class="settings-section">
+                    <h4 class="settings-section-title">General</h4>
+                    <div class="setting-item glass-card">
+                        <div class="setting-info">
+                            <div class="setting-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                                </svg>
+                            </div>
+                            <div class="setting-text">
+                                <h4>Show Notifications</h4>
+                                <p>Display system notifications for new messages</p>
+                            </div>
+                        </div>
+                        <div class="toggle" id="toggleNotifications" onclick="toggleSetting(this, 'showNotifications')"></div>
+                    </div>
+                    <div class="setting-item glass-card">
+                        <div class="setting-info">
+                            <div class="setting-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                                </svg>
+                            </div>
+                            <div class="setting-text">
+                                <h4>Sound Effects</h4>
+                                <p>Play sound when receiving messages</p>
+                            </div>
+                        </div>
+                        <div class="toggle" id="toggleSound" onclick="toggleSetting(this, 'soundEffects')"></div>
+                    </div>
+                    <div class="setting-item glass-card">
+                        <div class="setting-info">
+                            <div class="setting-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                                </svg>
+                            </div>
+                            <div class="setting-text">
+                                <h4>Always on Top</h4>
+                                <p>Keep Claw button above other windows</p>
+                            </div>
+                        </div>
+                        <div class="toggle active" id="toggleAlwaysOnTop" onclick="toggleSetting(this, 'alwaysOnTop')"></div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h4 class="settings-section-title">Keyboard Shortcuts</h4>
+                    <div class="setting-item glass-card">
+                        <div class="setting-info">
+                            <div class="setting-text">
+                                <h4>Toggle Chat</h4>
+                                <p>Open or close the mini chat window</p>
+                            </div>
+                        </div>
+                        <div class="shortcut-display">Ctrl+Shift+C</div>
+                    </div>
+                    <div class="setting-item glass-card">
+                        <div class="setting-info">
+                            <div class="setting-text">
+                                <h4>Open Dashboard</h4>
+                                <p>Show the main dashboard window</p>
+                            </div>
+                        </div>
+                        <div class="shortcut-display">Ctrl+Shift+D</div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h4 class="settings-section-title">About</h4>
+                    <div class="about-card glass-card">
+                        <div class="about-logo">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 2C9.5 2 7.5 4 7.5 6.5C7.5 8.5 9 10 11 10C12.5 10 13.5 9 14 8C14.5 7 16 7 16.5 8C17 9 18 10 19.5 10C20.5 10 21.5 9.5 22 8.5C22.5 7.5 22.5 6 22 5C21.5 4 20.5 3 19.5 3C18.5 3 17.5 3.5 17 4C16.5 4.5 16 5 15 5C14 5 13.5 4.5 13 4C12.5 3.5 12 3.5 11.5 4C11 4.5 10.5 5 9.5 5C9 5 8.5 4.8 8 4.5C7.5 4.2 7 4 6.5 4.5L6 5C5.5 5.5 5.5 6 5.5 6.5C5.5 7.5 6 8 7 8.5C8 9 8.5 9.5 8.5 10.5C8.5 11.5 8 12.5 7 13.5C6 14.5 5.5 15.5 5.5 16.5C5.5 18 6.5 19.5 8 20C9.5 20.5 11 20 12 19C13 18 14 17 14 15.5C14 14 13.5 13 13 12C12.5 11 12.5 10 13 9C13.5 8 14 7.5 14.5 7C15 6.5 15.5 6 16 6C16.5 6 17 6.5 17.5 7.5L18 8.5C18.5 9.5 18.5 10.5 18 11.5C17.5 12.5 16.5 13 15.5 13C14.5 13 14 12.5 13.5 12C13 11.5 12.5 11 12 11C11.5 11 11 11.5 10.5 12C10 12.5 9.5 13 9 13.5C8.5 14 8 14 7.5 13.5C7 13 6.5 12.5 6.5 11.5C6.5 10.5 7 9.5 8 8.5C9 7.5 9.5 6.5 9.5 5.5C9.5 4 9 2.5 7.5 2L12 2Z"/>
+                            </svg>
+                        </div>
+                        <h3 class="about-name">CialloClaw</h3>
+                        <p class="about-version">Version 1.0.0</p>
+                        <p class="about-desc">Your AI Desktop Agent.<br>Built with Electron.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let tasks = [];
+        let memory = [];
+        let config = {};
+        let chatHistory = [];
+
+        async function loadData() {
+            try {
+                config = await window.electronAPI.getConfig();
+                tasks = await window.electronAPI.getTasks();
+                memory = await window.electronAPI.getMemory();
+                chatHistory = await window.electronAPI.getChatHistory();
+                
+                applyConfig();
+                renderTasks();
+                renderMemory();
+                updateStats();
+            } catch (e) {
+                console.error('Failed to load data:', e);
+            }
+        }
+
+        function applyConfig() {
+            document.getElementById('toggleNotifications').classList.toggle('active', config.showNotifications);
+            document.getElementById('toggleSound').classList.toggle('active', config.soundEffects);
+            document.getElementById('toggleAlwaysOnTop').classList.toggle('active', config.alwaysOnTop);
+        }
+
+        function updateStats() {
+            document.getElementById('statChats').textContent = chatHistory.filter(m => m.type === 'user').length;
+            const completed = tasks.filter(t => t.completed).length;
+            document.getElementById('statTasks').textContent = completed;
+            document.getElementById('statActive').textContent = tasks.filter(t => !t.completed).length;
+            
+            const badge = document.getElementById('taskBadge');
+            const activeCount = tasks.filter(t => !t.completed).length;
+            if (activeCount > 0) {
+                badge.style.display = 'inline';
+                badge.textContent = activeCount;
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        function renderTasks() {
+            const taskList = document.getElementById('taskList');
+            taskList.innerHTML = '';
+            
+            if (tasks.length === 0) {
+                taskList.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg><h4>No tasks yet</h4><p>Add a task to get started</p></div>';
+                return;
+            }
+            
+            tasks.forEach((task, index) => {
+                const taskEl = document.createElement('div');
+                taskEl.className = `task-item glass-card ${task.completed ? 'completed' : ''}`;
+                taskEl.innerHTML = `
+                    <div class="task-checkbox ${task.completed ? 'checked' : ''}" onclick="toggleTask(${index})">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                    </div>
+                    <div class="task-content">
+                        <div class="task-title">${escapeHtml(task.title)}</div>
+                        <div class="task-meta">
+                            <span class="task-tag ${task.tag}">${task.tag}</span>
+                        </div>
+                    </div>
+                    <button class="task-delete" onclick="deleteTask(${index})" title="Delete">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                `;
+                taskList.appendChild(taskEl);
+            });
+        }
+
+        async function addTask() {
+            const input = document.getElementById('newTaskInput');
+            const tagSelect = document.getElementById('newTaskTag');
+            const title = input.value.trim();
+            if (!title) return;
+            
+            tasks.push({ title, tag: tagSelect.value, completed: false, createdAt: new Date().toISOString() });
+            input.value = '';
+            
+            await window.electronAPI.saveTasks(tasks);
+            renderTasks();
+            updateStats();
+        }
+
+        async function toggleTask(index) {
+            tasks[index].completed = !tasks[index].completed;
+            await window.electronAPI.saveTasks(tasks);
+            renderTasks();
+            updateStats();
+        }
+
+        async function deleteTask(index) {
+            tasks.splice(index, 1);
+            await window.electronAPI.saveTasks(tasks);
+            renderTasks();
+            updateStats();
+        }
+
+        function renderMemory() {
+            const grid = document.getElementById('memoryGrid');
+            grid.innerHTML = '';
+            
+            if (memory.length === 0) {
+                grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg><h4>No memories yet</h4><p>Save important information to remember</p></div>';
+                return;
+            }
+            
+            memory.forEach((item, index) => {
+                const card = document.createElement('div');
+                card.className = 'memory-card glass-card';
+                card.innerHTML = `
+                    <div class="memory-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                        </svg>
+                        ${escapeHtml(item.title)}
+                    </div>
+                    <div class="memory-preview">${escapeHtml(item.content)}</div>
+                    <div class="memory-meta">${new Date(item.createdAt).toLocaleDateString()}</div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        async function addMemory() {
+            const titleInput = document.getElementById('newMemoryTitle');
+            const contentInput = document.getElementById('newMemoryContent');
+            const title = titleInput.value.trim();
+            const content = contentInput.value.trim();
+            
+            if (!title || !content) return;
+            
+            memory.push({ title, content, createdAt: new Date().toISOString() });
+            titleInput.value = '';
+            contentInput.value = '';
+            
+            await window.electronAPI.saveMemory(memory);
+            renderMemory();
+        }
+
+        async function toggleSetting(element, key) {
+            element.classList.toggle('active');
+            config[key] = element.classList.contains('active');
+            await window.electronAPI.saveConfig(config);
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            event.target.closest('.tab').classList.add('active');
+            document.getElementById(tabName).classList.add('active');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        window.electronAPI.onSwitchTab((tab) => {
+            switchTab(tab);
+        });
+
+        document.getElementById('newTaskInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') addTask();
+        });
+
+        loadData();
+    </script>
+</body>
+</html>

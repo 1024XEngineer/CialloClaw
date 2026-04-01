@@ -1,0 +1,12 @@
+{
+  "name": "ciallo-claw",
+  "version": "1.0.0",
+  "description": "Desktop agent with low-friction interaction - CialloClaw",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "author": "CialloClaw",
+  "license": "MIT"
+}

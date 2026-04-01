@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+    <link rel="stylesheet" href="styles.css">
+    <title>CialloClaw - Claw</title>
+    <style>
+        body {
+            background: transparent;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="claw-container">
+        <div class="claw-glow"></div>
+        <div class="claw-button" id="clawButton">
+            <svg class="claw-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C9.5 2 7.5 4 7.5 6.5C7.5 8.5 9 10 11 10C12.5 10 13.5 9 14 8C14.5 7 16 7 16.5 8C17 9 18 10 19.5 10C20.5 10 21.5 9.5 22 8.5C22.5 7.5 22.5 6 22 5C21.5 4 20.5 3 19.5 3C18.5 3 17.5 3.5 17 4C16.5 4.5 16 5 15 5C14 5 13.5 4.5 13 4C12.5 3.5 12 3.5 11.5 4C11 4.5 10.5 5 9.5 5C9 5 8.5 4.8 8 4.5C7.5 4.2 7 4 6.5 4.5L6 5C5.5 5.5 5.5 6 5.5 6.5C5.5 7.5 6 8 7 8.5C8 9 8.5 9.5 8.5 10.5C8.5 11.5 8 12.5 7 13.5C6 14.5 5.5 15.5 5.5 16.5C5.5 18 6.5 19.5 8 20C9.5 20.5 11 20 12 19C13 18 14 17 14 15.5C14 14 13.5 13 13 12C12.5 11 12.5 10 13 9C13.5 8 14 7.5 14.5 7C15 6.5 15.5 6 16 6C16.5 6 17 6.5 17.5 7.5L18 8.5C18.5 9.5 18.5 10.5 18 11.5C17.5 12.5 16.5 13 15.5 13C14.5 13 14 12.5 13.5 12C13 11.5 12.5 11 12 11C11.5 11 11 11.5 10.5 12C10 12.5 9.5 13 9 13.5C8.5 14 8 14 7.5 13.5C7 13 6.5 12.5 6.5 11.5C6.5 10.5 7 9.5 8 8.5C9 7.5 9.5 6.5 9.5 5.5C9.5 4 9 2.5 7.5 2L12 2Z"/>
+            </svg>
+        </div>
+    </div>
+
+    <script>
+        const clawButton = document.getElementById('clawButton');
+        let isDragging = false;
+        let startX, startY;
+        let isClick = false;
+        let dragDistance = 0;
+
+        function createRipple(event) {
+            const ripple = document.createElement('span');
+            ripple.classList.add('ripple');
+            
+            const rect = clawButton.getBoundingClientRect();
+            const size = Math.max(rect.width, rect.height);
+            
+            ripple.style.width = ripple.style.height = size + 'px';
+            ripple.style.left = event.clientX - rect.left - size / 2 + 'px';
+            ripple.style.top = event.clientY - rect.top - size / 2 + 'px';
+            
+            clawButton.appendChild(ripple);
+            
+            ripple.addEventListener('animationend', () => {
+                ripple.remove();
+            });
+        }
+
+        clawButton.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                isDragging = true;
+                isClick = true;
+                dragDistance = 0;
+                startX = e.screenX;
+                startY = e.screenY;
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const dx = e.screenX - startX;
+                const dy = e.screenY - startY;
+                dragDistance += Math.abs(dx) + Math.abs(dy);
+                
+                const currentPos = clawButton.getBoundingClientRect();
+                window.moveTo(currentPos.left + dx, currentPos.top + dy);
+                
+                if (dragDistance > 10) {
+                    isClick = false;
+                }
+                
+                startX = e.screenX;
+                startY = e.screenY;
+            }
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            if (isDragging && isClick && e.button === 0) {
+                createRipple(e);
+                window.electronAPI.toggleChat();
+            }
+            isDragging = false;
+            isClick = false;
+        });
+
+        clawButton.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            window.electronAPI.showContextMenu();
+        });
+    </script>
+</body>
+</html>
