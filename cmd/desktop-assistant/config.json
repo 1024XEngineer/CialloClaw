@@ -1,0 +1,16 @@
+{
+  "app_name": "CialloClaw",
+  "http_addr": "127.0.0.1:8090",
+  "data_dir": "C:\\Users\\33721\\Desktop\\ciallo000\\cmd\\desktop-assistant\\.data",
+  "workspace_dir": "C:\\Users\\33721\\Desktop\\ciallo000\\cmd\\desktop-assistant\\workspace",
+  "todo_roots": [
+    "C:\\Users\\33721\\Desktop\\ciallo000\\cmd\\desktop-assistant\\workspace\\todos"
+  ],
+  "clipboard_poll_interval": "2s",
+  "todo_poll_interval": "15s",
+  "llm": {
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "api_key": "sk-67be505913be4d97b0c49258769995f2",
+    "model": "qwen3.5-flash"
+  }
+}

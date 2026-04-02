@@ -1,0 +1,5 @@
+.data/
+.gocache/
+.gomodcache/
+app.out.log
+app.err.log
