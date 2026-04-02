@@ -1,4 +1,4 @@
-module demo3
+module github.com/ciallo/cialloclaw/demo4
 
 go 1.22.0
 

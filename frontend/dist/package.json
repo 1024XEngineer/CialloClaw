@@ -1,0 +1,9 @@
+{
+  "name": "cialloclaw-demo4-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node -e \"console.log('Using static frontend assets from dist/ for Wails dev'); setInterval(() => {}, 1 << 30)\"",
+    "build": "node build.mjs"
+  }
+}

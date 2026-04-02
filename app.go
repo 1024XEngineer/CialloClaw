@@ -18,6 +18,22 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
+func (a *App) shutdown(ctx context.Context) {}
+
+func (a *App) Hide() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.Hide(a.ctx)
+}
+
+func (a *App) Show() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.Show(a.ctx)
+}
+
 func (a *App) Quit() {
 	if a.ctx == nil {
 		return

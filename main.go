@@ -16,23 +16,21 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:            "CialloClaw Demo3",
-		Width:            1480,
-		Height:           920,
-		MinWidth:         1280,
-		MinHeight:        780,
-		Frameless:        true,
-		DisableResize:    false,
-		BackgroundColour: &options.RGBA{R: 6, G: 10, B: 18, A: 1},
-		CSSDragProperty:  "--wails-draggable",
-		CSSDragValue:     "drag",
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		OnStartup: app.startup,
-		Bind: []any{
-			app,
-		},
+		Title:             "CialloClaw Demo4",
+		Width:             260,
+		Height:            260,
+		MinWidth:          220,
+		MinHeight:         220,
+		Frameless:         true,
+		DisableResize:     false,
+		StartHidden:       false,
+		HideWindowOnClose: true,
+		AlwaysOnTop:       true,
+		BackgroundColour:  options.NewRGBA(0, 0, 0, 0),
+		AssetServer:       &assetserver.Options{Assets: assets},
+		OnStartup:         app.startup,
+		OnShutdown:        app.shutdown,
+		Bind:              []any{app},
 	})
 	if err != nil {
 		log.Fatal(err)
