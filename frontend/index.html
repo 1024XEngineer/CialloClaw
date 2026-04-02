@@ -1,13 +1,124 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CialloClaw 桌面 UX Mock</title>
-    <link rel="stylesheet" href="./style.css" />
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="./app.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CialloClaw Demo3</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body style="--wails-draggable:no-drag;">
+  <div id="app" class="app-shell">
+    <header class="chrome-bar" style="--wails-draggable:drag;">
+      <div class="chrome-bar__brand">
+        <span class="chrome-bar__pulse"></span>
+        <span>CialloClaw · Demo3</span>
+      </div>
+      <div class="chrome-bar__status" id="globalStatus">潮汐核常驻 · 双击展开</div>
+    </header>
+
+    <main class="desktop-scene" id="desktopScene">
+      <div class="scene-glow scene-glow--a"></div>
+      <div class="scene-glow scene-glow--b"></div>
+      <div class="scene-grid"></div>
+      <div class="scene-noise"></div>
+
+      <section class="desktop-stage" aria-label="桌面场景">
+        <div class="desktop-stage__stack" id="desktopWindows"></div>
+
+        <button class="tidal-core" id="tidalCore" type="button" aria-label="潮汐核">
+          <div class="tidal-core__halo"></div>
+          <div class="tidal-core__shell"></div>
+          <div class="tidal-core__shine"></div>
+          <div class="tidal-core__label">潮汐核</div>
+          <div class="tidal-core__hint">双击展开协作窗</div>
+
+          <div class="tidal-status" id="tidalStatus" aria-hidden="true">
+            <span class="tidal-status__dot"></span>
+            <span class="tidal-status__text">有 2 项待推进</span>
+          </div>
+
+          <div class="tidal-slots" id="tidalSlots" aria-hidden="true">
+            <div class="tidal-slot tidal-slot--understand"><span>看懂</span></div>
+            <div class="tidal-slot tidal-slot--advance"><span>推进</span></div>
+            <div class="tidal-slot tidal-slot--queue"><span>入列</span></div>
+          </div>
+
+          <div class="tidal-track" id="systemTrack" aria-hidden="true">
+            <div class="tidal-track__rail">
+              <button class="chip chip--track" data-system-action="quiet" type="button">安静一小时</button>
+              <button class="chip chip--track" data-system-action="mute-reminders" type="button">暂停主动提醒</button>
+              <button class="chip chip--track" data-system-action="workspace" type="button">查看工作区</button>
+              <button class="chip chip--track" data-system-action="settings" type="button">设置</button>
+              <button class="chip chip--track chip--warn" data-system-action="quit" type="button">退出</button>
+            </div>
+            <div class="tidal-track__settings" id="systemSettings"></div>
+          </div>
+        </button>
+      </section>
+
+      <section class="collab-cluster is-hidden dock-right" id="collabCluster" aria-label="悬浮协作窗群">
+        <!-- 左滑来源层：显示来源对象、为什么命中当前意图、关联的任务/记忆 -->
+        <aside class="drawer drawer--source" id="sourceLayer" aria-label="来源层">
+          <div class="drawer__header">
+            <div>
+              <div class="drawer__kicker">左滑回看</div>
+              <div class="drawer__title">来源与关联</div>
+            </div>
+            <button class="drawer__close" data-side-close="source" type="button">收起</button>
+          </div>
+          <div class="drawer__body" id="sourceLayerBody"></div>
+        </aside>
+
+        <section class="collab-window state-half" id="collabWindow" aria-label="悬浮协作窗">
+          <div class="collab-window__topbar" id="collabDragHandle">
+            <div class="collab-window__brand">
+              <span class="collab-window__dot"></span>
+              <div>
+                <div class="collab-window__kicker">悬浮协作窗</div>
+                <div class="collab-window__title" id="collabTitle">等待承接</div>
+              </div>
+            </div>
+            <div class="collab-window__modes" id="modeSwitchers"></div>
+            <button class="icon-button icon-button--warn" data-shell-action="close" type="button">关闭</button>
+          </div>
+
+          <div class="collab-window__summary" id="collabSummary"></div>
+
+          <div class="collab-window__body">
+            <div class="mode-results" id="modeResults"></div>
+
+            <div class="followup-bar">
+              <div class="followup-bar__prompt-row">
+                <button class="followup-bar__prompt" id="followupPrompt" type="button">继续问这份结果</button>
+                <div class="followup-bar__hint" id="followupHint"></div>
+              </div>
+
+              <div class="followup-bar__chips" id="followupChips"></div>
+
+              <div class="followup-bar__input-row is-hidden" id="followupInputRow">
+                <input class="followup-bar__input" id="followupInput" type="text" />
+                <button class="followup-bar__send" id="followupSend" type="button">发送</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="followup-page" id="followupPage" aria-label="追问侧页">
+          <div class="drawer__header followup-page__header">
+            <div>
+              <div class="drawer__kicker">追问侧页</div>
+              <div class="drawer__title">连续追问</div>
+            </div>
+            <button class="drawer__close" data-side-close="followup" type="button">关闭</button>
+          </div>
+          <div class="followup-page__body" id="followupPageBody"></div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
 </html>

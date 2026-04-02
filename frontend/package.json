@@ -1,0 +1,8 @@
+{
+  "name": "demo3-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}
