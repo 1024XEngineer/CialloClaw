@@ -1,0 +1,33 @@
+# 依赖目录
+node_modules/
+
+# 发布目录
+release/
+
+# 构建工具缓存目录
+.electron-cache/
+
+# 环境变量文件
+.env
+.env.local
+.env.production
+
+# 构建产物
+dist/
+build/
+.next/
+out/
+
+# 日志文件
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# IDE 配置（可选，看团队规范）
+.vscode/
+.idea/

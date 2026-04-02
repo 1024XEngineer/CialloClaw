@@ -1,0 +1,64 @@
+{
+  "name": "pixel-orb-demo",
+  "version": "0.1.0",
+  "productName": "Pixel Orb Demo",
+  "description": "Electron floating pixel companion demo",
+  "author": "OpenAI Codex",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer/orb.js && node --check src/renderer/chat.js && node --check src/renderer/panel.js && node --check src/renderer/meeting-summary-overlay.js && node --check src/renderer/meeting-captions-overlay.js && node --check src/shared/meeting-summary-utils.js",
+    "verify:meeting-overlays": "node scripts/verify-meeting-overlays.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.codex.pixel-orb-demo",
+    "productName": "Pixel Orb Demo",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "src/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Pixel Orb Demo",
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
+  }
+}

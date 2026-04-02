@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Orb Panel</title>
+    <link rel="stylesheet" href="./panel.css" />
+  </head>
+  <body>
+    <div class="panel-shell">
+      <header class="panel-header">
+        <div>
+          <strong>悬浮球控制台</strong>
+          <span>调整基础设置、任务入口和会议总结模型配置</span>
+        </div>
+        <div class="panel-actions">
+          <button id="openChatButton" class="ghost-button" type="button">打开聊天</button>
+          <button id="closePanelButton" class="ghost-button" type="button">关闭</button>
+        </div>
+      </header>
+
+      <div class="panel-body">
+        <aside class="side-nav">
+          <button class="tab-button active" data-tab="general" type="button">常规</button>
+          <button class="tab-button" data-tab="appearance" type="button">外观</button>
+          <button class="tab-button" data-tab="tasks" type="button">任务</button>
+          <button class="tab-button" data-tab="privacy" type="button">隐私</button>
+          <button class="tab-button" data-tab="advanced" type="button">高级</button>
+        </aside>
+
+        <main class="content">
+          <section class="tab-panel active" data-panel="general">
+            <div class="card-grid">
+              <article class="card">
+                <h3>状态与行为</h3>
+                <label class="switch-row"><span>暂停 Agent</span><input id="pausedToggle" type="checkbox" /></label>
+                <label class="switch-row"><span>请勿打扰</span><input id="dndToggle" type="checkbox" /></label>
+                <label class="switch-row"><span>低存在感模式</span><input id="lowProfileToggle" type="checkbox" /></label>
+              </article>
+              <article class="card">
+                <h3>自动隐藏</h3>
+                <div class="radio-row">
+                  <label><input type="radio" name="autoHide" value="off" />关闭</label>
+                  <label><input type="radio" name="autoHide" value="peek" />探出</label>
+                  <label><input type="radio" name="autoHide" value="smart" />智能</label>
+                </div>
+                <p>无操作后可缩到边缘，只保留一条容易发现的探出区域。</p>
+              </article>
+            </div>
+            <article class="card full-card">
+              <h3>最近动作</h3>
+              <div id="recentActions" class="log-list"></div>
+            </article>
+          </section>
+
+          <section class="tab-panel" data-panel="appearance">
+            <div class="card-grid">
+              <article class="card">
+                <h3>尺寸</h3>
+                <div class="radio-row">
+                  <label><input type="radio" name="size" value="small" />小</label>
+                  <label><input type="radio" name="size" value="default" />默认</label>
+                  <label><input type="radio" name="size" value="large" />大</label>
+                </div>
+              </article>
+              <article class="card">
+                <h3>动效强度</h3>
+                <input id="motionRange" type="range" min="0.6" max="1.4" step="0.1" />
+                <p id="motionValue">1.0x</p>
+              </article>
+              <article class="card">
+                <h3>颜色饱和度</h3>
+                <input id="saturationRange" type="range" min="0.6" max="1.2" step="0.05" />
+                <p id="saturationValue">1.0x</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="tasks">
+            <article class="card full-card">
+              <h3>任务环配置</h3>
+              <div id="taskSlots" class="task-slot-list"></div>
+            </article>
+            <article class="card full-card">
+              <h3>任务库预览</h3>
+              <div id="libraryPreview" class="task-slot-list compact"></div>
+            </article>
+          </section>
+
+          <section class="tab-panel" data-panel="privacy">
+            <div class="card-grid">
+              <article class="card">
+                <h3>上下文来源</h3>
+                <label class="switch-row"><span>选中文本</span><input id="selectionToggle" type="checkbox" /></label>
+                <label class="switch-row"><span>剪贴板</span><input id="clipboardToggle" type="checkbox" /></label>
+                <label class="switch-row"><span>活动应用</span><input id="activeAppToggle" type="checkbox" /></label>
+                <label class="switch-row"><span>插件扩展</span><input id="pluginToggle" type="checkbox" /></label>
+              </article>
+              <article class="card">
+                <h3>演示上下文</h3>
+                <p id="contextSummary"></p>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="advanced">
+            <div class="card-grid">
+              <article class="card">
+                <h3>快速操作</h3>
+                <button id="runSummaryButton" class="ghost-button block" type="button">直接演示“总结”</button>
+                <button id="runExplainButton" class="ghost-button block" type="button">直接演示“解释错误”</button>
+              </article>
+              <article class="card">
+                <h3>状态摘要</h3>
+                <p id="statusSummary"></p>
+              </article>
+              <article class="card">
+                <h3>自动识别会议</h3>
+                <label class="switch-row"><span>检测到会议时提醒我启动总结</span><input id="meetingAutoDetectToggle" type="checkbox" /></label>
+                <p id="meetingAutoDetectStatus" class="helper-text">等待状态同步</p>
+                <p id="meetingAutoDetectMeta" class="helper-text">自动识别会优先依据前台会议软件判断，并在命中后提示你一键开始会议总结。</p>
+              </article>
+              <article class="card">
+                <h3>会议总结模型配置</h3>
+                <div class="config-group">
+                  <h4>语音转写</h4>
+                  <label class="field-label" for="transcriptionBaseUrl">Base URL</label>
+                  <input id="transcriptionBaseUrl" class="text-input" type="text" placeholder="https://api.openai.com/v1" />
+                  <label class="field-label" for="transcriptionApiKey">API Key</label>
+                  <input id="transcriptionApiKey" class="text-input" type="password" placeholder="sk-..." />
+                  <label class="field-label" for="transcriptionModel">Model</label>
+                  <input id="transcriptionModel" class="text-input" type="text" placeholder="gpt-4o-mini-transcribe / 自定义转写模型" />
+                </div>
+                <div class="config-group">
+                  <h4>文本总结</h4>
+                  <label class="field-label" for="summaryBaseUrl">Base URL</label>
+                  <input id="summaryBaseUrl" class="text-input" type="text" placeholder="https://api.openai.com/v1" />
+                  <label class="field-label" for="summaryApiKey">API Key</label>
+                  <input id="summaryApiKey" class="text-input" type="password" placeholder="sk-..." />
+                  <label class="field-label" for="summaryModel">Model</label>
+                  <input id="summaryModel" class="text-input" type="text" placeholder="gpt-4o-mini / 自定义总结模型" />
+                </div>
+                <p class="helper-text">点击保存后，两组配置都会长期保存在本地。会议总结会用“语音转写”配置调用转写接口，用“文本总结”配置调用聊天总结接口。</p>
+                <div class="button-row">
+                  <button id="saveModelConfigButton" class="ghost-button" type="button">保存配置</button>
+                  <span id="modelConfigStatus" class="helper-text inline-status"></span>
+                </div>
+              </article>
+            </div>
+            <article class="card full-card">
+              <h3>日志</h3>
+              <div id="advancedLogs" class="log-list"></div>
+            </article>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="./panel.js"></script>
+  </body>
+</html>

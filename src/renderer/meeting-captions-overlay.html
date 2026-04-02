@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>实时字幕</title>
+    <link rel="stylesheet" href="./meeting-captions-overlay.css" />
+  </head>
+  <body>
+    <main class="overlay-shell">
+      <header class="overlay-header drag-region">
+        <div class="header-copy">
+          <strong>实时字幕</strong>
+          <span id="captionsStatus">等待开始</span>
+        </div>
+        <div class="header-actions">
+          <button id="showSummaryButton" class="tool-button" type="button">概要窗</button>
+          <button id="closeButton" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+      </header>
+
+      <p id="captionsMeta" class="captions-meta">系统音频和麦克风会分开实时显示。</p>
+
+      <section class="captions-grid">
+        <article class="captions-lane">
+          <div class="lane-head">
+            <div>
+              <strong>他人讲话</strong>
+              <span>系统音频</span>
+            </div>
+            <span id="othersStatus" class="lane-status">等待输入</span>
+          </div>
+          <div id="othersFeed" class="captions-feed"></div>
+        </article>
+
+        <article class="captions-lane">
+          <div class="lane-head">
+            <div>
+              <strong>我讲话</strong>
+              <span>麦克风</span>
+            </div>
+            <span id="selfStatus" class="lane-status">等待输入</span>
+          </div>
+          <div id="selfFeed" class="captions-feed"></div>
+        </article>
+      </section>
+
+      <footer class="overlay-footer">
+        <span id="captionsUpdatedAt">实时更新中</span>
+      </footer>
+
+      <div id="resizeHandle" class="resize-handle" aria-hidden="true"></div>
+    </main>
+
+    <script src="./meeting-captions-overlay.js"></script>
+  </body>
+</html>

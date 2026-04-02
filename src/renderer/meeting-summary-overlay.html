@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>会议概要</title>
+    <link rel="stylesheet" href="./meeting-summary-overlay.css" />
+  </head>
+  <body>
+    <main class="overlay-shell">
+      <header class="overlay-header drag-region">
+        <div class="header-copy">
+          <strong>会议概要</strong>
+          <span id="summaryStatus">等待开始</span>
+        </div>
+        <div class="header-actions">
+          <button id="showCaptionsButton" class="tool-button" type="button">字幕窗</button>
+          <button id="closeButton" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+      </header>
+
+      <p id="summaryMeta" class="summary-meta">会议总结启动后，这里会每隔两分钟更新一次。</p>
+      <div id="summaryEmptyState" class="summary-empty hidden">最近两分钟暂无可总结内容</div>
+
+      <section class="summary-section">
+        <div class="section-head">
+          <strong>他人讲话</strong>
+          <span>系统音频</span>
+        </div>
+        <div id="othersSummary" class="summary-content">本轮未识别到有效内容</div>
+      </section>
+
+      <section class="summary-section">
+        <div class="section-head">
+          <strong>我讲话</strong>
+          <span>麦克风</span>
+        </div>
+        <div id="selfSummary" class="summary-content">本轮未识别到有效内容</div>
+      </section>
+
+      <footer class="overlay-footer">
+        <span id="summaryUpdatedAt">等待第一轮概要</span>
+        <span id="summaryWindowHint">最近 2 分钟</span>
+      </footer>
+
+      <div id="resizeHandle" class="resize-handle" aria-hidden="true"></div>
+    </main>
+
+    <script src="./meeting-summary-overlay.js"></script>
+  </body>
+</html>

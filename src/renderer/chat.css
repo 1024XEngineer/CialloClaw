@@ -1,0 +1,640 @@
+:root {
+  color-scheme: dark;
+  --bg: #07131d;
+  --panel: rgba(12, 24, 35, 0.96);
+  --panel-2: rgba(15, 30, 43, 0.96);
+  --line: rgba(145, 204, 203, 0.16);
+  --text: #e7f7f4;
+  --subtle: rgba(205, 229, 230, 0.72);
+  --accent: #67d8cb;
+  --accent-soft: rgba(103, 216, 203, 0.16);
+  --warm: #efbc77;
+  --shadow: 0 28px 64px rgba(1, 5, 8, 0.42);
+  --font-ui: "Microsoft YaHei UI", "Segoe UI Variable Display", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  font-family: var(--font-ui);
+  background:
+    radial-gradient(circle at top left, rgba(103, 216, 203, 0.12), transparent 34%),
+    linear-gradient(180deg, #07131d, #091722);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.chat-shell {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  width: 100%;
+  height: 100%;
+  padding: 14px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.chat-body {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 8px;
+  padding-bottom: 12px;
+  scroll-behavior: smooth;
+  -webkit-app-region: no-drag;
+}
+
+.chat-body::-webkit-scrollbar,
+.history-panel::-webkit-scrollbar,
+.meeting-summary-content::-webkit-scrollbar,
+.meeting-debug-log::-webkit-scrollbar,
+.meeting-debug-latest::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.chat-body::-webkit-scrollbar-thumb,
+.history-panel::-webkit-scrollbar-thumb,
+.meeting-summary-content::-webkit-scrollbar-thumb,
+.meeting-debug-log::-webkit-scrollbar-thumb,
+.meeting-debug-latest::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(145, 204, 203, 0.18);
+}
+
+.chat-header,
+.task-status,
+.meeting-prompt-card,
+.meeting-summary-card,
+.meeting-debug-card,
+.composer,
+.history-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 22px;
+  -webkit-app-region: drag;
+}
+
+.header-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar-wrap {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(17, 33, 47, 0.98), rgba(10, 20, 31, 0.98));
+  border: 1px solid rgba(176, 234, 230, 0.14);
+}
+
+#chatAvatar {
+  width: 36px;
+  height: 36px;
+  image-rendering: pixelated;
+}
+
+.header-copy strong {
+  display: block;
+  font-size: 15px;
+}
+
+.header-copy span {
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.icon-button,
+.ghost-button,
+.send-button,
+.chip-button {
+  border: 1px solid rgba(164, 222, 218, 0.14);
+  background: rgba(13, 27, 39, 0.9);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.icon-button.active {
+  color: #06131b;
+  background: var(--accent);
+}
+
+.history-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 18px;
+  max-height: 136px;
+  overflow: auto;
+  -webkit-app-region: no-drag;
+}
+
+.history-panel .history-item {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(16, 31, 45, 0.88);
+  border: 1px solid rgba(145, 204, 203, 0.1);
+}
+
+.history-item strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.history-item span {
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--subtle);
+}
+
+.task-status {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 18px;
+  -webkit-app-region: no-drag;
+}
+
+.task-status.hidden,
+.history-panel.hidden,
+.meeting-prompt-card.hidden,
+.meeting-summary-card.hidden,
+.meeting-debug-card.hidden {
+  display: none;
+}
+
+.meeting-prompt-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(44, 31, 13, 0.94), rgba(24, 18, 9, 0.9));
+  border-color: rgba(239, 188, 119, 0.22);
+  -webkit-app-region: no-drag;
+}
+
+.meeting-prompt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meeting-prompt-title strong {
+  display: block;
+  font-size: 14px;
+}
+
+.meeting-prompt-title span,
+.meeting-prompt-meta {
+  font-size: 12px;
+  color: rgba(244, 231, 202, 0.82);
+}
+
+.meeting-prompt-meta {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.meeting-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.meeting-cancel-button.hidden {
+  display: none;
+}
+
+.task-status-copy strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.task-status-copy span {
+  display: block;
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.task-progress {
+  grid-column: 1 / 2;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(7, 19, 29, 0.88);
+  overflow: hidden;
+}
+
+.task-progress-bar {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #a8efe4);
+  border-radius: inherit;
+  transition: width 180ms ease;
+}
+
+.meeting-summary-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(9, 21, 31, 0.74);
+  -webkit-app-region: no-drag;
+}
+
+.meeting-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meeting-summary-title strong {
+  display: block;
+  font-size: 14px;
+}
+
+.meeting-summary-title span,
+.meeting-summary-updated,
+.meeting-summary-meta {
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.meeting-summary-updated {
+  white-space: nowrap;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(103, 216, 203, 0.1);
+  border: 1px solid rgba(103, 216, 203, 0.12);
+}
+
+.meeting-summary-meta {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.meeting-window-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.meeting-window-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(145, 204, 203, 0.12);
+  background: rgba(5, 15, 22, 0.42);
+}
+
+.meeting-window-copy strong {
+  display: block;
+  font-size: 13px;
+}
+
+.meeting-window-copy span {
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.meeting-summary-content {
+  min-height: 88px;
+  max-height: 156px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(145, 204, 203, 0.12);
+  background: rgba(5, 15, 22, 0.42);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.meeting-debug-card {
+  display: grid;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(10, 22, 32, 0.76);
+  -webkit-app-region: no-drag;
+}
+
+.meeting-debug-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meeting-debug-title strong {
+  display: block;
+  font-size: 14px;
+}
+
+.meeting-debug-title span,
+.meeting-debug-source-meta,
+.meeting-debug-source-head span,
+.meeting-debug-log-item time {
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+.meeting-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.meeting-debug-source {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(145, 204, 203, 0.1);
+  background: rgba(5, 15, 22, 0.38);
+}
+
+.meeting-debug-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.meeting-debug-source-head strong {
+  font-size: 13px;
+}
+
+.meeting-debug-source-meta {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.meeting-debug-latest {
+  min-height: 72px;
+  max-height: 110px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(7, 19, 29, 0.72);
+  border: 1px solid rgba(145, 204, 203, 0.12);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+}
+
+.meeting-debug-log {
+  display: grid;
+  gap: 8px;
+  max-height: 132px;
+  overflow: auto;
+}
+
+.meeting-debug-log-item {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(13, 27, 39, 0.7);
+  border: 1px solid rgba(145, 204, 203, 0.08);
+}
+
+.meeting-debug-log-item time {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.meeting-debug-log-item span {
+  display: block;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.meeting-cancel-button {
+  grid-row: 3;
+  justify-self: stretch;
+  min-height: 42px;
+  width: 100%;
+  padding: 0 16px;
+  border: 1px solid rgba(239, 188, 119, 0.38);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(239, 188, 119, 0.96), rgba(214, 154, 70, 0.96));
+  color: #08131a;
+  box-shadow: 0 18px 36px rgba(2, 8, 12, 0.32);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.meeting-cancel-button:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+.meeting-cancel-button:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
+.message-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 96px;
+  overflow: visible;
+  -webkit-app-region: no-drag;
+}
+
+.message {
+  display: grid;
+  gap: 6px;
+  max-width: 88%;
+  padding: 12px 14px;
+  border-radius: 18px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 12px 24px rgba(2, 8, 12, 0.14);
+}
+
+.message.assistant {
+  justify-self: start;
+  background: rgba(13, 27, 38, 0.94);
+  border: 1px solid rgba(145, 204, 203, 0.14);
+}
+
+.message.user {
+  justify-self: end;
+  background: rgba(103, 216, 203, 0.14);
+  border: 1px solid rgba(103, 216, 203, 0.24);
+}
+
+.message-meta {
+  font-size: 11px;
+  color: rgba(199, 225, 226, 0.56);
+}
+
+.chip-strip {
+  min-height: 36px;
+  -webkit-app-region: no-drag;
+}
+
+.quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-button {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.chip-button:hover,
+.ghost-button:hover,
+.icon-button:hover,
+.send-button:hover {
+  border-color: rgba(103, 216, 203, 0.28);
+}
+
+.composer {
+  grid-row: 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "tools tools"
+    "input send";
+  gap: 10px;
+  padding: 14px;
+  border-radius: 22px;
+  align-items: end;
+  -webkit-app-region: no-drag;
+}
+
+.composer-tools {
+  grid-area: tools;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ghost-button {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.accent-button {
+  border-color: rgba(103, 216, 203, 0.28);
+  background: rgba(103, 216, 203, 0.12);
+}
+
+.accent-button.active {
+  color: #03131a;
+  background: linear-gradient(180deg, rgba(239, 188, 119, 0.96), rgba(214, 154, 70, 0.96));
+  border-color: rgba(239, 188, 119, 0.28);
+}
+
+@media (max-width: 720px) {
+  .meeting-window-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+#composerInput {
+  grid-area: input;
+  min-height: 44px;
+  max-height: 92px;
+  padding: 10px 12px;
+  border: 1px solid rgba(145, 204, 203, 0.12);
+  border-radius: 16px;
+  resize: none;
+  outline: none;
+  background: rgba(8, 18, 27, 0.92);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  -webkit-app-region: no-drag;
+}
+
+#composerInput::placeholder {
+  color: rgba(201, 225, 225, 0.46);
+}
+
+.send-button {
+  grid-area: send;
+  height: 44px;
+  min-width: 72px;
+  padding: 0 18px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(103, 216, 203, 0.92), rgba(86, 190, 180, 0.92));
+  color: #03131a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.icon-button:focus-visible,
+.ghost-button:focus-visible,
+.chip-button:focus-visible,
+.send-button:focus-visible,
+#composerInput:focus-visible {
+  outline: none;
+  border-color: rgba(103, 216, 203, 0.38);
+  box-shadow: 0 0 0 3px rgba(103, 216, 203, 0.12);
+}

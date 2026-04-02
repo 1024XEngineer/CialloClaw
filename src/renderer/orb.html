@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Orb</title>
+    <link rel="stylesheet" href="./orb.css" />
+  </head>
+  <body>
+    <div id="app" class="orb-window">
+      <div id="dockHint" class="dock-hint"></div>
+      <div id="microTip" class="micro-tip"></div>
+
+      <div id="meetingPrompt" class="meeting-prompt hidden">
+        <div class="meeting-prompt-copy">
+          <strong id="meetingPromptTitle">检测到会议候选</strong>
+          <span id="meetingPromptMeta">确认后会自动打开聊天窗口并开始会议总结。</span>
+        </div>
+        <div class="meeting-prompt-actions">
+          <button id="meetingPromptAcceptButton" class="ghost-button" type="button">开始总结</button>
+          <button id="meetingPromptDismissButton" class="ghost-button ghost-button-muted" type="button">忽略本场</button>
+        </div>
+      </div>
+
+      <div id="meetingWindowsBar" class="meeting-windows-bar hidden">
+        <button id="showSummaryWindowButton" class="ghost-button" type="button">概要窗</button>
+        <button id="showCaptionsWindowButton" class="ghost-button" type="button">字幕窗</button>
+      </div>
+
+      <div id="taskTooltip" class="task-tooltip hidden">
+        <div class="tooltip-title" id="tooltipTitle"></div>
+        <div class="tooltip-desc" id="tooltipDesc"></div>
+        <div class="tooltip-meta">
+          <span id="tooltipAvailability"></span>
+          <span id="tooltipHint"></span>
+        </div>
+      </div>
+
+      <div id="taskLibrary" class="task-library hidden">
+        <div class="library-header">
+          <div>
+            <strong>更多任务</strong>
+            <span>轻量任务库</span>
+          </div>
+          <button id="libraryClose" class="ghost-button" type="button">关闭</button>
+        </div>
+        <div id="libraryList" class="library-list"></div>
+      </div>
+
+      <div id="ringLayer" class="ring-layer"></div>
+
+      <button id="orbShell" class="orb-shell" type="button" aria-label="展开任务环">
+        <div class="orb-progress"></div>
+        <div class="orb-surface"></div>
+        <canvas id="spriteCanvas" width="72" height="72"></canvas>
+        <div id="statusDot" class="status-dot"></div>
+      </button>
+    </div>
+    <script src="./orb.js"></script>
+  </body>
+</html>

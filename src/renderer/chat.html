@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Chat</title>
+    <link rel="stylesheet" href="./chat.css" />
+  </head>
+  <body>
+    <div class="chat-shell">
+      <header class="chat-header">
+        <div class="header-main">
+          <div class="avatar-wrap">
+            <canvas id="chatAvatar" width="48" height="48"></canvas>
+          </div>
+          <div class="header-copy">
+            <strong>像素伙伴</strong>
+            <span id="statusLabel">空闲</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="pinButton" class="icon-button" type="button" title="置顶">钉</button>
+          <button id="historyButton" class="icon-button" type="button" title="最近动作">历</button>
+          <button id="closeButton" class="icon-button" type="button" title="关闭">关</button>
+        </div>
+      </header>
+
+      <section id="chatBody" class="chat-body">
+        <aside id="historyPanel" class="history-panel hidden"></aside>
+
+        <div id="taskStatus" class="task-status hidden">
+          <div class="task-status-copy">
+            <strong id="taskStatusLabel">正在执行</strong>
+            <span id="taskStatusMeta">准备中</span>
+          </div>
+          <div class="task-progress">
+            <div id="taskProgressBar" class="task-progress-bar"></div>
+          </div>
+          <button id="cancelTaskButton" class="ghost-button" type="button">取消</button>
+        </div>
+
+        <section id="meetingPromptCard" class="meeting-prompt-card hidden">
+          <div class="meeting-prompt-head">
+            <div class="meeting-prompt-title">
+              <strong>检测到会议候选</strong>
+              <span id="meetingPromptStatus">待确认</span>
+            </div>
+          </div>
+          <p id="meetingPromptMeta" class="meeting-prompt-meta"></p>
+          <div class="meeting-prompt-actions">
+            <button id="meetingPromptAcceptButton" class="ghost-button accent-button" type="button">开始会议总结</button>
+            <button id="meetingPromptDismissButton" class="ghost-button" type="button">忽略本场会议</button>
+          </div>
+        </section>
+
+        <section id="meetingSummaryCard" class="meeting-summary-card hidden">
+          <div class="meeting-summary-head">
+            <div class="meeting-summary-title">
+              <strong>会议总结</strong>
+              <span id="meetingSummaryStatus">未开始</span>
+            </div>
+            <span id="meetingSummaryUpdated" class="meeting-summary-updated">等待第一轮概要</span>
+          </div>
+          <p id="meetingSummaryMeta" class="meeting-summary-meta"></p>
+          <div class="meeting-window-grid">
+            <article class="meeting-window-item">
+              <div class="meeting-window-copy">
+                <strong>概要窗</strong>
+                <span id="meetingSummaryOverlayState">已隐藏</span>
+              </div>
+              <button id="showSummaryOverlayButton" class="ghost-button" type="button">显示</button>
+            </article>
+            <article class="meeting-window-item">
+              <div class="meeting-window-copy">
+                <strong>字幕窗</strong>
+                <span id="meetingCaptionsOverlayState">已隐藏</span>
+              </div>
+              <button id="showCaptionsOverlayButton" class="ghost-button" type="button">显示</button>
+            </article>
+          </div>
+        </section>
+
+        <main id="messageList" class="message-list"></main>
+
+        <section class="chip-strip">
+          <div id="quickChips" class="quick-chips"></div>
+        </section>
+      </section>
+
+      <button id="meetingCancelButton" class="meeting-cancel-button hidden" type="button">取消会议总结</button>
+
+      <footer class="composer">
+        <div class="composer-tools">
+          <button id="meetingSummaryButton" class="ghost-button accent-button" type="button">会议总结</button>
+          <button id="showSummaryOverlayToolbarButton" class="ghost-button" type="button">概要窗</button>
+          <button id="showCaptionsOverlayToolbarButton" class="ghost-button" type="button">实时字幕</button>
+          <button id="selectionButton" class="ghost-button" type="button">选区</button>
+          <button id="clipboardButton" class="ghost-button" type="button">剪贴板</button>
+        </div>
+        <textarea id="composerInput" rows="1" maxlength="280" placeholder="输入一句短问题，或让我继续处理当前任务"></textarea>
+        <button id="sendButton" class="send-button" type="button">发送</button>
+      </footer>
+    </div>
+
+    <script src="./chat.js"></script>
+  </body>
+</html>
