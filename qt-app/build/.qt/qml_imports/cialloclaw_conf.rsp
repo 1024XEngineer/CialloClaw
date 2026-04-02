@@ -1,9 +1,0 @@
--rootPath
-E:/code/opencode/Ciallo-Demo/qt-app
--cmake-output
--output-file
-E:/code/opencode/Ciallo-Demo/qt-app/build/.qt/qml_imports/cialloclaw_conf.cmake
--importPath
-E:/code/opencode/Ciallo-Demo/qt-app/build
--importPath
-E:/Qt/6.8.2/mingw_64/qml

@@ -1,345 +1,118 @@
-# CialloClaw 桌面原型机
+# CialloClaw 桌面 UX Mock
 
-基于 **Tauri 2 + Vue 3 + TypeScript + Tailwind CSS + Go sidecar** 的多窗口桌面原型机。
+基于 Wails 的桌面常驻 UX 原型，展示任务、记忆、理解、推进四种工作面的交互闭环。
 
-目标：把“桌面常驻悬浮球 Agent”做成可运行、可打包、可继续演进的产品前身，而不是一次性网页 demo。
+## 启动方式
 
----
+```bash
+cd demo2
+wails dev
+```
 
-## 已完成能力
+启动后会在浏览器打开调试窗口，或生成桌面应用窗口。
 
-- 四个独立窗口
-  - 悬浮球窗口 `orb`
-  - 主对话窗口 `chat`
-  - 设置窗口 `settings`
-  - 轻提示窗口 `nudge`
-- Tauri 2 Rust 壳负责
-  - 多窗口创建与关闭语义控制
-  - 托盘菜单
-  - 原生右键菜单弹出
-  - Go sidecar 启停
-- Vue 前端负责
-  - 路由化窗口视图
-  - 像素风 UI 呈现
-  - 统一 store / service 数据访问
-- Go sidecar 负责
-  - 首页状态 mock
-  - 轻提示 mock
-  - 对话场景 mock
-  - 设置数据 mock
-  - mock 动作确认
+## 功能概览
 
----
+### 1. 悬浮球（四向入口）
+
+- **位置**：桌面右下角
+- **交互**：点击展开四个方向按钮
+  - 上 → 理解模式（文档提炼场景）
+  - 右 → 推进模式（日报骨架场景）
+  - 左 → 巡检（任务控制台）
+  - 下 → 记忆（镜像面板）
+- **关闭**：点击空白区域或按 Escape 返回只有悬浮球的状态
+
+### 2. 桌面岛（轻量入口）
+
+- **位置**：左下角
+- **交互**：点击展开快捷卡片
+  - 继续当前处理
+  - 打开任务控制台
+  - 打开镜像面板
+  - 打开轻提示
+
+### 3. 侧边信标
+
+- **位置**：右侧边缘
+- **交互**：点击打开任务控制台
+
+### 4. 任务控制台
+
+- **布局**：三列（筛选栏 | 任务列表 | 任务详情）
+- **筛选**：按行动状态 / 时间 / 项目
+- **操作**：
+  - 查看任务详情
+  - 点击「跳转镜像」进入对应镜像
+  - 点击「打开收束台」进入工作台
+
+### 5. 镜像面板
+
+- **布局**：两列（层级导航 | 镜像列表）
+- **层级**：最近记忆 / 阶段镜像 / 长期偏好 / 记忆管理
+- **操作**：
+  - 查看镜像详情
+  - 点击「跳转任务」进入对应任务
+  - 关闭 / 校正镜像
+
+### 6. 工作台（收束台）
+
+- **场景**：文档提炼 / 合同差异 / 日报骨架
+- **模式**：理解模式 / 推进模式
+- **区域**：
+  - 顶部：对象信息（标题、标签、来源）
+  - 中间：结果卡片（三张可滚动）
+  - 底部：操作按钮 + 追问输入框
+- **操作**：
+  - 点击 ActionBar 按钮确认执行
+  - 输入追问并提交
+  - 点击「挂回任务控制台」或「记入镜像面板」跳转
+
+### 7. 轻提示承接卡
+
+- **触发**：从背景窗口的信号按钮点击
+- **操作**：点击按钮打开对应工作台场景
+
+### 8. 交互规则
+
+- **关闭方式**：点击遮罩层 / 按 Escape / 点击关闭按钮
+- **状态记忆**：工作台会记住上一次使用的场景和模式
+- **双向跳转**：任务 ↔ 镜像 ↔ 工作台 之间可自由跳转
+
+## 技术栈
+
+- **运行时**：Wails（Go + WebView）
+- **前端**：原生 HTML + CSS + JavaScript（无框架）
+- **数据**：静态 mock 数据，无后端数据库
 
 ## 项目结构
 
-```text
-Ciallo-Demo/
-├─ src/                         # Vue + Vite 前端
-│  ├─ index.html
-│  ├─ package.json
-│  ├─ vite.config.ts
-│  ├─ tailwind.config.cjs
-│  └─ src/
-│     ├─ main.ts
-│     ├─ App.vue
-│     ├─ router/
-│     ├─ windows/
-│     │  ├─ OrbWindow.vue
-│     │  ├─ ChatWindow.vue
-│     │  ├─ SettingsWindow.vue
-│     │  └─ NudgeWindow.vue
-│     ├─ components/
-│     ├─ stores/
-│     ├─ services/
-│     ├─ styles/
-│     └─ types/
-├─ src-tauri/                   # Tauri 2 Rust 桌面壳
-│  ├─ src/main.rs
-│  ├─ build.rs
-│  ├─ Cargo.toml
-│  ├─ tauri.conf.json
-│  └─ icons/
-├─ go-backend/                  # Go mock sidecar
-│  ├─ go.mod
-│  ├─ bin/
-│  └─ cmd/sidecar/main.go
-└─ README.md
+```
+demo2/
+├── main.go           # Wails 入口
+├── app.go            # App 结构
+├── wails.json        # Wails 配置
+├── go.mod / go.sum   # Go 依赖
+└── frontend/
+    ├── index.html    # 入口 HTML
+    ├── style.css     # 所有样式
+    ├── app.js        # 主逻辑 + 事件处理
+    ├── router.js     # 状态管理
+    ├── data.js       # 静态 mock 数据
+    └── views/
+        ├── desktop.js   # 桌面渲染
+        ├── tasks.js     # 任务控制台
+        ├── memory.js    # 镜像面板
+        ├── understand.js # 理解面板
+        ├── advance.js   # 推进面板
+        └── workbench.js # 工作台 + ActionBar
 ```
 
----
+## 设计理念
 
-## 各层职责
+> 桌面常驻不是打断，而是随手抽出工作全貌。
 
-### 1. Rust / Tauri 层
-
-只负责桌面壳：
-
-- 创建 4 个原生窗口
-- 维护“关闭 = 隐藏”“退出 = 真退出”的语义
-- 托盘菜单
-- 悬浮球右键原生菜单
-- 启动 Go sidecar
-- 提供必要 IPC（如打开设置、隐藏应用、显示聊天窗）
-
-### 2. Vue 前端层
-
-只负责表现与交互：
-
-- 窗口 UI
-- 路由视图
-- store 状态管理
-- service 访问 sidecar
-- 统一像素风视觉
-
-### 3. Go sidecar 层
-
-负责未来 Agent 边界的 mock 承接：
-
-- `/api/home`
-- `/api/nudges`
-- `/api/scenarios`
-- `/api/settings`
-- `/api/actions/confirm`
-
-目前全部为 mock 数据，但数据源真实来自 Go，而不是散落在窗口组件里。
-
----
-
-## 当前哪些是 mock
-
-以下内容都还是 mock：
-
-- Agent 推理结果
-- 记忆系统
-- 权限系统
-- 执行系统
-- 工作流
-- 系统感知/OCR/真实文件写入
-
-### 未来如何接入真实 Agent
-
-后续只需要替换 `go-backend/cmd/sidecar/main.go` 背后的实现：
-
-- 把静态 JSON 替换为真实 workflow / memory / policy 服务
-- 保持前端 `services/api.ts` 的接口不变
-- 保持窗口组件层不承载业务逻辑
-
----
-
-## 开发环境要求
-
-- Node.js 18+
-- Rust stable
-- Go 1.20+
-- Windows 下建议已安装 WebView2 Runtime
-
----
-
-## 安装依赖
-
-### 前端
-
-```powershell
-Set-Location E:\code\opencode\Ciallo-Demo\src
-npm install
-```
-
-### Go sidecar
-
-```powershell
-Set-Location E:\code\opencode\Ciallo-Demo\go-backend
-go build -o .\bin\cialloclaw-sidecar.exe .\cmd\sidecar
-```
-
-### Rust / Tauri
-
-Rust 依赖通过 Cargo 自动处理。
-
----
-
-## 启动开发环境
-
-```powershell
-Set-Location E:\code\opencode\Ciallo-Demo
-& ".\src\node_modules\.bin\tauri.cmd" dev
-```
-
-说明：
-
-- Vite dev server 会跑在 `http://127.0.0.1:5173`
-- Tauri 会创建 4 个原生窗口
-- Rust 会尝试启动 `go-backend/bin/cialloclaw-sidecar.exe`
-
----
-
-## 构建
-
-### 前端构建
-
-```powershell
-Set-Location E:\code\opencode\Ciallo-Demo\src
-npm run build
-```
-
-### Go sidecar 构建
-
-```powershell
-Set-Location E:\code\opencode\Ciallo-Demo\go-backend
-if (!(Test-Path .\bin)) { New-Item -ItemType Directory -Path .\bin | Out-Null }
-go build -o .\bin\cialloclaw-sidecar.exe .\cmd\sidecar
-```
-
-### Windows 桌面应用构建
-
-```powershell
-Set-Location E:\code\opencode\Ciallo-Demo
-& ".\src\node_modules\.bin\tauri.cmd" build --debug
-```
-
----
-
-## 当前已产出的 Windows 可运行成品
-
-本次环境内已实际构建成功：
-
-- 调试可执行文件：
-  - `src-tauri/target/debug/cialloclaw.exe`
-- Windows 安装包：
-  - `src-tauri/target/debug/bundle/nsis/CialloClaw_0.0.0_x64-setup.exe`
-- Windows MSI：
-  - `src-tauri/target/debug/bundle/msi/CialloClaw_0.0.0_x64_en-US.msi`
-
-其中：
-
-- **可双击运行的 exe 安装成品**：
-  - `src-tauri/target/debug/bundle/nsis/CialloClaw_0.0.0_x64-setup.exe`
-
----
-
-## macOS 打包方式
-
-当前环境是 Windows，无法直接产出 macOS `.app`，但工程已具备 Tauri 2 标准构建链路。
-
-在 **macOS 主机** 上执行：
-
-```bash
-cd /path/to/Ciallo-Demo/src
-npm install
-npm run build
-npx tauri build --target universal-apple-darwin
-```
-
-典型产物位置：
-
-- `.app`：`src-tauri/target/universal-apple-darwin/release/bundle/macos/`
-- `.dmg`：`src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
-
-如需签名/公证，需要在 macOS 环境补充 Apple 开发者证书配置。
-
----
-
-## Linux 打包方式
-
-当前环境是 Windows，无法直接产出 Linux 成品，但工程已具备标准构建链路。
-
-在 **Linux 主机** 上执行：
-
-```bash
-cd /path/to/Ciallo-Demo/src
-npm install
-npm run build
-npx tauri build
-```
-
-典型产物位置：
-
-- AppImage：`src-tauri/target/release/bundle/appimage/`
-- deb：`src-tauri/target/release/bundle/deb/`
-- rpm：`src-tauri/target/release/bundle/rpm/`
-
-Linux 下推荐交付：
-
-- `AppImage`（双击可运行）
-- 或 `deb/rpm`（标准桌面分发）
-
----
-
-## 窗口职责
-
-### 悬浮球窗口 `orb`
-
-- 常驻桌面主入口
-- 左键打开/聚焦主对话窗
-- 右键弹原生菜单
-- 始终存在，除非明确退出应用
-
-### 主对话窗口 `chat`
-
-- 承接核心 mock 场景
-- 展示“先提示，再确认，后执行”
-- 关闭只隐藏，不退出应用
-
-### 设置窗口 `settings`
-
-- 仅通过悬浮球右键菜单或托盘菜单打开
-- 展示外观、提醒、mock 模式、安全说明等
-
-### 轻提示窗口 `nudge`
-
-- 低打扰提示
-- 可查看 / 稍后 / 忽略
-- 查看会导向主对话窗口
-
----
-
-## 多窗口与生命周期语义
-
-- 悬浮球是锚点窗口
-- 主对话关闭仅隐藏
-- 设置窗口关闭仅隐藏
-- 轻提示关闭仅隐藏
-- “隐藏” = 所有窗口隐藏，但进程仍在、托盘仍在
-- “退出” = 结束窗口、结束 sidecar、结束应用进程
-
----
-
-## 当前验证结果
-
-已验证：
-
-- `cargo check` 通过
-- `cargo build` 通过
-- `go build ./cmd/sidecar` 通过
-- `npm run build` 通过
-- `npx tauri build --debug` 通过（Windows）
-- Go sidecar HTTP 接口可返回数据
-
----
-
-## 剩余风险
-
-- macOS `.app` 与 Linux AppImage/deb/rpm 需要在对应原生系统上实际执行打包
-- 当前图标仍为占位资产，后续可替换为正式品牌资产
-- Go sidecar 当前走固定 localhost 端口，未来可升级为更强的 sidecar 发现/健康检查机制
-
----
-
-## 默认产物位置速查
-
-### Windows
-
-- 可执行文件：`src-tauri/target/debug/cialloclaw.exe`
-- NSIS 安装包：`src-tauri/target/debug/bundle/nsis/CialloClaw_0.0.0_x64-setup.exe`
-- MSI：`src-tauri/target/debug/bundle/msi/CialloClaw_0.0.0_x64_en-US.msi`
-
-### macOS
-
-- `.app`：`src-tauri/target/<target>/release/bundle/macos/`
-- `.dmg`：`src-tauri/target/<target>/release/bundle/dmg/`
-
-### Linux
-
-- `AppImage`：`src-tauri/target/release/bundle/appimage/`
-- `deb`：`src-tauri/target/release/bundle/deb/`
-- `rpm`：`src-tauri/target/release/bundle/rpm/`
+核心目标：
+1. **短操作**：入口比聊天输入更短
+2. **可跳转**：任务—记忆—理解—推进自然闭环
+3. **非聊天**：不是聊天窗口，而是工作面板集合

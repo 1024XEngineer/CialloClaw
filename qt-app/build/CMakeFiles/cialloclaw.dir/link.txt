@@ -1,3 +1,0 @@
-E:\python\python11\Lib\site-packages\cmake\data\bin\cmake.exe -E rm -f CMakeFiles\cialloclaw.dir/objects.a
-E:\mingw64\bin\ar.exe qc CMakeFiles\cialloclaw.dir/objects.a @CMakeFiles\cialloclaw.dir\objects1.rsp
-E:\mingw64\bin\g++.exe -mwindows -Wl,--whole-archive CMakeFiles\cialloclaw.dir/objects.a -Wl,--no-whole-archive -o cialloclaw.exe -Wl,--out-implib,libcialloclaw.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\cialloclaw.dir\linkLibs.rsp

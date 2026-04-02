@@ -1,6 +1,0 @@
-E:/code/opencode/Ciallo-Demo/qt-app/build/CMakeFiles/cialloclaw.dir
-E:/code/opencode/Ciallo-Demo/qt-app/build/CMakeFiles/cialloclaw_qmlimportscan.dir
-E:/code/opencode/Ciallo-Demo/qt-app/build/CMakeFiles/edit_cache.dir
-E:/code/opencode/Ciallo-Demo/qt-app/build/CMakeFiles/rebuild_cache.dir
-E:/code/opencode/Ciallo-Demo/qt-app/build/CMakeFiles/cialloclaw_autogen_timestamp_deps.dir
-E:/code/opencode/Ciallo-Demo/qt-app/build/CMakeFiles/cialloclaw_autogen.dir

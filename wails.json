@@ -1,0 +1,15 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "demo2",
+  "outputfilename": "demo2",
+  "frontend:dir": "frontend",
+  "author": {
+    "name": "OpenCode",
+    "email": "devnull@example.com"
+  },
+  "info": {
+    "companyName": "OpenCode",
+    "productName": "demo2",
+    "productVersion": "0.1.0"
+  }
+}

@@ -1,5 +1,0 @@
-src/node_modules/
-src/dist/
-src-tauri/target/
-go-backend/bin/
-*.log
