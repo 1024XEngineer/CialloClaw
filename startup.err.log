@@ -1,0 +1,17 @@
+Traceback (most recent call last):
+  File "C:\Users\33721\Desktop\Ciallo13\app.py", line 9, in <module>
+    main()
+  File "C:\Users\33721\Desktop\Ciallo13\app.py", line 5, in main
+    PrototypeApp().run()
+    ^^^^^^^^^^^^^^
+  File "C:\Users\33721\Desktop\Ciallo13\prototype\ui.py", line 25, in __init__
+    self.dashboard = DashboardView(self.root, self)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\33721\Desktop\Ciallo13\prototype\dashboard.py", line 47, in __init__
+    self._build()
+  File "C:\Users\33721\Desktop\Ciallo13\prototype\dashboard.py", line 125, in _build
+    self._build_settings()
+  File "C:\Users\33721\Desktop\Ciallo13\prototype\dashboard.py", line 294, in _build_settings
+    self._entry(row, self.workspace_edit_var, width=58).pack(side="left", padx=(0, 8), fill="x", expand=True)
+    ^^^^^^^^^^^
+AttributeError: 'DashboardView' object has no attribute '_entry'

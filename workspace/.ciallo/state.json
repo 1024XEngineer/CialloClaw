@@ -1,0 +1,3433 @@
+{
+  "session": {
+    "session_id": "session_13a7502e",
+    "started_at": "2026-04-03T00:56:33+08:00",
+    "status": "running",
+    "focus_mode": "assistant"
+  },
+  "workspace_root": "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace",
+  "scan_roots": [
+    "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\tasks",
+    "C:\\Users\\33721\\Desktop\\巡检目录"
+  ],
+  "memory_enabled": true,
+  "scan_interval_seconds": 8,
+  "auto_scan": true,
+  "show_floating_ball": true,
+  "clipboard_text": "请设计一个桌面端 AI 助手的高保真交互原型，仅关注前端界面和交互表现，不需要后端逻辑、不需要真实数据、不需要接口设计、不需要技术实现细节。\n\n产品必须包含一个常驻桌面的悬浮球，作为核心入口。悬浮球支持拖拽移动、吸边停靠、hover 反馈和点击激活，但不能只是点击后打开聊天框，而应作为一个多输入方式的桌面触发器。\n\n请围绕“悬浮球 + 多输入方式 + 桌面效率工具”设计完整原型。\n\n需要展示的输入方式：\n- 单行命令输入\n- 选中文本后的上下文操作\n- 将文本、文件、图片、PDF、链接拖拽到悬浮球作为输入\n- 截图 / 框选屏幕区域作为输入\n- 可选语音输入入口\n\n需要展示的输出方式：\n- 简单结果使用轻量卡片展示\n- 复杂结果进入侧边面板继续处理\n\n请输出完整原型页面和交互状态，至少包括：\n- 悬浮球默认待机态\n- hover 态\n- 拖拽移动态\n- 吸边停靠态\n- 激活后的快捷操作面板\n- 单行命令输入态\n- 拖拽接收态\n- 文本选中联动态\n- 截图 / 框选态\n- 处理中态\n- 结果卡片态\n- 侧边详情面板\n- 历史记录态\n- 设置态\n- 错误态和空状态\n\n设计要求：\n- 只输出前端原型和交互表现\n- 不需要后端逻辑和技术实现\n- 不要设计成聊天软件界面\n- 悬浮球不是单纯聊天入口\n- 强调桌面端原生感、低打扰、高效率、系统工具感\n- 风格简洁、专业、现代、克制\n- 参考 macOS / Windows 桌面效率工具\n- 界面层级清晰，交互反馈明确\n\n请优先展示悬浮球相关页面和交互，不要把重点放在聊天对话页。",
+  "clipboard_kind": "error",
+  "clipboard_hint": "检测到错误文本，可直接排查。",
+  "clipboard_actions": [
+    "排查问题",
+    "解释",
+    "总结",
+    "下一步"
+  ],
+  "pending_video_url": "",
+  "pending_video_approval_id": "",
+  "last_scan_summary": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+  "last_scan_at": "2026-04-03T00:56:44+08:00",
+  "command_text": "dir",
+  "active_task": {
+    "id": "task_fbbe477e",
+    "kind": "boot",
+    "title": "启动检查",
+    "source": "",
+    "status": "completed",
+    "created_at": "2026-04-03T00:56:34+08:00",
+    "updated_at": "2026-04-03T00:56:37+08:00",
+    "steps": [
+      "加载工作区",
+      "扫描待办",
+      "准备入口"
+    ],
+    "current_step_index": 3,
+    "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+    "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+    "timeline": [
+      "2026-04-03T00:56:34+08:00 | 已创建任务：启动检查",
+      "2026-04-03T00:56:34+08:00 | 当前步骤：加载工作区",
+      "2026-04-03T00:56:35+08:00 | 执行步骤：加载工作区",
+      "2026-04-03T00:56:36+08:00 | 执行步骤：扫描待办",
+      "2026-04-03T00:56:37+08:00 | 执行步骤：准备入口",
+      "2026-04-03T00:56:37+08:00 | 任务完成"
+    ],
+    "details": {
+      "source": "startup"
+    }
+  },
+  "task_history": [
+    {
+      "id": "task_884ca815",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "running",
+      "created_at": "2026-04-02T16:01:53+08:00",
+      "updated_at": "2026-04-02T16:01:53+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 0,
+      "summary": "",
+      "result": "",
+      "timeline": [
+        "2026-04-02T16:01:53+08:00 | 已创建任务：启动检查",
+        "2026-04-02T16:01:53+08:00 | 当前步骤：加载工作区"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_236b719b",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T16:17:33+08:00",
+      "updated_at": "2026-04-02T16:17:37+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-02T16:17:33+08:00 | 已创建任务：启动检查",
+        "2026-04-02T16:17:33+08:00 | 当前步骤：加载工作区",
+        "2026-04-02T16:17:34+08:00 | 执行步骤：加载工作区",
+        "2026-04-02T16:17:35+08:00 | 执行步骤：扫描待办",
+        "2026-04-02T16:17:37+08:00 | 执行步骤：准备入口",
+        "2026-04-02T16:17:37+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_e394faf7",
+      "kind": "translate",
+      "title": "翻译复制内容",
+      "source": "没弹出窗口",
+      "status": "completed",
+      "created_at": "2026-04-02T16:22:25+08:00",
+      "updated_at": "2026-04-02T16:22:29+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 3,
+      "summary": "翻译草稿（离线原型） - 当前使用本地术语词表做结构化翻译，不是完整机器翻译。 - 原文预览：没弹出窗口 - 草稿：没弹出窗口",
+      "result": "翻译草稿（离线原型）\n- 当前使用本地术语词表做结构化翻译，不是完整机器翻译。\n- 原文预览：没弹出窗口\n- 草稿：没弹出窗口",
+      "timeline": [
+        "2026-04-02T16:22:25+08:00 | 已创建任务：翻译复制内容",
+        "2026-04-02T16:22:25+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T16:22:26+08:00 | 执行步骤：识别上下文",
+        "2026-04-02T16:22:27+08:00 | 执行步骤：生成草稿",
+        "2026-04-02T16:22:29+08:00 | 执行步骤：输出结果",
+        "2026-04-02T16:22:29+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "translate"
+      }
+    },
+    {
+      "id": "task_bd05d489",
+      "kind": "explain",
+      "title": "解释当前内容",
+      "source": "没弹出窗口",
+      "status": "terminated",
+      "created_at": "2026-04-02T16:22:52+08:00",
+      "updated_at": "2026-04-02T16:22:55+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 2,
+      "summary": "",
+      "result": "任务被终止：被新任务替换",
+      "timeline": [
+        "2026-04-02T16:22:52+08:00 | 已创建任务：解释当前内容",
+        "2026-04-02T16:22:52+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T16:22:53+08:00 | 执行步骤：识别上下文",
+        "2026-04-02T16:22:54+08:00 | 执行步骤：生成草稿",
+        "2026-04-02T16:22:55+08:00 | 已终止：被新任务替换"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "explain"
+      }
+    },
+    {
+      "id": "task_0100f397",
+      "kind": "translate",
+      "title": "翻译复制内容",
+      "source": "没弹出窗口",
+      "status": "terminated",
+      "created_at": "2026-04-02T16:22:55+08:00",
+      "updated_at": "2026-04-02T16:22:55+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 0,
+      "summary": "",
+      "result": "任务被终止：被新任务替换",
+      "timeline": [
+        "2026-04-02T16:22:55+08:00 | 已创建任务：翻译复制内容",
+        "2026-04-02T16:22:55+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T16:22:55+08:00 | 已终止：被新任务替换"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "translate"
+      }
+    },
+    {
+      "id": "task_85e87d0d",
+      "kind": "next",
+      "title": "问下一步做什么",
+      "source": "没弹出窗口",
+      "status": "completed",
+      "created_at": "2026-04-02T16:22:56+08:00",
+      "updated_at": "2026-04-02T16:22:59+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 3,
+      "summary": "下一步建议 - 当前上下文：没弹出窗口 - 先确认你真正想达成的结果。 - 补齐缺失的上下文、样例或约束。 - 把目标拆成一个最小可执行动作。 - 完成后再决定是否继续扩展或自动化。",
+      "result": "下一步建议\n- 当前上下文：没弹出窗口\n- 先确认你真正想达成的结果。\n- 补齐缺失的上下文、样例或约束。\n- 把目标拆成一个最小可执行动作。\n- 完成后再决定是否继续扩展或自动化。",
+      "timeline": [
+        "2026-04-02T16:22:56+08:00 | 已创建任务：问下一步做什么",
+        "2026-04-02T16:22:56+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T16:22:57+08:00 | 执行步骤：识别上下文",
+        "2026-04-02T16:22:58+08:00 | 执行步骤：生成草稿",
+        "2026-04-02T16:22:59+08:00 | 执行步骤：输出结果",
+        "2026-04-02T16:22:59+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "next"
+      }
+    },
+    {
+      "id": "task_00d7540d",
+      "kind": "memory",
+      "title": "生成镜子记忆",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T16:27:21+08:00",
+      "updated_at": "2026-04-02T16:27:25+08:00",
+      "steps": [
+        "提炼近期上下文",
+        "生成 summary.md",
+        "生成 USER.md"
+      ],
+      "current_step_index": 3,
+      "summary": "镜子记忆已生成 - summary.md: C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\memory\\summary.md - USER.md:...",
+      "result": "镜子记忆已生成\n- summary.md: C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\memory\\summary.md\n- USER.md: C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\memory\\USER.md\n- 说明：文件已写入本地工作区的 memory 目录。",
+      "timeline": [
+        "2026-04-02T16:27:21+08:00 | 已创建任务：生成镜子记忆",
+        "2026-04-02T16:27:21+08:00 | 当前步骤：提炼近期上下文",
+        "2026-04-02T16:27:22+08:00 | 执行步骤：提炼近期上下文",
+        "2026-04-02T16:27:23+08:00 | 执行步骤：生成 summary.md",
+        "2026-04-02T16:27:25+08:00 | 执行步骤：生成 USER.md",
+        "2026-04-02T16:27:25+08:00 | 任务完成"
+      ],
+      "details": {
+        "workspace": "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace"
+      }
+    },
+    {
+      "id": "task_36fcaea0",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "running",
+      "created_at": "2026-04-02T16:51:05+08:00",
+      "updated_at": "2026-04-02T16:51:05+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 0,
+      "summary": "",
+      "result": "",
+      "timeline": [
+        "2026-04-02T16:51:05+08:00 | 已创建任务：启动检查",
+        "2026-04-02T16:51:05+08:00 | 当前步骤：加载工作区"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_75893034",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T16:55:57+08:00",
+      "updated_at": "2026-04-02T16:56:02+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-02T16:55:57+08:00 | 已创建任务：启动检查",
+        "2026-04-02T16:55:57+08:00 | 当前步骤：加载工作区",
+        "2026-04-02T16:55:59+08:00 | 执行步骤：加载工作区",
+        "2026-04-02T16:56:00+08:00 | 执行步骤：扫描待办",
+        "2026-04-02T16:56:02+08:00 | 执行步骤：准备入口",
+        "2026-04-02T16:56:02+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_1dabc2b1",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T17:06:07+08:00",
+      "updated_at": "2026-04-02T17:06:12+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-02T17:06:07+08:00 | 已创建任务：启动检查",
+        "2026-04-02T17:06:07+08:00 | 当前步骤：加载工作区",
+        "2026-04-02T17:06:09+08:00 | 执行步骤：加载工作区",
+        "2026-04-02T17:06:10+08:00 | 执行步骤：扫描待办",
+        "2026-04-02T17:06:12+08:00 | 执行步骤：准备入口",
+        "2026-04-02T17:06:12+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_cdc36817",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T20:39:07+08:00",
+      "updated_at": "2026-04-02T20:39:11+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-02T20:39:07+08:00 | 已创建任务：启动检查",
+        "2026-04-02T20:39:07+08:00 | 当前步骤：加载工作区",
+        "2026-04-02T20:39:08+08:00 | 执行步骤：加载工作区",
+        "2026-04-02T20:39:10+08:00 | 执行步骤：扫描待办",
+        "2026-04-02T20:39:11+08:00 | 执行步骤：准备入口",
+        "2026-04-02T20:39:11+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_4e81f603",
+      "kind": "next",
+      "title": "问下一步做什么",
+      "source": "sk-67be505913be4d97b0c49258769995f2",
+      "status": "terminated",
+      "created_at": "2026-04-02T20:43:01+08:00",
+      "updated_at": "2026-04-02T20:43:04+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 2,
+      "summary": "",
+      "result": "任务被终止：被新任务替换",
+      "timeline": [
+        "2026-04-02T20:43:01+08:00 | 已创建任务：问下一步做什么",
+        "2026-04-02T20:43:01+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T20:43:03+08:00 | 执行步骤：识别上下文",
+        "2026-04-02T20:43:04+08:00 | 执行步骤：生成草稿",
+        "2026-04-02T20:43:04+08:00 | 已终止：被新任务替换"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "next"
+      }
+    },
+    {
+      "id": "task_a2695b6b",
+      "kind": "summary",
+      "title": "总结当前内容",
+      "source": "sk-67be505913be4d97b0c49258769995f2",
+      "status": "terminated",
+      "created_at": "2026-04-02T20:43:04+08:00",
+      "updated_at": "2026-04-02T20:43:07+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 1,
+      "summary": "",
+      "result": "任务被终止：被新任务替换",
+      "timeline": [
+        "2026-04-02T20:43:04+08:00 | 已创建任务：总结当前内容",
+        "2026-04-02T20:43:04+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T20:43:06+08:00 | 执行步骤：识别上下文",
+        "2026-04-02T20:43:07+08:00 | 已终止：被新任务替换"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "summary"
+      }
+    },
+    {
+      "id": "task_83a4ff29",
+      "kind": "explain",
+      "title": "解释当前内容",
+      "source": "sk-67be505913be4d97b0c49258769995f2",
+      "status": "completed",
+      "created_at": "2026-04-02T20:43:07+08:00",
+      "updated_at": "2026-04-02T20:43:11+08:00",
+      "steps": [
+        "识别上下文",
+        "生成草稿",
+        "输出结果"
+      ],
+      "current_step_index": 3,
+      "summary": "解释 - 这段内容主要在讲：sk-67be505913be4d97b0c49258769995f2 - 它的重点词：暂无明显英文关键词 - 如果这是任务或方案，先确认目标、输入和约束。 - 如果这是知识内容，先提炼概念、关系和结论。",
+      "result": "解释\n- 这段内容主要在讲：sk-67be505913be4d97b0c49258769995f2\n- 它的重点词：暂无明显英文关键词\n- 如果这是任务或方案，先确认目标、输入和约束。\n- 如果这是知识内容，先提炼概念、关系和结论。",
+      "timeline": [
+        "2026-04-02T20:43:07+08:00 | 已创建任务：解释当前内容",
+        "2026-04-02T20:43:07+08:00 | 当前步骤：识别上下文",
+        "2026-04-02T20:43:08+08:00 | 执行步骤：识别上下文",
+        "2026-04-02T20:43:09+08:00 | 执行步骤：生成草稿",
+        "2026-04-02T20:43:11+08:00 | 执行步骤：输出结果",
+        "2026-04-02T20:43:11+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "clipboard",
+        "action": "explain"
+      }
+    },
+    {
+      "id": "task_428c3b26",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T20:59:06+08:00",
+      "updated_at": "2026-04-02T20:59:10+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-02T20:59:06+08:00 | 已创建任务：启动检查",
+        "2026-04-02T20:59:06+08:00 | 当前步骤：加载工作区",
+        "2026-04-02T20:59:07+08:00 | 执行步骤：加载工作区",
+        "2026-04-02T20:59:08+08:00 | 执行步骤：扫描待办",
+        "2026-04-02T20:59:10+08:00 | 执行步骤：准备入口",
+        "2026-04-02T20:59:10+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_d96082cb",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-02T22:54:15+08:00",
+      "updated_at": "2026-04-02T22:54:19+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-02T22:54:15+08:00 | 已创建任务：启动检查",
+        "2026-04-02T22:54:15+08:00 | 当前步骤：加载工作区",
+        "2026-04-02T22:54:17+08:00 | 执行步骤：加载工作区",
+        "2026-04-02T22:54:18+08:00 | 执行步骤：扫描待办",
+        "2026-04-02T22:54:19+08:00 | 执行步骤：准备入口",
+        "2026-04-02T22:54:19+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "id": "task_fbbe477e",
+      "kind": "boot",
+      "title": "启动检查",
+      "source": "",
+      "status": "completed",
+      "created_at": "2026-04-03T00:56:34+08:00",
+      "updated_at": "2026-04-03T00:56:37+08:00",
+      "steps": [
+        "加载工作区",
+        "扫描待办",
+        "准备入口"
+      ],
+      "current_step_index": 3,
+      "summary": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "result": "原型已完成启动检查，桌面入口和数据层已就绪。",
+      "timeline": [
+        "2026-04-03T00:56:34+08:00 | 已创建任务：启动检查",
+        "2026-04-03T00:56:34+08:00 | 当前步骤：加载工作区",
+        "2026-04-03T00:56:35+08:00 | 执行步骤：加载工作区",
+        "2026-04-03T00:56:36+08:00 | 执行步骤：扫描待办",
+        "2026-04-03T00:56:37+08:00 | 执行步骤：准备入口",
+        "2026-04-03T00:56:37+08:00 | 任务完成"
+      ],
+      "details": {
+        "source": "startup"
+      }
+    }
+  ],
+  "approvals": [
+    {
+      "id": "approval_cf07624b",
+      "task_id": "",
+      "action": "command_demo",
+      "risk": "yellow",
+      "description": "是否记录命令演示：dir",
+      "status": "pending",
+      "requested_at": "2026-04-02T16:27:30+08:00",
+      "decided_at": "",
+      "payload": {
+        "command": "dir"
+      },
+      "result_text": ""
+    }
+  ],
+  "logs": [
+    {
+      "timestamp": "2026-04-02T20:54:48+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 13
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:54:51+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 12
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:54:52+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 13
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:54:55+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:54:55+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:03+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:03+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:11+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:11+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:20+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:20+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:28+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:28+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:36+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:36+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:45+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:45+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:55:53+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:55:53+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:01+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:01+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:09+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:09+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:17+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 3
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:18+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:18+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:26+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:26+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:34+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:34+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:43+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:43+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:51+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:51+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:56:59+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:56:59+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:07+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:08+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:15+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 4
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:16+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:16+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:24+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:25+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:33+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:33+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:41+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:41+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:50+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:50+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:57:58+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:57:58+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:06+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:06+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:14+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:14+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:22+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:22+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:31+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:31+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:39+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:39+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:47+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:47+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:58:56+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:58:56+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:04+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:04+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:06+08:00",
+      "level": "info",
+      "category": "system.startup",
+      "message": "原型已启动",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:06+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:06+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:06+08:00",
+      "level": "info",
+      "category": "boot.created",
+      "message": "任务已创建：启动检查",
+      "task_id": "task_428c3b26",
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:06+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 4
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:07+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：加载工作区",
+      "task_id": "task_428c3b26",
+      "details": {
+        "step": "加载工作区"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:08+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:08+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:08+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：扫描待办",
+      "task_id": "task_428c3b26",
+      "details": {
+        "step": "扫描待办"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:10+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：准备入口",
+      "task_id": "task_428c3b26",
+      "details": {
+        "step": "准备入口"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:10+08:00",
+      "level": "info",
+      "category": "boot.completed",
+      "message": "任务完成：启动检查",
+      "task_id": "task_428c3b26",
+      "details": {
+        "result": "原型已完成启动检查，桌面入口和数据层已就绪。"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:16+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:16+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:24+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:24+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:33+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:33+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:41+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:41+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:49+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:49+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T20:59:57+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T20:59:58+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:06+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:06+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:14+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:14+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:22+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:22+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:31+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:31+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:39+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:39+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:47+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:47+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:00:55+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:00:55+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:04+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:04+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:12+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:12+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:20+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:20+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:28+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:29+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:37+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:37+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:45+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:45+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:01:53+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:01:53+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:01+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:02+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:10+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:10+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:18+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:18+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:26+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:26+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:35+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:35+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:43+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:43+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:51+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:02:51+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:02:52+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 40
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:00+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:00+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:08+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:08+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:16+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:16+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:24+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:25+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:33+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:33+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:41+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:41+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:49+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:49+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:03:57+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:03:57+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:06+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:06+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:14+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:14+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:22+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:22+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:31+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:31+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:39+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:39+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:47+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:47+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:04:55+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:04:55+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:03+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:04+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:12+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:12+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:20+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:20+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:28+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:28+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:36+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:36+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:45+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:45+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:05:53+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:05:53+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:01+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:01+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:09+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:10+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:18+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:18+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:26+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:26+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:34+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:34+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:42+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:43+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:51+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:51+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:06:59+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:06:59+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:07+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:07+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:15+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:15+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:24+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:24+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:32+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:32+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:40+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:40+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:48+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:48+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:07:57+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:07:57+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:05+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:05+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:13+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:13+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:21+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:22+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:30+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:30+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:38+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:38+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:46+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:46+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:08:55+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:08:55+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:03+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:03+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:11+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:11+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:19+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:20+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:28+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:28+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:36+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:36+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:44+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:44+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:09:53+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:09:53+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:01+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:01+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:09+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:09+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:17+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:17+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:26+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:26+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:34+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:34+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:42+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:42+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:50+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:50+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:10:59+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:10:59+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:07+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:07+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:15+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:15+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:23+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:24+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:32+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:32+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:40+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:41+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:49+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:49+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:11:57+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:11:57+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:32:33+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:32:33+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:34:06+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:34:06+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:34:14+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:34:14+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:34:22+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:34:22+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:34:30+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:34:30+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T21:34:38+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T21:34:38+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:15+08:00",
+      "level": "info",
+      "category": "system.startup",
+      "message": "原型已启动",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-02T22:54:15+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 0 个 Markdown 文件，识别 0 条待办，未完成 0 条，已完成 0 条",
+      "task_id": "",
+      "details": {
+        "pending": 0,
+        "completed": 0
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:15+08:00",
+      "level": "info",
+      "category": "boot.created",
+      "message": "任务已创建：启动检查",
+      "task_id": "task_d96082cb",
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:16+08:00",
+      "level": "info",
+      "category": "clipboard.text.captured",
+      "message": "检测到可处理的剪贴板文本。",
+      "task_id": "",
+      "details": {
+        "length": 13
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:17+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：加载工作区",
+      "task_id": "task_d96082cb",
+      "details": {
+        "step": "加载工作区"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:17+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 0 个 Markdown 文件，识别 0 条待办，未完成 0 条，已完成 0 条",
+      "task_id": "",
+      "details": {
+        "pending": 0,
+        "completed": 0
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:18+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：扫描待办",
+      "task_id": "task_d96082cb",
+      "details": {
+        "step": "扫描待办"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:19+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：准备入口",
+      "task_id": "task_d96082cb",
+      "details": {
+        "step": "准备入口"
+      }
+    },
+    {
+      "timestamp": "2026-04-02T22:54:19+08:00",
+      "level": "info",
+      "category": "boot.completed",
+      "message": "任务完成：启动检查",
+      "task_id": "task_d96082cb",
+      "details": {
+        "result": "原型已完成启动检查，桌面入口和数据层已就绪。"
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:33+08:00",
+      "level": "info",
+      "category": "system.startup",
+      "message": "原型已启动",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-03T00:56:34+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-03T00:56:34+08:00",
+      "level": "info",
+      "category": "todo.file.changed",
+      "message": "任务文件已变更：tasks\\sample_tasks.md",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-03T00:56:34+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:34+08:00",
+      "level": "info",
+      "category": "boot.created",
+      "message": "任务已创建：启动检查",
+      "task_id": "task_fbbe477e",
+      "details": {
+        "source": "startup"
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:34+08:00",
+      "level": "warn",
+      "category": "problem.error_text.detected",
+      "message": "检测到错误文本，可直接排查。",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-03T00:56:35+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：加载工作区",
+      "task_id": "task_fbbe477e",
+      "details": {
+        "step": "加载工作区"
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:35+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-03T00:56:35+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:36+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：扫描待办",
+      "task_id": "task_fbbe477e",
+      "details": {
+        "step": "扫描待办"
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:37+08:00",
+      "level": "info",
+      "category": "tool.call",
+      "message": "启动检查：准备入口",
+      "task_id": "task_fbbe477e",
+      "details": {
+        "step": "准备入口"
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:37+08:00",
+      "level": "info",
+      "category": "boot.completed",
+      "message": "任务完成：启动检查",
+      "task_id": "task_fbbe477e",
+      "details": {
+        "result": "原型已完成启动检查，桌面入口和数据层已就绪。"
+      }
+    },
+    {
+      "timestamp": "2026-04-03T00:56:44+08:00",
+      "level": "info",
+      "category": "todo.scan.started",
+      "message": "开始巡检 Markdown 任务文件",
+      "task_id": "",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-03T00:56:44+08:00",
+      "level": "info",
+      "category": "todo.tasks.parsed",
+      "message": "扫描 1 个 Markdown 文件，识别 3 条待办，未完成 2 条，已完成 1 条",
+      "task_id": "",
+      "details": {
+        "pending": 2,
+        "completed": 1
+      }
+    }
+  ],
+  "todo_items": [
+    {
+      "path": "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\tasks\\sample_tasks.md",
+      "relative_path": "tasks\\sample_tasks.md",
+      "line_no": 3,
+      "checked": false,
+      "text": "整理今天的需求反馈",
+      "mtime": 1775118409.773345
+    },
+    {
+      "path": "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\tasks\\sample_tasks.md",
+      "relative_path": "tasks\\sample_tasks.md",
+      "line_no": 4,
+      "checked": false,
+      "text": "检查复制内容触发是否正常",
+      "mtime": 1775118409.773345
+    },
+    {
+      "path": "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\tasks\\sample_tasks.md",
+      "relative_path": "tasks\\sample_tasks.md",
+      "line_no": 5,
+      "checked": true,
+      "text": "准备待办巡检样例",
+      "mtime": 1775118409.773345
+    }
+  ],
+  "task_mtimes": {
+    "C:\\Users\\33721\\Desktop\\Ciallo13\\workspace\\tasks\\sample_tasks.md": 1775118409.773345
+  }
+}
