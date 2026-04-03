@@ -1,0 +1,77 @@
+.orbWrap {
+  position: absolute;
+  right: 2rem;
+  display: grid;
+  justify-items: center;
+  gap: 0.65rem;
+}
+
+.orbWrap[data-edge='left'] {
+  left: 2rem;
+  right: auto;
+}
+
+.orb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 999px;
+  background: linear-gradient(145deg, rgba(15, 108, 189, 0.96), rgba(79, 158, 255, 0.92));
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: grab;
+  box-shadow: 0 16px 40px rgba(15, 108, 189, 0.24);
+  transition: transform 150ms ease, box-shadow 150ms ease, filter 150ms ease;
+}
+
+.orb:hover,
+.orb:focus-visible {
+  transform: translateY(-2px) scale(1.02);
+  filter: saturate(1.08);
+  box-shadow: 0 0 0 10px rgba(60, 148, 255, 0.12), 0 18px 42px rgba(15, 108, 189, 0.3);
+}
+
+.orb:active {
+  cursor: grabbing;
+}
+
+.badge {
+  position: absolute;
+  top: -0.45rem;
+  right: -0.55rem;
+  min-width: 1.1rem;
+  min-height: 1.1rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #0f6cbd;
+  font-size: 0.7rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.tooltip {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #223047;
+  font-size: 0.82rem;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 150ms ease, transform 150ms ease;
+  pointer-events: none;
+}
+
+.orbWrap:hover .tooltip,
+.orbWrap:focus-within .tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}

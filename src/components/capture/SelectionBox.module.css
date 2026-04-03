@@ -1,0 +1,81 @@
+.selectionBox {
+  position: absolute;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 1rem;
+  background: rgba(102, 189, 255, 0.12);
+  box-shadow:
+    0 0 0 1px rgba(68, 174, 255, 0.65),
+    inset 0 0 0 9999px rgba(255, 255, 255, 0.02);
+}
+
+.meta {
+  position: absolute;
+  top: 0.85rem;
+  left: 0.85rem;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: calc(100% - 1.7rem);
+}
+
+.dimensions,
+.hint {
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(11, 18, 32, 0.82);
+  color: #f8fbff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.hint {
+  color: #bfe8ff;
+}
+
+.corner {
+  position: absolute;
+  width: 0.95rem;
+  height: 0.95rem;
+  border: 3px solid #f8fbff;
+}
+
+.corner[data-corner='top-left'] {
+  top: -2px;
+  left: -2px;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: 0.6rem;
+}
+
+.corner[data-corner='top-right'] {
+  top: -2px;
+  right: -2px;
+  border-left: 0;
+  border-bottom: 0;
+  border-top-right-radius: 0.6rem;
+}
+
+.corner[data-corner='bottom-left'] {
+  bottom: -2px;
+  left: -2px;
+  border-right: 0;
+  border-top: 0;
+  border-bottom-left-radius: 0.6rem;
+}
+
+.corner[data-corner='bottom-right'] {
+  right: -2px;
+  bottom: -2px;
+  border-top: 0;
+  border-left: 0;
+  border-bottom-right-radius: 0.6rem;
+}
+
+@media (max-width: 768px) {
+  .meta {
+    top: 0.55rem;
+    left: 0.55rem;
+    max-width: calc(100% - 1.1rem);
+  }
+}

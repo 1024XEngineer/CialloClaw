@@ -1,0 +1,25 @@
+.app {
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+.sceneFrame {
+  position: relative;
+  width: min(100%, 90rem);
+}
+
+.app > [data-testid='surface-state'],
+.app > [data-testid='suggested-action'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,0 +1,9 @@
+:root {
+  color-scheme: light;
+  --color-background: #f2f4f7;
+  --color-surface: rgba(255, 255, 255, 0.88);
+  --color-border: rgba(15, 23, 42, 0.08);
+  --color-text: #132033;
+  --color-accent: #0f6cbd;
+  --shadow-shell: 0 24px 64px rgba(15, 23, 42, 0.16);
+}

@@ -1,0 +1,57 @@
+.card {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 0.85rem;
+  width: min(18rem, calc(100% - 2rem));
+  padding: 1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 1.35rem;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(18px);
+  touch-action: none;
+}
+
+.dragHandle {
+  color: #35506d;
+  cursor: grab;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stage {
+  margin: 0;
+  color: #17253b;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  gap: 0.65rem;
+}
+
+.primary,
+.secondary {
+  flex: 1;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 0.7rem 0.9rem;
+}
+
+.primary {
+  background: linear-gradient(135deg, rgba(15, 108, 189, 0.98), rgba(79, 158, 255, 0.94));
+  color: #f8fbff;
+}
+
+.secondary {
+  background: rgba(244, 247, 251, 0.96);
+  color: #17253b;
+}

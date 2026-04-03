@@ -1,0 +1,50 @@
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  cursor: crosshair;
+  background:
+    linear-gradient(rgba(9, 14, 26, 0.18), rgba(9, 14, 26, 0.28)),
+    radial-gradient(circle at top, rgba(92, 171, 255, 0.14), transparent 36%);
+}
+
+.instructions {
+  position: absolute;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.7rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(8, 13, 24, 0.82);
+  color: #f4f8ff;
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 40px rgba(8, 13, 24, 0.24);
+}
+
+.warning {
+  position: absolute;
+  bottom: 1.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.75rem 1rem;
+  border-radius: 999px;
+  background: rgba(125, 26, 26, 0.92);
+  color: #fff2f2;
+  font-size: 0.84rem;
+  font-weight: 700;
+  box-shadow: 0 18px 36px rgba(80, 12, 12, 0.24);
+}
+
+@media (max-width: 768px) {
+  .instructions,
+  .warning {
+    width: calc(100% - 2rem);
+    border-radius: 1rem;
+  }
+}

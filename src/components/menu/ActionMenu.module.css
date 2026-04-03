@@ -1,0 +1,45 @@
+.menu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  max-width: min(26rem, calc(100% - 2rem));
+  padding: 0.85rem;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 1.3rem;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(18px);
+}
+
+.action,
+.primary,
+.utility {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(245, 248, 252, 0.98), rgba(236, 242, 249, 0.94));
+  color: #17253b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 0.7rem 0.95rem;
+}
+
+.primary {
+  background: linear-gradient(135deg, rgba(15, 108, 189, 0.98), rgba(79, 158, 255, 0.94));
+  color: #f8fbff;
+}
+
+.utility {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+@media (max-width: 768px) {
+  .menu {
+    left: 1rem !important;
+    right: 1rem;
+    max-width: none;
+  }
+}
