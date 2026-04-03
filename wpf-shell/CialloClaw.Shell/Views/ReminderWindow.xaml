@@ -1,0 +1,39 @@
+﻿<Window x:Class="CialloClaw.Shell.Views.ReminderWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="提醒"
+        Width="320"
+        Height="166"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        AllowsTransparency="True"
+        Background="Transparent">
+    <Border CornerRadius="12" Background="#F8FCFF" BorderBrush="#BFD2E8" BorderThickness="1" Padding="10">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" />
+
+            <TextBlock Grid.Row="1"
+                       Margin="0,8,0,8"
+                       Text="{Binding Message}"
+                       TextWrapping="Wrap"
+                       Foreground="#3D5168" />
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Width="62" Height="28" Margin="0,0,6,0" Content="执行" Command="{Binding ExecuteCommand}" />
+                <Button Width="62" Height="28" Margin="0,0,6,0" Content="稍后" Command="{Binding LaterCommand}" />
+                <Button Width="74" Height="28" Content="关闭此类" Command="{Binding DisableCommand}" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

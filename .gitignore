@@ -1,0 +1,25 @@
+﻿# editor
+.idea/
+.vscode/
+.claude/
+
+# local caches
+.cache/
+dist/
+
+# go
+/go-core/*.exe
+/go-core/*.test
+/go-core/main.go.*
+
+# dotnet
+**/bin/
+**/obj/
+/wpf-shell/CialloClaw.Shell/artifacts/
+
+# temp
+*.tmp
+
+# os
+.DS_Store
+Thumbs.db
