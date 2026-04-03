@@ -1,0 +1,2461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Task Stage</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-1: #090b0e;
+      --bg-2: #101317;
+      --text: #f2f3f5;
+      --muted: rgba(242, 243, 245, 0.62);
+      --soft: rgba(242, 243, 245, 0.42);
+      --line: rgba(255, 255, 255, 0.09);
+      --line-strong: rgba(255, 255, 255, 0.14);
+      --panel: rgba(176, 176, 176, 0.16);
+      --panel-strong: rgba(186, 186, 186, 0.19);
+      --card: rgba(226, 226, 226, 0.1);
+      --card-quiet: rgba(220, 220, 220, 0.07);
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+      --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.22);
+      --running: #91a8bb;
+      --completed: #94aa99;
+      --blocked: #c29999;
+      --waiting: #c4ab89;
+      --paused: #9a91a4;
+      --radius-panel: 36px;
+      --radius-card: 28px;
+      --radius-soft: 22px;
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(160, 160, 160, 0.05), transparent 24%),
+        radial-gradient(circle at 78% 24%, rgba(144, 144, 144, 0.04), transparent 20%),
+        linear-gradient(180deg, var(--bg-2), var(--bg-1));
+      font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 6, 9, 0.56);
+      backdrop-filter: blur(12px);
+      pointer-events: none;
+    }
+
+    button, input, textarea { font: inherit; }
+
+    #app {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 26px;
+      isolation: isolate;
+    }
+
+    .ambient-wash {
+      position: fixed;
+      inset: auto;
+      border-radius: 50%;
+      filter: blur(40px);
+      opacity: 0.12;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+
+    .ambient-wash.a { width: 340px; height: 340px; left: 10%; top: 12%; background: rgba(170, 170, 170, 0.24); }
+    .ambient-wash.b { width: 280px; height: 280px; right: 12%; bottom: 14%; background: rgba(140, 140, 140, 0.18); }
+
+    .stage-shell {
+      position: relative;
+      width: min(1380px, calc(100vw - 72px));
+      height: min(880px, calc(100vh - 68px));
+      border-radius: 42px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: linear-gradient(180deg, rgba(19, 22, 27, 0.86), rgba(12, 14, 18, 0.8));
+      box-shadow: 0 28px 120px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      overflow: hidden;
+    }
+
+    .stage-shell::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 22%, transparent 78%, rgba(255,255,255,0.015));
+      pointer-events: none;
+    }
+
+    .stage-topbar {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      top: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .topbar-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .topbar-note,
+    .meta-chip,
+    .panel-kicker,
+    .page-name,
+    .page-dot,
+    .tiny-copy,
+    .mini-label,
+    .status-pill,
+    .quiet-chip,
+    .dot-button,
+    .soft-button,
+    .toast,
+    .card-hint {
+      letter-spacing: 0.02em;
+    }
+
+    .topbar-note {
+      color: var(--soft);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+
+    .meta-chip,
+    .quiet-chip,
+    .status-pill,
+    .mini-dot,
+    .info-tag,
+    .action-pill,
+    .memory-chip,
+    .context-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      font-size: 12px;
+      color: rgba(242, 243, 245, 0.72);
+      backdrop-filter: blur(10px);
+    }
+
+    .meta-chip { pointer-events: auto; }
+
+    .chip-dot,
+    .status-pill::before,
+    .mini-dot::before,
+    .info-tag::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 4px rgba(255,255,255,0.05);
+    }
+
+    .chip-dot { color: var(--running); }
+    .status-running { color: var(--running); }
+    .status-completed { color: var(--completed); }
+    .status-blocked { color: var(--blocked); }
+    .status-waiting_user,
+    .status-waiting_permission { color: var(--waiting); }
+    .status-paused { color: var(--paused); }
+
+    .stage-pages {
+      position: absolute;
+      inset: 0;
+    }
+
+    .page {
+      position: absolute;
+      inset: 64px 56px 54px;
+      opacity: 0;
+      transform: translateY(18px) scale(0.988);
+      pointer-events: none;
+      filter: blur(8px);
+      transition: opacity 0.6s var(--ease), transform 0.6s var(--ease), filter 0.6s var(--ease);
+    }
+
+    .page.active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+      filter: blur(0);
+    }
+
+    .page-scene {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .scene-panel,
+    .floating-card,
+    .column-card,
+    .summary-card,
+    .profile-card,
+    .brief-detail-card,
+    .full-detail-card,
+    .cluster-panel,
+    .overlay-card,
+    .input-sheet,
+    .toast {
+      position: relative;
+      border-radius: var(--radius-panel);
+      background: linear-gradient(180deg, var(--panel-strong), var(--panel));
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.05);
+      backdrop-filter: blur(18px) saturate(108%);
+      overflow: hidden;
+    }
+
+    .scene-panel::before,
+    .floating-card::before,
+    .column-card::before,
+    .summary-card::before,
+    .profile-card::before,
+    .brief-detail-card::before,
+    .full-detail-card::before,
+    .cluster-panel::before,
+    .overlay-card::before,
+    .input-sheet::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(155deg, rgba(255,255,255,0.05), transparent 28%, transparent 72%, rgba(255,255,255,0.02));
+      pointer-events: none;
+    }
+
+    .scene-panel {
+      position: absolute;
+      left: 50%;
+      top: 52%;
+      transform: translate(-50%, -50%);
+      width: min(1120px, 86%);
+      height: min(560px, 72%);
+      padding: 26px;
+    }
+
+    .panel-kicker {
+      position: absolute;
+      right: 26px;
+      top: 18px;
+      font-size: 11px;
+      color: rgba(242,243,245,0.42);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+
+    .panel-caption {
+      position: absolute;
+      left: 26px;
+      top: 18px;
+      font-size: 13px;
+      color: rgba(242,243,245,0.54);
+    }
+
+    .task-panel {
+      width: min(1100px, 90%);
+      height: min(520px, 68%);
+      top: 54%;
+    }
+
+    .task-cluster {
+      position: absolute;
+      inset: clamp(52px, 8%, 68px) clamp(34px, 4.6%, 48px) clamp(92px, 14%, 108px) clamp(34px, 4.6%, 48px);
+    }
+
+    .floating-card {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      border-radius: 26px;
+      padding: 14px 16px;
+      background: linear-gradient(180deg, rgba(230,230,230,0.11), rgba(210,210,210,0.07));
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.05);
+      cursor: pointer;
+      transition: transform 0.26s var(--ease), box-shadow 0.26s var(--ease), opacity 0.26s var(--ease), border-color 0.26s var(--ease);
+    }
+
+    .floating-card:hover,
+    .column-card:hover,
+    .summary-card:hover,
+    .profile-card:hover,
+    .todo-item:hover,
+    .cluster-option:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 24px 54px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.06);
+      border-color: rgba(255,255,255,0.14);
+    }
+
+    .floating-card.quiet {
+      background: linear-gradient(180deg, rgba(222,222,222,0.07), rgba(200,200,200,0.05));
+      opacity: 0.76;
+    }
+
+    .floating-card.dimmed,
+    .column-card.dimmed,
+    .summary-card.dimmed,
+    .profile-card.dimmed,
+    .scene-panel.dimmed {
+      opacity: 0.26;
+      transform: translate(-50%, -50%) scale(0.985);
+      pointer-events: none;
+    }
+
+    .floating-card.position-0 { left: 34%; top: 8%; width: clamp(272px, 30%, 340px); height: clamp(194px, 44%, 236px); z-index: 6; }
+    .floating-card.position-1 { left: 8%; top: 14%; width: clamp(184px, 21%, 236px); height: clamp(148px, 34%, 186px); z-index: 4; }
+    .floating-card.position-2 { left: 72%; top: 12%; width: clamp(184px, 20%, 236px); height: clamp(148px, 34%, 186px); z-index: 3; }
+    .floating-card.position-3 { left: 10%; top: 58%; width: clamp(178px, 19%, 228px); height: clamp(144px, 30%, 180px); z-index: 2; }
+    .floating-card.position-4 { left: 42%; top: 60%; width: clamp(194px, 22%, 246px); height: clamp(148px, 31%, 186px); z-index: 5; }
+    .floating-card.position-5 { left: 69%; top: 50%; width: clamp(182px, 19%, 232px); height: clamp(146px, 30%, 182px); z-index: 1; }
+
+    .task-card-title,
+    .section-title,
+    .column-title,
+    .summary-title,
+    .profile-title,
+    .brief-title,
+    .full-title,
+    .overlay-title,
+    .input-title {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+
+    .task-card-title {
+      font-size: 16px;
+      line-height: 1.22;
+      margin-bottom: 10px;
+    }
+
+    .floating-card.position-0 .task-card-title {
+      font-size: 20px;
+      margin-bottom: 12px;
+    }
+
+    .task-card-meta,
+    .task-card-stage,
+    .task-card-summary,
+    .brief-copy,
+    .summary-copy,
+    .profile-copy,
+    .list-copy,
+    .history-copy,
+    .overlay-copy,
+    .input-helper {
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    .task-card-stage { margin-top: 10px; }
+    .task-card-summary {
+      margin-top: 8px;
+      font-size: 12px;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 4;
+      overflow: hidden;
+    }
+
+    .floating-card.position-0 .task-card-summary {
+      -webkit-line-clamp: 5;
+      font-size: 13px;
+    }
+
+    .dot-button {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(72, 68, 70, 0.72);
+      color: rgba(255,255,255,0.72);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      z-index: 11;
+      transition: transform 0.24s var(--ease), background 0.24s var(--ease), color 0.24s var(--ease);
+    }
+
+    .dot-button:hover {
+      transform: translateY(-50%) scale(1.04);
+      background: rgba(88, 82, 85, 0.86);
+      color: rgba(255,255,255,0.92);
+    }
+
+    .dot-button.prev { left: 28px; }
+    .dot-button.next { right: 28px; }
+    .dot-button svg { width: 14px; height: 14px; }
+
+    .cluster-trigger {
+      position: absolute;
+      right: 36px;
+      bottom: 26px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      color: rgba(242,243,245,0.56);
+      font-size: 12px;
+    }
+
+    .cluster-stack {
+      display: flex;
+      gap: 6px;
+    }
+
+    .cluster-stack span {
+      width: 30px;
+      height: 42px;
+      border-radius: 12px;
+      background: rgba(232,232,232,0.12);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: block;
+    }
+
+    .cluster-stack span:nth-child(2) { transform: translateY(4px); opacity: 0.88; }
+    .cluster-stack span:nth-child(3) { transform: translateY(8px); opacity: 0.72; }
+
+    .cluster-panel {
+      position: absolute;
+      right: 28px;
+      bottom: 22px;
+      width: 314px;
+      max-height: 320px;
+      padding: 18px;
+      border-radius: 28px;
+      z-index: 13;
+      overscroll-behavior: contain;
+      overflow-y: auto;
+      animation: layerIn 0.34s var(--ease);
+    }
+
+    .cluster-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+      overflow-x: hidden;
+    }
+
+    .cluster-option,
+    .todo-item,
+    .soft-button,
+    .action-pill,
+    .ghost-button,
+    .submit-button,
+    .close-icon {
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.045);
+      color: rgba(242,243,245,0.86);
+      border-radius: 16px;
+      cursor: pointer;
+      transition: transform 0.22s var(--ease), background 0.22s var(--ease), border-color 0.22s var(--ease);
+    }
+
+    .cluster-option {
+      padding: 12px 14px;
+      text-align: left;
+    }
+
+    .cluster-option strong,
+    .todo-item strong,
+    .history-row strong,
+    .summary-block strong,
+    .profile-block strong,
+    .overlay-block strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+      color: rgba(255,255,255,0.92);
+    }
+
+    .task-layer,
+    .overlay-scrim,
+    .input-scrim {
+      position: absolute;
+      inset: 0;
+      display: none;
+      z-index: 18;
+    }
+
+    .task-layer.visible,
+    .overlay-scrim.visible,
+    .input-scrim.visible {
+      display: block;
+      animation: fadeIn 0.24s var(--ease);
+    }
+
+    .task-layer::before,
+    .overlay-scrim::before,
+    .input-scrim::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(7, 8, 11, 0.34);
+      backdrop-filter: blur(8px);
+    }
+
+    .brief-detail-card,
+    .full-detail-card,
+    .overlay-card,
+    .input-sheet {
+      position: absolute;
+      z-index: 1;
+      animation: layerIn 0.34s var(--ease);
+    }
+
+    .brief-detail-card {
+      left: 50%;
+      top: 72px;
+      transform: translateX(-50%);
+      width: 320px;
+      min-height: 258px;
+      padding: 24px 22px 20px;
+      border-radius: 30px;
+      background: linear-gradient(180deg, rgba(232,232,232,0.12), rgba(214,214,214,0.08));
+    }
+
+    .full-detail-card {
+      left: 26px;
+      top: 22px;
+      width: min(650px, calc(100% - 390px));
+      min-height: 340px;
+      padding: 22px 22px 18px;
+      border-radius: 32px;
+      background: linear-gradient(180deg, rgba(236,236,236,0.12), rgba(216,216,216,0.08));
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes layerIn {
+      from { opacity: 0; transform: translateY(14px) scale(0.975); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .brief-title {
+      font-size: 28px;
+      line-height: 1.08;
+      margin-bottom: 12px;
+      padding-right: 28px;
+    }
+
+    .brief-copy { margin: 16px 0 0; }
+
+    .brief-actions,
+    .full-actions,
+    .overlay-actions,
+    .input-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .brief-actions { margin-top: 18px; }
+
+    .soft-button,
+    .ghost-button,
+    .submit-button,
+    .action-pill {
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+
+    .full-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 10px;
+      padding-right: 34px;
+    }
+
+    .full-title {
+      font-size: 28px;
+      line-height: 1.1;
+      margin-bottom: 10px;
+    }
+
+    .close-icon {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+    }
+
+    .full-description {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .full-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .detail-block,
+    .summary-block,
+    .history-row,
+    .profile-block,
+    .overlay-block,
+    .todo-item,
+    .bucket-item {
+      border-radius: 22px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.05);
+      padding: 14px 15px;
+    }
+
+    .detail-block h4,
+    .section-title,
+    .column-title,
+    .summary-title,
+    .profile-title,
+    .overlay-block h4 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: rgba(242,243,245,0.5);
+      margin: 0 0 12px;
+      font-family: inherit;
+      font-weight: 600;
+    }
+
+    .stage-track {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .stage-step {
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      font-size: 12px;
+      color: rgba(242,243,245,0.64);
+    }
+
+    .stage-step.done { background: rgba(148, 170, 153, 0.12); color: var(--completed); }
+    .stage-step.current { background: rgba(145, 168, 187, 0.16); color: var(--running); }
+
+    .detail-list,
+    .profile-list,
+    .overlay-list,
+    .todo-list,
+    .history-list,
+    .summary-list,
+    .bucket-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .full-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .footer-dots {
+      position: absolute;
+      right: 22px;
+      bottom: 18px;
+      display: flex;
+      gap: 8px;
+    }
+
+    .footer-dots span {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: rgba(232,232,232,0.32);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: block;
+    }
+
+    .footer-dots span.active { background: rgba(96, 88, 92, 0.9); }
+
+    .todo-panel { width: min(1120px, 86%); height: min(540px, 70%); }
+
+    .todo-layout {
+      position: absolute;
+      inset: 56px 28px 26px;
+      display: grid;
+      grid-template-columns: 0.8fr 1.35fr 0.92fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .column-card,
+    .summary-card,
+    .profile-card {
+      border-radius: 28px;
+      padding: 16px 16px 14px;
+      background: linear-gradient(180deg, rgba(230,230,230,0.11), rgba(208,208,208,0.07));
+      border: 1px solid rgba(255,255,255,0.08);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      cursor: default;
+    }
+
+    .card-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 8px;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.12) transparent;
+    }
+
+    .column-card.completed-column { opacity: 0.82; }
+
+    .column-title,
+    .summary-title,
+    .profile-title {
+      font-size: 20px;
+      line-height: 1.15;
+      margin-bottom: 12px;
+    }
+
+    .column-subcopy,
+    .summary-copy,
+    .profile-copy { margin-bottom: 12px; }
+
+    .day-bucket { margin-bottom: 14px; }
+    .day-bucket:last-child { margin-bottom: 0; }
+
+    .day-label {
+      font-size: 11px;
+      color: rgba(242,243,245,0.44);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      margin-bottom: 8px;
+    }
+
+    .bucket-item,
+    .todo-item {
+      cursor: pointer;
+      transition: transform 0.22s var(--ease), background 0.22s var(--ease), border-color 0.22s var(--ease);
+    }
+
+    .summary-panel { width: min(1140px, 87%); height: min(560px, 72%); }
+
+    .summary-layout {
+      position: absolute;
+      inset: 56px 28px 26px;
+      display: grid;
+      grid-template-columns: 1.72fr 0.84fr;
+      gap: 18px;
+      min-height: 0;
+    }
+
+    .report-card {
+      padding: 18px 18px 16px;
+      min-height: 0;
+    }
+
+    .report-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .history-rail {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 14px;
+      min-height: 0;
+    }
+
+    .profile-panel { width: min(1040px, 82%); height: min(520px, 66%); }
+
+    .profile-layout {
+      position: absolute;
+      inset: 30px 32px 26px;
+    }
+
+    .profile-card.main {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(440px, 52%);
+      min-height: 240px;
+      padding: 24px 22px 20px;
+      cursor: pointer;
+    }
+
+    .profile-card.side-left {
+      position: absolute;
+      left: 34px;
+      top: 54px;
+      width: 220px;
+      min-height: 160px;
+      opacity: 0.84;
+      cursor: pointer;
+    }
+
+    .profile-card.side-right {
+      position: absolute;
+      right: 36px;
+      bottom: 26px;
+      width: 246px;
+      min-height: 174px;
+      opacity: 0.8;
+      cursor: pointer;
+    }
+
+    .profile-button-row {
+      margin-top: 18px;
+      display: flex;
+      justify-content: flex-start;
+    }
+
+    .page-indicator {
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 12;
+      pointer-events: none;
+    }
+
+    .page-dot {
+      width: 20px;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .page-dot::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.48);
+      opacity: 0;
+      transition: opacity 0.24s var(--ease);
+    }
+
+    .page-dot.active::after { opacity: 1; }
+
+    .page-name {
+      font-size: 12px;
+      color: rgba(242,243,245,0.34);
+      min-width: 74px;
+      text-align: center;
+    }
+
+    .overlay-card {
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(760px, calc(100% - 160px));
+      max-height: calc(100% - 120px);
+      padding: 24px 24px 22px;
+      border-radius: 30px;
+      overflow: auto;
+    }
+
+    .overlay-title {
+      font-size: 28px;
+      line-height: 1.1;
+      margin: 0 0 10px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+    }
+
+    .overlay-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding-right: 34px;
+      margin-bottom: 18px;
+    }
+
+    .overlay-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .overlay-block {
+      cursor: default;
+    }
+
+    .overlay-card::-webkit-scrollbar,
+    .input-sheet textarea::-webkit-scrollbar,
+    .cluster-panel::-webkit-scrollbar,
+    .card-scroll::-webkit-scrollbar { width: 8px; }
+    .overlay-card::-webkit-scrollbar-thumb,
+    .input-sheet textarea::-webkit-scrollbar-thumb,
+    .cluster-panel::-webkit-scrollbar-thumb,
+    .card-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.08);
+      border-radius: 999px;
+    }
+
+    .input-sheet {
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(520px, calc(100% - 120px));
+      padding: 22px 22px 18px;
+      border-radius: 28px;
+    }
+
+    .input-title {
+      font-size: 28px;
+      line-height: 1.08;
+      margin: 0 0 8px;
+    }
+
+    .field {
+      margin-top: 16px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--soft);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      margin-bottom: 10px;
+    }
+
+    .field textarea {
+      width: 100%;
+      min-height: 128px;
+      resize: vertical;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      padding: 14px 16px;
+      outline: none;
+    }
+
+    .toast-stack {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      width: 320px;
+      display: grid;
+      gap: 10px;
+      z-index: 26;
+      pointer-events: none;
+    }
+
+    .toast {
+      padding: 14px 15px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(206,206,206,0.13), rgba(184,184,184,0.09));
+      animation: layerIn 0.3s var(--ease);
+    }
+
+    .toast-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 11px;
+      color: rgba(242,243,245,0.46);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      margin-bottom: 6px;
+    }
+
+    .small-empty {
+      color: rgba(242,243,245,0.34);
+      font-size: 12px;
+      padding: 8px 2px 2px;
+    }
+
+    @media (max-width: 1480px) {
+      .stage-shell { width: calc(100vw - 48px); height: calc(100vh - 48px); }
+      .dot-button.prev { left: 84px; }
+      .dot-button.next { right: 84px; }
+      .full-detail-card { width: min(620px, calc(100% - 360px)); }
+    }
+
+    @media (max-width: 1180px) {
+      html, body { overflow: auto; }
+      #app { padding: 16px; }
+      .stage-shell {
+        width: min(100%, 1120px);
+        min-height: 980px;
+        height: auto;
+      }
+      .page {
+        position: relative;
+        inset: auto;
+        min-height: 900px;
+      }
+      .scene-panel {
+        width: calc(100% - 30px);
+        height: auto;
+        min-height: 430px;
+      }
+      .task-panel {
+        min-height: 640px;
+      }
+      .task-panel,
+      .todo-panel,
+      .summary-panel,
+      .profile-panel {
+        width: calc(100% - 30px);
+      }
+      .todo-layout,
+      .summary-layout {
+        position: relative;
+        inset: auto;
+        margin-top: 34px;
+      }
+      .todo-layout {
+        grid-template-columns: 1fr;
+      }
+      .summary-layout {
+        grid-template-columns: 1fr;
+      }
+      .history-rail {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: none;
+      }
+      .profile-card.main,
+      .profile-card.side-left,
+      .profile-card.side-right {
+        position: relative;
+        inset: auto;
+        transform: none;
+        width: 100%;
+        margin-top: 14px;
+      }
+      .profile-layout {
+        position: relative;
+        inset: auto;
+        margin-top: 34px;
+      }
+      .brief-detail-card,
+      .full-detail-card,
+      .overlay-card,
+      .input-sheet {
+        width: calc(100% - 40px);
+        left: 20px;
+        right: 20px;
+        transform: none;
+      }
+      .brief-detail-card { top: 32px; }
+      .full-detail-card { top: 24px; }
+      .full-body { grid-template-columns: 1fr; }
+      .dot-button.prev { left: 24px; }
+      .dot-button.next { right: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-wash a"></div>
+  <div class="ambient-wash b"></div>
+  <div id="app"></div>
+
+  <script>
+    /** -------------------------------------------------------
+     * MOCK DATA LAYER
+     * 保留原有任务数据与摘要数据，后续替换时优先改这里。
+     * ------------------------------------------------------ */
+    const TASKS = [
+      {
+        id: "t1",
+        name: "重构桌面任务舞台原型",
+        type: "design_system",
+        status: "running",
+        phase: "生成结果",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 3,
+        updatedAt: "刚刚",
+        summary: "主舞台结构已经稳定，正在收拢交互和视觉节奏。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: [
+          "三页轮播结构已经接通：任务舞台 / 工作总览 / 协作镜像。",
+          "主任务详情卡支持阶段轨迹、产出预览、阻塞和依赖说明。",
+          "动作脊已挂入补充信息、暂停/继续、重试步骤、授权等入口。"
+        ],
+        memories: ["你偏好先看当前主任务，再看并行态势", "你不喜欢传统后台式结构", "你更在意进度和卡点，而不是功能入口"],
+        contexts: ["prototype/index.html", "最近一次交互：要求 3 个大页面自动循环", "引用：状态色和桌面暗幕氛围要求"],
+        dependencies: ["等待将日报摘要文案压缩到更安静的层次", "与任务簇展开层共享关闭交互语言"],
+        priority: "高",
+        history: ["22:08 收敛了页面切换节奏", "22:15 任务详情态加上动作脊", "22:23 减弱已完成任务的视觉存在感"]
+      },
+      {
+        id: "t2",
+        name: "归档昨日研究摘录",
+        type: "research",
+        status: "completed",
+        phase: "完成",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 5,
+        updatedAt: "12 分钟前",
+        summary: "已压缩为 4 条可复用判断，等待下一轮引用。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: ["输出为 1 份极简研究摘要", "提炼了 2 条关于弱分页指示的设计原则"],
+        memories: ["你希望完成项更安静，只保留完成感"],
+        contexts: ["history/2026-04-02", "memory cluster / visual restraint"],
+        dependencies: [],
+        priority: "中",
+        history: ["21:04 完成归档", "21:08 被工作总览页引用"]
+      },
+      {
+        id: "t3",
+        name: "清理历史任务摘要",
+        type: "ops",
+        status: "blocked",
+        phase: "处理中",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 2,
+        updatedAt: "7 分钟前",
+        summary: "遇到重复记录冲突，无法自动归并历史节点。",
+        blockerReason: "事件时间戳不一致，当前无法判断哪条记录应作为主轨迹。",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: ["已定位到 3 组冲突记录", "等待选择保留规则后可继续"],
+        memories: ["你一般保留最近人工确认过的版本"],
+        contexts: ["history summary store", "task event timeline"],
+        dependencies: ["需要任务事件源完成去重"],
+        priority: "高",
+        history: ["22:01 自动归并失败", "22:05 记录冲突原因", "22:12 进入阻塞态"]
+      },
+      {
+        id: "t4",
+        name: "补充权限说明文案",
+        type: "writing",
+        status: "waiting_permission",
+        phase: "等待确认",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 4,
+        updatedAt: "3 分钟前",
+        summary: "文案草稿已就绪，但需要读取本地文件目录权限后才能补全示例。",
+        blockerReason: "",
+        needsPermission: true,
+        needsUser: false,
+        outputPreview: ["已生成权限弹层 copy 草稿", "缺少本地目录示例和目标路径说明"],
+        memories: ["你希望权限提示更明确，不要像系统设置页"],
+        contexts: ["permission request copy", "workspace file read hint"],
+        dependencies: ["需要授权：读取 E:/workspace/example"],
+        priority: "中",
+        history: ["22:09 需要示例权限", "22:14 转入等待权限"]
+      },
+      {
+        id: "t5",
+        name: "确认日报摘要口吻",
+        type: "review",
+        status: "waiting_user",
+        phase: "等待确认",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 4,
+        updatedAt: "1 分钟前",
+        summary: "我倾向使用更冷静的日报口吻，需要你确认是否继续。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: true,
+        outputPreview: ["候选口吻 A：更像任务接力摘要", "候选口吻 B：更像安静的日报折页"],
+        memories: ["你不喜欢长文章式总结", "你更愿意接受结构化短句"],
+        contexts: ["work overview / summary card"],
+        dependencies: ["等待用户确认最终语气"],
+        priority: "高",
+        history: ["22:16 生成两版摘要口吻", "22:20 请求确认"]
+      },
+      {
+        id: "t6",
+        name: "压缩待办预览层级",
+        type: "planning",
+        status: "paused",
+        phase: "处理中",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 2,
+        updatedAt: "18 分钟前",
+        summary: "为了优先完成主舞台，暂时挂起待办预览的次级细节。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: ["已定义三层待办分组：现在该处理 / 很快会轮到 / 暂时挂起"],
+        memories: ["你希望待办只做预览，不要变成完整任务管理器"],
+        contexts: ["todo preview groups"],
+        dependencies: [],
+        priority: "低",
+        history: ["21:58 暂停以给主任务让路"]
+      },
+      {
+        id: "t7",
+        name: "整理常用记忆簇",
+        type: "memory",
+        status: "running",
+        phase: "处理中",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 2,
+        updatedAt: "9 分钟前",
+        summary: "已聚合 4 组高频记忆，正在删减冗余引用。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: ["高频记忆簇：视觉克制 / 先看主任务 / 偏好结构化摘要 / 慎用复杂控件"],
+        memories: ["你经常引用最近 3 次对话中的视觉约束"],
+        contexts: ["memory cluster ranking", "collaboration mirror"],
+        dependencies: [],
+        priority: "中",
+        history: ["22:02 开始聚类", "22:10 已压缩 11 条到 4 簇"]
+      },
+      {
+        id: "t8",
+        name: "生成协作镜像摘要",
+        type: "analysis",
+        status: "completed",
+        phase: "完成",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 5,
+        updatedAt: "24 分钟前",
+        summary: "协作镜像的只读结构已准备好，可按引用依据展开查看。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: ["镜像卡包含：高频任务类型 / 输出偏好 / 权限使用概览"],
+        memories: ["这里不该像用户画像，只展示与协作执行相关的理解"],
+        contexts: ["mirror cards / evidence view"],
+        dependencies: [],
+        priority: "中",
+        history: ["21:40 完成初稿", "21:53 通过结构检查"]
+      },
+      {
+        id: "t9",
+        name: "验证本地离线交互",
+        type: "qa",
+        status: "running",
+        phase: "收集资料",
+        stages: ["理解需求", "收集资料", "处理中", "生成结果", "等待确认", "完成"],
+        currentStageIndex: 1,
+        updatedAt: "5 分钟前",
+        summary: "正在核对所有交互都不依赖网络资源。",
+        blockerReason: "",
+        needsPermission: false,
+        needsUser: false,
+        outputPreview: ["已确认：无外部库、无 CDN、无远程字体"],
+        memories: ["你要求双击本地文件即可运行"],
+        contexts: ["offline prototype constraints"],
+        dependencies: ["等页面详情态全部接通后再做整体验证"],
+        priority: "高",
+        history: ["22:11 开始离线检查"]
+      }
+    ];
+
+    const DAILY_SUMMARY = {
+      headline: "今天共推进 6 项交办，当前有 1 项待你确认，1 项待授权。",
+      done: [
+        "完成协作镜像结构和引用依据块",
+        "归档昨日研究摘要并压缩成可复用判断",
+        "收敛已完成任务卡的薄层视觉"
+      ],
+      running: [
+        "任务舞台正在补足详情态动作闭环",
+        "常用记忆簇正在删减冗余引用",
+        "离线交互核查正在进行"
+      ],
+      waiting: [
+        "确认日报摘要口吻是否继续维持安静折页风格",
+        "授予本地目录读取权限以补全权限示例"
+      ],
+      incidents: [
+        "历史记录摘要出现重复事件时间戳冲突，需要重试归并规则"
+      ],
+      detail: [
+        "当前主任务已经从结构搭建进入结果收拢阶段。",
+        "并行任务里有一项阻塞、一项待用户、一项待权限，适合优先处理确认类输入。",
+        "整体界面已具备演示完整性，剩余重点是语言压缩和边角一致性。"
+      ]
+    };
+
+    const CONVERSATION_DIGESTS = {
+      recent: [
+        {
+          title: "任务舞台不应像 dashboard",
+          time: "刚刚",
+          summary: "反复确认了主界面首先服务于‘快速判断做到哪、哪里卡住、需不需要你介入’，而不是功能罗列。",
+          takeaways: [
+            "主任务必须始终占据视觉主位，其他信息只能围绕它服务。",
+            "阻塞、待确认、待授权要比普通进展更先被看见。",
+            "信息组织应像舞台对象，而不是后台模块。"
+          ],
+          useful: [
+            "后续新增页面时，先问‘能否帮助用户 3 秒看懂当前局势’，不能就不该进主舞台。",
+            "适合沉淀成通用协作产品的首页信息优先级规则。"
+          ]
+        },
+        {
+          title: "任务卡布局必须是固定舞台构图",
+          time: "12 分钟前",
+          summary: "明确否定自动排布，要求所有卡片只映射到预定义槽位，内容变化不能影响舞台稳定性。",
+          takeaways: [
+            "布局规则应独立于数据，任务数据不能反过来决定位置。",
+            "固定槽位更适合做品牌级稳定视觉语言。",
+            "多余任务统一折叠，避免舞台失控。"
+          ],
+          useful: [
+            "这套槽位思想可以复用到消息舞台、协作台、状态中心等界面。",
+            "以后做多任务视图时，优先先设计槽位，再接数据。"
+          ]
+        },
+        {
+          title: "摘要页不该总结任务流转，而应提炼讨论内容",
+          time: "现在",
+          summary: "你强调‘最近关键变化 / 更早记录’应该记录与 agent 探讨过的内容精华，而不是某个任务状态。",
+          takeaways: [
+            "摘要的价值在于复用认知，而不是复述过程。",
+            "展开后应看到更有判断价值的提炼，而不是流水账。",
+            "历史内容更像可回收的洞察库。"
+          ],
+          useful: [
+            "适合把反复出现的讨论提炼为设计原则、协作偏好、产品判断。",
+            "后续可继续扩展为‘可复用共识卡’而不是日志卡。"
+          ]
+        }
+      ],
+      archive: [
+        {
+          title: "本地原型必须离线可演示",
+          time: "昨天",
+          summary: "曾讨论过原型交付方式，最终定为单文件 HTML、本地双击即可运行、无外部依赖。",
+          takeaways: [
+            "可交付性比工程复杂度更重要。",
+            "mock 数据应直接写在页面 JS 中，便于后续快速替换。"
+          ],
+          useful: [
+            "适合任何前期方向验证、汇报演示、视觉试装。"
+          ]
+        },
+        {
+          title: "协作镜像应是只读理解，不是设置页",
+          time: "更早",
+          summary: "曾经集中讨论过‘用户画像页’应避免人格标签，而只展示与协作执行有关的理解依据。",
+          takeaways: [
+            "不做开关、不做设置控件，只展示 agent 当前形成的工作理解。",
+            "唯一允许的修改入口应该回到对话，而不是表单。"
+          ],
+          useful: [
+            "这对 AI 产品里的‘理解层’很关键：展示理解，但把修正放回对话。"
+          ]
+        },
+        {
+          title: "你更偏好结构化短摘要而不是长文说明",
+          time: "更早",
+          summary: "多次交流里都偏向块状、可扫读、可快速判断的信息表达。",
+          takeaways: [
+            "摘要应该先给结构，再给细节。",
+            "长说明只有在展开态才有意义。"
+          ],
+          useful: [
+            "之后所有日报、历史摘要、结果预览都可以沿用这个表达原则。"
+          ]
+        }
+      ]
+    };
+
+    const MIRROR_DATA = {
+      focus: "当前工作重心集中在：构建一个可快速判断进度 / 阻塞 / 等待状态的任务舞台。",
+      taskTypes: [
+        ["原型与结构设计", "最近最常出现"],
+        ["摘要压缩与梳理", "次高频"],
+        ["权限与确认流整理", "持续出现"]
+      ],
+      outputPrefs: [
+        ["结构化短摘要", "比长文更常被接受"],
+        ["带阶段感的过程可视化", "有助于快速判断做到哪"],
+        ["引用块 / 标签式依据", "比长说明更清楚"]
+      ],
+      memoryClusters: [
+        "视觉上更像悬浮舞台，不像后台控制台",
+        "先看主任务，其次看并行状态，再看历史与镜像",
+        "需要看到为什么卡住，以及需要你做什么",
+        "倾向克制而高级的层次，不喜欢夸张效果"
+      ],
+      contexts: ["index.html 原型", "最近 3 次交互需求", "任务历史摘要", "权限请求说明", "协作镜像引用依据"],
+      permissions: [
+        ["文件读取", "本周使用 3 次，用于补全上下文和引用"],
+        ["历史摘要访问", "最近高频，用于生成日报和时间线"],
+        ["对话接力", "用于继续修正理解，而不是设置"]
+      ],
+      evidence: [
+        "最近 6 次任务里，有 4 次要求先看当前任务进度。",
+        "你多次强调不要做 dashboard / 设置页 / 复杂表格。",
+        "当页面出现摘要时，你更偏向结构化块，而非说明文。"
+      ]
+    };
+
+    /** -------------------------------------------------------
+     * 待办页衍生数据
+     * 复用现有任务与待办数据，组织成草图所需的三栏结构。
+     * ------------------------------------------------------ */
+    const TODO_VIEW = {
+      completedBuckets: [
+        { label: "今天", items: [{ taskId: "t8", title: "生成协作镜像摘要", note: "镜像页结构和依据块已经落稳" }] },
+        { label: "昨天", items: [{ taskId: "t2", title: "归档昨日研究摘录", note: "已压缩为可复用的研究判断" }] },
+        { label: "前天", items: [] }
+      ],
+      notStarted: [
+        { taskId: "t4", title: "补全权限示例", reason: "当前缺少本地目录读取权限", condition: "授予目录读取后开始补齐" },
+        { taskId: "t6", title: "继续压缩待办预览", reason: "主舞台仍优先，暂不回切", condition: "主任务收束后恢复推进" },
+        { taskId: "t9", title: "做最终离线验证收尾", reason: "要等两级详情卡稳定后再统一检查", condition: "任务页布局锁定后开始" }
+      ]
+    };
+
+    /** -------------------------------------------------------
+     * 视图状态层
+     * 增加第 4 页和任务详情两级卡状态。
+     * ------------------------------------------------------ */
+    const state = {
+      pageIndex: 0,
+      selectedTaskId: null,
+      taskDetailLevel: null,
+      clusterOpen: false,
+      expandedPanel: null,
+      inputSheet: null,
+      hoverPaused: false,
+      timer: null,
+      toastSeed: 1,
+      toasts: [],
+      tasks: JSON.parse(JSON.stringify(TASKS))
+    };
+
+    const PAGE_NAMES = ["任务页", "待办页", "摘要页", "用户画像页"];
+    const TASK_CLUSTER_POSITIONS = ["position-0", "position-1", "position-2", "position-3", "position-4", "position-5"];
+    const app = document.getElementById("app");
+
+    const statusLabelMap = {
+      running: "进行中",
+      completed: "已完成",
+      blocked: "阻塞",
+      waiting_user: "等待我",
+      waiting_permission: "待授权",
+      paused: "暂停"
+    };
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function getTask(id) {
+      return state.tasks.find((task) => task.id === id);
+    }
+
+    function getVisibleTasks() {
+      const rank = { running: 0, blocked: 1, waiting_user: 2, waiting_permission: 3, paused: 4, completed: 5 };
+      const sorted = [...state.tasks].sort((a, b) => rank[a.status] - rank[b.status]);
+      return { visible: sorted.slice(0, TASK_CLUSTER_POSITIONS.length), hidden: sorted.slice(TASK_CLUSTER_POSITIONS.length) };
+    }
+
+    function getIncompleteTasks() {
+      const rank = { blocked: 0, waiting_user: 1, waiting_permission: 2, running: 3, paused: 4 };
+      return state.tasks
+        .filter((task) => task.status !== "completed")
+        .sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9));
+    }
+
+    function getTaskNextStep(task) {
+      if (task.blockerReason) return "先解决卡点后再继续。";
+      if (task.needsPermission) return "等待授权后继续生成结果。";
+      if (task.needsUser) return "等待你确认后进入下一步。";
+      return task.stages[task.currentStageIndex + 1]
+        ? `下一步会进入「${task.stages[task.currentStageIndex + 1]}」`
+        : "当前任务接近完成。";
+    }
+
+    function getTaskFocusCopy(task) {
+      return `第 ${task.currentStageIndex + 1} / ${task.stages.length} 步 · ${task.phase}`;
+    }
+
+    function getTaskFlags(task) {
+      const flags = [];
+      if (task.status === "blocked") flags.push({ label: "已阻塞", cls: "status-blocked" });
+      if (task.needsPermission) flags.push({ label: "等待权限", cls: "status-waiting_permission" });
+      if (task.needsUser) flags.push({ label: "等待我确认", cls: "status-waiting_user" });
+      if (!flags.length) flags.push({ label: statusLabelMap[task.status], cls: `status-${task.status}` });
+      return flags;
+    }
+
+    function isOverlayOpen() {
+      return Boolean(state.selectedTaskId || state.expandedPanel || state.inputSheet || state.clusterOpen);
+    }
+
+    function pageTitle() {
+      return PAGE_NAMES[state.pageIndex];
+    }
+
+    function showToast(title, message) {
+      const id = state.toastSeed++;
+      state.toasts = [{ id, title, message }, ...state.toasts].slice(0, 3);
+      render();
+      setTimeout(() => {
+        state.toasts = state.toasts.filter((toast) => toast.id !== id);
+        render();
+      }, 2400);
+    }
+
+    /** -------------------------------------------------------
+     * 自动轮播逻辑
+     * 4 个页面循环播放，hover / 展开层 / 手动切换都会控制计时。
+     * 这里按规则使用 5 秒轮播。
+     * ------------------------------------------------------ */
+    function clearAutoplay() {
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+    }
+
+    function setupAutoplay() {
+      clearAutoplay();
+      if (state.hoverPaused || isOverlayOpen()) return;
+      state.timer = setInterval(() => {
+        state.pageIndex = (state.pageIndex + 1) % PAGE_NAMES.length;
+        render();
+      }, 5000);
+    }
+
+    function gotoPage(nextIndex) {
+      state.pageIndex = (nextIndex + PAGE_NAMES.length) % PAGE_NAMES.length;
+      render();
+      setupAutoplay();
+    }
+
+    /** -------------------------------------------------------
+     * hover 暂停逻辑
+     * 鼠标悬浮整个舞台时暂停，移开恢复。
+     * ------------------------------------------------------ */
+    function setHoverPaused(value) {
+      state.hoverPaused = value;
+      setupAutoplay();
+    }
+
+    /** -------------------------------------------------------
+     * 任务详情两级卡逻辑
+     * brief: 小详情卡
+     * full: 横向大详情卡
+     * ------------------------------------------------------ */
+    function openTask(taskId, level = "brief") {
+      state.selectedTaskId = taskId;
+      state.taskDetailLevel = level;
+      state.clusterOpen = false;
+      render();
+      setupAutoplay();
+    }
+
+    function expandTaskDetail() {
+      if (!state.selectedTaskId) return;
+      state.taskDetailLevel = "full";
+      render();
+      setupAutoplay();
+    }
+
+    function closeTransientLayers() {
+      const hadOverlay = isOverlayOpen();
+      state.selectedTaskId = null;
+      state.taskDetailLevel = null;
+      state.clusterOpen = false;
+      state.expandedPanel = null;
+      state.inputSheet = null;
+      if (hadOverlay) {
+        render();
+        setupAutoplay();
+      }
+    }
+
+    /** -------------------------------------------------------
+     * 任务折叠 / 展开逻辑
+     * 默认只露出少量任务卡，其余通过折叠任务层选择。
+     * ------------------------------------------------------ */
+    function toggleCluster() {
+      state.clusterOpen = !state.clusterOpen;
+      render();
+      setupAutoplay();
+    }
+
+    /** -------------------------------------------------------
+     * 轻量输入层逻辑
+     * 保留现有 mock 动作，输入后更新任务内容并给出 toast。
+     * ------------------------------------------------------ */
+    function openInputSheet(mode) {
+      state.inputSheet = mode;
+      render();
+      setupAutoplay();
+    }
+
+    function applyAction(mode, payload) {
+      const task = getTask(state.selectedTaskId);
+      if (!task && mode !== "mirror-correction") return;
+
+      switch (mode) {
+        case "supplement":
+          task.summary = payload || "已补充新的上下文，正在据此继续推进。";
+          task.outputPreview.unshift(`补充信息：${payload || "新增了一段上下文说明"}`);
+          task.updatedAt = "刚刚";
+          task.status = "running";
+          if (task.currentStageIndex < 3) task.currentStageIndex = 3;
+          showToast("已补充信息", "任务上下文已经更新，当前任务继续推进。");
+          break;
+        case "retarget":
+          task.name = payload || task.name;
+          task.updatedAt = "刚刚";
+          showToast("目标已调整", "当前任务的目标说明已更新。");
+          break;
+        case "permission":
+          task.needsPermission = false;
+          task.status = "running";
+          task.summary = "已获得所需权限，正在补齐缺失示例。";
+          task.dependencies = task.dependencies.filter((item) => !item.includes("需要授权"));
+          task.updatedAt = "刚刚";
+          if (task.currentStageIndex < 3) task.currentStageIndex = 3;
+          showToast("已授权继续", "任务已从待授权切回进行中。");
+          break;
+        case "pause-toggle":
+          if (task.status === "paused") {
+            task.status = "running";
+            task.summary = "任务已恢复，继续沿当前阶段推进。";
+            showToast("任务已继续", "当前任务已恢复到进行中状态。");
+          } else {
+            task.status = "paused";
+            task.summary = "已临时暂停，等待你重新拉起。";
+            showToast("任务已暂停", "当前任务已挂起，可稍后继续。");
+          }
+          task.updatedAt = "刚刚";
+          break;
+        case "retry":
+          task.status = "running";
+          task.blockerReason = "";
+          task.summary = "已重试当前步骤，正在重新执行阻塞段。";
+          task.updatedAt = "刚刚";
+          showToast("已重试当前步骤", "任务已经重新开始推进。");
+          break;
+        case "format":
+          task.outputPreview.unshift(`产出形式调整为：${payload || "结构化摘要 + 关键结论"}`);
+          task.updatedAt = "刚刚";
+          showToast("产出形式已调整", "后续结果会按新的形式输出。");
+          break;
+        case "continue-chat":
+          showToast("已继续对话", "会带着当前任务上下文接力下去。");
+          break;
+        case "mirror-correction":
+          showToast("已发起理解修正", payload || "将带着当前镜像上下文进入对话修正。");
+          break;
+      }
+
+      state.inputSheet = null;
+      render();
+      setupAutoplay();
+    }
+
+    function renderStatusPill(status) {
+      return `<span class="status-pill status-${status}">${statusLabelMap[status] || status}</span>`;
+    }
+
+    function renderFlagChips(task) {
+      return getTaskFlags(task)
+        .map((flag) => `<span class="mini-dot ${flag.cls}">${escapeHtml(flag.label)}</span>`)
+        .join("");
+    }
+
+    function renderTaskCard(task, positionClass) {
+      const quiet = task.status === "completed" ? "quiet" : "";
+      return `
+        <article class="floating-card ${positionClass} ${quiet}" data-task-card="${task.id}">
+          <h3 class="task-card-title">${escapeHtml(task.name)}</h3>
+          ${renderStatusPill(task.status)}
+          <div class="task-card-stage">${escapeHtml(task.phase)}</div>
+          <div class="task-card-summary">${escapeHtml(task.summary)}</div>
+        </article>
+      `;
+    }
+
+    /** -------------------------------------------------------
+     * 第 1 页：任务页结构
+     * 草图对应：中央大面板 + 中间任务卡簇 + 两侧低调圆形翻页按钮。
+     * ------------------------------------------------------ */
+    function renderTaskPage() {
+      const { visible, hidden } = getVisibleTasks();
+      const sceneDimmed = state.selectedTaskId ? "dimmed" : "";
+      return `
+        <section class="page ${state.pageIndex === 0 ? "active" : ""}">
+          <div class="page-scene">
+            <div class="scene-panel task-panel ${sceneDimmed}">
+              <div class="panel-caption">当前任务 / 并行任务</div>
+              <div class="panel-kicker">task page</div>
+              <div class="task-cluster">
+                ${visible.map((task, index) => renderTaskCard(task, TASK_CLUSTER_POSITIONS[index])).join("")}
+              </div>
+              <div class="cluster-trigger" data-cluster-toggle>
+                <div class="cluster-stack"><span></span><span></span><span></span></div>
+                <span>其余 ${hidden.length} 个任务已折叠</span>
+              </div>
+              ${state.clusterOpen ? renderClusterPanel(hidden) : ""}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderClusterPanel(hiddenTasks) {
+      return `
+        <aside class="cluster-panel" data-floating-panel>
+          <div class="panel-caption" style="position:static; margin-bottom:6px;">折叠任务</div>
+          <div class="task-card-summary">点击一个任务，直接进入它的详情查看态。</div>
+          <div class="cluster-grid">
+            ${hiddenTasks.map((task) => `
+              <button class="cluster-option" data-select-task="${task.id}">
+                <strong>${escapeHtml(task.name)}</strong>
+                <span class="task-card-summary">${escapeHtml(statusLabelMap[task.status])} · ${escapeHtml(task.phase)}</span>
+              </button>
+            `).join("")}
+          </div>
+        </aside>
+      `;
+    }
+
+    /** -------------------------------------------------------
+     * 任务详情两级卡渲染
+     * brief = 中等小卡
+     * full = 横向大卡，底部双区块 + 轻量操作条。
+     * ------------------------------------------------------ */
+    function renderTaskLayer() {
+      if (!state.selectedTaskId) return "";
+      const task = getTask(state.selectedTaskId);
+      if (!task) return "";
+
+      return `
+        <div class="task-layer visible" data-task-scrim>
+          ${state.taskDetailLevel === "full" ? renderFullTaskCard(task) : renderBriefTaskCard(task)}
+        </div>
+      `;
+    }
+
+    function renderBriefTaskCard(task) {
+      return `
+        <article class="brief-detail-card" role="dialog" aria-modal="true">
+          <button class="close-icon" data-close-overlay aria-label="关闭">×</button>
+          <h2 class="brief-title">${escapeHtml(task.name)}</h2>
+          ${renderStatusPill(task.status)}
+          <p class="brief-copy">${escapeHtml(getTaskFocusCopy(task))}</p>
+          <p class="brief-copy">${escapeHtml(getTaskNextStep(task))}</p>
+          <div class="brief-copy" style="margin-top:14px;">${escapeHtml(task.summary)}</div>
+          <div class="brief-actions">
+            <button class="soft-button" data-open-full>查看完整详情</button>
+            <button class="soft-button" data-action="continue-chat">继续对话</button>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderFullTaskCard(task) {
+      return `
+        <article class="full-detail-card" role="dialog" aria-modal="true">
+          <button class="close-icon" data-close-overlay aria-label="关闭">×</button>
+          <div class="full-top">
+            <div>
+              <h2 class="full-title">${escapeHtml(task.name)}</h2>
+              <div class="full-description">${escapeHtml(task.summary)}</div>
+            </div>
+            ${renderStatusPill(task.status)}
+          </div>
+
+          <div class="full-meta-row">
+            ${renderFlagChips(task)}
+            <span class="quiet-chip">${escapeHtml(getTaskFocusCopy(task))}</span>
+            <span class="quiet-chip">最近更新 · ${escapeHtml(task.updatedAt)}</span>
+          </div>
+
+          <div class="full-body">
+            <section class="detail-block">
+              <h4>进展</h4>
+              <div class="stage-track">
+                ${task.stages.map((stage, index) => {
+                  const cls = index < task.currentStageIndex ? "done" : index === task.currentStageIndex ? "current" : "";
+                  return `<span class="stage-step ${cls}">${escapeHtml(stage)}</span>`;
+                }).join("")}
+              </div>
+              <div class="detail-list" style="margin-top:12px;">
+                <div class="overlay-block">
+                  <strong>当前做到哪一步</strong>
+                  <div class="overlay-copy">${escapeHtml(task.phase)} · ${escapeHtml(getTaskNextStep(task))}</div>
+                </div>
+                <div class="overlay-block">
+                  <strong>阻塞 / 权限 / 等待</strong>
+                  <div class="overlay-copy">${escapeHtml(task.blockerReason || (task.needsPermission ? "当前在等权限。" : task.needsUser ? "当前在等你确认。" : "暂无明显卡点。"))}</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="detail-block">
+              <h4>产出</h4>
+              <div class="detail-list">
+                ${task.outputPreview.slice(0, 2).map((item, index) => `
+                  <div class="overlay-block">
+                    <strong>产出片段 ${index + 1}</strong>
+                    <div class="overlay-copy">${escapeHtml(item)}</div>
+                  </div>
+                `).join("")}
+              </div>
+            </section>
+          </div>
+
+          <div class="detail-list">
+            <div class="overlay-block">
+              <strong>上下文依据 / 记忆引用</strong>
+              <div class="overlay-copy">${escapeHtml(task.memories.slice(0, 2).join(" · "))}</div>
+              <div class="overlay-copy" style="margin-top:6px;">${escapeHtml(task.contexts.slice(0, 2).join(" · "))}</div>
+            </div>
+          </div>
+
+          <div class="full-actions" style="margin-top:14px; padding-right: 52px;">
+            <button class="action-pill" data-action="retarget">修改目标</button>
+            <button class="action-pill" data-action="supplement">补充信息</button>
+            <button class="action-pill" data-action="permission">授权继续</button>
+            <button class="action-pill" data-action="format">改变产出形式</button>
+            <button class="action-pill" data-action="pause-toggle">暂停 / 继续</button>
+            <button class="action-pill" data-action="continue-chat">继续对话</button>
+          </div>
+
+          <div class="footer-dots"><span></span><span class="active"></span></div>
+        </article>
+      `;
+    }
+
+    /** -------------------------------------------------------
+     * 第 2 页：待办页三栏逻辑
+     * 左窄：近三天已完成 / 中大：未完成 / 右中窄：未开始。
+     * ------------------------------------------------------ */
+    function renderTodoPage() {
+      const unfinished = getIncompleteTasks().slice(0, 5);
+      return `
+        <section class="page ${state.pageIndex === 1 ? "active" : ""}">
+          <div class="page-scene">
+            <div class="scene-panel todo-panel">
+              <div class="panel-kicker">todo page</div>
+              <div class="panel-caption">任务追踪</div>
+              <div class="todo-layout">
+                <article class="column-card completed-column">
+                  <h3 class="column-title">近三天已完成</h3>
+                  <div class="column-subcopy">按今天 / 昨天 / 前天弱分组，只保留简短完成痕迹。</div>
+                  <div class="card-scroll">
+                    ${TODO_VIEW.completedBuckets.map((bucket) => `
+                      <div class="day-bucket">
+                        <div class="day-label">${escapeHtml(bucket.label)}</div>
+                        <div class="bucket-list">
+                          ${bucket.items.length ? bucket.items.map((item) => `
+                            <button class="bucket-item" data-open-task-full="${item.taskId}">
+                              <strong>${escapeHtml(item.title)}</strong>
+                              <div class="history-copy">${escapeHtml(item.note)}</div>
+                            </button>
+                          `).join("") : `<div class="small-empty">暂无新完成项</div>`}
+                        </div>
+                      </div>
+                    `).join("")}
+                  </div>
+                </article>
+
+                <article class="column-card">
+                  <h3 class="column-title">未完成</h3>
+                  <div class="column-subcopy">页面重点。集中展示仍未收束的事项，以及下一步要做什么。</div>
+                  <div class="card-scroll">
+                    <div class="todo-list">
+                      ${unfinished.map((task) => `
+                        <button class="todo-item" data-open-task-full="${task.id}">
+                          <strong>${escapeHtml(task.name)}</strong>
+                          <div class="history-copy">${escapeHtml(statusLabelMap[task.status])} · ${escapeHtml(task.phase)}</div>
+                          <div class="history-copy" style="margin-top:6px;">${escapeHtml(task.blockerReason || getTaskNextStep(task))}</div>
+                        </button>
+                      `).join("")}
+                    </div>
+                  </div>
+                </article>
+
+                <article class="column-card">
+                  <h3 class="column-title">未开始</h3>
+                  <div class="column-subcopy">已经进入任务池，但仍有前置条件未满足。</div>
+                  <div class="card-scroll">
+                    <div class="todo-list">
+                      ${TODO_VIEW.notStarted.map((item) => `
+                        <button class="todo-item" data-open-task-full="${item.taskId}">
+                          <strong>${escapeHtml(item.title)}</strong>
+                          <div class="history-copy">为什么还没开始：${escapeHtml(item.reason)}</div>
+                          <div class="history-copy" style="margin-top:6px;">开始条件：${escapeHtml(item.condition)}</div>
+                        </button>
+                      `).join("")}
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    /** -------------------------------------------------------
+     * 第 3 页：摘要页左右结构逻辑
+     * 左侧大区 = 日报；右侧窄栏 = 上下两张历史卡。
+     * ------------------------------------------------------ */
+    function renderSummaryPage() {
+      const recent = CONVERSATION_DIGESTS.recent;
+      const older = CONVERSATION_DIGESTS.archive;
+      return `
+        <section class="page ${state.pageIndex === 2 ? "active" : ""}">
+          <div class="page-scene">
+            <div class="scene-panel summary-panel">
+              <div class="panel-kicker">summary page</div>
+              <div class="summary-layout">
+                <article class="summary-card report-card" data-panel-card="summary-report">
+                  <h3 class="summary-title">日报</h3>
+                  <p class="summary-copy">${escapeHtml(DAILY_SUMMARY.headline)}</p>
+                  <div class="card-scroll">
+                    <div class="report-grid">
+                      <div class="summary-block">
+                        <strong>关键完成项</strong>
+                        <div class="summary-list">${DAILY_SUMMARY.done.slice(0, 2).map((item) => `<div class="history-copy">${escapeHtml(item)}</div>`).join("")}</div>
+                      </div>
+                      <div class="summary-block">
+                        <strong>关键阻塞</strong>
+                        <div class="summary-list">${DAILY_SUMMARY.incidents.map((item) => `<div class="history-copy">${escapeHtml(item)}</div>`).join("")}</div>
+                      </div>
+                      <div class="summary-block">
+                        <strong>当前推进</strong>
+                        <div class="summary-list">${DAILY_SUMMARY.running.slice(0, 2).map((item) => `<div class="history-copy">${escapeHtml(item)}</div>`).join("")}</div>
+                      </div>
+                      <div class="summary-block">
+                        <strong>需要用户关注</strong>
+                        <div class="summary-list">${DAILY_SUMMARY.waiting.map((item) => `<div class="history-copy">${escapeHtml(item)}</div>`).join("")}</div>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <div class="history-rail">
+                  <article class="summary-card" data-panel-card="summary-recent">
+                    <h3 class="summary-title" style="font-size:18px;">最近关键变化</h3>
+                    <div class="card-scroll">
+                      <div class="history-list">
+                        ${recent.map((event) => `
+                          <div class="history-row">
+                            <strong>${escapeHtml(event.title)}</strong>
+                            <div class="history-copy">${escapeHtml(event.summary)}</div>
+                            <div class="history-copy" style="margin-top:6px; color:rgba(242,243,245,0.4);">${escapeHtml(event.time)}</div>
+                          </div>
+                        `).join("")}
+                      </div>
+                    </div>
+                  </article>
+
+                  <article class="summary-card" data-panel-card="summary-archive">
+                    <h3 class="summary-title" style="font-size:18px;">更早记录</h3>
+                    <div class="card-scroll">
+                      <div class="history-list">
+                        ${older.map((event) => `
+                          <div class="history-row">
+                            <strong>${escapeHtml(event.title)}</strong>
+                            <div class="history-copy">${escapeHtml(event.summary)}</div>
+                            <div class="history-copy" style="margin-top:6px; color:rgba(242,243,245,0.4);">${escapeHtml(event.time)}</div>
+                          </div>
+                        `).join("")}
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    /** -------------------------------------------------------
+     * 第 4 页：用户画像页结构逻辑
+     * 更安静，留白更多，中央主理解卡 + 少量辅助块。
+     * ------------------------------------------------------ */
+    function renderProfilePage() {
+      return `
+        <section class="page ${state.pageIndex === 3 ? "active" : ""}">
+          <div class="page-scene">
+            <div class="scene-panel profile-panel">
+              <div class="panel-kicker">user profile page</div>
+              <div class="profile-layout">
+                <article class="profile-card side-left" data-panel-card="profile-memory">
+                  <h3 class="profile-title" style="font-size:18px;">最近常引用的记忆簇</h3>
+                  <div class="card-scroll">
+                    <div class="profile-list">
+                      ${MIRROR_DATA.memoryClusters.slice(0, 2).map((item) => `<div class="history-copy">${escapeHtml(item)}</div>`).join("")}
+                    </div>
+                  </div>
+                </article>
+
+                <article class="profile-card main" data-panel-card="profile-core">
+                  <h3 class="profile-title">当前协作理解</h3>
+                  <p class="profile-copy">${escapeHtml(MIRROR_DATA.focus)}</p>
+                  <div class="card-scroll">
+                    <div class="profile-list">
+                      <div class="profile-block"><strong>高频任务类型</strong><div class="history-copy">${escapeHtml(MIRROR_DATA.taskTypes.map(([title]) => title).join(" · "))}</div></div>
+                      <div class="profile-block"><strong>常用输出偏好</strong><div class="history-copy">${escapeHtml(MIRROR_DATA.outputPrefs.map(([title]) => title).join(" · "))}</div></div>
+                    </div>
+                  </div>
+                  <div class="profile-button-row">
+                    <button class="soft-button" data-open-input="mirrorCorrection">告诉 agent 这项理解不对</button>
+                  </div>
+                </article>
+
+                <article class="profile-card side-right" data-panel-card="profile-context">
+                  <h3 class="profile-title" style="font-size:18px;">上下文 / 权限概览</h3>
+                  <div class="card-scroll">
+                    <div class="profile-list">
+                      <div class="history-copy">${escapeHtml(MIRROR_DATA.contexts.slice(0, 3).join(" · "))}</div>
+                      <div class="history-copy">${escapeHtml(MIRROR_DATA.permissions.map(([title]) => title).join(" · "))}</div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderExpandedPanel() {
+      if (!state.expandedPanel) return "";
+
+      const builders = {
+        "summary-report": {
+          title: "更完整的日报摘要",
+          subtitle: DAILY_SUMMARY.headline,
+          blocks: [
+            { title: "今天整体推进了什么", items: DAILY_SUMMARY.running },
+            { title: "关键完成项", items: DAILY_SUMMARY.done },
+            { title: "关键阻塞", items: DAILY_SUMMARY.incidents },
+            { title: "需要用户关注的变化", items: DAILY_SUMMARY.waiting },
+            { title: "补充判断", items: DAILY_SUMMARY.detail }
+          ]
+        },
+        "summary-recent": {
+          title: "最近关键变化",
+          subtitle: "这里记录的是最近几次与 agent 探讨过的内容精华，不是任务流转日志。",
+          blocks: [
+            ...CONVERSATION_DIGESTS.recent.map((event) => ({
+              title: `${event.title} · ${event.time}`,
+              items: [
+                `讨论概述：${event.summary}`,
+                ...event.takeaways.map((item) => `精华提炼：${item}`),
+                ...event.useful.map((item) => `对你可能有用：${item}`)
+              ]
+            }))
+          ]
+        },
+        "summary-archive": {
+          title: "更早历史摘要",
+          subtitle: "保留更早但仍值得回看的讨论结论与协作判断。",
+          blocks: [
+            ...CONVERSATION_DIGESTS.archive.map((event) => ({
+              title: `${event.title} · ${event.time}`,
+              items: [
+                `讨论概述：${event.summary}`,
+                ...event.takeaways.map((item) => `精华提炼：${item}`),
+                ...event.useful.map((item) => `对你可能有用：${item}`)
+              ]
+            }))
+          ]
+        },
+        "profile-core": {
+          title: "用户画像 / 协作理解",
+          subtitle: "只展示与协作执行相关的理解，不做设置中心。",
+          blocks: [
+            { title: "当前工作重心", items: [MIRROR_DATA.focus] },
+            { title: "高频任务类型", items: MIRROR_DATA.taskTypes.map(([title, note]) => `${title} · ${note}`) },
+            { title: "常用输出偏好", items: MIRROR_DATA.outputPrefs.map(([title, note]) => `${title} · ${note}`) }
+          ]
+        },
+        "profile-memory": {
+          title: "最近常引用的记忆簇",
+          subtitle: "这些理解来自最近几轮协作中的重复约束。",
+          blocks: [
+            { title: "记忆簇", items: MIRROR_DATA.memoryClusters },
+            { title: "引用依据", items: MIRROR_DATA.evidence }
+          ]
+        },
+        "profile-context": {
+          title: "常见上下文 / 权限概览",
+          subtitle: "页面、应用和权限的只读摘要。",
+          blocks: [
+            { title: "常见上下文 / 页面", items: MIRROR_DATA.contexts },
+            { title: "权限使用概览", items: MIRROR_DATA.permissions.map(([title, note]) => `${title} · ${note}`) }
+          ]
+        }
+      };
+
+      const panel = builders[state.expandedPanel];
+      if (!panel) return "";
+
+      return `
+        <div class="overlay-scrim visible" data-scrim>
+          <article class="overlay-card" role="dialog" aria-modal="true">
+            <button class="close-icon" data-close-overlay aria-label="关闭">×</button>
+            <div class="overlay-header">
+              <div>
+                <h2 class="overlay-title">${escapeHtml(panel.title)}</h2>
+                <div class="overlay-copy">${escapeHtml(panel.subtitle)}</div>
+              </div>
+            </div>
+            <div class="overlay-grid">
+              ${panel.blocks.map((block) => `
+                <section class="overlay-block">
+                  <h4 style="margin:0 0 10px; font-size:13px; color:rgba(242,243,245,0.5); text-transform:uppercase; letter-spacing:0.14em;">${escapeHtml(block.title)}</h4>
+                  <div class="overlay-list">${block.items.map((item) => `<div class="overlay-copy">${escapeHtml(item)}</div>`).join("")}</div>
+                </section>
+              `).join("")}
+            </div>
+          </article>
+        </div>
+      `;
+    }
+
+    function renderInputSheet() {
+      if (!state.inputSheet) return "";
+      const task = getTask(state.selectedTaskId);
+      const configs = {
+        retarget: {
+          title: "修改目标",
+          helper: "轻量修改当前任务的标题或焦点方向。",
+          label: "新的任务目标 / 标题",
+          value: task ? task.name : ""
+        },
+        supplement: {
+          title: "补充信息",
+          helper: "增加新的上下文、引用材料或你想强调的限制。",
+          label: "补充给 agent 的信息",
+          value: "补充：整体尽量继续贴近草图，不要让页面看起来像项目管理工具。"
+        },
+        format: {
+          title: "改变产出形式",
+          helper: "例如改成结构化摘要、草稿、清单或更短的结论块。",
+          label: "新的产出形式",
+          value: "结构化摘要 + 关键判断 + 下一步建议"
+        },
+        mirrorCorrection: {
+          title: "修正当前理解",
+          helper: "这里不是设置页，只是把当前画像上下文带入一次对话修正。",
+          label: "告诉 agent 哪项理解不对",
+          value: "当前整体方向是对的，但用户画像页还应该更安静一些。"
+        }
+      };
+
+      const config = configs[state.inputSheet];
+      if (!config) return "";
+
+      return `
+        <div class="input-scrim visible" data-input-scrim>
+          <article class="input-sheet">
+            <button class="close-icon" data-cancel-input aria-label="关闭">×</button>
+            <h2 class="input-title">${escapeHtml(config.title)}</h2>
+            <div class="input-helper">${escapeHtml(config.helper)}</div>
+            <div class="field">
+              <label>${escapeHtml(config.label)}</label>
+              <textarea id="sheet-textarea">${escapeHtml(config.value)}</textarea>
+            </div>
+            <div class="input-actions" style="margin-top:18px; justify-content:flex-end;">
+              <button class="ghost-button" data-cancel-input>取消</button>
+              <button class="submit-button" data-submit-input="${state.inputSheet}">提交并更新</button>
+            </div>
+          </article>
+        </div>
+      `;
+    }
+
+    function renderToasts() {
+      return `
+        <div class="toast-stack">
+          ${state.toasts.map((toast) => `
+            <div class="toast">
+              <div class="toast-head"><span>${escapeHtml(toast.title)}</span><span>just now</span></div>
+              <div class="history-copy">${escapeHtml(toast.message)}</div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    /** -------------------------------------------------------
+     * 4 个页面统一渲染入口
+     * ------------------------------------------------------ */
+    function render() {
+      app.innerHTML = `
+        <div class="stage-shell" id="stage-shell">
+          <div class="stage-topbar">
+            <div class="topbar-group">
+              <span class="topbar-note">general agent stage</span>
+              <span class="meta-chip"><span class="chip-dot"></span> 当前页 · ${escapeHtml(pageTitle())}</span>
+            </div>
+            <div class="topbar-group">
+              <span class="meta-chip">并行任务 ${state.tasks.filter((task) => task.status !== "completed").length} 项</span>
+              <span class="meta-chip">保留交互 · 本地离线</span>
+            </div>
+          </div>
+
+          <button class="dot-button prev" data-nav="prev" aria-label="上一页">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 5L8 12l6.5 7"/></svg>
+          </button>
+          <button class="dot-button next" data-nav="next" aria-label="下一页">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.5 5 16 12l-6.5 7"/></svg>
+          </button>
+
+          <div class="stage-pages">
+            ${renderTaskPage()}
+            ${renderTodoPage()}
+            ${renderSummaryPage()}
+            ${renderProfilePage()}
+          </div>
+
+          ${renderTaskLayer()}
+
+          <div class="page-indicator">
+            ${PAGE_NAMES.map((name, index) => `
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="page-dot ${state.pageIndex === index ? "active" : ""}"></span>
+                <span class="page-name">${state.pageIndex === index ? escapeHtml(name) : ""}</span>
+              </div>
+            `).join("")}
+          </div>
+
+          ${renderExpandedPanel()}
+          ${renderInputSheet()}
+          ${renderToasts()}
+        </div>
+      `;
+
+      bindEvents();
+    }
+
+    /** -------------------------------------------------------
+     * 统一交互语言
+     * 点击卡片进入更详细层 / 点击空白返回 / Esc 关闭。
+     * ------------------------------------------------------ */
+    function bindEvents() {
+      const shell = document.getElementById("stage-shell");
+      if (!shell) return;
+
+      shell.onmouseenter = () => setHoverPaused(true);
+      shell.onmouseleave = () => setHoverPaused(false);
+
+      shell.querySelectorAll("[data-nav]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          gotoPage(state.pageIndex + (button.dataset.nav === "next" ? 1 : -1));
+        };
+      });
+
+      shell.querySelectorAll("[data-task-card]").forEach((card) => {
+        card.onclick = (event) => {
+          event.stopPropagation();
+          openTask(card.dataset.taskCard, "brief");
+        };
+      });
+
+      const clusterTrigger = shell.querySelector("[data-cluster-toggle]");
+      if (clusterTrigger) {
+        clusterTrigger.onclick = (event) => {
+          event.stopPropagation();
+          toggleCluster();
+        };
+      }
+
+      shell.querySelectorAll("[data-select-task]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          openTask(button.dataset.selectTask, "brief");
+        };
+      });
+
+      shell.querySelectorAll("[data-open-task-full]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          openTask(button.dataset.openTaskFull, "full");
+        };
+      });
+
+      const openFull = shell.querySelector("[data-open-full]");
+      if (openFull) {
+        openFull.onclick = (event) => {
+          event.stopPropagation();
+          expandTaskDetail();
+        };
+      }
+
+      shell.querySelectorAll("[data-panel-card]").forEach((card) => {
+        card.onclick = (event) => {
+          event.stopPropagation();
+          state.expandedPanel = card.dataset.panelCard;
+          render();
+          setupAutoplay();
+        };
+      });
+
+      shell.querySelectorAll("[data-open-input]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          openInputSheet(button.dataset.openInput);
+        };
+      });
+
+      shell.querySelectorAll("[data-action]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          const action = button.dataset.action;
+          if (action === "retarget") return openInputSheet("retarget");
+          if (action === "supplement") return openInputSheet("supplement");
+          if (action === "format") return openInputSheet("format");
+          if (action === "permission") return applyAction("permission");
+          if (action === "pause-toggle") return applyAction("pause-toggle");
+          if (action === "continue-chat") return applyAction("continue-chat");
+          if (action === "retry") return applyAction("retry");
+        };
+      });
+
+      shell.querySelectorAll("[data-close-overlay]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          state.selectedTaskId = null;
+          state.taskDetailLevel = null;
+          state.expandedPanel = null;
+          render();
+          setupAutoplay();
+        };
+      });
+
+      shell.querySelectorAll("[data-cancel-input]").forEach((button) => {
+        button.onclick = (event) => {
+          event.stopPropagation();
+          state.inputSheet = null;
+          render();
+          setupAutoplay();
+        };
+      });
+
+      const submitButton = shell.querySelector("[data-submit-input]");
+      if (submitButton) {
+        submitButton.onclick = (event) => {
+          event.stopPropagation();
+          const value = shell.querySelector("#sheet-textarea")?.value.trim();
+          const mode = submitButton.dataset.submitInput;
+          if (mode === "retarget") applyAction("retarget", value);
+          if (mode === "supplement") applyAction("supplement", value);
+          if (mode === "format") applyAction("format", value);
+          if (mode === "mirrorCorrection") applyAction("mirror-correction", value);
+        };
+      }
+
+      const taskScrim = shell.querySelector("[data-task-scrim]");
+      if (taskScrim) {
+        taskScrim.onclick = (event) => {
+          if (event.target !== taskScrim) return;
+          state.selectedTaskId = null;
+          state.taskDetailLevel = null;
+          render();
+          setupAutoplay();
+        };
+      }
+
+      const overlayScrim = shell.querySelector("[data-scrim]");
+      if (overlayScrim) {
+        overlayScrim.onclick = (event) => {
+          if (event.target !== overlayScrim) return;
+          state.expandedPanel = null;
+          render();
+          setupAutoplay();
+        };
+      }
+
+      const inputScrim = shell.querySelector("[data-input-scrim]");
+      if (inputScrim) {
+        inputScrim.onclick = (event) => {
+          if (event.target !== inputScrim) return;
+          state.inputSheet = null;
+          render();
+          setupAutoplay();
+        };
+      }
+
+      shell.onclick = (event) => {
+        const shouldCloseCluster = state.clusterOpen && !event.target.closest("[data-floating-panel]") && !event.target.closest("[data-cluster-toggle]");
+        if (shouldCloseCluster) {
+          state.clusterOpen = false;
+          render();
+          setupAutoplay();
+        }
+      };
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeTransientLayers();
+      if (event.key === "ArrowRight" && !isOverlayOpen()) gotoPage(state.pageIndex + 1);
+      if (event.key === "ArrowLeft" && !isOverlayOpen()) gotoPage(state.pageIndex - 1);
+    });
+
+    render();
+    setupAutoplay();
+  </script>
+</body>
+</html>
