@@ -1,0 +1,30 @@
+:root {
+  --motion-nearby: 140ms;
+  --motion-snap: 200ms;
+  --motion-recognition: 750ms;
+  --motion-processing: 900ms;
+  --motion-result: 220ms;
+  --stage-blur: 18px;
+
+  --color-bg: #f8f9fa;
+  --color-text: #374151;
+  --color-text-muted: #6b7280;
+  --color-border: #e5e7eb;
+  --color-panel: #ffffff;
+  --color-highlight: #3b82f6;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-success: #10b981;
+
+  --radius-sm: 8px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+  --orb-size: 60px;
+  --orb-nearby: 140px;
+  --orb-hover: 76px;
+}

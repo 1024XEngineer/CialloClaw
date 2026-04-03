@@ -1,0 +1,8 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { 
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; 
+  background: linear-gradient(135deg, #e8ecf1 0%, #f5f7fa 100%);
+  color: var(--color-text);
+}
+button, input, textarea { font: inherit; }
