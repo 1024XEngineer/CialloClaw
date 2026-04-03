@@ -1,0 +1,1704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CialloClaw 桌面端 AI Agent 原型</title>
+  <style>
+    :root {
+      --bg1: #f7f4fb;
+      --bg2: #eef3ff;
+      --bg3: #fff7fb;
+      --panel: rgba(255,255,255,0.58);
+      --panel-strong: rgba(255,255,255,0.74);
+      --line: rgba(255,255,255,0.55);
+      --text: #2f3143;
+      --sub: #66708a;
+      --muted: #8891a6;
+      --pink: #f6a6cc;
+      --pink-2: #ffcae1;
+      --pink-3: #ffeff7;
+      --purple: #c9b8ff;
+      --blue: #b9d9ff;
+      --green: #bce7d0;
+      --orange: #ffd8b0;
+      --shadow-xl: 0 24px 64px rgba(143, 119, 169, 0.16);
+      --shadow-lg: 0 14px 40px rgba(143, 119, 169, 0.14);
+      --shadow-md: 0 8px 22px rgba(122, 104, 142, 0.12);
+      --shadow-sm: 0 6px 14px rgba(122, 104, 142, 0.08);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+      --radius-sm: 12px;
+      --ball-size: 92px;
+      --trans-fast: 180ms cubic-bezier(.2,.8,.2,1);
+      --trans-mid: 280ms cubic-bezier(.2,.8,.2,1);
+      --trans-slow: 420ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 18%, rgba(255, 214, 232, 0.86), transparent 24%),
+        radial-gradient(circle at 84% 14%, rgba(208, 225, 255, 0.78), transparent 28%),
+        radial-gradient(circle at 76% 88%, rgba(255, 233, 245, 0.9), transparent 32%),
+        linear-gradient(135deg, var(--bg1), var(--bg2) 45%, var(--bg3));
+      overflow: hidden;
+      user-select: none;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: auto;
+      border-radius: 999px;
+      filter: blur(80px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::before {
+      width: 360px;
+      height: 360px;
+      left: -80px;
+      bottom: -90px;
+      background: rgba(255, 193, 220, 0.35);
+    }
+
+    body::after {
+      width: 400px;
+      height: 400px;
+      right: -100px;
+      top: -100px;
+      background: rgba(182, 214, 255, 0.32);
+    }
+
+    .desktop {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 240px 1fr 300px;
+      grid-template-rows: 74px 1fr 120px;
+      gap: 18px;
+      width: 100%;
+      height: 100%;
+      padding: 22px;
+    }
+
+    .glass {
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.45);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(18px) saturate(140%);
+      -webkit-backdrop-filter: blur(18px) saturate(140%);
+    }
+
+    .topbar {
+      grid-column: 1 / 4;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      border-radius: 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 15px;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(255,255,255,0.95), rgba(255,255,255,0.3) 35%, transparent 36%),
+        linear-gradient(145deg, #ffc1dd, #f6a6cc 52%, #d99ac7);
+      box-shadow: inset 0 2px 6px rgba(255,255,255,0.55), 0 10px 20px rgba(246,166,204,0.28);
+      position: relative;
+    }
+
+    .brand-mark::before,
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      top: 9px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(92, 74, 104, 0.85);
+    }
+
+    .brand-mark::before { left: 11px; }
+    .brand-mark::after { right: 11px; }
+
+    .brand-text h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .brand-text p {
+      margin: 3px 0 0;
+      color: var(--sub);
+      font-size: 12px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pill,
+    .icon-btn {
+      border: 1px solid rgba(255,255,255,0.55);
+      background: rgba(255,255,255,0.48);
+      box-shadow: var(--shadow-sm);
+      color: var(--text);
+    }
+
+    .pill {
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--sub);
+    }
+
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+
+    .sidebar {
+      grid-column: 1 / 2;
+      grid-row: 2 / 4;
+      border-radius: var(--radius-xl);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .section-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .nav-card {
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.42);
+      border: 1px solid rgba(255,255,255,0.45);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.44);
+      color: var(--sub);
+      font-size: 13px;
+    }
+
+    .nav-item.active {
+      background: linear-gradient(135deg, rgba(255, 218, 236, 0.92), rgba(255,255,255,0.8));
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .assist-hint {
+      margin-top: auto;
+      padding: 16px;
+      border-radius: 18px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.64), rgba(252, 235, 244, 0.88));
+      border: 1px solid rgba(255,255,255,0.5);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .assist-hint h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .assist-hint p {
+      margin: 0;
+      color: var(--sub);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .main-stage {
+      grid-column: 2 / 3;
+      grid-row: 2 / 3;
+      border-radius: 34px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .window-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 8px 0;
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .window-dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: block;
+      background: rgba(255,255,255,0.85);
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+    }
+
+    .window-meta {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.42);
+      border: 1px solid rgba(255,255,255,0.5);
+    }
+
+    .editor-shell {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 260px;
+      gap: 18px;
+      min-height: 0;
+    }
+
+    .document-card,
+    .insight-card,
+    .dock {
+      background: rgba(255,255,255,0.46);
+      border: 1px solid rgba(255,255,255,0.48);
+      box-shadow: var(--shadow-md);
+      backdrop-filter: blur(14px) saturate(130%);
+      -webkit-backdrop-filter: blur(14px) saturate(130%);
+    }
+
+    .document-card {
+      border-radius: 28px;
+      padding: 28px 34px;
+      overflow: auto;
+      min-width: 0;
+    }
+
+    .doc-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(255,237,245,0.95), rgba(255,255,255,0.72));
+      color: #8d5f7f;
+      font-size: 12px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+    }
+
+    .document-card h2 {
+      margin: 18px 0 12px;
+      font-size: 34px;
+      line-height: 1.15;
+    }
+
+    .document-card p {
+      margin: 0 0 16px;
+      color: #5f6882;
+      line-height: 1.82;
+      font-size: 15px;
+    }
+
+    .selected-paragraph {
+      position: relative;
+      padding: 18px 18px 18px 22px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, rgba(255, 243, 248, 0.92), rgba(255,255,255,0.72));
+      border: 1px solid rgba(255,255,255,0.65);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
+    }
+
+    .selected-paragraph::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 12px;
+      bottom: 12px;
+      width: 5px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, var(--pink), #f48fbd);
+      box-shadow: 0 0 16px rgba(244, 143, 189, 0.3);
+    }
+
+    .selection-tag {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.68);
+      font-size: 12px;
+      color: #8a6981;
+    }
+
+    .insight-card {
+      border-radius: 24px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow: auto;
+    }
+
+    .mini-stat {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.48);
+      border: 1px solid rgba(255,255,255,0.5);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
+    }
+
+    .mini-stat label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .mini-stat strong {
+      display: block;
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+
+    .mini-stat span {
+      font-size: 12px;
+      color: var(--sub);
+      line-height: 1.6;
+    }
+
+    .dot-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .dot-list div {
+      display: flex;
+      gap: 10px;
+      color: var(--sub);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .dot-list div::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      margin-top: 7px;
+      border-radius: 50%;
+      background: linear-gradient(180deg, var(--pink), #e68eb8);
+      flex: 0 0 auto;
+      box-shadow: 0 0 10px rgba(246, 166, 204, 0.28);
+    }
+
+    .dock {
+      grid-column: 2 / 4;
+      grid-row: 3 / 4;
+      border-radius: 28px;
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .dock-left h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+    }
+
+    .dock-left p {
+      margin: 0;
+      color: var(--sub);
+      font-size: 13px;
+    }
+
+    .dock-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .soft-btn,
+    .primary-btn {
+      border: 0;
+      border-radius: 16px;
+      padding: 12px 16px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: transform var(--trans-fast), box-shadow var(--trans-fast), background var(--trans-fast);
+    }
+
+    .soft-btn {
+      background: rgba(255,255,255,0.56);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.6);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .primary-btn {
+      background: linear-gradient(135deg, #ffc9e2, #f4a4cb 60%, #e897c0);
+      color: #5c3f56;
+      box-shadow: 0 12px 24px rgba(236, 154, 194, 0.26), inset 0 1px 0 rgba(255,255,255,0.65);
+      font-weight: 600;
+    }
+
+    .soft-btn:hover,
+    .primary-btn:hover,
+    .chip:hover,
+    .send-btn:hover,
+    .close-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .float-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    .snap-guide {
+      position: absolute;
+      border-radius: 28px;
+      background: rgba(255,255,255,0.18);
+      border: 1px dashed rgba(255,255,255,0.5);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+      opacity: 0;
+      transition: opacity var(--trans-fast);
+      pointer-events: none;
+    }
+
+    .snap-guide.show { opacity: 1; }
+
+    .agent-wrap {
+      position: absolute;
+      left: calc(100vw - 180px);
+      top: calc(50vh - 120px);
+      width: max-content;
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    .agent-anchor {
+      position: relative;
+      width: var(--ball-size);
+      height: var(--ball-size);
+    }
+
+    .agent-ball {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 0;
+      cursor: grab;
+      background:
+        radial-gradient(circle at 32% 28%, rgba(255,255,255,0.98) 0, rgba(255,255,255,0.86) 18%, rgba(255,255,255,0.12) 19%, transparent 24%),
+        radial-gradient(circle at 65% 70%, rgba(255, 246, 251, 0.55), transparent 32%),
+        linear-gradient(145deg, #ffd3e7, #f5a9cf 58%, #de93bc 86%);
+      box-shadow:
+        0 24px 36px rgba(236, 156, 196, 0.34),
+        inset 0 2px 10px rgba(255,255,255,0.75),
+        inset 0 -10px 20px rgba(179, 112, 146, 0.18),
+        0 0 0 1px rgba(255,255,255,0.52);
+      transition: transform var(--trans-fast), box-shadow var(--trans-fast), filter var(--trans-fast);
+      outline: none;
+    }
+
+    .agent-ball:hover {
+      transform: scale(1.02);
+      box-shadow:
+        0 28px 42px rgba(236, 156, 196, 0.38),
+        inset 0 2px 10px rgba(255,255,255,0.75),
+        inset 0 -10px 20px rgba(179, 112, 146, 0.18),
+        0 0 0 1px rgba(255,255,255,0.52);
+    }
+
+    .agent-ball.dragging { cursor: grabbing; }
+    .agent-ball.listening { filter: saturate(108%); }
+    .agent-ball.locked { filter: saturate(112%); }
+
+    .face {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .eye {
+      position: absolute;
+      top: 36px;
+      width: 10px;
+      height: 12px;
+      border-radius: 50%;
+      background: rgba(92, 69, 96, 0.92);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,0.22);
+    }
+
+    .eye.left { left: 28px; }
+    .eye.right { right: 28px; }
+
+    .mouth {
+      position: absolute;
+      left: 50%;
+      bottom: 23px;
+      width: 26px;
+      height: 13px;
+      margin-left: -13px;
+      border-bottom: 4px solid rgba(120, 78, 104, 0.78);
+      border-radius: 0 0 16px 16px;
+    }
+
+    .blush {
+      position: absolute;
+      top: 48px;
+      width: 14px;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255, 236, 244, 0.58);
+      filter: blur(0.5px);
+    }
+
+    .blush.left { left: 16px; }
+    .blush.right { right: 16px; }
+
+    .paw,
+    .ear {
+      position: absolute;
+      background: linear-gradient(145deg, #ffd6e9, #efaccd 60%, #df95be);
+      box-shadow: inset 0 1px 6px rgba(255,255,255,0.55), 0 10px 20px rgba(236, 156, 196, 0.2);
+      pointer-events: none;
+    }
+
+    .ear {
+      width: 24px;
+      height: 28px;
+      top: -6px;
+      border-radius: 80% 80% 20% 20%;
+    }
+
+    .ear.left {
+      left: 14px;
+      transform: rotate(-20deg);
+    }
+
+    .ear.right {
+      right: 14px;
+      transform: rotate(20deg);
+    }
+
+    .paw {
+      width: 22px;
+      height: 20px;
+      bottom: 7px;
+      border-radius: 50% 50% 40% 40%;
+    }
+
+    .paw.left { left: 14px; }
+    .paw.right { right: 14px; }
+
+    .ring-layer {
+      position: absolute;
+      inset: -24px;
+      pointer-events: none;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .agent-ball.listening + .ring-layer,
+    .agent-ball.locked + .ring-layer {
+      display: flex;
+    }
+
+    .ring,
+    .ring-2,
+    .ring-3 {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 199, 224, 0.72);
+      box-shadow: 0 0 0 8px rgba(255, 214, 232, 0.08);
+    }
+
+    .ring {
+      inset: 4px;
+      animation: pulse 1.8s infinite;
+    }
+
+    .ring-2 {
+      inset: -6px;
+      border-color: rgba(188, 219, 255, 0.6);
+      animation: pulse 1.8s 0.35s infinite;
+    }
+
+    .ring-3 {
+      inset: -16px;
+      border-color: rgba(255,255,255,0.55);
+      animation: pulse 1.8s 0.7s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.94); opacity: 0.16; }
+      40% { opacity: 0.55; }
+      100% { transform: scale(1.08); opacity: 0; }
+    }
+
+    .status-float,
+    .suggest-panel,
+    .dashboard,
+    .input-panel,
+    .toast {
+      position: absolute;
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+      pointer-events: none;
+      transition: opacity var(--trans-mid), transform var(--trans-mid);
+    }
+
+    .status-float.show,
+    .suggest-panel.show,
+    .dashboard.show,
+    .input-panel.show,
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .status-float {
+      left: 50%;
+      transform: translate(-50%, 10px) scale(0.98);
+      bottom: calc(100% + 18px);
+      min-width: 200px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(255,255,255,0.72);
+      backdrop-filter: blur(18px) saturate(140%);
+      box-shadow: var(--shadow-lg);
+      text-align: center;
+      z-index: 3;
+    }
+
+    .status-float.show {
+      transform: translate(-50%, 0) scale(1);
+    }
+
+    .status-float small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 6px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .status-float strong {
+      display: block;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+
+    .status-float p {
+      margin: 0;
+      color: var(--sub);
+      font-size: 12px;
+    }
+
+    .suggest-panel {
+      right: calc(100% + 18px);
+      top: 50%;
+      width: 260px;
+      transform: translateY(-50%) translateX(10px) scale(0.98);
+      padding: 14px;
+      border-radius: 24px;
+      background: rgba(255,255,255,0.74);
+      border: 1px solid rgba(255,255,255,0.68);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(18px) saturate(140%);
+      z-index: 2;
+    }
+
+    .suggest-panel.show {
+      transform: translateY(-50%) translateX(0) scale(1);
+    }
+
+    .suggest-panel .hint-title {
+      margin: 0 0 10px;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .suggest-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .chip {
+      width: 100%;
+      border: 0;
+      text-align: left;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.72);
+      color: var(--text);
+      font-size: 13px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.85), var(--shadow-sm);
+      cursor: pointer;
+      transition: transform var(--trans-fast), background var(--trans-fast);
+    }
+
+    .chip span {
+      display: block;
+      color: var(--sub);
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    .dashboard {
+      right: calc(100% + 22px);
+      top: -10px;
+      width: 390px;
+      padding: 18px;
+      border-radius: 30px;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid rgba(255,255,255,0.72);
+      box-shadow: var(--shadow-xl);
+      backdrop-filter: blur(22px) saturate(145%);
+      z-index: 4;
+    }
+
+    .dashboard-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .dashboard-header h3 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .dashboard-header p {
+      margin: 6px 0 0;
+      color: var(--sub);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .close-mini {
+      border: 0;
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.75);
+      cursor: pointer;
+      color: var(--sub);
+      box-shadow: var(--shadow-sm);
+      flex: 0 0 auto;
+    }
+
+    .dash-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .dash-block {
+      padding: 16px;
+      border-radius: 20px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.82), rgba(249, 243, 255, 0.6));
+      border: 1px solid rgba(255,255,255,0.72);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.82);
+    }
+
+    .dash-block label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+    }
+
+    .dash-block strong {
+      display: block;
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .dash-block p {
+      margin: 0;
+      color: var(--sub);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .dash-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .dash-actions button {
+      border: 0;
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 12px;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      background: rgba(255,255,255,0.8);
+      color: var(--text);
+    }
+
+    .dash-actions .accent {
+      background: linear-gradient(135deg, #ffd2e6, #f2a6cb);
+      color: #5f3d55;
+      font-weight: 600;
+    }
+
+    .input-panel {
+      left: 50%;
+      top: calc(100% + 18px);
+      width: 360px;
+      transform: translateX(-50%) translateY(-6px) scale(0.98);
+      padding: 14px;
+      border-radius: 24px;
+      background: rgba(255,255,255,0.84);
+      border: 1px solid rgba(255,255,255,0.74);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(20px) saturate(140%);
+      z-index: 4;
+    }
+
+    .input-panel.show {
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+
+    .input-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .input-head h4 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .input-head span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .input-row input {
+      flex: 1;
+      min-width: 0;
+      border: 0;
+      border-radius: 16px;
+      padding: 13px 14px;
+      font-size: 13px;
+      color: var(--text);
+      background: rgba(255,255,255,0.92);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), inset 0 0 0 1px rgba(227, 226, 242, 0.8);
+      outline: none;
+    }
+
+    .send-btn,
+    .close-btn {
+      border: 0;
+      border-radius: 16px;
+      padding: 12px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      box-shadow: var(--shadow-sm);
+      transition: transform var(--trans-fast);
+    }
+
+    .send-btn {
+      background: linear-gradient(135deg, #ffd0e5, #f3a6cc);
+      color: #5f3d55;
+      font-weight: 600;
+    }
+
+    .close-btn {
+      background: rgba(255,255,255,0.82);
+      color: var(--sub);
+    }
+
+    .input-tips {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--sub);
+      line-height: 1.6;
+    }
+
+    .toast {
+      left: 50%;
+      bottom: 26px;
+      transform: translateX(-50%) translateY(10px);
+      min-width: 280px;
+      max-width: 520px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.84);
+      border: 1px solid rgba(255,255,255,0.74);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(18px) saturate(140%);
+      z-index: 50;
+      text-align: left;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .toast strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .toast p {
+      margin: 0;
+      color: var(--sub);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .helper-note {
+      position: fixed;
+      right: 26px;
+      bottom: 20px;
+      z-index: 10;
+      pointer-events: none;
+      color: rgba(89, 88, 112, 0.72);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1280px) {
+      .desktop {
+        grid-template-columns: 220px 1fr 260px;
+      }
+      .dashboard { width: 350px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="desktop">
+    <header class="topbar glass">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-text">
+          <h1>CialloClaw</h1>
+          <p>桌面端 AI Agent · 语音优先，文字兜底</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="pill">当前场景：竞品调研文档</div>
+        <button class="icon-btn" aria-label="提醒">✦</button>
+        <button class="icon-btn" aria-label="设置">⚙</button>
+      </div>
+    </header>
+
+    <aside class="sidebar glass">
+      <div>
+        <div class="section-title">Workspace</div>
+        <div class="nav-card">
+          <div class="nav-item active"><span>竞品分析稿</span><span>进行中</span></div>
+          <div class="nav-item"><span>周报草稿</span><span>待整理</span></div>
+          <div class="nav-item"><span>会议纪要</span><span>已同步</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Agent 承接中</div>
+        <div class="nav-card">
+          <div class="nav-item"><span>结果落地</span><span>桌面</span></div>
+          <div class="nav-item"><span>上下文来源</span><span>页面 + 选区</span></div>
+          <div class="nav-item"><span>交互方式</span><span>语音为主</span></div>
+        </div>
+      </div>
+
+      <div class="assist-hint">
+        <h3>不是聊天窗，而是任务承接层</h3>
+        <p>这个原型强调“少说多做”：Agent 读取当前工作界面、承接你的语音意图、给出结果摘要与去向说明，而不是占据主界面陪聊。</p>
+      </div>
+    </aside>
+
+    <main class="main-stage glass">
+      <div class="window-bar">
+        <div class="window-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="window-meta">正在浏览：2026 Q2 竞品能力梳理</div>
+      </div>
+
+      <div class="editor-shell">
+        <section class="document-card">
+          <div class="doc-badge">文档场景模拟 · 当前选中段落已被 Agent 感知</div>
+          <h2>桌面端 AI Agent 产品方向研究</h2>
+          <p>
+            为了让 AI 在桌面工作流中真正发挥价值，产品不应继续沿用聊天软件的主界面逻辑，而应将能力嵌入用户真实工作表面。
+            当用户在阅读文档、浏览网页、整理资料、撰写汇报时，AI 需要以低打扰方式感知上下文，并在恰当时机承接任务。
+          </p>
+
+          <div class="selected-paragraph">
+            <div class="selection-tag">当前选区</div>
+            <p>
+              对于桌面端 AI Agent，主界面不应是聊天框，而应是一个悬浮式入口。这个入口默认以语音交互为主，只有在语音不可用时才通过极简输入框兜底。
+              输出也不应堆积成聊天气泡，而应以“结果摘要 + 去向说明”的形式承接，例如“已生成摘要、已保存到桌面、已打开草稿文档”。
+              用户真正需要看到的，是当前状态、正在理解的上下文、已经完成了什么，以及下一步可以怎么接续。
+            </p>
+          </div>
+
+          <p>
+            在这种设计下，Agent 更像是桌面上的协作者，而不是一个需要用户切换上下文去专门访问的聊天系统。
+            它的存在应当柔和、轻量，但在关键时刻反应明确：听见、理解、执行、落地。
+          </p>
+
+          <p>
+            因此，在交互设计上，需要把悬停提示、长按语音、锁定持续监听、单击查看任务摘要、双击唤起临时输入等动作整合到同一个悬浮体上，
+            以形成统一的心智模型：平时安静悬浮，需要时即刻承接。
+          </p>
+        </section>
+
+        <aside class="insight-card">
+          <div>
+            <div class="section-title">Scene Signals</div>
+            <div class="mini-stat">
+              <label>选中内容</label>
+              <strong>3 段核心观点</strong>
+              <span>可执行动作：总结、提炼待办、改写风格、生成汇报摘要</span>
+            </div>
+          </div>
+          <div class="mini-stat">
+            <label>最近执行结果</label>
+            <strong>已完成资料整理</strong>
+            <span>Agent 已将上一轮竞品截图归档到桌面 / CialloClaw Demo 文件夹</span>
+          </div>
+          <div class="mini-stat">
+            <label>建议下一步</label>
+            <div class="dot-list">
+              <div>根据当前选区生成 5 个关键结论</div>
+              <div>输出汇报口吻版本并附带行动建议</div>
+              <div>继续追问当前段落中的待办事项</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <section class="dock">
+      <div class="dock-left">
+        <h3>当前任务承接状态</h3>
+        <p>基于你正在浏览的页面与选中段落，CialloClaw 已准备接手总结、提炼、改写与落地动作。</p>
+      </div>
+      <div class="dock-actions">
+        <button class="soft-btn">查看桌面结果</button>
+        <button class="soft-btn">继续补充材料</button>
+        <button class="primary-btn">生成汇报摘要</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="float-layer">
+    <div class="snap-guide" id="snapGuide"></div>
+
+    <div class="agent-wrap" id="agentWrap">
+      <div class="status-float" id="statusFloat">
+        <small id="statusLabel">语音输入</small>
+        <strong id="statusTitle">正在听…</strong>
+        <p id="statusDesc">继续说，我在听</p>
+      </div>
+
+      <div class="suggest-panel" id="suggestPanel">
+        <p class="hint-title">你可能想让它做</p>
+        <div class="suggest-list">
+          <button class="chip" data-action="summary">帮我总结这段内容<span>基于当前选中段落</span></button>
+          <button class="chip" data-action="todo">提炼这里的待办事项<span>整理为可执行清单</span></button>
+          <button class="chip" data-action="formal">改写成更正式的表达<span>适合汇报或方案文档</span></button>
+        </div>
+      </div>
+
+      <div class="dashboard" id="dashboard">
+        <div class="dashboard-header">
+          <div>
+            <h3>任务仪表盘</h3>
+            <p>这里承接状态、上下文、结果摘要与下一步动作，不展示消息历史。</p>
+          </div>
+          <button class="close-mini" id="closeDashboard" aria-label="关闭仪表盘">✕</button>
+        </div>
+
+        <div class="dash-grid">
+          <div class="dash-block">
+            <label>当前状态</label>
+            <strong id="dashStatus">已完成竞品资料整理</strong>
+            <p>上一轮请求已处理完成，新的任务可以直接承接当前选区继续执行。</p>
+          </div>
+          <div class="dash-block">
+            <label>当前上下文</label>
+            <strong id="dashContext">基于你当前浏览的页面与选中段落</strong>
+            <p>系统已识别当前工作表面是“桌面端 AI Agent 产品方向研究”，并锁定重点段落。</p>
+          </div>
+          <div class="dash-block">
+            <label>结果摘要</label>
+            <strong id="dashResult">已生成一份摘要，包含 5 个关键结论</strong>
+            <p id="dashResultDesc">结果已保存到桌面，同时生成了一份适合继续加工的草稿说明。</p>
+          </div>
+          <div class="dash-block">
+            <label>下一步动作</label>
+            <strong id="dashNext">打开结果 / 继续补充 / 改成汇报口吻</strong>
+            <p>建议优先把当前结论改写成适合汇报的表达，再补充竞品对照视图。</p>
+          </div>
+        </div>
+
+        <div class="dash-actions">
+          <button class="accent" data-quick="open">打开结果</button>
+          <button data-quick="continue">继续补充</button>
+          <button data-quick="report">改成汇报口吻</button>
+        </div>
+      </div>
+
+      <div class="input-panel" id="inputPanel">
+        <div class="input-head">
+          <div>
+            <h4>临时文字输入</h4>
+            <span>语音不可用时的兜底入口</span>
+          </div>
+          <button class="close-mini" id="closeInput" aria-label="关闭输入框">✕</button>
+        </div>
+        <div class="input-row">
+          <input id="textInput" type="text" value="请把当前选中的内容改写成汇报风格" placeholder="输入一个临时指令…" />
+          <button class="send-btn" id="sendText">发送</button>
+          <button class="close-btn" id="miniClose">关闭</button>
+        </div>
+        <div class="input-tips">这里不会显示消息历史，只做一次性输入。发送后会以“结果摘要 + 去向说明”的方式反馈。</div>
+      </div>
+
+      <div class="agent-anchor">
+        <button class="agent-ball" id="agentBall" aria-label="CialloClaw 浮动助手">
+          <span class="ear left"></span>
+          <span class="ear right"></span>
+          <span class="face">
+            <span class="eye left"></span>
+            <span class="eye right"></span>
+            <span class="blush left"></span>
+            <span class="blush right"></span>
+            <span class="mouth"></span>
+          </span>
+          <span class="paw left"></span>
+          <span class="paw right"></span>
+        </button>
+        <div class="ring-layer" id="ringLayer">
+          <span class="ring"></span>
+          <span class="ring-2"></span>
+          <span class="ring-3"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast">
+      <strong id="toastTitle">已生成调研摘要</strong>
+      <p id="toastDesc">包含 5 个关键结论，已保存到桌面，并打开结果草稿以便继续编辑。</p>
+    </div>
+  </div>
+
+  <div class="helper-note">
+    单击悬浮球：打开仪表盘 · 双击：临时输入框 · 长按：语音态 · 长按上滑：锁定语音态 · 可拖动并吸附边缘
+  </div>
+
+  <script>
+    (function () {
+      const agentWrap = document.getElementById('agentWrap');
+      const agentBall = document.getElementById('agentBall');
+      const suggestPanel = document.getElementById('suggestPanel');
+      const dashboard = document.getElementById('dashboard');
+      const inputPanel = document.getElementById('inputPanel');
+      const statusFloat = document.getElementById('statusFloat');
+      const statusLabel = document.getElementById('statusLabel');
+      const statusTitle = document.getElementById('statusTitle');
+      const statusDesc = document.getElementById('statusDesc');
+      const closeDashboard = document.getElementById('closeDashboard');
+      const closeInput = document.getElementById('closeInput');
+      const miniClose = document.getElementById('miniClose');
+      const textInput = document.getElementById('textInput');
+      const sendText = document.getElementById('sendText');
+      const toast = document.getElementById('toast');
+      const toastTitle = document.getElementById('toastTitle');
+      const toastDesc = document.getElementById('toastDesc');
+      const snapGuide = document.getElementById('snapGuide');
+
+      const dashStatus = document.getElementById('dashStatus');
+      const dashContext = document.getElementById('dashContext');
+      const dashResult = document.getElementById('dashResult');
+      const dashResultDesc = document.getElementById('dashResultDesc');
+      const dashNext = document.getElementById('dashNext');
+
+      let pos = {
+        x: window.innerWidth - 180,
+        y: window.innerHeight * 0.5 - 120
+      };
+
+      let pointerDown = false;
+      let dragging = false;
+      let listening = false;
+      let lockedListening = false;
+      let hoverIntent = false;
+      let startX = 0;
+      let startY = 0;
+      let startWrapX = 0;
+      let startWrapY = 0;
+      let pointerId = null;
+      let pressTimer = null;
+      let suppressClickUntil = 0;
+      let singleClickTimer = null;
+      let toastTimer = null;
+
+      const HOLD_DELAY = 420;
+      const DRAG_THRESHOLD = 6;
+      const LOCK_THRESHOLD = -48;
+      const EDGE_SNAP = 28;
+      const WRAP_MARGIN = 14;
+
+      const demoResponses = {
+        summary: {
+          title: '已生成调研摘要',
+          desc: '提炼了 5 个关键结论，已保存到桌面，并可继续改成汇报口吻。',
+          dashStatus: '已完成当前段落总结',
+          dashResult: '已生成摘要，包含 5 个关键结论',
+          dashResultDesc: '摘要已保存到桌面 / CialloClaw Demo 文件夹，并同步到当前工作流。',
+          dashNext: '打开结果 / 补充案例 / 转为汇报表达'
+        },
+        todo: {
+          title: '已提炼待办事项',
+          desc: '识别出 3 条待执行动作，已整理为清单并放入桌面便签。',
+          dashStatus: '已完成待办提炼',
+          dashResult: '已输出 3 条可执行待办',
+          dashResultDesc: '内容已保存到桌面，并标注优先级与建议负责人。',
+          dashNext: '打开清单 / 继续拆解 / 生成会议纪要版'
+        },
+        formal: {
+          title: '已改写成正式表达',
+          desc: '已输出更适合方案文档与汇报材料的版本，并打开预览。',
+          dashStatus: '已完成正式化改写',
+          dashResult: '已生成汇报风格版本',
+          dashResultDesc: '改写稿已另存为新文档，可继续补充结构和结论页。',
+          dashNext: '打开改写稿 / 继续润色 / 生成演示提纲'
+        },
+        text: {
+          title: '已承接文字指令',
+          desc: '正在根据临时输入执行任务，结果将以摘要形式落地，不展示消息历史。',
+          dashStatus: '已收到临时文字请求',
+          dashResult: '正在生成结果摘要',
+          dashResultDesc: '处理完成后将显示结果去向，例如桌面、草稿文档或当前页面。',
+          dashNext: '查看结果 / 继续补充 / 切回语音方式'
+        },
+        voice: {
+          title: '已记录语音任务',
+          desc: '当前语音请求已进入执行队列，将根据当前上下文自动完成整理与落地。',
+          dashStatus: '已承接语音任务',
+          dashResult: '准备基于当前页面生成结果',
+          dashResultDesc: '结果会以摘要和去向说明方式返回，并尽量直接完成动作。',
+          dashNext: '打开结果 / 继续追问 / 锁定持续语音'
+        },
+        open: {
+          title: '已打开结果草稿',
+          desc: '结果文档已在桌面预览区打开，便于继续编辑和补充。',
+          dashStatus: '结果已打开',
+          dashResult: '草稿文档已就绪',
+          dashResultDesc: '当前可继续进行改写、删改或生成新的输出版本。',
+          dashNext: '继续编辑 / 改成汇报版 / 导出到桌面'
+        },
+        continue: {
+          title: '已继续补充材料',
+          desc: 'Agent 正在把当前结论扩展为更完整的说明，并保留原始上下文。',
+          dashStatus: '正在补充上下文材料',
+          dashResult: '扩展内容生成中',
+          dashResultDesc: '完成后将形成更完整的调研摘要与建议列表。',
+          dashNext: '查看扩展结果 / 停止补充 / 改为对比视图'
+        },
+        report: {
+          title: '已切换为汇报口吻',
+          desc: '结果已按汇报表达方式重写，更适合管理层汇报或方案演示。',
+          dashStatus: '已生成汇报表达',
+          dashResult: '汇报版内容已就绪',
+          dashResultDesc: '同步生成标题、结论句与建议动作，适合继续输出成 PPT 结构。',
+          dashNext: '打开汇报稿 / 生成提纲 / 补充数据支撑'
+        }
+      };
+
+      function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+      }
+
+      function applyPosition(animated = false) {
+        if (animated) {
+          agentWrap.style.transition = 'left 260ms cubic-bezier(.2,.8,.2,1), top 260ms cubic-bezier(.2,.8,.2,1)';
+        } else {
+          agentWrap.style.transition = 'none';
+        }
+        agentWrap.style.left = pos.x + 'px';
+        agentWrap.style.top = pos.y + 'px';
+      }
+
+      function getWrapBounds() {
+        const width = agentWrap.offsetWidth || 420;
+        const height = Math.max(agentWrap.offsetHeight || 92, 92);
+        return { width, height };
+      }
+
+      function hideAllPanels(except) {
+        [dashboard, inputPanel, suggestPanel].forEach((el) => {
+          if (el !== except) el.classList.remove('show');
+        });
+      }
+
+      function setStatus(mode) {
+        statusFloat.classList.add('show');
+        if (mode === 'locked') {
+          statusLabel.textContent = '持续语音';
+          statusTitle.textContent = '已锁定语音';
+          statusDesc.textContent = '稳定监听中，可继续连续表达';
+        } else {
+          statusLabel.textContent = '语音输入';
+          statusTitle.textContent = '正在听…';
+          statusDesc.textContent = '继续说，我在听';
+        }
+      }
+
+      function clearListening(showToastAfter = false) {
+        listening = false;
+        lockedListening = false;
+        agentBall.classList.remove('listening', 'locked');
+        statusFloat.classList.remove('show');
+        if (showToastAfter) {
+          applyResponse('voice');
+        }
+      }
+
+      function startListening() {
+        listening = true;
+        lockedListening = false;
+        hideAllPanels();
+        agentBall.classList.add('listening');
+        agentBall.classList.remove('locked');
+        setStatus('listening');
+      }
+
+      function lockListening() {
+        listening = true;
+        lockedListening = true;
+        agentBall.classList.add('listening', 'locked');
+        setStatus('locked');
+      }
+
+      function showToast(title, desc) {
+        toastTitle.textContent = title;
+        toastDesc.textContent = desc;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 3400);
+      }
+
+      function applyResponse(type) {
+        const data = demoResponses[type];
+        if (!data) return;
+        dashStatus.textContent = data.dashStatus;
+        dashResult.textContent = data.dashResult;
+        dashResultDesc.textContent = data.dashResultDesc;
+        dashNext.textContent = data.dashNext;
+        showToast(data.title, data.desc);
+      }
+
+      function openDashboard() {
+        hideAllPanels(dashboard);
+        dashboard.classList.add('show');
+      }
+
+      function openInput() {
+        hideAllPanels(inputPanel);
+        inputPanel.classList.add('show');
+        setTimeout(() => textInput.focus(), 120);
+      }
+
+      function closeTransient() {
+        dashboard.classList.remove('show');
+        inputPanel.classList.remove('show');
+        if (!hoverIntent) suggestPanel.classList.remove('show');
+      }
+
+      function snapToEdge() {
+        const bounds = getWrapBounds();
+        const maxX = window.innerWidth - bounds.width - WRAP_MARGIN;
+        const maxY = window.innerHeight - bounds.height - WRAP_MARGIN;
+        const minX = WRAP_MARGIN;
+        const minY = WRAP_MARGIN;
+
+        pos.x = clamp(pos.x, minX, maxX);
+        pos.y = clamp(pos.y, minY, maxY);
+
+        const distLeft = pos.x - minX;
+        const distRight = maxX - pos.x;
+        const distTop = pos.y - minY;
+        const distBottom = maxY - pos.y;
+
+        let snapped = false;
+        let guide = { left: pos.x, top: pos.y, width: bounds.width, height: bounds.height };
+
+        if (distLeft < EDGE_SNAP) {
+          pos.x = minX;
+          snapped = true;
+          guide.left = minX;
+        } else if (distRight < EDGE_SNAP) {
+          pos.x = maxX;
+          snapped = true;
+          guide.left = maxX;
+        }
+
+        if (distTop < EDGE_SNAP) {
+          pos.y = minY;
+          snapped = true;
+          guide.top = minY;
+        } else if (distBottom < EDGE_SNAP) {
+          pos.y = maxY;
+          snapped = true;
+          guide.top = maxY;
+        }
+
+        if (snapped) {
+          snapGuide.style.left = guide.left + 'px';
+          snapGuide.style.top = guide.top + 'px';
+          snapGuide.style.width = guide.width + 'px';
+          snapGuide.style.height = guide.height + 'px';
+          snapGuide.classList.add('show');
+          setTimeout(() => snapGuide.classList.remove('show'), 280);
+        }
+
+        applyPosition(true);
+      }
+
+      function onPointerDown(e) {
+        if (e.button !== 0) return;
+        pointerDown = true;
+        dragging = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        startWrapX = pos.x;
+        startWrapY = pos.y;
+        pointerId = e.pointerId;
+        agentBall.setPointerCapture(pointerId);
+        agentBall.classList.add('dragging');
+
+        clearTimeout(pressTimer);
+        pressTimer = setTimeout(() => {
+          if (pointerDown && !dragging) startListening();
+        }, HOLD_DELAY);
+      }
+
+      function onPointerMove(e) {
+        if (!pointerDown) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        if (!dragging && Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD) {
+          dragging = true;
+          hideAllPanels();
+        }
+
+        if (dragging) {
+          const bounds = getWrapBounds();
+          const maxX = window.innerWidth - bounds.width - WRAP_MARGIN;
+          const maxY = window.innerHeight - bounds.height - WRAP_MARGIN;
+          pos.x = clamp(startWrapX + dx, WRAP_MARGIN, maxX);
+          pos.y = clamp(startWrapY + dy, WRAP_MARGIN, maxY);
+          applyPosition(false);
+        }
+
+        if (listening && !lockedListening && dy < LOCK_THRESHOLD) {
+          lockListening();
+        }
+      }
+
+      function onPointerUp() {
+        if (!pointerDown) return;
+        pointerDown = false;
+        clearTimeout(pressTimer);
+        agentBall.classList.remove('dragging');
+
+        if (dragging) {
+          dragging = false;
+          suppressClickUntil = Date.now() + 260;
+          snapToEdge();
+        } else if (listening && !lockedListening) {
+          clearListening(true);
+        }
+      }
+
+      agentBall.addEventListener('pointerdown', onPointerDown);
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+
+      agentBall.addEventListener('mouseenter', () => {
+        hoverIntent = true;
+        if (!dashboard.classList.contains('show') && !inputPanel.classList.contains('show') && !listening) {
+          suggestPanel.classList.add('show');
+        }
+      });
+
+      agentWrap.addEventListener('mouseleave', () => {
+        hoverIntent = false;
+        if (!dashboard.classList.contains('show') && !inputPanel.classList.contains('show')) {
+          suggestPanel.classList.remove('show');
+        }
+      });
+
+      agentBall.addEventListener('click', () => {
+        if (Date.now() < suppressClickUntil || listening || lockedListening) return;
+        clearTimeout(singleClickTimer);
+        singleClickTimer = setTimeout(() => {
+          if (dashboard.classList.contains('show')) {
+            dashboard.classList.remove('show');
+          } else {
+            openDashboard();
+          }
+        }, 220);
+      });
+
+      agentBall.addEventListener('dblclick', () => {
+        if (Date.now() < suppressClickUntil || listening || lockedListening) return;
+        clearTimeout(singleClickTimer);
+        openInput();
+      });
+
+      closeDashboard.addEventListener('click', () => dashboard.classList.remove('show'));
+      closeInput.addEventListener('click', () => inputPanel.classList.remove('show'));
+      miniClose.addEventListener('click', () => inputPanel.classList.remove('show'));
+
+      document.querySelectorAll('.chip').forEach((chip) => {
+        chip.addEventListener('click', () => {
+          const action = chip.dataset.action;
+          applyResponse(action);
+          openDashboard();
+        });
+      });
+
+      document.querySelectorAll('[data-quick]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          applyResponse(btn.dataset.quick);
+        });
+      });
+
+      sendText.addEventListener('click', () => {
+        const val = textInput.value.trim();
+        if (!val) {
+          showToast('请输入一个临时指令', '这里是语音不可用时的兜底输入入口，不保留消息历史。');
+          textInput.focus();
+          return;
+        }
+        applyResponse('text');
+        dashContext.textContent = '基于当前页面、当前选区，以及你的临时文字指令';
+        inputPanel.classList.remove('show');
+      });
+
+      textInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendText.click();
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (lockedListening || listening) {
+            clearListening(true);
+            return;
+          }
+          closeTransient();
+          toast.classList.remove('show');
+        }
+      });
+
+      document.addEventListener('click', (e) => {
+        const withinAgent = agentWrap.contains(e.target);
+        if (!withinAgent && !dragging) {
+          dashboard.classList.remove('show');
+          inputPanel.classList.remove('show');
+          suggestPanel.classList.remove('show');
+        }
+      });
+
+      window.addEventListener('resize', () => {
+        const bounds = getWrapBounds();
+        pos.x = clamp(pos.x, WRAP_MARGIN, window.innerWidth - bounds.width - WRAP_MARGIN);
+        pos.y = clamp(pos.y, WRAP_MARGIN, window.innerHeight - bounds.height - WRAP_MARGIN);
+        applyPosition(false);
+      });
+
+      applyPosition(false);
+      suggestPanel.classList.add('show');
+      showToast('欢迎使用 CialloClaw', '试试悬停、单击、双击、长按，感受语音优先的桌面 Agent 交互。');
+    })();
+  </script>
+</body>
+</html>
