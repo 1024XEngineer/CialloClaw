@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CialloClaw MVP Prototype</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="dashboard-shell" aria-label="Prototype workspace">
+        <div class="dashboard-main">
+          <section class="hero panel-card" aria-label="Dashboard overview">
+            <p class="eyebrow">CialloClaw</p>
+            <h1>Visible task help for everyday desktop work.</h1>
+            <p class="hero-copy">
+              A lightweight prototype for inspection, draft generation, and transparent execution history.
+            </p>
+          </section>
+
+          <aside id="assistant-panel" class="assistant-panel panel-card is-hidden" aria-live="polite">
+            <p id="assistant-message">Ready to inspect tasks and prepare a visible draft.</p>
+            <div class="assistant-actions">
+              <button id="run-inspection" type="button">Run Inspection</button>
+              <button id="generate-draft" type="button">Generate Draft</button>
+              <button id="undo-last-action" type="button" disabled>Undo Last Action</button>
+              <button id="view-log" type="button">View Log</button>
+            </div>
+          </aside>
+
+          <section class="dashboard-grid" aria-label="Operational workflow">
+            <article class="panel-card">
+              <div class="section-heading">
+                <p class="section-kicker">Inspection</p>
+                <h2>Task Inspection</h2>
+              </div>
+              <div id="task-list" class="content-slot" aria-live="polite">
+                <p>Task candidates will appear here.</p>
+              </div>
+            </article>
+
+            <article class="panel-card">
+              <div class="section-heading">
+                <p class="section-kicker">Results</p>
+                <h2>Summary and Draft</h2>
+              </div>
+              <div id="inspection-summary" class="content-slot" aria-live="polite">
+                <p>Inspection summary will appear here.</p>
+              </div>
+              <div id="draft-output" class="content-slot accent-slot" aria-live="polite">
+                <p>Draft output will appear here.</p>
+              </div>
+            </article>
+
+            <article class="panel-card">
+              <div class="section-heading">
+                <p class="section-kicker">Audit</p>
+                <h2>Execution Log</h2>
+              </div>
+              <div id="execution-log" class="content-slot" aria-live="polite">
+                <p>Execution details will appear here.</p>
+              </div>
+            </article>
+          </section>
+        </div>
+
+        <aside id="chat-panel" class="chat-panel chat-shell panel-card" aria-label="Assistant chat">
+          <div class="chat-panel__header section-heading">
+            <p class="section-kicker">Assistant</p>
+            <h2>Conversation</h2>
+          </div>
+          <div id="chat-messages" class="chat-messages content-slot" aria-live="polite">
+            <p>Chat messages will appear here.</p>
+          </div>
+          <div class="chat-quick-actions">
+            <button id="chat-action-summarize" type="button">Summarize</button>
+            <button id="chat-action-explain" type="button">Explain</button>
+            <button id="chat-action-extract-todos" type="button">Extract Todos</button>
+          </div>
+          <div class="chat-compose">
+            <input id="chat-input" type="text" aria-label="Assistant chat message" placeholder="Ask for a summary or next steps">
+            <button id="chat-send" type="button">Send</button>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <button id="floating-ball" class="floating-ball" type="button" aria-controls="assistant-panel" aria-expanded="false">
+      Open assistant
+    </button>
+    <script src="logic.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

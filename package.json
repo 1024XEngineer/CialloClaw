@@ -1,0 +1,13 @@
+{
+  "name": "cialloclaw-mvp",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "^36.0.0"
+  }
+}
