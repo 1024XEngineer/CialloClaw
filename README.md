@@ -1,4 +1,6 @@
-# Orb Weave
+# CialloClaw
+
+## Orb Weave Prototype
 
 Orb Weave is a Tauri desktop prototype for a gesture-first floating orb assistant.
 
