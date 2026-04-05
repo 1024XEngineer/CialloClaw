@@ -294,6 +294,321 @@ CialloClaw/
 
 ---
 
+## 实现模式
+
+本项目采用了一套一致且精心设计的交互实现模式，以下展示核心技术细节。
+
+### 拖拽交互模式
+
+#### 1. 中心球拖拽（弹簧回弹）
+
+**位置**: `src/pages/home/components/CenterOrb.tsx:96-161`
+
+使用物理弹簧模型实现平滑回弹效果：
+
+```tsx
+// 弹簧回弹核心算法
+const spring = () => {
+  const stiffness = 0.16;  // 弹簧刚度
+  const damping = 0.70;    // 阻尼系数
+  velRef.current.x += -offsetRef.current.x * stiffness;
+  velRef.current.y += -offsetRef.current.y * stiffness;
+  velRef.current.x *= damping;
+  velRef.current.y *= damping;
+  offsetRef.current.x += velRef.current.x;
+  offsetRef.current.y += velRef.current.y;
+
+  // 使用 requestAnimationFrame 实现平滑动画
+  if (dist > 0.3 || Math.abs(velRef.current.x) > 0.1) {
+    returnAnimRef.current = requestAnimationFrame(spring);
+  }
+};
+```
+
+**特点**：
+- 拖拽半径限制为 100px
+- 使用 `useRef` 存储速度和位置，避免频繁重新渲染
+- 同时支持拖拽和长按（650ms 触发语音）
+
+#### 2. 行星拖拽（自动吸附轨道）
+
+**位置**: `src/pages/home/components/PlanetNode.tsx:122-185`
+
+行星松手后自动计算轨道角度并吸附：
+
+```tsx
+// 计算释放点的轨道角度
+const rect = containerRef.current.getBoundingClientRect();
+const relX = e.clientX - (rect.left + rect.width / 2);
+const relY = e.clientY - (rect.top + rect.height / 2);
+const dropAngle = (Math.atan2(relY, relX) * 180) / Math.PI;
+const normalizedAngle = ((dropAngle % 360) + 360) % 360;
+onOrbitAngleChange?.(config.key, normalizedAngle);
+```
+
+**特点**：
+- 6px 阈值区分点击和拖拽
+- 使用 `Math.atan2` 计算极坐标角度
+- 角度标准化到 0-360° 范围
+
+#### 3. 面板长按分离窗口
+
+**位置**: `src/pages/home/components/JarvisPanel.tsx:476-560`
+
+长按面板标题栏 800ms 后可拖拽分离：
+
+```tsx
+// 使用 setInterval 更新进度条（每 100ms）
+longPressProgressRef.current = setInterval(() => {
+  setLongPressProgress(prev => {
+    const next = prev + 100 / 8;  // 8 步完成
+    if (next >= 100) {
+      clearInterval(longPressProgressRef.current);
+      return 100;
+    }
+    return next;
+  });
+}, 100);
+
+// 长按 800ms 后激活拖拽
+longPressTimerRef.current = setTimeout(() => {
+  isLongPressRef.current = true;
+  detachActiveRef.current = true;
+}, 800);
+```
+
+**特点**：
+- 使用 `setInterval` 产生平滑的进度条动画
+- 拖拽超过 80px 显示分离预览
+- 支持水平/垂直滑动锁定
+
+---
+
+### 动画实现模式
+
+#### 1. 请求动画帧（RAF）
+
+**位置**: `src/pages/home/page.tsx:418-445`
+
+使用 `requestAnimationFrame` 替代 `setInterval` 实现平滑动画：
+
+```tsx
+useEffect(() => {
+  const animate = (timestamp: number) => {
+    // 脉冲动画：正弦波产生 0-1 的值
+    const t = Date.now() / 1000;
+    setPulse(Math.sin(t * 1.2) * 0.5 + 0.5);
+
+    // 使用 timestamp 计算 delta time
+    const dt = lastTimeRef.current ? (timestamp - lastTimeRef.current) / 1000 : 0;
+    lastTimeRef.current = timestamp;
+
+    // 更新行星轨道角度（使用 delta time 保证平滑）
+    if (dt > 0 && dt < 0.1) {
+      setAngles(prev => {
+        const next = { ...prev };
+        ALL_PLANETS.forEach(p => {
+          if (!draggingPlanets.current.has(p.key) && p.orbitSpeed > 0) {
+            next[p.key] = (prev[p.key] + p.orbitSpeed * dt) % 360;
+          }
+        });
+        return next;
+      });
+    }
+
+    animRef.current = requestAnimationFrame(animate);
+  };
+  animRef.current = requestAnimationFrame(animate);
+  return () => cancelAnimationFrame(animRef.current);
+}, []);
+```
+
+**优势**：
+- 与浏览器刷新率同步（通常 60fps）
+- 页面不可见时自动暂停，节省资源
+- 使用 delta time 保证动画平滑
+
+#### 2. 粒子系统（语音界面）
+
+**位置**: `src/pages/home/components/VoiceInterface.tsx:171-196`
+
+在"理解"阶段，粒子向中心汇聚：
+
+```tsx
+setParticles(prev => {
+  // 更新现有粒子：向中心移动 + 淡出
+  const moved = prev.map(p => ({
+    ...p,
+    radius: p.radius - p.speed * 1.4,
+    opacity: p.radius < 35 ? p.opacity * 0.88 : p.opacity * 0.992,
+  })).filter(p => p.radius > 4 && p.opacity > 0.03);
+
+  // 随机生成新粒子
+  if (moved.length < 20 && Math.random() < 0.35) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 110 + Math.random() * 55;
+    moved.push({
+      id: ++particleIdRef.current,
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      radius,
+      opacity: 0.5 + Math.random() * 0.35,
+      speed: 0.7 + Math.random() * 0.7,
+      size: 1.5 + Math.random() * 2,
+    });
+  }
+  return moved;
+});
+```
+
+**特点**：
+- 粒子数量限制为 20 个
+- 使用 `Math.random()` 控制生成概率
+- 每个粒子有独立的速度和生命周期
+
+#### 3. CSS 过渡效果
+
+**位置**: `src/pages/home/components/CenterOrb.tsx:359-365`
+
+根据交互状态动态切换过渡时长：
+
+```tsx
+transform: `perspective(300px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) scale(...)`,
+transition: isDragging
+  ? 'transform 0.05s ease'                                    // 拖拽时快速响应
+  : 'transform 0.9s cubic-bezier(0.34,1.56,0.64,1), ...',     // 松手时弹性缓动
+```
+
+**缓动函数说明**：
+- `ease` - 标准缓动
+- `cubic-bezier(0.34,1.56,0.64,1)` - 弹性效果（超出目标后回弹）
+
+---
+
+### 状态管理模式
+
+#### 1. 组件本地状态
+
+**位置**: 所有组件统一使用 `useState` + `useRef` 组合
+
+```tsx
+// useState 用于需要触发重新渲染的状态
+const [rotation, setRotation] = useState(0);
+const [isDragging, setIsDragging] = useState(false);
+const [offset, setOffset] = useState({ x: 0, y: 0 });
+
+// useRef 用于存储不触发渲染的值
+const animRef = useRef<number>(0);           // 动画帧 ID
+const dragStartRef = useRef({ x: 0, y: 0 }); // 拖拽起始点
+const velRef = useRef({ x: 0, y: 0 });        // 速度向量
+const isDraggingRef = useRef(false);          // 拖拽状态标志
+```
+
+**设计原则**：
+- 渲染相关状态用 `useState`
+- 临时值和 DOM 引用用 `useRef`
+- 事件处理函数用 `useCallback` 缓存
+
+#### 2. 全局状态提升
+
+**位置**: `src/pages/home/page.tsx:312-358`
+
+在父组件中管理子组件共享的状态：
+
+```tsx
+// 状态提升到父组件
+const [activePlanet, setActivePlanet] = useState<ModuleKey | null>(null);
+const [currentState, setCurrentState] = useState<AgentStateKey>('working');
+const [focusMode, setFocusMode] = useState(false);
+
+// 派生状态通过条件计算得出
+const stateData = agentStates[currentState];
+const activePlanetConfig = activePlanet
+  ? ALL_PLANETS.find(p => p.key === activePlanet)
+  : null;
+
+// 事件处理函数通过 props 传递
+const handlePlanetClick = useCallback((key: ModuleKey) => {
+  setActivePlanet(key);
+  setCurrentState(group.states[0]);
+}, [activePlanet]);
+```
+
+**优点**：
+- 多个组件可以访问同一状态
+- 状态变化时同步更新所有相关组件
+- 便于实现复杂的交互逻辑
+
+---
+
+### 长按交互模式
+
+**位置**: `src/pages/home/components/CenterOrb.tsx:125-161`
+
+长按检测使用 `setTimeout` + `requestAnimationFrame` 组合：
+
+```tsx
+const LONG_PRESS_DURATION = 650; // ms
+
+// 进度环动画（RAF 实现）
+const startLongPressAnim = useCallback(() => {
+  longPressStartRef.current = Date.now();
+  const tick = () => {
+    const elapsed = Date.now() - longPressStartRef.current;
+    const progress = Math.min(elapsed / LONG_PRESS_DURATION, 1);
+    setLongPressProgress(progress);
+    if (progress < 1) {
+      longPressAnimRef.current = requestAnimationFrame(tick);
+    }
+  };
+  longPressAnimRef.current = requestAnimationFrame(tick);
+}, []);
+
+// 长按检测（setTimeout 实现）
+longPressRef.current = setTimeout(() => {
+  cancelLongPressAnim();
+  onLongPress?.();  // 触发回调
+}, LONG_PRESS_DURATION);
+```
+
+**特点**：
+- `requestAnimationFrame` 更新进度环（60fps）
+- `setTimeout` 检测长按阈值
+- 移动超过 6px 自动取消长按
+
+---
+
+### 过渡效果模式
+
+#### 交错淡入动画
+
+**位置**: `src/pages/home/page.tsx:456-464`
+
+退出专注模式时行星交错显示：
+
+```tsx
+setFocusModeExiting(true);
+setRevealedPlanets(new Set());
+
+ALL_PLANETS.forEach((p, i) => {
+  setTimeout(() => {
+    setRevealedPlanets(cur => new Set([...cur, p.key]));
+  }, 120 + i * 110);  // 基础延迟 120ms，每个行星额外延迟 110ms
+});
+
+setTimeout(() => setFocusModeExiting(false),
+  120 + ALL_PLANETS.length * 110 + 400
+);
+```
+
+**效果**：
+- 第一个行星延迟 120ms 出现
+- 第二个行星延迟 230ms 出现
+- 第三个行星延迟 340ms 出现
+- 以此类推...
+
+---
+
 ## 快速开始
 
 ### 环境要求
