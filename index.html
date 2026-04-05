@@ -1,0 +1,2538 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Dashboard Mock</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --panel: #ffffff;
+      --panel-2: #fafafa;
+      --text: #111827;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --line-2: #d1d5db;
+      --accent: #111827;
+      --accent-2: #4b5563;
+      --ok: #0f766e;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --soft: #eef2ff;
+      --shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at top, #ffffff 0%, #f5f6f8 44%, #eef0f3 100%);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    .app {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      padding: 18px;
+    }
+
+    .shell {
+      width: 100%;
+      height: 100%;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.66);
+      backdrop-filter: blur(14px);
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 250px;
+    }
+
+    .brand-badge {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      background: linear-gradient(180deg, #ffffff, #f3f4f6);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.1;
+      letter-spacing: 0.02em;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .nav {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+    }
+
+    .nav button,
+    .seg button,
+    .pill,
+    .chip,
+    .ghost,
+    .action {
+      transition: 140ms ease;
+    }
+
+    .nav button {
+      min-width: 70px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      color: var(--muted);
+    }
+
+    .nav button.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .ghost {
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--accent);
+    }
+
+    .ghost:hover,
+    .nav button:hover,
+    .seg button:hover,
+    .action:hover,
+    .pill:hover {
+      transform: translateY(-1px);
+    }
+
+    .stage {
+      position: relative;
+      overflow: hidden;
+      padding: 16px;
+    }
+
+    .stage-inner {
+      height: 100%;
+      overflow: auto;
+      padding-right: 6px;
+    }
+
+    .page {
+      min-height: 100%;
+      display: grid;
+      gap: 14px;
+      animation: fadeIn 180ms ease;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 6px 4px 0;
+    }
+
+    .page-head h2 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .page-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 72ch;
+    }
+
+    .page-note {
+      font-size: 12px;
+      color: var(--muted);
+      text-align: right;
+      max-width: 42ch;
+    }
+
+    .banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid rgba(180, 83, 9, 0.18);
+      background: #fff8ee;
+      border-radius: 16px;
+      color: #7c2d12;
+      font-size: 13px;
+    }
+
+    .banner .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .layout-2,
+    .layout-3 {
+      display: grid;
+      gap: 14px;
+    }
+
+    .layout-2 {
+      grid-template-columns: 1.2fr 0.8fr;
+    }
+
+    .layout-3 {
+      grid-template-columns: 1.1fr 1fr 0.9fr;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.86);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fff, #fbfbfb);
+    }
+
+    .panel-head strong {
+      font-size: 14px;
+    }
+
+    .panel-head .sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      padding: 14px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .card:hover {
+      border-color: var(--line-2);
+      box-shadow: 0 12px 28px rgba(17,24,39,0.05);
+      transform: translateY(-1px);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .chip.dark {
+      color: #111827;
+      background: #f3f4f6;
+    }
+
+    .chip.ok { color: var(--ok); background: #f0fdfa; border-color: rgba(15,118,110,0.16); }
+    .chip.warn { color: var(--warn); background: #fff7ed; border-color: rgba(180,83,9,0.16); }
+    .chip.bad { color: var(--bad); background: #fef2f2; border-color: rgba(185,28,28,0.16); }
+    .chip.soft { color: #3730a3; background: var(--soft); border-color: rgba(99,102,241,0.16); }
+
+    .mini {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .seg button {
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      border-right: 1px solid var(--line);
+    }
+
+    .seg button:last-child { border-right: 0; }
+    .seg button.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .list-note {
+      padding: 0 14px 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+      padding: 14px;
+      min-height: 108px;
+    }
+
+    .stat .k {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .stat .v {
+      font-size: 30px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .stat .d {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .risk {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .risk h4 {
+      margin: 0 0 6px;
+      font-size: 14px;
+    }
+
+    .risk p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .jump-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .jump {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      padding: 14px;
+      text-align: left;
+    }
+
+    .jump strong { display: block; margin-bottom: 6px; }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      padding: 14px;
+      text-align: left;
+    }
+
+    .timeline-item .top {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .timeline-item h4 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .timeline-item p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .detail-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+    }
+
+    .detail-overlay.show { display: flex; }
+
+    .detail-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(15,23,42,0.28);
+      backdrop-filter: blur(4px);
+    }
+
+    .detail {
+      position: relative;
+      width: min(960px, calc(100vw - 36px));
+      max-height: min(88vh, 920px);
+      overflow: hidden;
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: #fff;
+      box-shadow: 0 30px 90px rgba(15,23,42,0.28);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      z-index: 1;
+    }
+
+    .detail-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fff, #fbfbfb);
+    }
+
+    .detail-head h3 {
+      margin: 6px 0 0;
+      font-size: 20px;
+    }
+
+    .detail-head .kicker {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .detail-close {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .detail-body {
+      overflow: auto;
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 14px;
+    }
+
+    .detail-box {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .detail-box h4 {
+      margin: 0 0 10px;
+      font-size: 14px;
+    }
+
+    .fields {
+      display: grid;
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 4px;
+      font-size: 13px;
+    }
+
+    .field .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .field .value {
+      line-height: 1.6;
+    }
+
+    .steps {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .steps li {
+      display: flex;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fafafa;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .steps li.current {
+      background: #eff6ff;
+      border-color: rgba(59,130,246,0.22);
+    }
+
+    .steps .idx {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      flex: none;
+      margin-top: 1px;
+    }
+
+    .actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 0 20px 20px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .action {
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .action.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .action.danger {
+      color: var(--bad);
+      border-color: rgba(185,28,28,0.18);
+      background: #fff7f7;
+    }
+
+    .action.soft {
+      background: #f8fafc;
+    }
+
+    .action:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .file-list,
+    .bullet-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .file-list li,
+    .bullet-list li {
+      display: flex;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fafafa;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .file-list button,
+    .bullet-list button {
+      text-align: left;
+      width: 100%;
+    }
+
+    .detail-footer {
+      padding: 12px 20px 16px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--line);
+      background: #fbfbfb;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .toasts {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      z-index: 30;
+      display: grid;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .toast {
+      min-width: 260px;
+      max-width: 380px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.94);
+      box-shadow: 0 16px 30px rgba(15,23,42,0.08);
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text);
+      pointer-events: auto;
+    }
+
+    .toast .t {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .toast.ok { border-color: rgba(15,118,110,0.18); }
+    .toast.warn { border-color: rgba(180,83,9,0.18); }
+    .toast.bad { border-color: rgba(185,28,28,0.18); }
+
+    .composer {
+      position: fixed;
+      right: 30px;
+      bottom: 22px;
+      z-index: 15;
+      width: min(340px, calc(100vw - 60px));
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+      pointer-events: none;
+    }
+
+    .orb {
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      border: 1px solid rgba(17,24,39,0.12);
+      background: radial-gradient(circle at 30% 30%, #ffffff, #cfd6df 72%, #aab4c1 100%);
+      box-shadow: 0 14px 40px rgba(15,23,42,0.16);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      color: #111827;
+      pointer-events: auto;
+    }
+
+    .composer-card {
+      pointer-events: auto;
+      width: 100%;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.92);
+      padding: 10px;
+      box-shadow: 0 12px 26px rgba(15,23,42,0.08);
+    }
+
+    .composer-card .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .composer-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .composer-row input {
+      flex: 1;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      outline: none;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .composer-row input:focus {
+      border-color: rgba(17,24,39,0.35);
+      box-shadow: 0 0 0 4px rgba(17,24,39,0.06);
+    }
+
+    .composer-row button {
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .statusline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #16a34a;
+      box-shadow: 0 0 0 4px rgba(22,163,74,0.12);
+    }
+
+    .status-dot.paused {
+      background: #d97706;
+      box-shadow: 0 0 0 4px rgba(217,119,6,0.12);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .hidden { display: none !important; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 1280px) {
+      .layout-3 { grid-template-columns: 1fr; }
+      .layout-2 { grid-template-columns: 1fr; }
+      .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .jump-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .risk-grid { grid-template-columns: 1fr; }
+      .detail-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 860px) {
+      body { overflow: auto; }
+      .app { padding: 10px; height: auto; min-height: 100vh; }
+      .shell { height: auto; min-height: calc(100vh - 20px); }
+      .topbar { flex-direction: column; align-items: stretch; }
+      .brand { min-width: 0; }
+      .toolbar { justify-content: space-between; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .jump-grid { grid-template-columns: 1fr; }
+      .composer { right: 16px; bottom: 14px; width: calc(100vw - 32px); }
+      .page-head { flex-direction: column; align-items: start; }
+      .page-note { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="shell" id="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-badge">MOCK</div>
+          <div>
+            <h1>Agent 仪表盘原型</h1>
+            <p>任务 / 待办 / 摘要 / 镜子 · 5 秒自动切页，hover 与详情会暂停</p>
+          </div>
+        </div>
+        <nav class="nav" id="nav"></nav>
+        <div class="toolbar">
+          <button type="button" class="ghost" data-action="prev-page">← 上一页</button>
+          <button type="button" class="ghost" data-action="next-page">下一页 →</button>
+          <div class="statusline" id="statusLine"></div>
+        </div>
+      </header>
+      <main class="stage" id="stage">
+        <div class="stage-inner" id="stageInner">
+          <div class="page" id="page"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="detail-overlay" id="detailOverlay" aria-hidden="true">
+    <div class="detail-backdrop"></div>
+    <section class="detail" id="detail"></section>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <div class="composer">
+    <div class="orb" title="悬浮球">AI</div>
+    <div class="composer-card">
+      <div class="hint" id="composerHint">悬浮球下方输入框：用于继续修改、补充说明或 mock 指令</div>
+      <div class="composer-row">
+        <input id="composerInput" type="text" placeholder="输入一句 mock 指令" />
+        <button type="button" id="composerSend">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const pages = [
+      { key: 'tasks', label: '任务' },
+      { key: 'todos', label: '待办' },
+      { key: 'summary', label: '摘要' },
+      { key: 'mirror', label: '镜子' }
+    ];
+
+    const now = Date.now();
+    const mins = (n) => now + n * 60 * 1000;
+    const hours = (n) => now + n * 60 * 60 * 1000;
+    const days = (n) => now + n * 24 * 60 * 60 * 1000;
+
+    const state = {
+      pageIndex: 0,
+      detail: null,
+      finishedView: 3,
+      hoverPaused: false,
+      composerMode: null,
+      lastJump: '摘要页',
+    };
+
+    let tasks = [
+      {
+        id: 'task-1',
+        name: '梳理任务/待办边界',
+        status: 'active',
+        progress: '第 2 / 5 步：确认任务页与待办页的职责边界',
+        steps: ['拆分四页结构', '定义 todo → task 触发点', '展示重复事项实例', '补全异常风险提示', '对齐镜子日志'],
+        currentStep: 1,
+        memoryRefs: ['记忆 A：极简风', '记忆 B：边界清晰优先'],
+        operations: ['新建任务', '关联待办 todo-1', '写入镜子日志'],
+        outputs: [{ label: '边界说明.md', path: 'E:/mock/output/boundary-notes.md' }],
+        linkedTodoId: 'todo-1',
+        createdAt: mins(-110),
+        updatedAt: mins(-8),
+        sortAt: mins(-8)
+      },
+      {
+        id: 'task-2',
+        name: '等待用户在悬浮球继续修改',
+        status: 'paused',
+        progress: '第 3 / 4 步：已暂停思考，等待你补充说明',
+        steps: ['接收初始需求', '整理边界差异', '暂停等待输入', '回写镜子摘要'],
+        currentStep: 2,
+        memoryRefs: ['记忆 C：修改不是弹窗表单'],
+        operations: ['点击“修改”后暂停'],
+        outputs: [{ label: '暂停提示截图', path: 'E:/mock/output/pause-note.png' }],
+        linkedTodoId: null,
+        createdAt: mins(-160),
+        updatedAt: mins(-18),
+        sortAt: mins(-18)
+      },
+      {
+        id: 'task-3',
+        name: '读取本地资料授权',
+        status: 'waiting',
+        progress: '第 1 / 3 步：等待你授权读取本地资料路径',
+        steps: ['等待授权', '读取镜子引用', '输出 mock 结果'],
+        currentStep: 0,
+        memoryRefs: ['记忆 D：授权要可见'],
+        operations: ['等待授权中'],
+        outputs: [{ label: '授权请求单', path: 'E:/mock/output/permission-request.txt' }],
+        linkedTodoId: 'todo-4',
+        createdAt: mins(-70),
+        updatedAt: mins(-12),
+        sortAt: mins(-12)
+      },
+      {
+        id: 'task-4',
+        name: '同步失败的发布说明',
+        status: 'failed',
+        progress: '第 4 / 4 步：校验发布说明时失败，需 mock 重试',
+        steps: ['生成草稿', '合并摘要', '验证链接', '失败回收'],
+        currentStep: 3,
+        memoryRefs: ['记忆 E：失败也要留痕'],
+        operations: ['校验失败', '记录失败原因'],
+        outputs: [{ label: '失败日志', path: 'E:/mock/output/failure-log.txt' }],
+        linkedTodoId: null,
+        createdAt: mins(-95),
+        updatedAt: mins(-14),
+        sortAt: mins(-14)
+      },
+      {
+        id: 'task-5',
+        name: '整理日报模板',
+        status: 'done',
+        progress: '已完成',
+        steps: ['确定模板', '补齐摘要', '导出文件'],
+        currentStep: 2,
+        memoryRefs: ['记忆 A：极简风'],
+        operations: ['新建文件', '删减冗余说明', '完成导出'],
+        outputs: [{ label: '日报模板.md', path: 'E:/mock/output/daily-template.md' }],
+        createdAt: mins(-360),
+        endedAt: mins(-120),
+        sortAt: mins(-120)
+      },
+      {
+        id: 'task-6',
+        name: '生成镜子索引',
+        status: 'done',
+        progress: '已完成',
+        steps: ['汇总历史对话', '整理记忆引用', '输出索引'],
+        currentStep: 2,
+        memoryRefs: ['记忆 F：镜子是历史的入口'],
+        operations: ['读取历史摘要', '建立引用关系', '产出索引'],
+        outputs: [{ label: '镜子索引.md', path: 'E:/mock/output/mirror-index.md' }],
+        createdAt: mins(-480),
+        endedAt: mins(-200),
+        sortAt: mins(-200)
+      },
+      {
+        id: 'task-7',
+        name: '回收过期草稿',
+        status: 'canceled',
+        progress: '已取消',
+        steps: ['找到草稿', '确认过期', '取消执行'],
+        currentStep: 2,
+        memoryRefs: ['记忆 G：取消要留记录'],
+        operations: ['取消任务', '保留记录'],
+        outputs: [{ label: '取消摘要', path: 'E:/mock/output/canceled-summary.txt' }],
+        createdAt: mins(-430),
+        endedAt: mins(-160),
+        sortAt: mins(-160)
+      },
+      {
+        id: 'task-8',
+        name: '导出周报文件',
+        status: 'done',
+        progress: '已完成',
+        steps: ['汇总本周变化', '整理完成项', '导出周报'],
+        currentStep: 2,
+        memoryRefs: ['记忆 A：极简风', '记忆 B：边界清晰优先'],
+        operations: ['新建任务', '导出文件', '写入镜子日志'],
+        outputs: [{ label: '周报.pdf', path: 'E:/mock/output/weekly-report.pdf' }],
+        createdAt: mins(-540),
+        endedAt: mins(-260),
+        sortAt: mins(-260)
+      }
+    ];
+
+    let todos = [
+      {
+        id: 'todo-1',
+        name: '梳理任务/待办边界',
+        kind: 'single',
+        bucket: 'recent',
+        status: 'upcoming',
+        timeLabel: '今天 16:00',
+        timeInfo: '距开始 2 小时',
+        note: '需要 agent 立即推进；执行时自动转成任务。',
+        prereq: '先看完摘要页的风险提示。',
+        promotedTaskId: 'task-1',
+        docs: ['E:/mock/docs/boundary-spec.md'],
+        sortAt: mins(-6)
+      },
+      {
+        id: 'todo-2',
+        name: '补充摘要页风险提示',
+        kind: 'single',
+        bucket: 'recent',
+        status: 'overdue',
+        timeLabel: '今天 10:00',
+        timeInfo: '已逾期 6 小时',
+        note: '会直接映射到摘要页的异常块。',
+        prereq: '等待前置对齐但已经超时。',
+        docs: ['E:/mock/docs/summary-risks.md'],
+        sortAt: mins(-2)
+      },
+      {
+        id: 'todo-3',
+        name: '每日检查镜子日志',
+        kind: 'repeat-instance',
+        bucket: 'recent',
+        status: 'upcoming',
+        timeLabel: '今天 18:30',
+        timeInfo: '距离开始 4 小时 10 分',
+        note: '这是重复事项今天的实例，规则本身在重复事项里。',
+        prereq: '先完成当前任务页的修改说明。',
+        parentRuleId: 'todo-rule-1',
+        docs: ['E:/mock/docs/mirror-log.md'],
+        sortAt: mins(-4)
+      },
+      {
+        id: 'todo-4',
+        name: '整理下周计划',
+        kind: 'single',
+        bucket: 'future',
+        status: 'future',
+        timeLabel: '明天 09:00',
+        timeInfo: '未到时间',
+        note: '只在后续安排中展示，不应混入任务页。',
+        prereq: '先等今天的异常项收口。',
+        docs: ['E:/mock/docs/next-week-plan.md'],
+        sortAt: days(1)
+      },
+      {
+        id: 'todo-5',
+        name: '检查完成文件夹',
+        kind: 'single',
+        bucket: 'future',
+        status: 'future',
+        timeLabel: '下周一 10:00',
+        timeInfo: '未到时间',
+        note: '用来演示“更多”与历史积累。',
+        prereq: '需先完成几项任务后再检查。',
+        docs: ['E:/mock/docs/archive-cleanup.md'],
+        sortAt: days(3)
+      },
+      {
+        id: 'todo-rule-1',
+        name: '每日检查镜子日志',
+        kind: 'repeat-rule',
+        bucket: 'repeat',
+        status: 'active',
+        repeatRule: '每天 18:30',
+        nextOccurs: '今天 18:30',
+        lastStatus: '已完成',
+        effectiveRange: '从 2026-04-01 起，无结束日期',
+        note: '规则本身只在重复事项详情里看。',
+        docs: ['E:/mock/docs/mirror-log.md'],
+        missedCount: 0,
+        paused: false,
+        sortAt: mins(-40)
+      },
+      {
+        id: 'todo-rule-2',
+        name: '工作日收盘整理',
+        kind: 'repeat-rule',
+        bucket: 'repeat',
+        status: 'active',
+        repeatRule: '工作日 17:00',
+        nextOccurs: '明天 17:00',
+        lastStatus: '已逾期',
+        effectiveRange: '从 2026-03-20 起，到 2026-05-01',
+        note: '连续漏做的风险会在摘要页中暴露。',
+        docs: ['E:/mock/docs/end-of-day.md'],
+        missedCount: 2,
+        paused: false,
+        sortAt: mins(-50)
+      },
+      {
+        id: 'todo-6',
+        name: '回顾上周缺口',
+        kind: 'single',
+        bucket: 'ended',
+        status: 'done',
+        timeLabel: '昨天 20:00',
+        endedAt: mins(-90),
+        originalTime: '昨天 20:00',
+        timeInfo: '已完成 · 结束于今天 00:10',
+        note: '已结束待办的恢复演示。',
+        docs: ['E:/mock/docs/gap-review.md'],
+        sortAt: mins(-90)
+      },
+      {
+        id: 'todo-7',
+        name: '废弃的临时提醒',
+        kind: 'single',
+        bucket: 'ended',
+        status: 'canceled',
+        timeLabel: '上周五 15:00',
+        endedAt: mins(-170),
+        originalTime: '上周五 15:00',
+        timeInfo: '已取消 · 结束于昨天 11:20',
+        note: '展示已取消的结束态。',
+        docs: ['E:/mock/docs/temp-reminder.md'],
+        sortAt: mins(-170)
+      },
+      {
+        id: 'todo-8',
+        name: '每日检查镜子日志（昨天实例）',
+        kind: 'repeat-instance',
+        bucket: 'ended',
+        status: 'done',
+        timeLabel: '昨天 18:30',
+        endedAt: mins(-130),
+        originalTime: '昨天 18:30',
+        timeInfo: '已完成 · 这是重复事项的某次实例',
+        parentRuleId: 'todo-rule-1',
+        note: '用于演示结束态的重复实例。',
+        docs: ['E:/mock/docs/mirror-log.md'],
+        sortAt: mins(-130)
+      }
+    ];
+
+    let mirrorSummaries = [
+      {
+        id: 'mirror-s-1',
+        title: '最近 3 天：任务与待办边界已经收口',
+        summary: '历史对话已经明确：待办是未来安排，任务是正在推进的工作；执行开始后会自动生成任务。',
+        refs: ['task-1', 'todo-1', 'todo-rule-1'],
+        path: 'E:/mock/memory/dialogue-001.md',
+        updatedAt: mins(-6)
+      },
+      {
+        id: 'mirror-s-2',
+        title: '今天：重复事项实例与规则分离展示',
+        summary: '今天的实例进入近期要做，但规则详情仍然只看规则本身。',
+        refs: ['todo-3', 'todo-rule-1'],
+        path: 'E:/mock/memory/dialogue-002.md',
+        updatedAt: mins(-3)
+      },
+      {
+        id: 'mirror-s-3',
+        title: '任务页与镜子页的联动',
+        summary: '任务的创建、结束、取消、授权与恢复会同步记入镜子日志，供后续回看。',
+        refs: ['task-3', 'task-4', 'task-6'],
+        path: 'E:/mock/memory/dialogue-003.md',
+        updatedAt: mins(-12)
+      }
+    ];
+
+    let mirrorLogs = [
+      {
+        id: 'log-1',
+        type: '任务创建',
+        title: '梳理任务/待办边界 生成任务',
+        detail: '待办 todo-1 在执行开始时自动生成 task-1，并继续保留在待办视图中。',
+        refs: ['todo-1', 'task-1'],
+        path: 'E:/mock/logs/task-created.log',
+        at: mins(-8)
+      },
+      {
+        id: 'log-2',
+        type: '待办转任务',
+        title: 'execute todo-1 → task-1',
+        detail: '任务页与待办页都能看到同一条工作，但职责不同。',
+        refs: ['todo-1', 'task-1'],
+        path: 'E:/mock/logs/promotion.log',
+        at: mins(-7)
+      },
+      {
+        id: 'log-3',
+        type: '重复事项实例',
+        title: '生成今日实例：每日检查镜子日志',
+        detail: '重复事项规则没有被改动；今天的实例单独进入近期要做。',
+        refs: ['todo-3', 'todo-rule-1'],
+        path: 'E:/mock/logs/recurrence.log',
+        at: mins(-5)
+      },
+      {
+        id: 'log-4',
+        type: '授权',
+        title: '读取本地资料授权请求',
+        detail: 'task-3 处于等待授权状态，尚未实际读取本地资料。',
+        refs: ['task-3'],
+        path: 'E:/mock/logs/permission.log',
+        at: mins(-12)
+      },
+      {
+        id: 'log-5',
+        type: '产出',
+        title: '导出周报文件',
+        detail: 'task-8 已完成并生成 mock 输出文件。',
+        refs: ['task-8'],
+        path: 'E:/mock/output/weekly-report.pdf',
+        at: mins(-260)
+      },
+      {
+        id: 'log-6',
+        type: '取消',
+        title: '回收过期草稿',
+        detail: 'task-7 被取消，保留了结束记录。',
+        refs: ['task-7'],
+        path: 'E:/mock/logs/cancel.log',
+        at: mins(-160)
+      },
+      {
+        id: 'log-7',
+        type: '恢复',
+        title: '恢复已结束待办的 mock 入口',
+        detail: '结束态待办可以恢复为未完成，由 mock agent 决定恢复到哪个子类。',
+        refs: ['todo-6', 'todo-7'],
+        path: 'E:/mock/logs/restore.log',
+        at: mins(-100)
+      },
+      {
+        id: 'log-8',
+        type: '重启',
+        title: '从已结束任务重启',
+        detail: '已结束任务可以重启为新的未完成任务。',
+        refs: ['task-5', 'task-8'],
+        path: 'E:/mock/logs/restart.log',
+        at: mins(-98)
+      }
+    ];
+
+    const statusMap = {
+      task: {
+        active: { label: '正在进行', cls: 'ok' },
+        paused: { label: '暂停', cls: 'warn' },
+        waiting: { label: '等待授权', cls: 'soft' },
+        failed: { label: '失败', cls: 'bad' },
+        done: { label: '已完成', cls: 'ok' },
+        canceled: { label: '已取消', cls: '' }
+      },
+      todo: {
+        future: { label: '未到时间', cls: 'soft' },
+        upcoming: { label: '即将到来', cls: 'ok' },
+        overdue: { label: '已逾期', cls: 'bad' },
+        done: { label: '已完成', cls: 'ok' },
+        canceled: { label: '已取消', cls: '' },
+        active: { label: '进行中', cls: 'ok' }
+      }
+    };
+
+    const el = {
+      nav: document.getElementById('nav'),
+      page: document.getElementById('page'),
+      stage: document.getElementById('stage'),
+      stageInner: document.getElementById('stageInner'),
+      statusLine: document.getElementById('statusLine'),
+      overlay: document.getElementById('detailOverlay'),
+      detail: document.getElementById('detail'),
+      toasts: document.getElementById('toasts'),
+      composerHint: document.getElementById('composerHint'),
+      composerInput: document.getElementById('composerInput'),
+      composerSend: document.getElementById('composerSend')
+    };
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+
+    function relativeTime(ts) {
+      const diff = ts - Date.now();
+      const abs = Math.abs(diff);
+      const minutes = Math.round(abs / 60000);
+      const hours = Math.round(abs / 3600000);
+      const days = Math.round(abs / 86400000);
+      if (abs < 45 * 1000) return diff >= 0 ? '刚刚要到' : '刚刚过去';
+      if (abs < 90 * 60 * 1000) return diff >= 0 ? `约 ${minutes} 分钟后` : `约 ${minutes} 分钟前`;
+      if (abs < 36 * 60 * 60 * 1000) return diff >= 0 ? `约 ${hours} 小时后` : `约 ${hours} 小时前`;
+      return diff >= 0 ? `约 ${days} 天后` : `约 ${days} 天前`;
+    }
+
+    function timeInfo(start, end) {
+      if (end) return `${fmtTime(start)} - ${fmtTime(end)} · ${relativeTime(start)}`;
+      return `${fmtTime(start)} · ${relativeTime(start)}`;
+    }
+
+    function activePage() {
+      return pages[state.pageIndex];
+    }
+
+    function isDetailOpen() {
+      return Boolean(state.detail);
+    }
+
+    function isPaused() {
+      return state.hoverPaused || isDetailOpen();
+    }
+
+    function taskLabel(status) {
+      return statusMap.task[status] || { label: status, cls: '' };
+    }
+
+    function todoLabel(status) {
+      return statusMap.todo[status] || { label: status, cls: '' };
+    }
+
+    function sortByRecent(list, field = 'sortAt') {
+      return [...list].sort((a, b) => (b[field] || 0) - (a[field] || 0));
+    }
+
+    function getTask(id) {
+      return tasks.find((item) => item.id === id);
+    }
+
+    function getTodo(id) {
+      return todos.find((item) => item.id === id);
+    }
+
+    function getCurrentDetailTarget() {
+      if (!state.detail) return null;
+      const { type, id } = state.detail;
+      if (type.startsWith('task')) return getTask(id);
+      if (type.startsWith('todo')) return getTodo(id);
+      if (type === 'mirror-summary') return mirrorSummaries.find((item) => item.id === id);
+      if (type === 'mirror-log') return mirrorLogs.find((item) => item.id === id);
+      return null;
+    }
+
+    function addLog(entry) {
+      mirrorLogs.unshift({
+        id: `log-${Math.random().toString(36).slice(2, 9)}`,
+        at: Date.now(),
+        ...entry
+      });
+    }
+
+    function toast(message, tone = 'ok', title = 'Mock 提示') {
+      const node = document.createElement('div');
+      node.className = `toast ${tone}`;
+      node.innerHTML = `<div class="t">${escapeHtml(title)}</div><div>${escapeHtml(message)}</div>`;
+      el.toasts.appendChild(node);
+      setTimeout(() => {
+        node.style.opacity = '0';
+        node.style.transform = 'translateY(-4px)';
+        setTimeout(() => node.remove(), 180);
+      }, 2600);
+    }
+
+    function setPage(index, silent = false) {
+      state.pageIndex = (index + pages.length) % pages.length;
+      state.lastJump = `${pages[state.pageIndex].label}页`;
+      render();
+      if (!silent) toast(`已切到 ${pages[state.pageIndex].label} 页`, 'ok');
+    }
+
+    function openDetail(type, id) {
+      state.detail = { type, id };
+      render();
+    }
+
+    function closeDetail() {
+      state.detail = null;
+      state.composerMode = null;
+      el.composerInput.value = '';
+      el.composerHint.textContent = '悬浮球下方输入框：用于继续修改、补充说明或 mock 指令';
+      render();
+    }
+
+    function setComposerMode(mode, hint) {
+      state.composerMode = mode;
+      el.composerHint.textContent = hint;
+    }
+
+    function currentComposerTarget() {
+      if (!state.composerMode) return null;
+      if (state.composerMode.type === 'modify-task') return getTask(state.composerMode.id);
+      return null;
+    }
+
+    function promoteTodoToTask(todoId) {
+      const todo = getTodo(todoId);
+      if (!todo) return;
+      if (todo.promotedTaskId && getTask(todo.promotedTaskId)) {
+        toast('这条待办已经生成任务了。', 'warn');
+        return;
+      }
+
+      const createdAt = Date.now();
+      const newTask = {
+        id: `task-auto-${Math.random().toString(36).slice(2, 7)}`,
+        name: todo.name,
+        status: 'active',
+        progress: `第 1 / 4 步：从待办 ${todo.id} 自动进入执行`,
+        steps: ['接收待办', '开始执行', '回写镜子日志', '保留待办侧安排'],
+        currentStep: 0,
+        memoryRefs: ['记忆 H：待办转任务后需同步'],
+        operations: ['自动新建任务', `来源待办：${todo.name}`],
+        outputs: [{ label: '执行草稿', path: `E:/mock/output/${todo.id}-draft.txt` }],
+        linkedTodoId: todo.id,
+        createdAt,
+        updatedAt: createdAt,
+        sortAt: createdAt
+      };
+      tasks.unshift(newTask);
+      todo.promotedTaskId = newTask.id;
+      todo.note = `${todo.note}（执行开始后已自动新建任务）`;
+      addLog({
+        type: '待办转任务',
+        title: `${todo.name} 自动生成任务`,
+        detail: `待办 ${todo.id} 开始执行后自动生成 ${newTask.id}，并继续保留在待办视图中。`,
+        refs: [todo.id, newTask.id],
+        path: `E:/mock/logs/${todo.id}-promotion.log`
+      });
+      toast('已自动新建任务，并同步写入待办侧。', 'ok');
+      render();
+    }
+
+    function createTaskFromEnded(task) {
+      const baseName = task.name.replace(/（重启）$/, '');
+      const createdAt = Date.now();
+      const clone = {
+        ...task,
+        id: `task-restart-${Math.random().toString(36).slice(2, 7)}`,
+        name: `${baseName}（重启）`,
+        status: 'active',
+        progress: '第 1 / 4 步：重启后重新进入执行',
+        currentStep: 0,
+        operations: ['重启自已结束记录'],
+        createdAt,
+        updatedAt: createdAt,
+        endedAt: undefined,
+        sortAt: createdAt
+      };
+      tasks.unshift(clone);
+      addLog({
+        type: '重启',
+        title: `从已结束任务重启：${task.name}`,
+        detail: `已结束任务 ${task.id} 被重启为新的未完成任务 ${clone.id}。`,
+        refs: [task.id, clone.id],
+        path: `E:/mock/logs/${task.id}-restart.log`
+      });
+      toast('已重启为新的未完成任务。', 'ok');
+      return clone;
+    }
+
+    function restoreTodo(item) {
+      const createdAt = Date.now();
+      const restored = {
+        ...item,
+        id: `todo-restore-${Math.random().toString(36).slice(2, 7)}`,
+        status: item.kind === 'repeat-instance' || item.kind === 'repeat-rule' ? 'upcoming' : 'upcoming',
+        bucket: item.kind === 'repeat-rule' ? 'repeat' : (item.timeInfo && item.timeInfo.includes('已逾期') ? 'recent' : 'future'),
+        timeInfo: item.kind === 'repeat-instance' ? '恢复到近期要做' : '恢复为未完成',
+        sortAt: createdAt,
+        endedAt: undefined,
+        promotedTaskId: item.promotedTaskId || null
+      };
+      todos.unshift(restored);
+      addLog({
+        type: '恢复',
+        title: `恢复待办：${item.name}`,
+        detail: `结束态待办 ${item.id} 被恢复为未完成，并由 mock agent 判断进入相应子类。`,
+        refs: [item.id, restored.id],
+        path: `E:/mock/logs/${item.id}-restore.log`
+      });
+      toast('已恢复为未完成。', 'ok');
+      return restored;
+    }
+
+    function deleteItem(kind, id) {
+      if (kind.startsWith('task')) {
+        tasks = tasks.filter((item) => item.id !== id);
+      } else {
+        todos = todos.filter((item) => item.id !== id);
+      }
+      toast('记录已删除。', 'warn');
+      render();
+    }
+
+    function openLocalPath(path) {
+      toast(`Mock 打开本地路径：${path}`, 'ok');
+    }
+
+    function handlePageAction(action, dataset) {
+      if (action === 'prev-page') return setPage(state.pageIndex - 1);
+      if (action === 'next-page') return setPage(state.pageIndex + 1);
+      if (action === 'goto-page') return setPage(Number(dataset.index || 0));
+
+      if (action === 'finished-view') {
+        const value = dataset.value;
+        if (value === 'more') {
+          state.finishedView = 'more';
+          toast('Mock：打开存放已完成任务的文件夹。', 'warn');
+        } else {
+          state.finishedView = Number(value);
+        }
+        render();
+        return;
+      }
+
+      if (action === 'jump-detail') {
+        setPage(Number(dataset.page || 0), true);
+        openDetail(dataset.type, dataset.id);
+        return;
+      }
+
+      if (action === 'open-path') {
+        openLocalPath(dataset.path);
+        return;
+      }
+
+      if (action === 'clean-records') {
+        toast(`Mock 提示：是否清理过去 ${dataset.range || '30 天'} 的记录？`, 'warn');
+        return;
+      }
+
+      if (action === 'jump-page') {
+        setPage(Number(dataset.index || 0));
+        return;
+      }
+    }
+
+    function handleDetailAction(action, dataset) {
+      const target = getCurrentDetailTarget();
+      if (!target) return;
+
+      if (action === 'close-detail') return closeDetail();
+
+      if (state.detail.type.startsWith('task-active')) {
+        const task = target;
+        if (action === 'task-toggle') {
+          if (task.status === 'paused') {
+            task.status = 'active';
+            task.progress = '已继续执行';
+            task.operations.unshift('继续执行');
+            addLog({ type: '恢复', title: `任务继续：${task.name}`, detail: '任务从暂停回到进行中。', refs: [task.id], path: `E:/mock/logs/${task.id}-resume.log` });
+            toast('已继续。', 'ok');
+          } else if (task.status === 'waiting') {
+            task.status = 'active';
+            task.progress = '已获得授权，继续执行';
+            task.operations.unshift('授权后继续');
+            addLog({ type: '授权', title: `授权后继续：${task.name}`, detail: '等待授权任务已转回正在进行。', refs: [task.id], path: `E:/mock/logs/${task.id}-auth.log` });
+            toast('Mock 授权后继续执行。', 'ok');
+          } else if (task.status === 'failed') {
+            task.status = 'active';
+            task.progress = '已从失败态重试，重新进入执行';
+            task.operations.unshift('失败后重试');
+            addLog({ type: '重启', title: `失败任务重试：${task.name}`, detail: '失败任务被 mock 重试并回到进行中。', refs: [task.id], path: `E:/mock/logs/${task.id}-retry.log` });
+            toast('已从失败态重试。', 'warn');
+          } else {
+            task.status = 'paused';
+            task.progress = '已暂停，等待后续继续';
+            task.operations.unshift('暂停执行');
+            addLog({ type: '暂停', title: `任务暂停：${task.name}`, detail: '任务已暂停。', refs: [task.id], path: `E:/mock/logs/${task.id}-pause.log` });
+            toast('已暂停。', 'warn');
+          }
+          task.updatedAt = Date.now();
+          task.sortAt = task.updatedAt;
+          render();
+          return;
+        }
+
+        if (action === 'task-cancel') {
+          task.status = 'canceled';
+          task.progress = '已取消';
+          task.endedAt = Date.now();
+          task.sortAt = task.endedAt;
+          addLog({ type: '取消', title: `取消任务：${task.name}`, detail: '未完成任务被取消并转入已结束区。', refs: [task.id], path: `E:/mock/logs/${task.id}-cancel.log` });
+          toast('已取消并移入已结束。', 'warn');
+          render();
+          return;
+        }
+
+        if (action === 'task-modify') {
+          task.status = 'paused';
+          task.progress = '已暂停思考，等待你在悬浮球输入框继续修改';
+          task.updatedAt = Date.now();
+          task.sortAt = task.updatedAt;
+          setComposerMode({ type: 'modify-task', id: task.id }, '已暂停思考，请在悬浮球下方输入框继续修改（不是弹窗表单）');
+          toast('已暂停思考，请在下方输入框继续修改。', 'warn');
+          render();
+          return;
+        }
+      }
+
+      if (state.detail.type === 'task-ended') {
+        const task = target;
+        if (action === 'task-restart') {
+          const clone = createTaskFromEnded(task);
+          closeDetail();
+          setPage(0, true);
+          openDetail('task-active', clone.id);
+          return;
+        }
+        if (action === 'task-delete') {
+          deleteItem('task', task.id);
+          closeDetail();
+          return;
+        }
+      }
+
+      if (state.detail.type === 'todo-recent') {
+        const todo = target;
+        if (action === 'todo-execute') {
+          promoteTodoToTask(todo.id);
+          render();
+          return;
+        }
+        if (action === 'todo-complete') {
+          todo.status = 'done';
+          todo.bucket = 'ended';
+          todo.endedAt = Date.now();
+          todo.timeInfo = '已完成';
+          todo.sortAt = todo.endedAt;
+          addLog({ type: '完成', title: `待办完成：${todo.name}`, detail: '近期要做已完成。', refs: [todo.id], path: `E:/mock/logs/${todo.id}-complete.log` });
+          toast('已标记完成。', 'ok');
+          render();
+          return;
+        }
+        if (action === 'todo-cancel') {
+          todo.status = todo.kind === 'repeat-instance' ? 'canceled' : 'canceled';
+          todo.bucket = 'ended';
+          todo.endedAt = Date.now();
+          todo.timeInfo = todo.kind === 'repeat-instance' ? '跳过本次' : '已取消';
+          todo.sortAt = todo.endedAt;
+          addLog({ type: '取消', title: `待办取消：${todo.name}`, detail: todo.kind === 'repeat-instance' ? '重复实例被跳过本次。' : '待办已取消。', refs: [todo.id], path: `E:/mock/logs/${todo.id}-cancel.log` });
+          toast(todo.kind === 'repeat-instance' ? '已跳过本次。' : '已取消。', 'warn');
+          render();
+          return;
+        }
+        if (action === 'todo-edit') {
+          if (todo.kind === 'repeat-instance') {
+            toast('重复事项实例不能改规则，请到规则本身编辑。', 'warn');
+          } else {
+            toast('Mock 编辑已打开：这里不会弹出表单。', 'ok');
+          }
+          return;
+        }
+        if (action === 'todo-docs') {
+          openLocalPath(todo.docs?.[0] || 'E:/mock/docs/related.md');
+          addLog({ type: '产出', title: `打开资料：${todo.name}`, detail: '从待办详情打开相关资料。', refs: [todo.id], path: todo.docs?.[0] || 'E:/mock/docs/related.md' });
+          return;
+        }
+      }
+
+      if (state.detail.type === 'todo-future') {
+        const todo = target;
+        if (action === 'todo-advance') {
+          todo.bucket = 'recent';
+          todo.status = 'upcoming';
+          todo.timeInfo = '已提前到近期要做';
+          todo.sortAt = Date.now();
+          addLog({ type: '恢复', title: `提前到近期要做：${todo.name}`, detail: '后续安排被提升到近期要做。', refs: [todo.id], path: `E:/mock/logs/${todo.id}-advance.log` });
+          toast('已提前到近期要做。', 'ok');
+          render();
+          return;
+        }
+        if (action === 'todo-edit') {
+          toast('Mock 编辑已打开：未来安排不显示真实表单。', 'ok');
+          return;
+        }
+        if (action === 'todo-cancel') {
+          todo.status = 'canceled';
+          todo.bucket = 'ended';
+          todo.endedAt = Date.now();
+          todo.sortAt = todo.endedAt;
+          addLog({ type: '取消', title: `后续安排取消：${todo.name}`, detail: '后续安排被取消。', refs: [todo.id], path: `E:/mock/logs/${todo.id}-cancel.log` });
+          toast('已取消。', 'warn');
+          render();
+          return;
+        }
+        if (action === 'todo-docs') {
+          openLocalPath(todo.docs?.[0] || 'E:/mock/docs/related.md');
+          return;
+        }
+      }
+
+      if (state.detail.type === 'todo-repeat-rule') {
+        const todo = target;
+        if (action === 'todo-rule-toggle') {
+          todo.paused = !todo.paused;
+          addLog({ type: todo.paused ? '暂停' : '恢复', title: `${todo.paused ? '暂停' : '开启'}重复事项：${todo.name}`, detail: '规则本身被切换状态。', refs: [todo.id], path: `E:/mock/logs/${todo.id}-toggle.log` });
+          toast(todo.paused ? '已暂停重复。' : '已开启重复。', 'ok');
+          render();
+          return;
+        }
+        if (action === 'todo-rule-edit') {
+          toast('重复事项规则不弹出表单，只做 mock 修改提示。', 'ok');
+          return;
+        }
+        if (action === 'todo-rule-cancel') {
+          todo.status = 'canceled';
+          todo.bucket = 'ended';
+          todo.endedAt = Date.now();
+          todo.sortAt = todo.endedAt;
+          addLog({ type: '取消', title: `取消整个重复事项：${todo.name}`, detail: '重复事项规则被整体取消。', refs: [todo.id], path: `E:/mock/logs/${todo.id}-cancel.log` });
+          toast('已取消整个重复事项。', 'warn');
+          render();
+          return;
+        }
+        if (action === 'todo-docs') {
+          openLocalPath(todo.docs?.[0] || 'E:/mock/docs/related.md');
+          return;
+        }
+      }
+
+      if (state.detail.type === 'todo-ended') {
+        const todo = target;
+        if (action === 'todo-restore') {
+          const restored = restoreTodo(todo);
+          closeDetail();
+          setPage(1, true);
+          openDetail(restored.kind === 'repeat-rule' ? 'todo-repeat-rule' : (restored.kind === 'repeat-instance' || restored.status === 'upcoming' ? 'todo-recent' : 'todo-future'), restored.id);
+          return;
+        }
+        if (action === 'todo-delete') {
+          deleteItem('todo', todo.id);
+          closeDetail();
+          return;
+        }
+      }
+
+      if (state.detail.type === 'mirror-summary') {
+        if (action === 'mirror-path') {
+          openLocalPath(target.path);
+          return;
+        }
+      }
+
+      if (state.detail.type === 'mirror-log') {
+        if (action === 'mirror-path') {
+          openLocalPath(target.path || 'E:/mock/logs');
+          return;
+        }
+      }
+    }
+
+    function taskCard(task) {
+      const label = taskLabel(task.status);
+      const ending = ['done', 'canceled'].includes(task.status);
+      const openType = ending ? 'task-ended' : 'task-active';
+      return `
+        <button class="card" data-open="${openType}" data-id="${task.id}">
+          <div class="card-top">
+            <div>
+              <h3>${escapeHtml(task.name)}</h3>
+              <div class="mini">${escapeHtml(task.progress)}</div>
+            </div>
+            <span class="chip ${label.cls}">${escapeHtml(label.label)}</span>
+          </div>
+          <p>更新时间：${escapeHtml(relativeTime(task.sortAt))} · ${escapeHtml(task.linkedTodoId ? `来源待办 ${task.linkedTodoId}` : '独立任务')}</p>
+          <div class="meta">
+            <span class="chip">步骤 ${task.currentStep + 1}/${task.steps.length}</span>
+            ${task.memoryRefs.slice(0, 2).map((m) => `<span class="chip soft">${escapeHtml(m)}</span>`).join('')}
+          </div>
+        </button>
+      `;
+    }
+
+    function todoRecentCard(todo) {
+      const label = todoLabel(todo.status);
+      const promo = todo.promotedTaskId ? `<span class="chip ok">已转任务</span>` : '';
+      const extra = todo.kind === 'repeat-instance' ? '<span class="chip soft">重复实例</span>' : '<span class="chip">单次事项</span>';
+      return `
+        <button class="card" data-open="todo-recent" data-id="${todo.id}">
+          <div class="card-top">
+            <div>
+              <h3>${escapeHtml(todo.name)}</h3>
+              <div class="mini">${escapeHtml(todo.note)}</div>
+            </div>
+            <span class="chip ${label.cls}">${escapeHtml(label.label)}</span>
+          </div>
+          <p>${escapeHtml(todo.timeLabel)} · ${escapeHtml(todo.timeInfo)}</p>
+          <div class="meta">${extra}${promo}</div>
+        </button>
+      `;
+    }
+
+    function todoFutureCard(todo) {
+      const label = todoLabel(todo.status);
+      return `
+        <button class="card" data-open="todo-future" data-id="${todo.id}">
+          <div class="card-top">
+            <div>
+              <h3>${escapeHtml(todo.name)}</h3>
+              <div class="mini">${escapeHtml(todo.prereq)}</div>
+            </div>
+            <span class="chip ${label.cls}">${escapeHtml(label.label)}</span>
+          </div>
+          <p>${escapeHtml(todo.timeLabel)} · ${escapeHtml(todo.timeInfo)}</p>
+          <div class="meta"><span class="chip">后续安排</span></div>
+        </button>
+      `;
+    }
+
+    function todoRuleCard(todo) {
+      const label = todo.paused ? '已暂停' : '生效中';
+      const cls = todo.paused ? 'warn' : 'ok';
+      return `
+        <button class="card" data-open="todo-repeat-rule" data-id="${todo.id}">
+          <div class="card-top">
+            <div>
+              <h3>${escapeHtml(todo.name)}</h3>
+              <div class="mini">${escapeHtml(todo.repeatRule)} · 下次 ${escapeHtml(todo.nextOccurs)}</div>
+            </div>
+            <span class="chip ${cls}">${label}</span>
+          </div>
+          <p>最近一次状态：${escapeHtml(todo.lastStatus)} · 生效范围：${escapeHtml(todo.effectiveRange)}</p>
+          <div class="meta">
+            <span class="chip">规则本身</span>
+            <span class="chip ${todo.missedCount ? 'bad' : 'ok'}">连续漏做 ${todo.missedCount || 0}</span>
+          </div>
+        </button>
+      `;
+    }
+
+    function todoEndedCard(todo) {
+      const label = todoLabel(todo.status);
+      return `
+        <button class="card" data-open="todo-ended" data-id="${todo.id}">
+          <div class="card-top">
+            <div>
+              <h3>${escapeHtml(todo.name)}</h3>
+              <div class="mini">${escapeHtml(todo.kind === 'repeat-instance' ? '重复事项实例' : '单次事项')}</div>
+            </div>
+            <span class="chip ${label.cls}">${escapeHtml(label.label)}</span>
+          </div>
+          <p>原定：${escapeHtml(todo.originalTime || todo.timeLabel)} · 结束：${escapeHtml(relativeTime(todo.endedAt || todo.sortAt))}</p>
+          <div class="meta"><span class="chip">已结束</span></div>
+        </button>
+      `;
+    }
+
+    function mirrorSummaryCard(item) {
+      return `
+        <button class="timeline-item" data-open="mirror-summary" data-id="${item.id}">
+          <div class="top">
+            <h4>${escapeHtml(item.title)}</h4>
+            <span class="chip soft">${escapeHtml(relativeTime(item.updatedAt))}</span>
+          </div>
+          <p>${escapeHtml(item.summary)}</p>
+          <div class="meta">${item.refs.map((ref) => `<span class="chip">${escapeHtml(ref)}</span>`).join('')}</div>
+        </button>
+      `;
+    }
+
+    function mirrorLogCard(item) {
+      return `
+        <button class="timeline-item" data-open="mirror-log" data-id="${item.id}">
+          <div class="top">
+            <h4>${escapeHtml(item.type)} · ${escapeHtml(item.title)}</h4>
+            <span class="chip">${escapeHtml(relativeTime(item.at))}</span>
+          </div>
+          <p>${escapeHtml(item.detail)}</p>
+          <div class="meta">${item.refs.map((ref) => `<span class="chip soft">${escapeHtml(ref)}</span>`).join('')}</div>
+        </button>
+      `;
+    }
+
+    function renderNav() {
+      el.nav.innerHTML = pages.map((page, index) => `
+        <button class="${index === state.pageIndex ? 'active' : ''}" data-action="jump-page" data-index="${index}">${page.label}</button>
+      `).join('');
+    }
+
+    function renderStatusLine() {
+      const dotClass = isPaused() ? 'status-dot paused' : 'status-dot';
+      el.statusLine.innerHTML = `
+        <span class="${dotClass}"></span>
+        <span>${escapeHtml(isPaused() ? '轮播暂停' : '自动轮播中')}</span>
+        <span>· 当前 ${escapeHtml(activePage().label)} 页</span>
+        <span>· ${escapeHtml(state.lastJump)}</span>
+      `;
+    }
+
+    function taskEndedViewButtons() {
+      const items = [3, 7, 'more'];
+      return items.map((value) => {
+        const label = value === 'more' ? '更多' : String(value);
+        const active = state.finishedView === value;
+        return `<button class="${active ? 'active' : ''}" data-action="finished-view" data-value="${value}">${label}</button>`;
+      }).join('');
+    }
+
+    function buildTasksPage() {
+      const activeTasks = sortByRecent(tasks.filter((item) => !['done', 'canceled'].includes(item.status)));
+      const endedTasks = sortByRecent(tasks.filter((item) => ['done', 'canceled'].includes(item.status)), 'endedAt');
+      const showEnded = state.finishedView === 'more' ? endedTasks : endedTasks.slice(0, state.finishedView);
+      return `
+        <section class="page">
+          ${tasks.length >= 6 ? `<div class="banner">
+            <div>系统默认全部存储；记录偏大时可 mock 清理过去一段时间的记录。</div>
+            <div class="actions">
+              <button class="ghost" data-action="clean-records" data-range="30 天">清理 30 天</button>
+              <button class="ghost" data-action="clean-records" data-range="7 天">清理 7 天</button>
+            </div>
+          </div>` : ''}
+          <div class="page-head">
+            <div>
+              <h2>任务</h2>
+              <p>只看正在被 agent 推进的工作；不展示普通未来提醒。未完成全部可见，已结束按 3 / 7 / 更多 查看。</p>
+            </div>
+            <div class="page-note">修改不是弹窗表单，而是回到悬浮球下方输入框继续。</div>
+          </div>
+          <div class="layout-2">
+            <section class="panel">
+              <div class="panel-head">
+                <div><strong>未完成</strong> <span class="sub">${activeTasks.length} 条</span></div>
+                <span class="chip">按最近更新时间排序</span>
+              </div>
+              <div class="stack">
+                ${activeTasks.map(taskCard).join('') || '<div class="card"><h3>暂无未完成任务</h3><p>此处只会显示正在推进的工作。</p></div>'}
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <div><strong>已结束</strong> <span class="sub">${endedTasks.length} 条</span></div>
+                <div class="seg">${taskEndedViewButtons()}</div>
+              </div>
+              <div class="stack">
+                ${showEnded.map(taskCard).join('') || '<div class="card"><h3>暂无已结束任务</h3><p>这会随着 mock 操作动态变化。</p></div>'}
+              </div>
+              <div class="list-note">点击“更多”会模拟打开存放已完成任务的文件夹。</div>
+            </section>
+          </div>
+        </section>
+      `;
+    }
+
+    function buildTodosPage() {
+      const recent = sortByRecent(todos.filter((item) => item.bucket === 'recent' || item.kind === 'repeat-instance'));
+      const future = sortByRecent(todos.filter((item) => item.bucket === 'future'));
+      const repeatRules = sortByRecent(todos.filter((item) => item.kind === 'repeat-rule'));
+      const ended = sortByRecent(todos.filter((item) => item.bucket === 'ended'), 'endedAt');
+      return `
+        <section class="page">
+          <div class="page-head">
+            <div>
+              <h2>待办</h2>
+              <p>只看未来安排，不展示“正在进行 / 失败 / 等待授权”这种任务流状态。未完成分为近期要做、后续安排、重复事项。</p>
+            </div>
+            <div class="page-note">近期要做中包含重复事项当天实例；规则本身只在重复事项里看。</div>
+          </div>
+          <div class="layout-2">
+            <section class="panel">
+              <div class="panel-head"><div><strong>近期要做</strong> <span class="sub">${recent.length} 条</span></div><span class="chip ok">即将到来 / 已逾期</span></div>
+              <div class="stack">${recent.map(todoRecentCard).join('') || '<div class="card"><h3>暂无近期要做</h3></div>'}</div>
+              <div class="list-note">若是重复事项实例，编辑时不能改规则。</div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><strong>后续安排</strong> <span class="sub">${future.length} 条</span></div><span class="chip">未到时间</span></div>
+              <div class="stack">${future.map(todoFutureCard).join('') || '<div class="card"><h3>暂无后续安排</h3></div>'}</div>
+              <div class="list-note">可以提前到近期要做，仍然只是 mock 调整。</div>
+            </section>
+          </div>
+          <div class="layout-2">
+            <section class="panel">
+              <div class="panel-head"><div><strong>重复事项</strong> <span class="sub">${repeatRules.length} 条规则</span></div><span class="chip soft">规则本身</span></div>
+              <div class="stack">${repeatRules.map(todoRuleCard).join('') || '<div class="card"><h3>暂无重复事项规则</h3></div>'}</div>
+              <div class="list-note">如果某次实例进入近期要做，请去近期要做详情里看它。</div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><strong>已结束</strong> <span class="sub">${ended.length} 条</span></div><span class="chip">完成 / 取消</span></div>
+              <div class="stack">${ended.map(todoEndedCard).join('') || '<div class="card"><h3>暂无结束待办</h3></div>'}</div>
+              <div class="list-note">恢复后会由 mock agent 判断回到哪个子类。</div>
+            </section>
+          </div>
+        </section>
+      `;
+    }
+
+    function buildSummaryPage() {
+      const activeTasks = tasks.filter((item) => !['done', 'canceled'].includes(item.status));
+      const recentTodos = todos.filter((item) => item.bucket === 'recent' || item.kind === 'repeat-instance');
+      const overdueTodos = todos.filter((item) => item.status === 'overdue').length;
+      const failedTasks = tasks.filter((item) => item.status === 'failed').length;
+      const completed3 = tasks.filter((item) => item.status === 'done' && item.endedAt >= days(-3)).length;
+      const canceledCount = [...tasks, ...todos].filter((item) => item.status === 'canceled').length;
+      const risks = [
+        { title: '逾期风险', text: overdueTodos ? `${overdueTodos} 条待办已逾期，摘要页已能看出异常。` : '当前没有逾期待办。' },
+        { title: '时间冲突', text: 'todo-1 与 todo-3 都接近傍晚时段，适合检查冲突。' },
+        { title: '重复事项连续漏做', text: 'todo-rule-2 当前已记录连续漏做 2 次。' },
+        { title: '权限阻塞', text: 'task-3 正处于等待授权，属于当前阻塞点。' },
+        { title: '任务失败', text: failedTasks ? `${failedTasks} 条任务失败，需 mock 重启或重试。` : '当前没有失败任务。' },
+        { title: '待办转任务后不同步', text: 'todo-1 已自动生成 task-1，摘要页需要确认两边都可见。' }
+      ];
+      const changes = sortByRecent(mirrorLogs, 'at').slice(0, 5);
+      const totalLogs = mirrorLogs.length;
+      return `
+        <section class="page">
+          ${totalLogs > 8 ? `<div class="banner">
+            <div>记录偏多：系统默认全部存储，但可以 mock 询问是否清理过去 x 范围记录。</div>
+            <div class="actions"><button class="ghost" data-action="clean-records" data-range="过去 30 天">询问清理</button></div>
+          </div>` : ''}
+          <div class="page-head">
+            <div>
+              <h2>摘要</h2>
+              <p>高层检查“当前计划有没有纰漏”，只做几个摘要块，覆盖异常情况，不写长文总结。</p>
+            </div>
+            <div class="page-note">用来暴露逾期、冲突、连续漏做、权限阻塞、任务失败和同步问题。</div>
+          </div>
+          <section class="panel">
+            <div class="panel-head"><div><strong>计划健康度</strong> <span class="sub">当前计划的总览</span></div><span class="chip">异常优先</span></div>
+            <div class="stack">
+              <div class="summary-grid">
+                <div class="stat"><div class="k">未完成任务</div><div class="v">${activeTasks.length}</div><div class="d">只统计正在推进中的任务。</div></div>
+                <div class="stat"><div class="k">近期要做</div><div class="v">${recentTodos.length}</div><div class="d">包含今日重复事项实例。</div></div>
+                <div class="stat"><div class="k">逾期数</div><div class="v">${overdueTodos}</div><div class="d">待办逾期会直达风险块。</div></div>
+                <div class="stat"><div class="k">失败任务数</div><div class="v">${failedTasks}</div><div class="d">失败态任务仍在任务页的未完成区。</div></div>
+                <div class="stat"><div class="k">最近 3 天完成数</div><div class="v">${completed3}</div><div class="d">展示正常完成流转。</div></div>
+                <div class="stat"><div class="k">取消数</div><div class="v">${canceledCount}</div><div class="d">包括任务和待办的取消。</div></div>
+              </div>
+            </div>
+          </section>
+          <div class="layout-2">
+            <section class="panel">
+              <div class="panel-head"><div><strong>风险提示</strong> <span class="sub">异常优先展示</span></div><span class="chip bad">查漏补缺</span></div>
+              <div class="stack">
+                ${risks.map((item, index) => `
+                  <div class="risk">
+                    <h4>${escapeHtml(String(index + 1).padStart(2, '0'))}. ${escapeHtml(item.title)}</h4>
+                    <p>${escapeHtml(item.text)}</p>
+                  </div>
+                `).join('')}
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><strong>近期关键变化</strong> <span class="sub">最近的状态流转</span></div><span class="chip soft">来自镜子日志</span></div>
+              <div class="stack">
+                ${changes.map((item) => `
+                  <button class="card" data-action="jump-detail" data-page="${pages.findIndex((p) => p.key === 'mirror')}" data-type="mirror-log" data-id="${item.id}">
+                    <div class="card-top">
+                      <div>
+                        <h3>${escapeHtml(item.title)}</h3>
+                        <div class="mini">${escapeHtml(item.type)}</div>
+                      </div>
+                      <span class="chip">${escapeHtml(relativeTime(item.at))}</span>
+                    </div>
+                    <p>${escapeHtml(item.detail)}</p>
+                  </button>
+                `).join('')}
+              </div>
+            </section>
+          </div>
+          <section class="panel">
+            <div class="panel-head"><div><strong>快捷跳转</strong> <span class="sub">跳到具体任务 / 待办 / 重复规则 / 镜子日志</span></div><span class="chip">一键定位</span></div>
+            <div class="stack">
+              <div class="jump-grid">
+                <button class="jump" data-action="jump-detail" data-page="0" data-type="task-active" data-id="task-1"><strong>跳到任务</strong><div class="muted">查看自动生成的未完成任务</div></button>
+                <button class="jump" data-action="jump-detail" data-page="1" data-type="todo-recent" data-id="todo-2"><strong>跳到待办</strong><div class="muted">查看逾期待办</div></button>
+                <button class="jump" data-action="jump-detail" data-page="1" data-type="todo-repeat-rule" data-id="todo-rule-2"><strong>跳到重复规则</strong><div class="muted">查看规则本身</div></button>
+                <button class="jump" data-action="jump-detail" data-page="3" data-type="mirror-log" data-id="log-2"><strong>跳到镜子日志</strong><div class="muted">查看任务与待办同步记录</div></button>
+              </div>
+            </div>
+          </section>
+        </section>
+      `;
+    }
+
+    function buildMirrorPage() {
+      const memories = [
+        { title: '记忆引用关系', text: '哪些任务引用了哪些记忆：任务页与镜子页之间的关系。', refs: ['task-1', 'task-2', 'task-3', 'task-4'] },
+        { title: '多任务共用历史', text: '多个任务可以共用一段对话历史，镜子里按概要看，不需要手动挑选。', refs: ['mirror-s-1', 'mirror-s-2'] },
+        { title: '日志承载事件流', text: '任务创建、待办转任务、重复事项实例、授权、产出、取消、恢复、重启都会被记录。', refs: ['log-1', 'log-2', 'log-3', 'log-4'] }
+      ];
+      return `
+        <section class="page">
+          <div class="page-head">
+            <div>
+              <h2>镜子</h2>
+              <p>记忆模块：历史对话概要查看 + 日志查看。平时不用手动挑选历史，真实产品里会由悬浮球自行检索。</p>
+            </div>
+            <div class="page-note">点击概要或日志可展开详情；“跳本地路径”只做 mock 提示。</div>
+          </div>
+          <div class="layout-3">
+            <section class="panel">
+              <div class="panel-head"><div><strong>历史对话概要</strong> <span class="sub">只看概要</span></div><button class="ghost" data-action="open-path" data-path="E:/mock/memory/">跳本地路径</button></div>
+              <div class="stack">${sortByRecent(mirrorSummaries, 'updatedAt').map(mirrorSummaryCard).join('')}</div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><strong>记忆引用关系</strong> <span class="sub">任务如何引用记忆</span></div><span class="chip">跨任务共用</span></div>
+              <div class="stack">
+                ${memories.map((item) => `
+                  <div class="risk">
+                    <h4>${escapeHtml(item.title)}</h4>
+                    <p>${escapeHtml(item.text)}</p>
+                    <div class="meta">${item.refs.map((ref) => `<span class="chip">${escapeHtml(ref)}</span>`).join('')}</div>
+                  </div>
+                `).join('')}
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><strong>日志</strong> <span class="sub">事件追踪</span></div><button class="ghost" data-action="open-path" data-path="E:/mock/logs/">跳本地路径</button></div>
+              <div class="stack">${sortByRecent(mirrorLogs, 'at').map(mirrorLogCard).join('')}</div>
+            </section>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderDetail() {
+      const item = getCurrentDetailTarget();
+      if (!item || !state.detail) {
+        el.overlay.classList.remove('show');
+        el.overlay.setAttribute('aria-hidden', 'true');
+        el.detail.innerHTML = '';
+        return;
+      }
+
+      const { type } = state.detail;
+      let title = '';
+      let kicker = '';
+      let body = '';
+      let footer = '按 Esc 或点空白关闭。';
+
+      if (type === 'task-active' || type === 'task-ended') {
+        const task = item;
+        title = task.name;
+        kicker = type === 'task-active' ? '任务详情 · 未完成' : '任务详情 · 已结束';
+        const status = taskLabel(task.status);
+        const actions = type === 'task-active'
+          ? `
+            <button class="action primary" data-action="task-toggle">${task.status === 'paused' ? '继续' : task.status === 'waiting' ? '授权后继续' : task.status === 'failed' ? '重试' : '暂停'}</button>
+            <button class="action" data-action="task-cancel">取消</button>
+            <button class="action soft" data-action="task-modify">修改</button>
+          `
+          : `
+            <button class="action primary" data-action="task-restart">重启</button>
+            <button class="action danger" data-action="task-delete">删除记录</button>
+          `;
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>基本信息</h4>
+              <div class="fields">
+                <div class="field"><div class="label">任务名称</div><div class="value">${escapeHtml(task.name)}</div></div>
+                <div class="field"><div class="label">任务状态</div><div class="value"><span class="chip ${status.cls}">${escapeHtml(status.label)}</span></div></div>
+                <div class="field"><div class="label">任务进展</div><div class="value">${escapeHtml(task.progress)}</div></div>
+                <div class="field"><div class="label">记忆与上下文应用</div><div class="value">${task.memoryRefs.map((m) => `<span class="chip soft">${escapeHtml(m)}</span>`).join(' ')}</div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>完整任务进展</h4>
+              <ul class="steps">
+                ${task.steps.map((step, index) => `<li class="${index === task.currentStep ? 'current' : ''}"><span class="idx">${index + 1}</span><span>${escapeHtml(step)}${index === task.currentStep ? '（当前步骤）' : ''}</span></li>`).join('')}
+              </ul>
+            </div>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>关键操作记录</h4>
+              <ul class="bullet-list">
+                ${task.operations.map((op) => `<li>${escapeHtml(op)}</li>`).join('')}
+              </ul>
+            </div>
+            <div class="detail-box">
+              <h4>${type === 'task-active' ? '更多信息' : '产出'}</h4>
+              <ul class="file-list">
+                ${task.outputs.map((file) => `<li><button data-action="open-path" data-path="${escapeHtml(file.path)}"><strong>${escapeHtml(file.label)}</strong><div class="mini">${escapeHtml(file.path)}</div></button></li>`).join('')}
+              </ul>
+            </div>
+          </div>
+          <div class="actions-row">${actions}</div>
+        `;
+      }
+
+      if (type === 'todo-recent') {
+        const todo = item;
+        title = todo.name;
+        kicker = '待办详情 · 近期要做';
+        const status = todoLabel(todo.status);
+        const allowPromote = !todo.promotedTaskId;
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>基本信息</h4>
+              <div class="fields">
+                <div class="field"><div class="label">事件名称</div><div class="value">${escapeHtml(todo.name)}</div></div>
+                <div class="field"><div class="label">状态</div><div class="value"><span class="chip ${status.cls}">${escapeHtml(status.label)}</span></div></div>
+                <div class="field"><div class="label">时间信息</div><div class="value">${escapeHtml(todo.timeLabel)} · ${escapeHtml(todo.timeInfo)}</div></div>
+                <div class="field"><div class="label">事件类型</div><div class="value">${escapeHtml(todo.kind === 'repeat-instance' ? '重复事项' : '单次事项')}</div></div>
+                <div class="field"><div class="label">备注</div><div class="value">${escapeHtml(todo.note)}</div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>执行边界</h4>
+              <div class="fields">
+                <div class="field"><div class="label">执行前置</div><div class="value">${escapeHtml(todo.prereq || '无')}</div></div>
+                <div class="field"><div class="label">是否已转任务</div><div class="value">${todo.promotedTaskId ? `<span class="chip ok">已生成 ${escapeHtml(todo.promotedTaskId)}</span>` : '<span class="chip">未生成</span>'}</div></div>
+                <div class="field"><div class="label">资料</div><div class="value">${(todo.docs || []).map((path) => `<span class="chip soft">${escapeHtml(path)}</span>`).join(' ')}</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="action primary" data-action="todo-execute" ${allowPromote ? '' : 'disabled'}>${allowPromote ? '开始执行并生成任务' : '已生成任务'}</button>
+            <button class="action" data-action="todo-complete">标记完成</button>
+            <button class="action" data-action="todo-cancel">${todo.kind === 'repeat-instance' ? '跳过本次' : '取消'}</button>
+            <button class="action soft" data-action="todo-edit">编辑</button>
+            <button class="action soft" data-action="todo-docs">打开相关资料</button>
+          </div>
+        `;
+      }
+
+      if (type === 'todo-future') {
+        const todo = item;
+        title = todo.name;
+        kicker = '待办详情 · 后续安排';
+        const status = todoLabel(todo.status);
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>基本信息</h4>
+              <div class="fields">
+                <div class="field"><div class="label">事件名称</div><div class="value">${escapeHtml(todo.name)}</div></div>
+                <div class="field"><div class="label">状态</div><div class="value"><span class="chip ${status.cls}">${escapeHtml(status.label)}</span></div></div>
+                <div class="field"><div class="label">时间信息</div><div class="value">${escapeHtml(todo.timeLabel)} · ${escapeHtml(todo.timeInfo)}</div></div>
+                <div class="field"><div class="label">前置条件</div><div class="value">${escapeHtml(todo.prereq)}</div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>相关信息</h4>
+              <div class="fields">
+                <div class="field"><div class="label">备注</div><div class="value">${escapeHtml(todo.note)}</div></div>
+                <div class="field"><div class="label">相关资料</div><div class="value">${(todo.docs || []).map((path) => `<span class="chip soft">${escapeHtml(path)}</span>`).join(' ')}</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="action primary" data-action="todo-advance">提前到近期要做</button>
+            <button class="action soft" data-action="todo-edit">编辑</button>
+            <button class="action" data-action="todo-cancel">取消</button>
+            <button class="action soft" data-action="todo-docs">打开相关资料</button>
+          </div>
+        `;
+      }
+
+      if (type === 'todo-repeat-rule') {
+        const todo = item;
+        title = todo.name;
+        kicker = '待办详情 · 重复事项规则';
+        const status = todo.paused ? { label: '已暂停', cls: 'warn' } : { label: '生效中', cls: 'ok' };
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>规则字段</h4>
+              <div class="fields">
+                <div class="field"><div class="label">事件名称</div><div class="value">${escapeHtml(todo.name)}</div></div>
+                <div class="field"><div class="label">重复规则</div><div class="value">${escapeHtml(todo.repeatRule)}</div></div>
+                <div class="field"><div class="label">下次发生时间</div><div class="value">${escapeHtml(todo.nextOccurs)}</div></div>
+                <div class="field"><div class="label">最近一次状态</div><div class="value"><span class="chip ${todo.lastStatus === '已逾期' ? 'bad' : todo.lastStatus === '已完成' ? 'ok' : 'warn'}">${escapeHtml(todo.lastStatus)}</span></div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>作用范围与资料</h4>
+              <div class="fields">
+                <div class="field"><div class="label">生效范围</div><div class="value">${escapeHtml(todo.effectiveRange)}</div></div>
+                <div class="field"><div class="label">相关资料</div><div class="value">${(todo.docs || []).map((path) => `<span class="chip soft">${escapeHtml(path)}</span>`).join(' ')}</div></div>
+                <div class="field"><div class="label">规则状态</div><div class="value"><span class="chip ${status.cls}">${status.label}</span></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="action primary" data-action="todo-rule-toggle">${todo.paused ? '开启重复' : '暂停重复'}</button>
+            <button class="action soft" data-action="todo-rule-edit">修改</button>
+            <button class="action danger" data-action="todo-rule-cancel">取消整个重复事项</button>
+            <button class="action soft" data-action="todo-docs">打开相关资料</button>
+          </div>
+        `;
+      }
+
+      if (type === 'todo-ended') {
+        const todo = item;
+        title = todo.name;
+        kicker = '待办详情 · 已结束';
+        const status = todoLabel(todo.status);
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>结束信息</h4>
+              <div class="fields">
+                <div class="field"><div class="label">事件名称</div><div class="value">${escapeHtml(todo.name)}</div></div>
+                <div class="field"><div class="label">最终状态</div><div class="value"><span class="chip ${status.cls}">${escapeHtml(status.label)}</span></div></div>
+                <div class="field"><div class="label">原定时间</div><div class="value">${escapeHtml(todo.originalTime || todo.timeLabel)}</div></div>
+                <div class="field"><div class="label">结束时间</div><div class="value">${escapeHtml(fmtTime(todo.endedAt || todo.sortAt))}</div></div>
+                <div class="field"><div class="label">事件类型</div><div class="value">${escapeHtml(todo.kind === 'repeat-instance' ? '重复事项实例' : '单次事项')}</div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>相关资料</h4>
+              <ul class="file-list">
+                ${(todo.docs || []).map((path) => `<li><button data-action="open-path" data-path="${escapeHtml(path)}"><strong>${escapeHtml(path)}</strong><div class="mini">mock 跳转到本地路径</div></button></li>`).join('')}
+              </ul>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="action primary" data-action="todo-restore">恢复为未完成</button>
+            <button class="action danger" data-action="todo-delete">删除记录</button>
+          </div>
+        `;
+      }
+
+      if (type === 'mirror-summary') {
+        title = item.title;
+        kicker = '镜子 · 历史对话概要';
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>概要</h4>
+              <div class="fields">
+                <div class="field"><div class="label">概要标题</div><div class="value">${escapeHtml(item.title)}</div></div>
+                <div class="field"><div class="label">概要内容</div><div class="value">${escapeHtml(item.summary)}</div></div>
+                <div class="field"><div class="label">记忆引用</div><div class="value">${item.refs.map((ref) => `<span class="chip soft">${escapeHtml(ref)}</span>`).join(' ')}</div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>本地路径</h4>
+              <ul class="file-list">
+                <li><button data-action="mirror-path"><strong>${escapeHtml(item.path)}</strong><div class="mini">mock 跳转到本地存储路径文件夹</div></button></li>
+              </ul>
+            </div>
+          </div>
+        `;
+      }
+
+      if (type === 'mirror-log') {
+        title = item.title;
+        kicker = '镜子 · 日志';
+        body = `
+          <div class="detail-grid">
+            <div class="detail-box">
+              <h4>日志内容</h4>
+              <div class="fields">
+                <div class="field"><div class="label">事件类型</div><div class="value">${escapeHtml(item.type)}</div></div>
+                <div class="field"><div class="label">标题</div><div class="value">${escapeHtml(item.title)}</div></div>
+                <div class="field"><div class="label">详情</div><div class="value">${escapeHtml(item.detail)}</div></div>
+                <div class="field"><div class="label">相关对象</div><div class="value">${item.refs.map((ref) => `<span class="chip soft">${escapeHtml(ref)}</span>`).join(' ')}</div></div>
+              </div>
+            </div>
+            <div class="detail-box">
+              <h4>路径</h4>
+              <ul class="file-list">
+                <li><button data-action="mirror-path"><strong>${escapeHtml(item.path || 'E:/mock/logs/')}</strong><div class="mini">mock 跳转到本地路径</div></button></li>
+              </ul>
+            </div>
+          </div>
+        `;
+      }
+
+      el.overlay.classList.add('show');
+      el.overlay.setAttribute('aria-hidden', 'false');
+      el.detail.innerHTML = `
+        <div class="detail-head">
+          <div>
+            <div class="kicker">${escapeHtml(kicker)}</div>
+            <h3>${escapeHtml(title)}</h3>
+          </div>
+          <button class="detail-close" data-action="close-detail">✕</button>
+        </div>
+        <div class="detail-body">${body}</div>
+        <div class="detail-footer">
+          <div>${escapeHtml(footer)}</div>
+          <div>${escapeHtml(type.startsWith('task') ? '任务页' : type.startsWith('todo') ? '待办页' : '镜子页')} 的 detail 会暂停自动轮播。</div>
+        </div>
+      `;
+    }
+
+    function render() {
+      renderNav();
+      renderStatusLine();
+      const page = activePage().key;
+      if (page === 'tasks') el.page.innerHTML = buildTasksPage();
+      if (page === 'todos') el.page.innerHTML = buildTodosPage();
+      if (page === 'summary') el.page.innerHTML = buildSummaryPage();
+      if (page === 'mirror') el.page.innerHTML = buildMirrorPage();
+      renderDetail();
+    }
+
+    el.stage.addEventListener('mouseenter', () => {
+      state.hoverPaused = true;
+      renderStatusLine();
+    });
+
+    el.stage.addEventListener('mouseleave', () => {
+      state.hoverPaused = false;
+      renderStatusLine();
+    });
+
+    document.getElementById('nav').addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-action]');
+      if (!btn) return;
+      handlePageAction(btn.dataset.action, btn.dataset);
+    });
+
+    document.querySelector('.toolbar').addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-action]');
+      if (!btn) return;
+      handlePageAction(btn.dataset.action, btn.dataset);
+    });
+
+    el.page.addEventListener('click', (event) => {
+      const action = event.target.closest('[data-action]');
+      if (action) {
+        const actionName = action.dataset.action;
+        if (actionName === 'jump-detail') {
+          handlePageAction(actionName, action.dataset);
+          return;
+        }
+        handleDetailAction(actionName, action.dataset);
+        return;
+      }
+      const card = event.target.closest('[data-open]');
+      if (card) openDetail(card.dataset.open, card.dataset.id);
+    });
+
+    el.overlay.addEventListener('click', (event) => {
+      if (event.target.classList.contains('detail-backdrop') || event.target === el.overlay) closeDetail();
+      const action = event.target.closest('[data-action]');
+      if (action && action.dataset.action !== 'close-detail') {
+        handleDetailAction(action.dataset.action, action.dataset);
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.detail) closeDetail();
+    });
+
+    el.composerSend.addEventListener('click', () => {
+      const text = el.composerInput.value.trim();
+      if (!text) return toast('先输入一点内容。', 'warn');
+      const target = currentComposerTarget();
+      if (target && state.composerMode.type === 'modify-task') {
+        target.operations.unshift(`修改说明：${text}`);
+        target.progress = `已接收修改：${text.slice(0, 24)}`;
+        target.status = 'active';
+        target.updatedAt = Date.now();
+        target.sortAt = target.updatedAt;
+        addLog({ type: '修改', title: `修改任务：${target.name}`, detail: `通过悬浮球输入框接收修改：${text}`, refs: [target.id], path: `E:/mock/logs/${target.id}-modify.log` });
+        toast('已把修改输入写入任务。', 'ok');
+        state.composerMode = null;
+        el.composerInput.value = '';
+        el.composerHint.textContent = '悬浮球下方输入框：用于继续修改、补充说明或 mock 指令';
+        render();
+        return;
+      }
+      addLog({ type: '记忆', title: '悬浮球输入', detail: text, refs: [], path: 'E:/mock/logs/composer.log' });
+      toast(`已记录输入：${text}`, 'ok');
+      el.composerInput.value = '';
+    });
+
+    el.composerInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') el.composerSend.click();
+    });
+
+    setInterval(() => {
+      if (!isPaused()) setPage(state.pageIndex + 1, true);
+    }, 5000);
+
+    render();
+    toast('原型已启动：任务/待办边界、自动转任务、重复事项与镜子日志均为 mock。', 'ok', '初始化');
+  </script>
+</body>
+</html>
