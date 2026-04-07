@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentTaskStartParams",
+  "type": "object",
+  "required": [
+    "request_meta",
+    "request_source",
+    "request_trigger",
+    "input_type",
+    "source_type",
+    "title",
+    "payload"
+  ],
+  "properties": {
+    "request_meta": {
+      "type": "object",
+      "required": ["trace_id", "client_time"],
+      "properties": {
+        "trace_id": { "type": "string" },
+        "client_time": { "type": "string" }
+      }
+    },
+    "request_source": {
+      "enum": ["floating_ball", "dashboard", "tray_panel"]
+    },
+    "request_trigger": {
+      "enum": [
+        "voice_commit",
+        "hover_text_input",
+        "text_selected_click",
+        "file_drop",
+        "error_detected",
+        "recommendation_click"
+      ]
+    },
+    "input_type": {
+      "enum": ["text", "text_selection", "file", "error"]
+    },
+    "source_type": {
+      "enum": ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"]
+    },
+    "title": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "file_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "error_message": { "type": "string" }
+      }
+    }
+  }
+}

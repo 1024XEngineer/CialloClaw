@@ -1,0 +1,15 @@
+import type { AgentMirrorOverviewGetResult, RequestMeta } from "@cialloclaw/protocol";
+import { RPC_METHODS } from "@cialloclaw/protocol";
+import { rpcClient } from "@/rpc/client";
+
+export function getMirrorOverview(taskId: string) {
+  const requestMeta: RequestMeta = {
+    trace_id: `trace_mirror_${taskId}`,
+    client_time: new Date().toISOString(),
+  };
+
+  return rpcClient.request<AgentMirrorOverviewGetResult>(RPC_METHODS.AGENT_MIRROR_OVERVIEW_GET, {
+    request_meta: requestMeta,
+    task_id: taskId,
+  });
+}

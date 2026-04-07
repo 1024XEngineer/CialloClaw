@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req_task_start_demo",
+  "method": "agent.task.start",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_demo_task_start",
+      "client_time": "2026-04-07T10:20:00+08:00"
+    },
+    "request_source": "floating_ball",
+    "request_trigger": "file_drop",
+    "input_type": "file",
+    "source_type": "dragged_file",
+    "title": "整理并总结拖入文件",
+    "payload": {
+      "file_paths": [
+        "D:/CialloClawWorkspace/demo/notes.md"
+      ]
+    }
+  }
+}
