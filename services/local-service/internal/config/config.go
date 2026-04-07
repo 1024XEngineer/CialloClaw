@@ -6,8 +6,14 @@ type ModelConfig struct {
 	Endpoint string
 }
 
+type RPCConfig struct {
+	Transport        string
+	NamedPipeName    string
+	DebugHTTPAddress string
+}
+
 type Config struct {
-	RPCAddress    string
+	RPC           RPCConfig
 	WorkspaceRoot string
 	DatabasePath  string
 	Model         ModelConfig
@@ -15,7 +21,11 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		RPCAddress:    ":4317",
+		RPC: RPCConfig{
+			Transport:        "named_pipe",
+			NamedPipeName:    `\\.\pipe\cialloclaw-rpc`,
+			DebugHTTPAddress: ":4317",
+		},
 		WorkspaceRoot: "workspace",
 		DatabasePath:  "data/cialloclaw.db",
 		Model: ModelConfig{

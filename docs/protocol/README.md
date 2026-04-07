@@ -9,3 +9,4 @@
 - JSON-RPC 方法行为说明
 - Notification 载荷说明
 - schema 演进记录
+- IPC / Named Pipe 与调试态 HTTP 的边界说明

@@ -15,6 +15,7 @@
 - `apps/desktop` 已提供三个桌面入口和基础 task 视角界面
 - `packages/protocol` 已提供 task-centric 协议骨架与 dot.case 方法名
 - `services/local-service/internal/*` 已按 harness 分层落位
+- 主前后端通信骨架已明确收敛为 Named Pipe 优先、HTTP 调试兼容
 - `workers/*` 已隔离 Playwright、OCR、媒体处理 sidecar
 
 ## 下一步实现切片

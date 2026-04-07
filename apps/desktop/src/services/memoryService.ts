@@ -10,6 +10,6 @@ export function getMirrorOverview(taskId: string) {
 
   return rpcClient.request<AgentMirrorOverviewGetResult>(RPC_METHODS.AGENT_MIRROR_OVERVIEW_GET, {
     request_meta: requestMeta,
-    task_id: taskId,
+    include: ["history_summary", "daily_summary", "profile", "memory_references"],
   });
 }

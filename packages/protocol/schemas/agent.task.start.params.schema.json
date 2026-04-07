@@ -4,12 +4,9 @@
   "type": "object",
   "required": [
     "request_meta",
-    "request_source",
-    "request_trigger",
-    "input_type",
-    "source_type",
-    "title",
-    "payload"
+    "source",
+    "trigger",
+    "input"
   ],
   "properties": {
     "request_meta": {
@@ -20,10 +17,13 @@
         "client_time": { "type": "string" }
       }
     },
-    "request_source": {
+    "session_id": {
+      "type": "string"
+    },
+    "source": {
       "enum": ["floating_ball", "dashboard", "tray_panel"]
     },
-    "request_trigger": {
+    "trigger": {
       "enum": [
         "voice_commit",
         "hover_text_input",
@@ -33,22 +33,47 @@
         "recommendation_click"
       ]
     },
-    "input_type": {
-      "enum": ["text", "text_selection", "file", "error"]
-    },
-    "source_type": {
-      "enum": ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"]
-    },
-    "title": { "type": "string" },
-    "payload": {
+    "input": {
       "type": "object",
       "properties": {
+        "type": {
+          "enum": ["text", "text_selection", "file", "error"]
+        },
         "text": { "type": "string" },
-        "file_paths": {
+        "files": {
           "type": "array",
           "items": { "type": "string" }
         },
-        "error_message": { "type": "string" }
+        "error_message": { "type": "string" },
+        "page_context": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "url": { "type": "string" },
+            "app_name": { "type": "string" }
+          }
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "preferred": {
+          "enum": ["bubble", "workspace_document", "result_page", "open_file", "reveal_in_folder", "task_detail"]
+        },
+        "fallback": {
+          "enum": ["bubble", "workspace_document", "result_page", "open_file", "reveal_in_folder", "task_detail"]
+        }
       }
     }
   }

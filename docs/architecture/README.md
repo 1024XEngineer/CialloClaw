@@ -4,6 +4,7 @@
 
 - 前端：Tauri 2 + React 18 + TypeScript + Vite
 - 后端：通过 JSON-RPC 2.0 对外暴露的 Go harness service
+- 传输：Windows 主链路优先使用 Named Pipe，本地 HTTP 仅保留调试兼容态
 - Worker：独立进程 sidecar
 - 存储：SQLite + WAL、workspace 文件、artifact 存储与本地 RAG
 

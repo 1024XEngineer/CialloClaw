@@ -20,7 +20,12 @@ func main() {
 		log.Fatalf("bootstrap local service: %v", err)
 	}
 
-	log.Printf("local service listening on %s", cfg.RPCAddress)
+	log.Printf(
+		"local service transport=%s named_pipe=%s debug_http=%s",
+		cfg.RPC.Transport,
+		cfg.RPC.NamedPipeName,
+		cfg.RPC.DebugHTTPAddress,
+	)
 	if err := app.Start(ctx); err != nil {
 		log.Fatalf("run local service: %v", err)
 	}

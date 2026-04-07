@@ -1,27 +1,34 @@
 import type {
   ApprovalDecision,
   ApprovalRequest,
+  ApplyMode,
   Artifact,
   AuditRecord,
   BubbleMessage,
   DeliveryResult,
+  ImpactScope,
   InputMode,
   InputType,
+  IntentPayload,
   MirrorReference,
+  RecommendationFeedback,
+  RecommendationScene,
+  RecoveryPoint,
   RequestSource,
   RequestTrigger,
-  RecoveryPoint,
-  RetrievalHit,
+  RiskLevel,
   SecurityStatus,
   Session,
-  SettingsScope,
   SettingsSnapshot,
-  SettingItem,
   Task,
+  TaskControlAction,
   TaskListGroup,
-  TaskSourceType,
   TaskStep,
+  TimeInterval,
   TokenCostSummary,
+  TodoBucket,
+  TodoItem,
+  AuthorizationRecord,
 } from "../types/index";
 
 export const RPC_METHODS_STABLE = {
@@ -65,11 +72,11 @@ export const RPC_METHODS = {
 
 export const NOTIFICATION_METHODS = {
   TASK_UPDATED: "task.updated",
-  TASK_STEP_UPDATED: "task.step.updated",
-  BUBBLE_UPDATED: "bubble.updated",
-  ARTIFACT_CREATED: "artifact.created",
-  APPROVAL_REQUEST_UPDATED: "approval_request.updated",
-  RECOVERY_POINT_CREATED: "recovery_point.created",
+  DELIVERY_READY: "delivery.ready",
+  APPROVAL_PENDING: "approval.pending",
+  PLUGIN_UPDATED: "plugin.updated",
+  PLUGIN_METRIC_UPDATED: "plugin.metric.updated",
+  PLUGIN_TASK_UPDATED: "plugin.task.updated",
 } as const;
 
 export type RpcMethodName = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
@@ -79,18 +86,58 @@ export interface RequestMeta {
   client_time: string;
 }
 
+export interface JsonRpcPage {
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
+}
+
+export interface PageContext {
+  title: string;
+  app_name: string;
+  url: string;
+}
+
+export interface InputContext {
+  page?: PageContext;
+  selection?: {
+    text: string;
+  };
+  files?: string[];
+}
+
+export interface VoiceMeta {
+  voice_session_id: string;
+  is_locked_session: boolean;
+  asr_confidence: number;
+  segment_id: string;
+}
+
+export interface DeliveryPreference {
+  preferred: DeliveryResult["type"];
+  fallback?: DeliveryResult["type"];
+}
+
 export interface AgentInputSubmitParams {
   request_meta: RequestMeta;
   session_id?: string;
-  task_id?: string;
-  request_source: RequestSource;
-  request_trigger: Extract<RequestTrigger, "voice_commit" | "hover_text_input">;
-  input_mode: InputMode;
-  text: string;
+  source: RequestSource;
+  trigger: Extract<RequestTrigger, "voice_commit" | "hover_text_input">;
+  input: {
+    type: Extract<InputType, "text">;
+    text: string;
+    input_mode: InputMode;
+  };
+  context: InputContext;
+  voice_meta?: VoiceMeta;
+  options?: {
+    confirm_required?: boolean;
+    preferred_delivery?: DeliveryResult["type"];
+  };
 }
 
 export interface AgentInputSubmitResult {
-  session: Session;
   task: Task;
   bubble_message: BubbleMessage | null;
 }
@@ -98,30 +145,30 @@ export interface AgentInputSubmitResult {
 export interface AgentTaskStartParams {
   request_meta: RequestMeta;
   session_id?: string;
-  request_source: RequestSource;
-  request_trigger: RequestTrigger;
-  input_type: InputType;
-  source_type: TaskSourceType;
-  title: string;
-  payload: {
+  source: RequestSource;
+  trigger: RequestTrigger;
+  input: {
+    type: InputType;
     text?: string;
-    file_paths?: string[];
+    files?: string[];
+    page_context?: PageContext;
     error_message?: string;
   };
+  intent?: IntentPayload;
+  delivery?: DeliveryPreference;
 }
 
 export interface AgentTaskStartResult {
-  session: Session;
   task: Task;
   bubble_message: BubbleMessage | null;
+  delivery_result: DeliveryResult | null;
 }
 
 export interface AgentTaskConfirmParams {
   request_meta: RequestMeta;
   task_id: string;
   confirmed: boolean;
-  intent_name: string;
-  arguments?: Record<string, unknown>;
+  corrected_intent?: IntentPayload;
 }
 
 export interface AgentTaskConfirmResult {
@@ -130,13 +177,57 @@ export interface AgentTaskConfirmResult {
   delivery_result: DeliveryResult | null;
 }
 
+export interface RecommendationItem {
+  recommendation_id: string;
+  text: string;
+  intent: IntentPayload;
+}
+
+export interface AgentRecommendationGetParams {
+  request_meta: RequestMeta;
+  source: RequestSource;
+  scene: RecommendationScene;
+  context: {
+    page_title: string;
+    app_name: string;
+    selection_text?: string;
+  };
+}
+
+export interface AgentRecommendationGetResult {
+  cooldown_hit: boolean;
+  items: RecommendationItem[];
+}
+
+export interface AgentRecommendationFeedbackSubmitParams {
+  request_meta: RequestMeta;
+  recommendation_id: string;
+  feedback: RecommendationFeedback;
+}
+
+export interface AgentRecommendationFeedbackSubmitResult {
+  applied: boolean;
+}
+
 export interface AgentTaskListParams {
   request_meta: RequestMeta;
-  group?: TaskListGroup;
+  group: TaskListGroup;
+  limit: number;
+  offset: number;
+  sort_by?: "updated_at" | "started_at" | "finished_at";
+  sort_order?: "asc" | "desc";
 }
 
 export interface AgentTaskListResult {
-  tasks: Task[];
+  items: Task[];
+  page: JsonRpcPage;
+}
+
+export interface SecuritySummary {
+  security_status: SecurityStatus;
+  risk_level: RiskLevel;
+  pending_authorizations: number;
+  latest_restore_point: string | RecoveryPoint | null;
 }
 
 export interface AgentTaskDetailGetParams {
@@ -146,43 +237,153 @@ export interface AgentTaskDetailGetParams {
 
 export interface AgentTaskDetailGetResult {
   task: Task;
-  task_steps: TaskStep[];
+  timeline: TaskStep[];
   artifacts: Artifact[];
-  approval_requests: ApprovalRequest[];
-  audit_records: AuditRecord[];
-  recovery_points: RecoveryPoint[];
   mirror_references: MirrorReference[];
+  security_summary: SecuritySummary;
 }
 
 export interface AgentTaskControlParams {
   request_meta: RequestMeta;
   task_id: string;
-  action: "pause" | "resume" | "cancel" | "restart";
+  action: TaskControlAction;
+  arguments?: Record<string, unknown>;
 }
 
 export interface AgentTaskControlResult {
+  task: Task;
+  bubble_message: BubbleMessage | null;
+}
+
+export interface InspectorConfig {
+  task_sources: string[];
+  inspection_interval: TimeInterval;
+  inspect_on_file_change: boolean;
+  inspect_on_startup: boolean;
+  remind_before_deadline: boolean;
+  remind_when_stale: boolean;
+}
+
+export interface AgentTaskInspectorConfigGetParams {
+  request_meta: RequestMeta;
+}
+
+export interface AgentTaskInspectorConfigGetResult extends InspectorConfig {}
+
+export interface AgentTaskInspectorConfigUpdateParams {
+  request_meta: RequestMeta;
+  task_sources: string[];
+  inspection_interval: TimeInterval;
+  inspect_on_file_change: boolean;
+  inspect_on_startup: boolean;
+  remind_before_deadline: boolean;
+  remind_when_stale: boolean;
+}
+
+export interface AgentTaskInspectorConfigUpdateResult {
+  updated: boolean;
+  effective_config: InspectorConfig;
+}
+
+export interface AgentTaskInspectorRunParams {
+  request_meta: RequestMeta;
+  reason: string;
+  target_sources: string[];
+}
+
+export interface AgentTaskInspectorRunResult {
+  inspection_id: string;
+  summary: {
+    parsed_files: number;
+    identified_items: number;
+    due_today: number;
+    overdue: number;
+    stale: number;
+  };
+  suggestions: string[];
+}
+
+export interface AgentNotepadListParams {
+  request_meta: RequestMeta;
+  group: TodoBucket;
+  limit: number;
+  offset: number;
+}
+
+export interface AgentNotepadListResult {
+  items: TodoItem[];
+  page: JsonRpcPage;
+}
+
+export interface AgentNotepadConvertToTaskParams {
+  request_meta: RequestMeta;
+  item_id: string;
+  confirmed: boolean;
+}
+
+export interface AgentNotepadConvertToTaskResult {
   task: Task;
 }
 
 export interface AgentDashboardOverviewGetParams {
   request_meta: RequestMeta;
+  focus_mode?: boolean;
+  include?: Array<"focus_summary" | "trust_summary" | "quick_actions" | "global_state" | "high_value_signal">;
 }
 
 export interface AgentDashboardOverviewGetResult {
-  unfinished_tasks: Task[];
-  finished_tasks: Task[];
-  pending_approvals: ApprovalRequest[];
-  token_cost_summary: TokenCostSummary;
+  overview: {
+    focus_summary: {
+      task_id: string;
+      title: string;
+      status: Task["status"];
+      current_step: string;
+      next_action: string;
+      updated_at: string;
+    } | null;
+    trust_summary: {
+      risk_level: RiskLevel;
+      pending_authorizations: number;
+      has_restore_point: boolean;
+      workspace_path: string;
+    };
+    quick_actions?: string[];
+    global_state?: Record<string, unknown>;
+    high_value_signal?: string[];
+  };
+}
+
+export interface AgentDashboardModuleGetParams {
+  request_meta: RequestMeta;
+  module: string;
+  tab: string;
+}
+
+export interface AgentDashboardModuleGetResult {
+  module: string;
+  tab: string;
+  summary: Record<string, unknown>;
+  highlights: string[];
 }
 
 export interface AgentMirrorOverviewGetParams {
   request_meta: RequestMeta;
-  task_id?: string;
+  include?: Array<"history_summary" | "daily_summary" | "profile" | "memory_references">;
 }
 
 export interface AgentMirrorOverviewGetResult {
-  retrieval_hits: RetrievalHit[];
-  mirror_references: MirrorReference[];
+  history_summary: string[];
+  daily_summary: {
+    date: string;
+    completed_tasks: number;
+    generated_outputs: number;
+  } | null;
+  profile: {
+    work_style: string;
+    preferred_output: string;
+    active_hours: string;
+  } | null;
+  memory_references: MirrorReference[];
 }
 
 export interface AgentSecuritySummaryGetParams {
@@ -190,18 +391,23 @@ export interface AgentSecuritySummaryGetParams {
 }
 
 export interface AgentSecuritySummaryGetResult {
-  security_status: SecurityStatus;
-  pending_count: number;
-  recent_audit_records: AuditRecord[];
-  recovery_points: RecoveryPoint[];
+  summary: {
+    security_status: SecurityStatus;
+    pending_authorizations: number;
+    latest_restore_point: RecoveryPoint | null;
+    token_cost_summary: TokenCostSummary;
+  };
 }
 
 export interface AgentSecurityPendingListParams {
   request_meta: RequestMeta;
+  limit: number;
+  offset: number;
 }
 
 export interface AgentSecurityPendingListResult {
-  approval_requests: ApprovalRequest[];
+  items: ApprovalRequest[];
+  page: JsonRpcPage;
 }
 
 export interface AgentSecurityRespondParams {
@@ -209,33 +415,52 @@ export interface AgentSecurityRespondParams {
   task_id: string;
   approval_id: string;
   decision: ApprovalDecision;
+  remember_rule?: boolean;
 }
 
 export interface AgentSecurityRespondResult {
+  authorization_record: AuthorizationRecord;
   task: Task;
+  bubble_message: BubbleMessage | null;
+  impact_scope?: ImpactScope;
 }
 
 export interface AgentSettingsGetParams {
   request_meta: RequestMeta;
-  scope?: SettingsScope;
+  scope: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "data_log";
 }
 
 export interface AgentSettingsGetResult {
-  settings: SettingsSnapshot;
-  items: SettingItem[];
+  settings: SettingsSnapshot["settings"];
 }
 
 export interface AgentSettingsUpdateParams {
   request_meta: RequestMeta;
-  key: string;
-  value: string | boolean | number | null;
+  general?: Partial<SettingsSnapshot["settings"]["general"]>;
+  floating_ball?: Partial<SettingsSnapshot["settings"]["floating_ball"]>;
+  memory?: Partial<SettingsSnapshot["settings"]["memory"]>;
+  task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
+  data_log?: Partial<SettingsSnapshot["settings"]["data_log"]>;
 }
 
 export interface AgentSettingsUpdateResult {
-  settings: SettingsSnapshot;
+  updated_keys: string[];
+  effective_settings: Partial<SettingsSnapshot["settings"]>;
+  apply_mode: ApplyMode;
+  need_restart: boolean;
 }
 
 export interface TaskUpdatedNotification {
   task_id: string;
   status: Task["status"];
+}
+
+export interface DeliveryReadyNotification {
+  task_id: string;
+  delivery_result: DeliveryResult;
+}
+
+export interface ApprovalPendingNotification {
+  task_id: string;
+  approval_request: ApprovalRequest;
 }

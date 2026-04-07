@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -50,22 +49,9 @@ func New(cfg config.Config) (*App, error) {
 		plugin.NewService(),
 	)
 
-	return &App{server: rpc.NewServer(cfg.RPCAddress, orchestratorService)}, nil
+	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService)}, nil
 }
 
 func (a *App) Start(ctx context.Context) error {
-	errCh := make(chan error, 1)
-
-	go func() {
-		errCh <- a.server.Start()
-	}()
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return a.server.Shutdown(shutdownCtx)
-	case err := <-errCh:
-		return err
-	}
+	return a.server.Start(ctx)
 }

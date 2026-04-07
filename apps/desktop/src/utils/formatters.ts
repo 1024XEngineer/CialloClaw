@@ -17,7 +17,7 @@ export function formatStatusLabel(status: string) {
 
 export function formatTimestamp(value: string | null) {
   if (!value) {
-    return "not started";
+    return "未开始";
   }
 
   return new Date(value).toLocaleString();

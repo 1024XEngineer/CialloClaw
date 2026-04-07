@@ -7,15 +7,29 @@
       "trace_id": "trace_demo_task_start",
       "client_time": "2026-04-07T10:20:00+08:00"
     },
-    "request_source": "floating_ball",
-    "request_trigger": "file_drop",
-    "input_type": "file",
-    "source_type": "dragged_file",
-    "title": "整理并总结拖入文件",
-    "payload": {
-      "file_paths": [
+    "session_id": "sess_demo_001",
+    "source": "floating_ball",
+    "trigger": "file_drop",
+    "input": {
+      "type": "file",
+      "files": [
         "D:/CialloClawWorkspace/demo/notes.md"
-      ]
+      ],
+      "page_context": {
+        "title": "Notes",
+        "url": "local://notes",
+        "app_name": "editor"
+      }
+    },
+    "intent": {
+      "name": "summarize",
+      "arguments": {
+        "style": "key_points"
+      }
+    },
+    "delivery": {
+      "preferred": "workspace_document",
+      "fallback": "bubble"
     }
   }
 }

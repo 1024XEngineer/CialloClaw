@@ -28,6 +28,8 @@ type PathPolicy interface {
 type OSCapabilityAdapter interface {
 	Notify(title, body string) error
 	OpenExternal(target string) error
+	EnsureNamedPipe(pipeName string) error
+	CloseNamedPipe(pipeName string) error
 }
 
 type ExecutionBackendAdapter interface {

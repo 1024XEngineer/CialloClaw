@@ -15,20 +15,11 @@ export const TASK_LIST_GROUPS = ["unfinished", "finished"] as const;
 
 export const TODO_BUCKETS = ["upcoming", "later", "recurring_rule", "closed"] as const;
 
-export const STEP_STATUSES = [
-  "pending",
-  "running",
-  "succeeded",
-  "failed",
-  "skipped",
-] as const;
+export const TASK_STEP_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
 
-export const TOOL_CALL_STATUSES = [
-  "pending",
-  "running",
-  "succeeded",
-  "failed",
-] as const;
+export const STEP_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
+
+export const TOOL_CALL_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
 
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
 
@@ -83,12 +74,22 @@ export const THEME_MODES = ["follow_system", "light", "dark"] as const;
 
 export const POSITION_MODES = ["fixed", "draggable"] as const;
 
+export const TODO_STATUSES = ["normal", "due_today", "overdue", "completed", "cancelled"] as const;
+
+export const RECOMMENDATION_SCENES = ["hover", "selected_text", "idle", "error"] as const;
+
+export const RECOMMENDATION_FEEDBACKS = ["positive", "negative", "ignore"] as const;
+
+export const TASK_CONTROL_ACTIONS = ["pause", "resume", "cancel", "restart"] as const;
+
+export const TIME_UNITS = ["minute", "hour", "day", "week"] as const;
+
 export const RUN_STATUSES = ["processing", "completed"] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskListGroup = (typeof TASK_LIST_GROUPS)[number];
 export type TodoBucket = (typeof TODO_BUCKETS)[number];
-export type RunStatus = (typeof RUN_STATUSES)[number];
+export type TaskStepStatus = (typeof TASK_STEP_STATUSES)[number];
 export type StepStatus = (typeof STEP_STATUSES)[number];
 export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number];
 export type RiskLevel = (typeof RISK_LEVELS)[number];
@@ -107,10 +108,21 @@ export type SettingsScope = (typeof SETTINGS_SCOPES)[number];
 export type ApplyMode = (typeof APPLY_MODES)[number];
 export type ThemeMode = (typeof THEME_MODES)[number];
 export type PositionMode = (typeof POSITION_MODES)[number];
+export type TodoStatus = (typeof TODO_STATUSES)[number];
+export type RecommendationScene = (typeof RECOMMENDATION_SCENES)[number];
+export type RecommendationFeedback = (typeof RECOMMENDATION_FEEDBACKS)[number];
+export type TaskControlAction = (typeof TASK_CONTROL_ACTIONS)[number];
+export type TimeUnit = (typeof TIME_UNITS)[number];
+export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export interface IntentPayload {
   name: string;
   arguments: Record<string, unknown>;
+}
+
+export interface TimeInterval {
+  unit: TimeUnit;
+  value: number;
 }
 
 export interface Task {
@@ -130,7 +142,7 @@ export interface TaskStep {
   step_id: string;
   task_id: string;
   name: string;
-  status: TaskStatus | StepStatus;
+  status: TaskStepStatus;
   order_index: number;
   input_summary: string;
   output_summary: string;
@@ -159,68 +171,6 @@ export interface DeliveryResult {
   preview_text: string;
 }
 
-export interface Session {
-  session_id: string;
-  title: string;
-  status: "active" | "archived";
-  created_at: string;
-  updated_at: string;
-}
-
-export interface Run {
-  run_id: string;
-  task_id: string;
-  session_id: string;
-  source_type: "selected_text" | "dragged_file" | "voice" | "hover_input" | "todo" | "error_signal";
-  status: RunStatus;
-  started_at: string | null;
-  finished_at: string | null;
-}
-
-export interface Step {
-  step_id: string;
-  run_id: string;
-  task_id: string;
-  name: string;
-  status: StepStatus;
-  order_index: number;
-  input_summary: string;
-  output_summary: string;
-}
-
-export interface Event {
-  event_id: string;
-  run_id: string;
-  task_id: string;
-  step_id: string | null;
-  type: string;
-  level: "info" | "warn" | "error";
-  payload: Record<string, unknown>;
-  created_at: string;
-}
-
-export interface ToolCall {
-  tool_call_id: string;
-  run_id: string;
-  task_id: string;
-  step_id: string | null;
-  tool_name: string;
-  status: ToolCallStatus;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
-  error_code: number | null;
-  duration_ms: number;
-}
-
-export interface Citation {
-  citation_id: string;
-  task_id: string;
-  run_id: string;
-  source_type: "file" | "web" | "context";
-  source_ref: string;
-  label: string;
-}
-
 export interface Artifact {
   artifact_id: string;
   task_id: string;
@@ -234,7 +184,7 @@ export interface TodoItem {
   item_id: string;
   title: string;
   bucket: TodoBucket;
-  status: string;
+  status: TodoStatus;
   type: string;
   due_at: string | null;
   agent_suggestion: string | null;
@@ -319,6 +269,12 @@ export interface SettingsSnapshot {
       language: string;
       auto_launch: boolean;
       theme_mode: ThemeMode;
+      voice_notification_enabled: boolean;
+      voice_type: string;
+      download: {
+        workspace_path: string;
+        ask_before_save_each_file: boolean;
+      };
     };
     floating_ball: {
       auto_snap: boolean;
@@ -329,10 +285,16 @@ export interface SettingsSnapshot {
     memory: {
       enabled: boolean;
       lifecycle: string;
+      work_summary_interval: TimeInterval;
+      profile_refresh_interval: TimeInterval;
     };
     task_automation: {
       inspect_on_startup: boolean;
       inspect_on_file_change: boolean;
+      inspection_interval: TimeInterval;
+      task_sources: string[];
+      remind_before_deadline: boolean;
+      remind_when_stale: boolean;
     };
     data_log: {
       provider: string;
@@ -356,6 +318,68 @@ export interface AsyncJob {
   state: string;
   progress: number;
   created_at: string;
+}
+
+export interface Session {
+  session_id: string;
+  title: string;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Run {
+  run_id: string;
+  task_id: string;
+  session_id: string;
+  source_type: Extract<TaskSourceType, "selected_text" | "dragged_file" | "voice" | "hover_input" | "todo" | "error_signal">;
+  status: RunStatus;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface Step {
+  step_id: string;
+  run_id: string;
+  task_id: string;
+  name: string;
+  status: StepStatus;
+  order_index: number;
+  input_summary: string;
+  output_summary: string;
+}
+
+export interface Event {
+  event_id: string;
+  run_id: string;
+  task_id: string;
+  step_id: string | null;
+  type: string;
+  level: "info" | "warn" | "error";
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ToolCall {
+  tool_call_id: string;
+  run_id: string;
+  task_id: string;
+  step_id: string | null;
+  tool_name: string;
+  status: ToolCallStatus;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  error_code: number | null;
+  duration_ms: number;
+}
+
+export interface Citation {
+  citation_id: string;
+  task_id: string;
+  run_id: string;
+  source_type: "file" | "web" | "context";
+  source_ref: string;
+  label: string;
 }
 
 export interface MemorySummary {
@@ -384,32 +408,29 @@ export interface RetrievalHit {
   summary: string;
 }
 
-export interface RiskDecision {
-  risk_decision_id: string;
-  task_id: string;
-  level: RiskLevel;
-  reason: string;
+export interface PluginManifest {
+  plugin_id: string;
+  name: string;
+  version: string;
+  entry: string;
+  capabilities: string[];
+  permissions: string[];
 }
 
-export interface ApprovalRecord {
-  approval_record_id: string;
-  task_id: string;
-  decision: "approved" | "rejected";
-  created_at: string;
+export interface PluginRuntimeState {
+  plugin_id: string;
+  healthy: boolean;
+  last_heartbeat_at: string | null;
+  current_task_id: string | null;
+  last_error: string | null;
 }
 
-export interface AuditLog {
-  audit_log_id: string;
-  task_id: string;
-  action: string;
-  created_at: string;
-}
-
-export interface Checkpoint {
-  checkpoint_id: string;
-  task_id: string;
-  status: "created" | "restored" | "discarded";
-  created_at: string;
+export interface PluginMetricSnapshot {
+  plugin_id: string;
+  call_count: number;
+  error_count: number;
+  average_duration_ms: number;
+  artifact_count: number;
 }
 
 export interface RpcResponseMeta {
