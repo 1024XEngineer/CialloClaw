@@ -29,6 +29,11 @@ type TaskRecord struct {
 	ApprovalRequest   map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
+	MemoryReadPlans   []map[string]any
+	MemoryWritePlans  []map[string]any
+	StorageWritePlan  map[string]any
+	ArtifactPlans     []map[string]any
+	Notifications     []NotificationRecord
 	LatestEvent       map[string]any
 	LatestToolCall    map[string]any
 	CurrentStepStatus string
@@ -42,6 +47,12 @@ type TaskStepRecord struct {
 	OrderIndex    int
 	InputSummary  string
 	OutputSummary string
+}
+
+type NotificationRecord struct {
+	Method    string
+	Params    map[string]any
+	CreatedAt time.Time
 }
 
 type CreateTaskInput struct {
@@ -177,6 +188,10 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.LatestToolCall = e.buildToolCall(record, "read_file")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": taskID,
+		"status":  record.Status,
+	})
 
 	e.tasks[taskID] = record
 	e.taskOrder = append([]string{taskID}, e.taskOrder...)
@@ -243,6 +258,10 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 	record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "生成输出开始")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
 
 	return record.clone(), true
 }
@@ -267,6 +286,16 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 		record.Artifacts = cloneMapSlice(artifacts)
 	}
 	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	if deliveryResult != nil {
+		record.queueNotification("delivery.ready", map[string]any{
+			"task_id":         record.TaskID,
+			"delivery_result": cloneMap(record.DeliveryResult),
+		})
+	}
 
 	return record.clone(), true
 }
@@ -292,6 +321,14 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, buildRecoveryPoint(record.TaskID, now))
 	record.LatestEvent = e.buildEvent(record, "delivery.ready")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	record.queueNotification("delivery.ready", map[string]any{
+		"task_id":         record.TaskID,
+		"delivery_result": cloneMap(record.DeliveryResult),
+	})
 
 	return record.clone(), true
 }
@@ -322,8 +359,141 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 	record.UpdatedAt = now
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
 
 	return record.clone(), true
+}
+
+func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "waiting_auth"
+	record.CurrentStep = "waiting_authorization"
+	record.UpdatedAt = now
+	record.ApprovalRequest = cloneMap(approvalRequest)
+	if riskLevel, ok := approvalRequest["risk_level"].(string); ok && riskLevel != "" {
+		record.RiskLevel = riskLevel
+	}
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.SecuritySummary = map[string]any{
+		"security_status":        "pending_confirmation",
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 1,
+		"latest_restore_point":   nil,
+	}
+	record.Timeline = advanceTimeline(record.Timeline, "waiting_authorization", "running", "等待用户授权")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "approval.pending")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	record.queueNotification("approval.pending", map[string]any{
+		"task_id":          record.TaskID,
+		"approval_request": cloneMap(record.ApprovalRequest),
+	})
+
+	return record.clone(), true
+}
+
+func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]any, impactScope map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Authorization = cloneMap(authorization)
+	record.ImpactScope = cloneMap(impactScope)
+	record.ApprovalRequest = nil
+	latestRestorePoint := map[string]any(nil)
+	if existingRestorePoint, ok := record.SecuritySummary["latest_restore_point"].(map[string]any); ok {
+		latestRestorePoint = cloneMap(existingRestorePoint)
+	}
+	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePoint)
+	return record.clone(), true
+}
+
+func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, writePlans []map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	if readPlans != nil {
+		record.MemoryReadPlans = cloneMapSlice(readPlans)
+	}
+	if writePlans != nil {
+		record.MemoryWritePlans = cloneMapSlice(writePlans)
+	}
+	return record.clone(), true
+}
+
+func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any, artifactPlans []map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.StorageWritePlan = cloneMap(storageWritePlan)
+	record.ArtifactPlans = cloneMapSlice(artifactPlans)
+	return record.clone(), true
+}
+
+func (e *Engine) PendingNotifications(taskID string) ([]NotificationRecord, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return nil, false
+	}
+
+	return cloneNotifications(record.Notifications), true
+}
+
+func (e *Engine) PendingApprovalRequests(limit, offset int) ([]map[string]any, int) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	items := make([]map[string]any, 0)
+	for _, taskID := range e.taskOrder {
+		record := e.tasks[taskID]
+		if len(record.ApprovalRequest) == 0 {
+			continue
+		}
+		items = append(items, cloneMap(record.ApprovalRequest))
+	}
+
+	total := len(items)
+	if offset >= total {
+		return []map[string]any{}, total
+	}
+
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+
+	return items[offset:end], total
 }
 
 func (e *Engine) TaskDetail(taskID string) (TaskRecord, bool) {
@@ -492,6 +662,11 @@ func (r TaskRecord) clone() TaskRecord {
 	clone.ApprovalRequest = cloneMap(r.ApprovalRequest)
 	clone.Authorization = cloneMap(r.Authorization)
 	clone.ImpactScope = cloneMap(r.ImpactScope)
+	clone.MemoryReadPlans = cloneMapSlice(r.MemoryReadPlans)
+	clone.MemoryWritePlans = cloneMapSlice(r.MemoryWritePlans)
+	clone.StorageWritePlan = cloneMap(r.StorageWritePlan)
+	clone.ArtifactPlans = cloneMapSlice(r.ArtifactPlans)
+	clone.Notifications = cloneNotifications(r.Notifications)
 	clone.LatestEvent = cloneMap(r.LatestEvent)
 	clone.LatestToolCall = cloneMap(r.LatestToolCall)
 	if r.FinishedAt != nil {
@@ -499,6 +674,14 @@ func (r TaskRecord) clone() TaskRecord {
 		clone.FinishedAt = &finishedAt
 	}
 	return clone
+}
+
+func (r *TaskRecord) queueNotification(method string, params map[string]any) {
+	r.Notifications = append(r.Notifications, NotificationRecord{
+		Method:    method,
+		Params:    cloneMap(params),
+		CreatedAt: time.Now(),
+	})
 }
 
 func (r TaskRecord) isFinished() bool {
@@ -558,6 +741,23 @@ func cloneMapSlice(values []map[string]any) []map[string]any {
 	for _, value := range values {
 		result = append(result, cloneMap(value))
 	}
+	return result
+}
+
+func cloneNotifications(values []NotificationRecord) []NotificationRecord {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]NotificationRecord, len(values))
+	for index, value := range values {
+		result[index] = NotificationRecord{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
 	return result
 }
 

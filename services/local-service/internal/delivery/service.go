@@ -6,6 +6,22 @@ import (
 	"strings"
 )
 
+type StorageWritePlan struct {
+	TaskID       string
+	TargetPath   string
+	MimeType     string
+	DeliveryType string
+	Source       string
+}
+
+type ArtifactPersistPlan struct {
+	ArtifactID   string
+	TaskID       string
+	ArtifactType string
+	Path         string
+	MimeType     string
+}
+
 type Service struct{}
 
 func NewService() *Service {
@@ -68,6 +84,45 @@ func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]
 			"mime_type":     "text/markdown",
 		},
 	}
+}
+
+func (s *Service) BuildStorageWritePlan(taskID string, deliveryResult map[string]any) map[string]any {
+	payload, ok := deliveryResult["payload"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	path, _ := payload["path"].(string)
+	if path == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"task_id":       taskID,
+		"target_path":   path,
+		"mime_type":     "text/markdown",
+		"delivery_type": deliveryResult["type"],
+		"source":        "delivery_result",
+	}
+}
+
+func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[string]any) []map[string]any {
+	if len(artifacts) == 0 {
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		result = append(result, map[string]any{
+			"artifact_id":   artifact["artifact_id"],
+			"task_id":       taskID,
+			"artifact_type": artifact["artifact_type"],
+			"path":          artifact["path"],
+			"mime_type":     artifact["mime_type"],
+		})
+	}
+
+	return result
 }
 
 func slugify(title, fallback string) string {

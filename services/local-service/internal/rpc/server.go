@@ -35,6 +35,7 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.handleHealthz)
 	mux.HandleFunc("/rpc", server.handleHTTPRPC)
+	mux.HandleFunc("/events", server.handleDebugEvents)
 
 	server.debugHTTPServer = &http.Server{
 		Addr:              cfg.DebugHTTPAddress,
@@ -119,6 +120,33 @@ func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(s.dispatch(request))
 }
 
+func (s *Server) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	taskID := r.URL.Query().Get("task_id")
+	if taskID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "task_id is required"})
+		return
+	}
+
+	events, err := s.orchestrator.PendingNotifications(taskID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"task_id": taskID,
+		"items":   events,
+	})
+}
+
 func (s *Server) handleStreamConn(conn net.Conn) {
 	defer conn.Close()
 
@@ -178,4 +206,8 @@ func (s *Server) dispatch(request requestEnvelope) any {
 	}
 
 	return newSuccessEnvelope(request.ID, data, s.nowRFC3339())
+}
+
+func (s *Server) nowRFC3339() string {
+	return s.now().Format(time.RFC3339)
 }
