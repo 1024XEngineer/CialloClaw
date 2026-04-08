@@ -12,18 +12,25 @@ export const TASK_STATUSES = [
   "ended_unfinished",
 ] as const;
 
+// TASK_LIST_GROUPS 定义共享常量。
 export const TASK_LIST_GROUPS = ["unfinished", "finished"] as const;
 
+// TODO_BUCKETS 定义共享常量。
 export const TODO_BUCKETS = ["upcoming", "later", "recurring_rule", "closed"] as const;
 
+// TASK_STEP_STATUSES 定义共享常量。
 export const TASK_STEP_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
 
+// STEP_STATUSES 定义共享常量。
 export const STEP_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
 
+// TOOL_CALL_STATUSES 定义共享常量。
 export const TOOL_CALL_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
 
+// RISK_LEVELS 定义共享常量。
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
 
+// SECURITY_STATUSES 定义共享常量。
 export const SECURITY_STATUSES = [
   "normal",
   "pending_confirmation",
@@ -33,6 +40,7 @@ export const SECURITY_STATUSES = [
   "recovered",
 ] as const;
 
+// DELIVERY_TYPES 定义共享常量。
 export const DELIVERY_TYPES = [
   "bubble",
   "workspace_document",
@@ -42,10 +50,13 @@ export const DELIVERY_TYPES = [
   "task_detail",
 ] as const;
 
+// VOICE_SESSION_STATES 定义共享常量。
 export const VOICE_SESSION_STATES = ["listening", "locked", "processing", "cancelled", "finished"] as const;
 
+// REQUEST_SOURCES 定义共享常量。
 export const REQUEST_SOURCES = ["floating_ball", "dashboard", "tray_panel"] as const;
 
+// REQUEST_TRIGGERS 定义共享常量。
 export const REQUEST_TRIGGERS = [
   "voice_commit",
   "hover_text_input",
@@ -55,77 +66,124 @@ export const REQUEST_TRIGGERS = [
   "recommendation_click",
 ] as const;
 
+// INPUT_TYPES 定义共享常量。
 export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 
+// INPUT_MODES 定义共享常量。
 export const INPUT_MODES = ["voice", "text"] as const;
 
+// TASK_SOURCE_TYPES 定义共享常量。
 export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"] as const;
 
+// BUBBLE_MESSAGE_TYPES 定义共享常量。
 export const BUBBLE_MESSAGE_TYPES = ["status", "intent_confirm", "result"] as const;
 
+// APPROVAL_DECISIONS 定义共享常量。
 export const APPROVAL_DECISIONS = ["allow_once", "deny_once"] as const;
 
+// APPROVAL_STATUSES 定义共享常量。
 export const APPROVAL_STATUSES = ["pending", "approved", "denied"] as const;
 
+// SETTINGS_SCOPES 定义共享常量。
 export const SETTINGS_SCOPES = ["all", "general", "floating_ball", "memory", "task_automation", "data_log"] as const;
 
+// APPLY_MODES 定义共享常量。
 export const APPLY_MODES = ["immediate", "restart_required", "next_task_effective"] as const;
 
+// THEME_MODES 定义共享常量。
 export const THEME_MODES = ["follow_system", "light", "dark"] as const;
 
+// POSITION_MODES 定义共享常量。
 export const POSITION_MODES = ["fixed", "draggable"] as const;
 
+// TODO_STATUSES 定义共享常量。
 export const TODO_STATUSES = ["normal", "due_today", "overdue", "completed", "cancelled"] as const;
 
+// RECOMMENDATION_SCENES 定义共享常量。
 export const RECOMMENDATION_SCENES = ["hover", "selected_text", "idle", "error"] as const;
 
+// RECOMMENDATION_FEEDBACKS 定义共享常量。
 export const RECOMMENDATION_FEEDBACKS = ["positive", "negative", "ignore"] as const;
 
+// TASK_CONTROL_ACTIONS 定义共享常量。
 export const TASK_CONTROL_ACTIONS = ["pause", "resume", "cancel", "restart"] as const;
 
+// TIME_UNITS 定义共享常量。
 export const TIME_UNITS = ["minute", "hour", "day", "week"] as const;
 
+// RUN_STATUSES 定义共享常量。
 export const RUN_STATUSES = ["processing", "completed"] as const;
 
+// TaskStatus 定义当前模块的数据结构。
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+// TaskListGroup 定义当前模块的数据结构。
 export type TaskListGroup = (typeof TASK_LIST_GROUPS)[number];
+// TodoBucket 定义当前模块的数据结构。
 export type TodoBucket = (typeof TODO_BUCKETS)[number];
+// TaskStepStatus 定义当前模块的数据结构。
 export type TaskStepStatus = (typeof TASK_STEP_STATUSES)[number];
+// StepStatus 定义当前模块的数据结构。
 export type StepStatus = (typeof STEP_STATUSES)[number];
+// ToolCallStatus 定义当前模块的数据结构。
 export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number];
+// RiskLevel 定义当前模块的数据结构。
 export type RiskLevel = (typeof RISK_LEVELS)[number];
+// SecurityStatus 定义当前模块的数据结构。
 export type SecurityStatus = (typeof SECURITY_STATUSES)[number];
+// DeliveryType 定义当前模块的数据结构。
 export type DeliveryType = (typeof DELIVERY_TYPES)[number];
+// VoiceSessionState 描述当前模块状态。
 export type VoiceSessionState = (typeof VOICE_SESSION_STATES)[number];
+// RequestSource 定义当前模块的数据结构。
 export type RequestSource = (typeof REQUEST_SOURCES)[number];
+// RequestTrigger 定义当前模块的数据结构。
 export type RequestTrigger = (typeof REQUEST_TRIGGERS)[number];
+// InputType 定义当前模块的数据结构。
 export type InputType = (typeof INPUT_TYPES)[number];
+// InputMode 定义当前模块的数据结构。
 export type InputMode = (typeof INPUT_MODES)[number];
+// TaskSourceType 定义当前模块的数据结构。
 export type TaskSourceType = (typeof TASK_SOURCE_TYPES)[number];
+// BubbleMessageType 定义当前模块的数据结构。
 export type BubbleMessageType = (typeof BUBBLE_MESSAGE_TYPES)[number];
+// ApprovalDecision 定义当前模块的数据结构。
 export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
+// ApprovalStatus 定义当前模块的数据结构。
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+// SettingsScope 定义当前模块的数据结构。
 export type SettingsScope = (typeof SETTINGS_SCOPES)[number];
+// ApplyMode 定义当前模块的数据结构。
 export type ApplyMode = (typeof APPLY_MODES)[number];
+// ThemeMode 定义当前模块的数据结构。
 export type ThemeMode = (typeof THEME_MODES)[number];
+// PositionMode 定义当前模块的数据结构。
 export type PositionMode = (typeof POSITION_MODES)[number];
+// TodoStatus 定义当前模块的数据结构。
 export type TodoStatus = (typeof TODO_STATUSES)[number];
+// RecommendationScene 定义当前模块的数据结构。
 export type RecommendationScene = (typeof RECOMMENDATION_SCENES)[number];
+// RecommendationFeedback 定义当前模块的数据结构。
 export type RecommendationFeedback = (typeof RECOMMENDATION_FEEDBACKS)[number];
+// TaskControlAction 定义当前模块的数据结构。
 export type TaskControlAction = (typeof TASK_CONTROL_ACTIONS)[number];
+// TimeUnit 定义当前模块的数据结构。
 export type TimeUnit = (typeof TIME_UNITS)[number];
+// RunStatus 定义当前模块的数据结构。
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
+// IntentPayload 定义当前模块的接口约束。
 export interface IntentPayload {
   name: string;
   arguments: Record<string, unknown>;
 }
 
+// TimeInterval 定义当前模块的接口约束。
 export interface TimeInterval {
   unit: TimeUnit;
   value: number;
 }
 
+// Task 定义当前模块的接口约束。
 export interface Task {
   task_id: string;
   title: string;
@@ -139,6 +197,7 @@ export interface Task {
   finished_at: string | null;
 }
 
+// TaskStep 定义当前模块的接口约束。
 export interface TaskStep {
   step_id: string;
   task_id: string;
@@ -149,6 +208,7 @@ export interface TaskStep {
   output_summary: string;
 }
 
+// BubbleMessage 定义当前模块的接口约束。
 export interface BubbleMessage {
   bubble_id: string;
   task_id: string;
@@ -159,12 +219,14 @@ export interface BubbleMessage {
   created_at: string;
 }
 
+// DeliveryPayload 定义当前模块的接口约束。
 export interface DeliveryPayload {
   path: string | null;
   url: string | null;
   task_id: string | null;
 }
 
+// DeliveryResult 定义当前模块的接口约束。
 export interface DeliveryResult {
   type: DeliveryType;
   title: string;
@@ -172,6 +234,7 @@ export interface DeliveryResult {
   preview_text: string;
 }
 
+// Artifact 定义当前模块的接口约束。
 export interface Artifact {
   artifact_id: string;
   task_id: string;
@@ -181,6 +244,7 @@ export interface Artifact {
   mime_type: string;
 }
 
+// TodoItem 定义当前模块的接口约束。
 export interface TodoItem {
   item_id: string;
   title: string;
@@ -191,6 +255,7 @@ export interface TodoItem {
   agent_suggestion: string | null;
 }
 
+// RecurringRule 定义当前模块的接口约束。
 export interface RecurringRule {
   rule_id: string;
   title: string;
@@ -200,6 +265,7 @@ export interface RecurringRule {
   enabled: boolean;
 }
 
+// ApprovalRequest 定义当前模块的接口约束。
 export interface ApprovalRequest {
   approval_id: string;
   task_id: string;
@@ -211,6 +277,7 @@ export interface ApprovalRequest {
   created_at: string;
 }
 
+// AuthorizationRecord 定义当前模块的接口约束。
 export interface AuthorizationRecord {
   authorization_record_id: string;
   task_id: string;
@@ -221,6 +288,7 @@ export interface AuthorizationRecord {
   created_at: string;
 }
 
+// AuditRecord 定义当前模块的接口约束。
 export interface AuditRecord {
   audit_id: string;
   task_id: string;
@@ -232,6 +300,7 @@ export interface AuditRecord {
   created_at: string;
 }
 
+// ImpactScope 定义当前模块的接口约束。
 export interface ImpactScope {
   files: string[];
   webpages: string[];
@@ -240,6 +309,7 @@ export interface ImpactScope {
   overwrite_or_delete_risk: boolean;
 }
 
+// RecoveryPoint 定义当前模块的接口约束。
 export interface RecoveryPoint {
   recovery_point_id: string;
   task_id: string;
@@ -248,6 +318,7 @@ export interface RecoveryPoint {
   objects: string[];
 }
 
+// TokenCostSummary 定义当前模块的接口约束。
 export interface TokenCostSummary {
   current_task_tokens: number;
   current_task_cost: number;
@@ -258,12 +329,14 @@ export interface TokenCostSummary {
   budget_auto_downgrade: boolean;
 }
 
+// MirrorReference 定义当前模块的接口约束。
 export interface MirrorReference {
   memory_id: string;
   reason: string;
   summary: string;
 }
 
+// SettingsSnapshot 定义当前模块的接口约束。
 export interface SettingsSnapshot {
   settings: {
     general: {
@@ -304,6 +377,7 @@ export interface SettingsSnapshot {
   };
 }
 
+// SettingItem 定义当前模块的接口约束。
 export interface SettingItem {
   key: string;
   label: string;
@@ -313,6 +387,7 @@ export interface SettingItem {
   need_second_confirm: boolean;
 }
 
+// AsyncJob 定义当前模块的接口约束。
 export interface AsyncJob {
   job_id: string;
   task_id: string;
@@ -321,6 +396,7 @@ export interface AsyncJob {
   created_at: string;
 }
 
+// Session 定义当前模块的接口约束。
 export interface Session {
   session_id: string;
   title: string;
@@ -329,6 +405,7 @@ export interface Session {
   updated_at: string;
 }
 
+// Run 定义当前模块的接口约束。
 export interface Run {
   run_id: string;
   task_id: string;
@@ -339,6 +416,7 @@ export interface Run {
   finished_at: string | null;
 }
 
+// Step 定义当前模块的接口约束。
 export interface Step {
   step_id: string;
   run_id: string;
@@ -350,6 +428,7 @@ export interface Step {
   output_summary: string;
 }
 
+// Event 定义当前模块的接口约束。
 export interface Event {
   event_id: string;
   run_id: string;
@@ -361,6 +440,7 @@ export interface Event {
   created_at: string;
 }
 
+// ToolCall 定义当前模块的接口约束。
 export interface ToolCall {
   tool_call_id: string;
   run_id: string;
@@ -374,6 +454,7 @@ export interface ToolCall {
   duration_ms: number;
 }
 
+// Citation 定义当前模块的接口约束。
 export interface Citation {
   citation_id: string;
   task_id: string;
@@ -383,6 +464,7 @@ export interface Citation {
   label: string;
 }
 
+// MemorySummary 定义当前模块的接口约束。
 export interface MemorySummary {
   memory_summary_id: string;
   task_id: string;
@@ -391,6 +473,7 @@ export interface MemorySummary {
   created_at: string;
 }
 
+// MemoryCandidate 定义当前模块的接口约束。
 export interface MemoryCandidate {
   memory_candidate_id: string;
   task_id: string;
@@ -399,6 +482,7 @@ export interface MemoryCandidate {
   source: string;
 }
 
+// RetrievalHit 定义当前模块的接口约束。
 export interface RetrievalHit {
   retrieval_hit_id: string;
   task_id: string;
@@ -409,6 +493,7 @@ export interface RetrievalHit {
   summary: string;
 }
 
+// PluginManifest 定义当前模块的接口约束。
 export interface PluginManifest {
   plugin_id: string;
   name: string;
@@ -418,6 +503,7 @@ export interface PluginManifest {
   permissions: string[];
 }
 
+// PluginRuntimeState 定义当前模块的接口约束。
 export interface PluginRuntimeState {
   plugin_id: string;
   healthy: boolean;
@@ -426,6 +512,7 @@ export interface PluginRuntimeState {
   last_error: string | null;
 }
 
+// PluginMetricSnapshot 定义当前模块的接口约束。
 export interface PluginMetricSnapshot {
   plugin_id: string;
   call_count: number;
@@ -434,22 +521,26 @@ export interface PluginMetricSnapshot {
   artifact_count: number;
 }
 
+// RpcResponseMeta 定义当前模块的接口约束。
 export interface RpcResponseMeta {
   server_time: string;
 }
 
+// RpcResult 定义当前模块的接口约束。
 export interface RpcResult<T> {
   data: T;
   meta: RpcResponseMeta;
   warnings: string[];
 }
 
+// RpcSuccessResponse 定义当前模块的接口约束。
 export interface RpcSuccessResponse<T> {
   jsonrpc: "2.0";
   id: string;
   result: RpcResult<T>;
 }
 
+// RpcErrorResponse 定义当前模块的接口约束。
 export interface RpcErrorResponse {
   jsonrpc: "2.0";
   id: string;

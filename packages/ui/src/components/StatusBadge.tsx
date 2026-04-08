@@ -1,6 +1,7 @@
 // 该文件定义共享状态徽章组件。 
 import type { ReactNode } from "react";
 
+// tones 维护状态徽章的颜色映射。
 const tones: Record<string, string> = {
   confirming_intent: "bg-sky-400/20 text-sky-100",
   processing: "bg-cyan-400/20 text-cyan-100",
@@ -28,6 +29,7 @@ const tones: Record<string, string> = {
   red: "bg-rose-400/20 text-rose-100",
 };
 
+// StatusBadge 处理当前模块的相关逻辑。
 export function StatusBadge({ tone, children }: { tone: string; children: ReactNode }) {
   return (
     <span className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${tones[tone] ?? tones.status}`}>
