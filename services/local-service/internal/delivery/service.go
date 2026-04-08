@@ -25,6 +25,15 @@ type ArtifactPersistPlan struct {
 	MimeType     string
 }
 
+// ApprovalExecutionPlan 描述授权通过后继续执行所需的最小交付计划。
+type ApprovalExecutionPlan struct {
+	TaskID           string
+	DeliveryType     string
+	ResultTitle      string
+	PreviewText      string
+	ResultBubbleText string
+}
+
 // Service 提供当前模块的服务能力。
 type Service struct{}
 
@@ -134,6 +143,42 @@ func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[strin
 	}
 
 	return result
+}
+
+// BuildApprovalExecutionPlan 构建授权通过后的继续执行计划。
+func (s *Service) BuildApprovalExecutionPlan(taskID string, intent map[string]any) map[string]any {
+	intentName, _ := intent["name"].(string)
+	plan := map[string]any{
+		"task_id":            taskID,
+		"delivery_type":      "workspace_document",
+		"result_title":       "处理结果",
+		"preview_text":       "已为你写入文档并打开",
+		"result_bubble_text": "结果已经生成，可直接查看。",
+	}
+
+	switch intentName {
+	case "rewrite":
+		plan["result_title"] = "改写结果"
+		plan["result_bubble_text"] = "内容已经按要求改写完成，可直接查看。"
+	case "translate":
+		plan["delivery_type"] = "bubble"
+		plan["result_title"] = "翻译结果"
+		plan["preview_text"] = "结果已通过气泡返回"
+		plan["result_bubble_text"] = "翻译结果已经生成，可直接查看。"
+	case "explain":
+		plan["delivery_type"] = "bubble"
+		plan["result_title"] = "解释结果"
+		plan["preview_text"] = "结果已通过气泡返回"
+		plan["result_bubble_text"] = "这段内容的意思已经整理好了。"
+	case "write_file":
+		plan["result_title"] = "文件写入结果"
+		plan["result_bubble_text"] = "文件已经生成，可直接查看。"
+	case "summarize":
+		plan["result_title"] = "总结结果"
+		plan["result_bubble_text"] = "总结结果已经生成，可直接查看。"
+	}
+
+	return plan
 }
 
 // slugify 处理当前模块的相关逻辑。

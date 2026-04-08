@@ -29,6 +29,7 @@ type TaskRecord struct {
 	MirrorReferences  []map[string]any
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
+	PendingExecution  map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
 	MemoryReadPlans   []map[string]any
@@ -386,6 +387,11 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 
 // MarkWaitingApproval 处理当前模块的相关逻辑。
 func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	return e.MarkWaitingApprovalWithPlan(taskID, approvalRequest, nil, bubbleMessage)
+}
+
+// MarkWaitingApprovalWithPlan 将任务切换为等待授权，并附带待恢复执行计划。
+func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[string]any, pendingExecution map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -399,6 +405,7 @@ func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]a
 	record.CurrentStep = "waiting_authorization"
 	record.UpdatedAt = now
 	record.ApprovalRequest = cloneMap(approvalRequest)
+	record.PendingExecution = cloneMap(pendingExecution)
 	if riskLevel, ok := approvalRequest["risk_level"].(string); ok && riskLevel != "" {
 		record.RiskLevel = riskLevel
 	}
@@ -437,12 +444,93 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 	record.Authorization = cloneMap(authorization)
 	record.ImpactScope = cloneMap(impactScope)
 	record.ApprovalRequest = nil
+	record.PendingExecution = nil
 	latestRestorePoint := map[string]any(nil)
 	if existingRestorePoint, ok := record.SecuritySummary["latest_restore_point"].(map[string]any); ok {
 		latestRestorePoint = cloneMap(existingRestorePoint)
 	}
 	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePoint)
 	return record.clone(), true
+}
+
+// ResumeAfterApproval 将已授权任务恢复到处理中状态，并保留后续执行计划。
+func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "processing"
+	record.CurrentStep = "authorized_execution"
+	record.UpdatedAt = now
+	record.Authorization = cloneMap(authorization)
+	record.ImpactScope = cloneMap(impactScope)
+	record.ApprovalRequest = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+	record.Timeline = advanceTimeline(record.Timeline, "authorized_execution", "running", "授权通过，继续执行")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+
+	return record.clone(), true
+}
+
+// DenyAfterApproval 将已拒绝授权的任务收敛到结束状态。
+func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "cancelled"
+	record.CurrentStep = "authorization_denied"
+	record.UpdatedAt = now
+	record.FinishedAt = &now
+	record.Authorization = cloneMap(authorization)
+	record.ImpactScope = cloneMap(impactScope)
+	record.ApprovalRequest = nil
+	record.PendingExecution = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.SecuritySummary = map[string]any{
+		"security_status":        "intercepted",
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   latestRestorePointFromSummary(record.SecuritySummary),
+	}
+	record.Timeline = advanceTimeline(record.Timeline, "authorization_denied", "cancelled", "用户拒绝授权，任务已结束")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+
+	return record.clone(), true
+}
+
+// PendingExecutionPlan 返回等待授权任务保存的执行计划。
+func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok || len(record.PendingExecution) == 0 {
+		return nil, false
+	}
+
+	return cloneMap(record.PendingExecution), true
 }
 
 // SetMemoryPlans 设置MemoryPlans。
@@ -708,6 +796,7 @@ func (r TaskRecord) clone() TaskRecord {
 	clone.MirrorReferences = cloneMapSlice(r.MirrorReferences)
 	clone.SecuritySummary = cloneMap(r.SecuritySummary)
 	clone.ApprovalRequest = cloneMap(r.ApprovalRequest)
+	clone.PendingExecution = cloneMap(r.PendingExecution)
 	clone.Authorization = cloneMap(r.Authorization)
 	clone.ImpactScope = cloneMap(r.ImpactScope)
 	clone.MemoryReadPlans = cloneMapSlice(r.MemoryReadPlans)
@@ -867,6 +956,17 @@ func buildSecuritySummary(riskLevel string, latestRestorePoint map[string]any) m
 		"pending_authorizations": 0,
 		"latest_restore_point":   latestRestorePoint,
 	}
+}
+
+func latestRestorePointFromSummary(summary map[string]any) map[string]any {
+	if summary == nil {
+		return nil
+	}
+	latestRestorePoint, ok := summary["latest_restore_point"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloneMap(latestRestorePoint)
 }
 
 // buildRecoveryPoint 处理当前模块的相关逻辑。

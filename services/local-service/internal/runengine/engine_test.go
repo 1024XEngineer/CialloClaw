@@ -79,6 +79,8 @@ func TestEngineTaskLifecycle(t *testing.T) {
 // TestEngineAuthorizationAndHandoffState 验证EngineAuthorizationAndHandoffState。
 func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	engine := NewEngine()
+	fixedTime := time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return fixedTime }
 	task := engine.CreateTask(CreateTaskInput{
 		SessionID:   "sess_auth",
 		Title:       "需要授权的任务",
@@ -105,13 +107,23 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 		"reason":         "policy_requires_authorization",
 		"status":         "pending",
 	}
+	pendingExecution := map[string]any{
+		"task_id":            task.TaskID,
+		"delivery_type":      "workspace_document",
+		"result_title":       "文件写入结果",
+		"preview_text":       "已为你写入文档并打开",
+		"result_bubble_text": "文件已经生成，可直接查看。",
+	}
 	bubble := map[string]any{"task_id": task.TaskID, "type": "status", "text": "等待授权"}
-	waitingTask, ok := engine.MarkWaitingApproval(task.TaskID, approvalRequest, bubble)
+	waitingTask, ok := engine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	if !ok {
 		t.Fatal("expected waiting approval transition to succeed")
 	}
 	if waitingTask.Status != "waiting_auth" {
 		t.Fatalf("expected waiting_auth status, got %s", waitingTask.Status)
+	}
+	if waitingTask.PendingExecution["delivery_type"] != "workspace_document" {
+		t.Fatal("expected pending execution plan to be stored with waiting task")
 	}
 
 	memoryReadPlans := []map[string]any{{"kind": "retrieval", "task_id": task.TaskID}}
@@ -144,5 +156,49 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	lastNotification := notifications[len(notifications)-1]
 	if lastNotification.Method != "approval.pending" {
 		t.Fatalf("expected last notification to be approval.pending, got %s", lastNotification.Method)
+	}
+
+	processingBubble := map[string]any{"task_id": task.TaskID, "type": "status", "text": "继续执行"}
+	resumedTask, ok := engine.ResumeAfterApproval(task.TaskID, map[string]any{"decision": "allow_once"}, map[string]any{"files": []string{}}, processingBubble)
+	if !ok {
+		t.Fatal("expected authorized task to resume")
+	}
+	if resumedTask.Status != "processing" {
+		t.Fatalf("expected resumed task to return to processing, got %s", resumedTask.Status)
+	}
+
+	deniedEngine := NewEngine()
+	deniedTask := deniedEngine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_deny",
+		Title:       "拒绝授权的任务",
+		SourceType:  "dragged_file",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"require_authorization": true}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "red",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "开始处理文件",
+			OutputSummary: "等待后续处理",
+		}},
+	})
+	deniedApprovalRequest := map[string]any{
+		"approval_id":    "appr_deny",
+		"task_id":        deniedTask.TaskID,
+		"operation_name": "write_file",
+		"risk_level":     "red",
+		"target_object":  "workspace_document",
+		"reason":         "policy_requires_authorization",
+		"status":         "pending",
+	}
+	_, _ = deniedEngine.MarkWaitingApproval(deniedTask.TaskID, deniedApprovalRequest, bubble)
+	deniedResult, ok := deniedEngine.DenyAfterApproval(deniedTask.TaskID, map[string]any{"decision": "deny_once"}, map[string]any{"files": []string{}}, map[string]any{"task_id": deniedTask.TaskID, "type": "status", "text": "已拒绝"})
+	if !ok {
+		t.Fatal("expected deny flow to succeed")
+	}
+	if deniedResult.Status != "cancelled" {
+		t.Fatalf("expected denied task to be cancelled, got %s", deniedResult.Status)
 	}
 }
