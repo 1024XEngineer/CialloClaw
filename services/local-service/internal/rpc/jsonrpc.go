@@ -1,3 +1,4 @@
+// 该文件负责 JSON-RPC 协议结构、解析与响应封装。
 package rpc
 
 import (

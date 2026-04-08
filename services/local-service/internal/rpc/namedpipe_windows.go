@@ -1,5 +1,6 @@
 //go:build windows
 
+// 该文件负责 Windows 下的 Named Pipe 监听骨架。
 package rpc
 
 import (

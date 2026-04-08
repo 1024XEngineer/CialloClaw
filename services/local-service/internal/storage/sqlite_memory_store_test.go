@@ -1,3 +1,4 @@
+// 该测试文件验证存储层的数据行为。
 package storage
 
 import (

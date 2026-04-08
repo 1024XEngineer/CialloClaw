@@ -1,3 +1,4 @@
+// 该文件负责恢复点层的最小骨架。
 package checkpoint
 
 type Service struct{}

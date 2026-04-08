@@ -1,3 +1,4 @@
+// 该文件负责审计层的最小骨架。
 package audit
 
 type Service struct{}

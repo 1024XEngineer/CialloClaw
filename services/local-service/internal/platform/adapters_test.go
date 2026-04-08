@@ -1,3 +1,4 @@
+// 该测试文件验证平台抽象层行为。
 package platform
 
 import (

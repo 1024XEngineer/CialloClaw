@@ -1,3 +1,4 @@
+// 该文件负责交付结果、气泡消息与 artifact 计划的组装。
 package delivery
 
 import (

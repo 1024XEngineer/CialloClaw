@@ -1,3 +1,4 @@
+// 该文件负责本地服务配置结构与默认值。
 package config
 
 type ModelConfig struct {

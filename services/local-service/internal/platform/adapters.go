@@ -1,3 +1,4 @@
+// 该文件负责跨平台抽象接口或平台适配实现。
 package platform
 
 import (

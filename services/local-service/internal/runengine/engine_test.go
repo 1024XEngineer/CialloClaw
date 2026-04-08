@@ -1,3 +1,4 @@
+// 该测试文件验证运行时状态机与通知队列行为。
 package runengine
 
 import (

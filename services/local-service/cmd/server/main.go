@@ -1,3 +1,4 @@
+// 该入口负责启动本地 Harness 服务。
 package main
 
 import (

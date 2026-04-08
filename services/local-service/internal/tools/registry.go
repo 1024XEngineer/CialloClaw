@@ -1,3 +1,4 @@
+// 该文件负责工具注册表与工具元数据。
 package tools
 
 type Registry struct {
