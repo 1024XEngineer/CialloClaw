@@ -64,4 +64,82 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	if total != 1 || len(finishedTasks) != 1 {
 		t.Fatalf("expected completed task to appear in finished list, total=%d len=%d", total, len(finishedTasks))
 	}
+
+	notifications, ok := engine.PendingNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected notifications to be available for task")
+	}
+	if len(notifications) < 3 {
+		t.Fatalf("expected lifecycle notifications to be queued, got %d", len(notifications))
+	}
+}
+
+func TestEngineAuthorizationAndHandoffState(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_auth",
+		Title:       "需要授权的任务",
+		SourceType:  "dragged_file",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"require_authorization": true}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "red",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "开始处理文件",
+			OutputSummary: "等待后续处理",
+		}},
+	})
+
+	approvalRequest := map[string]any{
+		"approval_id":    "appr_test",
+		"task_id":        task.TaskID,
+		"operation_name": "write_file",
+		"risk_level":     "red",
+		"target_object":  "workspace_document",
+		"reason":         "policy_requires_authorization",
+		"status":         "pending",
+	}
+	bubble := map[string]any{"task_id": task.TaskID, "type": "status", "text": "等待授权"}
+	waitingTask, ok := engine.MarkWaitingApproval(task.TaskID, approvalRequest, bubble)
+	if !ok {
+		t.Fatal("expected waiting approval transition to succeed")
+	}
+	if waitingTask.Status != "waiting_auth" {
+		t.Fatalf("expected waiting_auth status, got %s", waitingTask.Status)
+	}
+
+	memoryReadPlans := []map[string]any{{"kind": "retrieval", "task_id": task.TaskID}}
+	memoryWritePlans := []map[string]any{{"kind": "summary_write", "task_id": task.TaskID}}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, memoryReadPlans, memoryWritePlans); !ok {
+		t.Fatal("expected memory handoff plans to be stored")
+	}
+
+	storagePlan := map[string]any{"task_id": task.TaskID, "target_path": "D:/CialloClawWorkspace/result.md"}
+	artifactPlans := []map[string]any{{"task_id": task.TaskID, "artifact_id": "art_test"}}
+	if _, ok := engine.SetDeliveryPlans(task.TaskID, storagePlan, artifactPlans); !ok {
+		t.Fatal("expected delivery handoff plans to be stored")
+	}
+
+	record, ok := engine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to remain available")
+	}
+	if len(record.MemoryReadPlans) != 1 || len(record.MemoryWritePlans) != 1 {
+		t.Fatal("expected memory handoff plans to be present on task record")
+	}
+	if record.StorageWritePlan["target_path"] != "D:/CialloClawWorkspace/result.md" {
+		t.Fatal("expected storage handoff target path to be stored")
+	}
+
+	notifications, ok := engine.PendingNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected approval notifications to be available")
+	}
+	lastNotification := notifications[len(notifications)-1]
+	if lastNotification.Method != "approval.pending" {
+		t.Fatalf("expected last notification to be approval.pending, got %s", lastNotification.Method)
+	}
 }
