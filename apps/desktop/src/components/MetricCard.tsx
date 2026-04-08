@@ -5,6 +5,7 @@ type MetricCardProps = {
   detail: string;
 };
 
+// MetricCard 处理当前模块的相关逻辑。
 export function MetricCard({ label, value, detail }: MetricCardProps) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">

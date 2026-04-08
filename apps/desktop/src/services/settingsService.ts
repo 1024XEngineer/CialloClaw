@@ -2,10 +2,13 @@
 import type { SettingsSnapshot } from "@cialloclaw/protocol";
 import { loadStoredValue, saveStoredValue } from "@/platform/storage";
 
+// SETTINGS_KEY 定义共享常量。
 const SETTINGS_KEY = "cialloclaw.settings";
 
+// DesktopSettings 定义当前模块的数据结构。
 export type DesktopSettings = SettingsSnapshot;
 
+// loadSettings 处理当前模块的相关逻辑。
 export function loadSettings(): DesktopSettings {
   return (
     loadStoredValue<DesktopSettings>(SETTINGS_KEY) ?? {
@@ -59,6 +62,7 @@ export function loadSettings(): DesktopSettings {
   );
 }
 
+// saveSettings 处理当前模块的相关逻辑。
 export function saveSettings(settings: DesktopSettings) {
   saveStoredValue(SETTINGS_KEY, settings);
 }

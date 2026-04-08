@@ -5,6 +5,7 @@ import { MetricCard } from "@/components/MetricCard";
 import { mapTaskToDetailViewModel } from "@/models/TaskDetailViewModel";
 import { useTaskStore } from "@/stores/taskStore";
 
+// DashboardApp 处理当前模块的相关逻辑。
 export function DashboardApp() {
   const tasks = useTaskStore((state) => state.tasks).map(mapTaskToDetailViewModel);
 

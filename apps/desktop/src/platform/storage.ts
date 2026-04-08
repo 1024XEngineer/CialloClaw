@@ -8,6 +8,7 @@ export function loadStoredValue<T>(key: string): T | null {
   return JSON.parse(rawValue) as T;
 }
 
+// saveStoredValue 处理当前模块的相关逻辑。
 export function saveStoredValue<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }

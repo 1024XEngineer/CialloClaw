@@ -3,6 +3,7 @@ import { Cpu, Database, MonitorCog } from "lucide-react";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { loadSettings } from "@/services/settingsService";
 
+// ControlPanelApp 控制PanelApp。
 export function ControlPanelApp() {
   const settings = loadSettings();
   const snapshot = settings.settings;

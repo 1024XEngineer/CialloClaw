@@ -6,6 +6,7 @@ import { useShellBallStore } from "@/stores/shellBallStore";
 import { useTaskStore } from "@/stores/taskStore";
 import { formatStatusLabel } from "@/utils/formatters";
 
+// ShellBallApp 处理当前模块的相关逻辑。
 export function ShellBallApp() {
   const activeTaskId = useTaskStore((state) => state.activeTaskId);
   const activeTask = useTaskStore((state) => state.tasks.find((task) => task.task_id === state.activeTaskId) ?? null);

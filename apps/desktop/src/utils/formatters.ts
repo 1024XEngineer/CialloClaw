@@ -16,6 +16,7 @@ export function formatStatusLabel(status: string) {
   return statusLabels[status] ?? status.replaceAll("_", " ");
 }
 
+// formatTimestamp 处理当前模块的相关逻辑。
 export function formatTimestamp(value: string | null) {
   if (!value) {
     return "未开始";

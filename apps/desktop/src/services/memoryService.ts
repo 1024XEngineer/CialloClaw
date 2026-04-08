@@ -3,6 +3,7 @@ import type { AgentMirrorOverviewGetResult, RequestMeta } from "@cialloclaw/prot
 import { RPC_METHODS } from "@cialloclaw/protocol";
 import { rpcClient } from "@/rpc/client";
 
+// getMirrorOverview 处理当前模块的相关逻辑。
 export function getMirrorOverview(taskId: string) {
   const requestMeta: RequestMeta = {
     trace_id: `trace_mirror_${taskId}`,

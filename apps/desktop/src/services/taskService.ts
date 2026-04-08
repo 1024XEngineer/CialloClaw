@@ -3,6 +3,7 @@ import type { RequestMeta, Task } from "@cialloclaw/protocol";
 import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";
 
+// bootstrapTask 处理当前模块的相关逻辑。
 export async function bootstrapTask(title: string) {
   const requestMeta: RequestMeta = {
     trace_id: `trace_task_${Date.now()}`,
@@ -37,6 +38,7 @@ export async function bootstrapTask(title: string) {
   return taskResult.task;
 }
 
+// listActiveTasks 处理当前模块的相关逻辑。
 export function listActiveTasks(): Task[] {
   return useTaskStore.getState().tasks;
 }

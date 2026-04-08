@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import type { Task } from "@cialloclaw/protocol";
 
+// seededTask 定义当前模块的基础变量。
 const seededTask: Task = {
   task_id: "task_demo_001",
   title: "整理拖入的规划笔记并输出重点摘要",
@@ -20,6 +21,7 @@ const seededTask: Task = {
   finished_at: null,
 };
 
+// TaskState 描述当前模块状态。
 type TaskState = {
   tasks: Task[];
   activeTaskId: string | null;
@@ -27,6 +29,7 @@ type TaskState = {
   setActiveTaskId: (taskId: string | null) => void;
 };
 
+// useTaskStore 暴露当前模块的状态容器。
 export const useTaskStore = create<TaskState>((set) => ({
   tasks: [seededTask],
   activeTaskId: seededTask.task_id,
