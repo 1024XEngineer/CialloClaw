@@ -1,3 +1,4 @@
+// 该文件封装前端可复用的 Hook 逻辑。
 import { useEffect } from "react";
 import { subscribeTask } from "@/rpc/subscriptions";
 

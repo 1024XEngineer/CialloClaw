@@ -1,3 +1,4 @@
+// 该文件负责模型接入层的结构或实现。
 package model
 
 import "context"

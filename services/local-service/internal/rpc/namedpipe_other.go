@@ -1,5 +1,6 @@
 //go:build !windows
 
+// 该文件负责非 Windows 环境下的 Named Pipe 占位实现。
 package rpc
 
 import (

@@ -1,3 +1,4 @@
+// 该文件维护悬浮球交互状态。 
 import { create } from "zustand";
 
 type ShellBallState = {

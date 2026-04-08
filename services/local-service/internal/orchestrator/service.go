@@ -1,3 +1,4 @@
+// 该文件负责 4 号主链路的任务编排与对外语义收口。
 package orchestrator
 
 import (

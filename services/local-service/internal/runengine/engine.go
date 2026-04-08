@@ -1,3 +1,4 @@
+// 该文件负责内存态 task/run 运行时与状态流转。
 package runengine
 
 import (

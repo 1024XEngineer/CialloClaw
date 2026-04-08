@@ -1,3 +1,4 @@
+// 该测试文件验证模型接入层行为。
 package model
 
 import (

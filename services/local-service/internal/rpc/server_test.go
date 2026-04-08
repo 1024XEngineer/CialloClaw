@@ -1,3 +1,4 @@
+// 该测试文件验证 RPC 层的响应与通知流行为。
 package rpc
 
 import (

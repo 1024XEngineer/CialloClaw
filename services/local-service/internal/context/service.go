@@ -1,3 +1,4 @@
+// 该文件负责主链路输入上下文的采集与归一化。
 package context
 
 type TaskContextSnapshot struct {

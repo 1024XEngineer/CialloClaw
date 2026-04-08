@@ -1,3 +1,4 @@
+// 该文件承载仪表盘任务工作台相关的界面逻辑。
 import { ShieldCheck, Workflow } from "lucide-react";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { MetricCard } from "@/components/MetricCard";

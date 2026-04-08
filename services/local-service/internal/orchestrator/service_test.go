@@ -1,3 +1,4 @@
+// 该测试文件验证主链路编排与对接点行为。
 package orchestrator
 
 import (

@@ -1,3 +1,4 @@
+// 该文件承载悬浮球近场承接相关的界面逻辑。
 import { Sparkles, WandSparkles } from "lucide-react";
 import { StatusBadge, PanelSurface } from "@cialloclaw/ui";
 import { useTaskStream } from "@/hooks/useTaskStream";

@@ -1,3 +1,4 @@
+// 该文件封装前端镜子记忆服务调用。 
 import type { AgentMirrorOverviewGetResult, RequestMeta } from "@cialloclaw/protocol";
 import { RPC_METHODS } from "@cialloclaw/protocol";
 import { rpcClient } from "@/rpc/client";

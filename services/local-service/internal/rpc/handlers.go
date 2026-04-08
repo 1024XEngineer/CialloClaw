@@ -1,3 +1,4 @@
+// 该文件负责把稳定 RPC 方法路由到 Harness 主链路服务。
 package rpc
 
 import (

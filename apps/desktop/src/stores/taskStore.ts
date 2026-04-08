@@ -1,3 +1,4 @@
+// 该文件维护任务主对象的本地示例状态。 
 import { create } from "zustand";
 import type { Task } from "@cialloclaw/protocol";
 

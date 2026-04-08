@@ -1,3 +1,4 @@
+// 该文件维护控制面板页面状态。 
 import { create } from "zustand";
 
 type ControlPanelState = {

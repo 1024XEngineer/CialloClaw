@@ -1,3 +1,4 @@
+// 该文件负责任务意图的识别与建议生成。
 package intent
 
 import (

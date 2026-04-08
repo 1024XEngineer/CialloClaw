@@ -1,3 +1,4 @@
+// 该文件定义共享状态徽章组件。 
 import type { ReactNode } from "react";
 
 const tones: Record<string, string> = {

@@ -1,3 +1,4 @@
+// 该文件维护仪表盘页面状态。 
 import { create } from "zustand";
 
 type DashboardState = {

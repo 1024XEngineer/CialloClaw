@@ -1,3 +1,4 @@
+// 该文件定义 task-centric 主模型、枚举和协议基础结构。
 export const TASK_STATUSES = [
   "confirming_intent",
   "processing",

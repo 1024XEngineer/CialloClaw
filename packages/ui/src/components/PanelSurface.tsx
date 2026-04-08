@@ -1,3 +1,4 @@
+// 该文件定义共享面板容器外观组件。 
 import type { PropsWithChildren } from "react";
 
 type PanelSurfaceProps = PropsWithChildren<{

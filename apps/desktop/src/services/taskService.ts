@@ -1,3 +1,4 @@
+// 该文件封装前端任务服务调用。 
 import type { RequestMeta, Task } from "@cialloclaw/protocol";
 import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";

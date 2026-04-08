@@ -1,3 +1,4 @@
+// 该文件封装前端设置读写服务。 
 import type { SettingsSnapshot } from "@cialloclaw/protocol";
 import { loadStoredValue, saveStoredValue } from "@/platform/storage";
 

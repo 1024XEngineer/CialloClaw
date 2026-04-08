@@ -1,3 +1,4 @@
+// 该文件负责 JSON-RPC 服务端、调试 HTTP 和事件流入口。
 package rpc
 
 import (

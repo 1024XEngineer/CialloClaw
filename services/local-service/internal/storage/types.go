@@ -1,3 +1,4 @@
+// 该文件负责存储层的数据接口或落盘实现。
 package storage
 
 import "context"

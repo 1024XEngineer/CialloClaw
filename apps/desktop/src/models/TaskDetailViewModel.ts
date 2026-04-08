@@ -1,3 +1,4 @@
+// 该文件负责把共享主模型映射成前端 ViewModel。
 import type { Task } from "@cialloclaw/protocol";
 import { formatStatusLabel, formatTimestamp } from "@/utils/formatters";
 

@@ -1,3 +1,4 @@
+// OCR worker 的最小入口。
 const manifest = {
   worker_name: "ocr_worker",
   transport: ["stdio", "jsonrpc"],

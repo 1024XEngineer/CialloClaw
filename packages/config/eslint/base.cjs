@@ -1,3 +1,4 @@
+// 该文件定义共享 ESLint 基础配置。
 module.exports = {
   root: false,
   env: {

@@ -1,3 +1,4 @@
+// 该文件定义稳定与规划中的 JSON-RPC 方法及其参数结构。
 import type {
   ApprovalDecision,
   ApprovalRequest,

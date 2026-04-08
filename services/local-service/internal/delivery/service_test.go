@@ -1,3 +1,4 @@
+// 该测试文件验证交付与落盘计划组装行为。
 package delivery
 
 import "testing"

@@ -1,3 +1,4 @@
+// 桌面端 Tailwind 配置，集中定义扫描范围与主题扩展。
 import type { Config } from "tailwindcss";
 
 export default {

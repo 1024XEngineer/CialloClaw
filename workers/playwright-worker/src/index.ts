@@ -1,3 +1,4 @@
+// 浏览器自动化 worker 的最小入口。
 const manifest = {
   worker_name: "playwright_worker",
   transport: ["stdio", "jsonrpc"],

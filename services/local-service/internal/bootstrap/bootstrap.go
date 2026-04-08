@@ -1,3 +1,4 @@
+// 该文件负责本地服务依赖装配与启动初始化。
 package bootstrap
 
 import (

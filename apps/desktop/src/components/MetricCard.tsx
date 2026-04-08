@@ -1,3 +1,4 @@
+// 该文件定义用于展示统计摘要卡片。 
 type MetricCardProps = {
   label: string;
   value: string;

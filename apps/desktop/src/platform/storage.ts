@@ -1,3 +1,4 @@
+// 该文件封装前端本地持久化能力。 
 export function loadStoredValue<T>(key: string): T | null {
   const rawValue = window.localStorage.getItem(key);
   if (!rawValue) {

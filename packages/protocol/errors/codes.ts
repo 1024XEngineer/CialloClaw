@@ -1,3 +1,4 @@
+// 该文件集中维护全仓统一错误码。
 export const ERROR_CODES = {
   OK: 0,
   TASK_NOT_FOUND: 1001001,
