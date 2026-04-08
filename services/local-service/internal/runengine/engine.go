@@ -470,6 +470,20 @@ func (e *Engine) PendingNotifications(taskID string) ([]NotificationRecord, bool
 	return cloneNotifications(record.Notifications), true
 }
 
+func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return nil, false
+	}
+
+	notifications := cloneNotifications(record.Notifications)
+	record.Notifications = nil
+	return notifications, true
+}
+
 func (e *Engine) PendingApprovalRequests(limit, offset int) ([]map[string]any, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

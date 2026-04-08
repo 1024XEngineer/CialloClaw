@@ -475,6 +475,24 @@ func (s *Service) PendingNotifications(taskID string) ([]map[string]any, error) 
 	return items, nil
 }
 
+func (s *Service) DrainNotifications(taskID string) ([]map[string]any, error) {
+	notifications, ok := s.runEngine.DrainNotifications(taskID)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+
+	items := make([]map[string]any, 0, len(notifications))
+	for _, notification := range notifications {
+		items = append(items, map[string]any{
+			"method":     notification.Method,
+			"params":     cloneMap(notification.Params),
+			"created_at": notification.CreatedAt.Format(dateTimeLayout),
+		})
+	}
+
+	return items, nil
+}
+
 func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.GetTask(taskID)
