@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CialloClaw",
+  "version": "0.1.0",
+  "identifier": "com.cialloclaw.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeDevCommand": "pnpm --dir .. dev",
+    "beforeBuildCommand": "pnpm --dir .. build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "shell-ball",
+        "title": "CialloClaw Shell Ball",
+        "width": 420,
+        "height": 640,
+        "decorations": false,
+        "transparent": true,
+        "url": "shell-ball.html"
+      },
+      {
+        "label": "dashboard",
+        "title": "CialloClaw Dashboard",
+        "width": 1280,
+        "height": 860,
+        "url": "dashboard.html"
+      },
+      {
+        "label": "control-panel",
+        "title": "CialloClaw Control Panel",
+        "width": 1080,
+        "height": 760,
+        "url": "control-panel.html"
+      }
+    ]
+  }
+}

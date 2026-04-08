@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentTaskStartParams",
+  "type": "object",
+  "required": [
+    "request_meta",
+    "source",
+    "trigger",
+    "input"
+  ],
+  "properties": {
+    "request_meta": {
+      "type": "object",
+      "required": ["trace_id", "client_time"],
+      "properties": {
+        "trace_id": { "type": "string" },
+        "client_time": { "type": "string" }
+      }
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "source": {
+      "enum": ["floating_ball", "dashboard", "tray_panel"]
+    },
+    "trigger": {
+      "enum": [
+        "voice_commit",
+        "hover_text_input",
+        "text_selected_click",
+        "file_drop",
+        "error_detected",
+        "recommendation_click"
+      ]
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": ["text", "text_selection", "file", "error"]
+        },
+        "text": { "type": "string" },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "error_message": { "type": "string" },
+        "page_context": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "url": { "type": "string" },
+            "app_name": { "type": "string" }
+          }
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "preferred": {
+          "enum": ["bubble", "workspace_document", "result_page", "open_file", "reveal_in_folder", "task_detail"]
+        },
+        "fallback": {
+          "enum": ["bubble", "workspace_document", "result_page", "open_file", "reveal_in_folder", "task_detail"]
+        }
+      }
+    }
+  }
+}

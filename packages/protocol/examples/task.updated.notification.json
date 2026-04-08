@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "method": "task.updated",
+  "params": {
+    "task_id": "task_demo_001",
+    "status": "processing"
+  }
+}

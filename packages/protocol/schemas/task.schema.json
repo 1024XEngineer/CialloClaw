@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Task",
+  "type": "object",
+  "required": [
+    "task_id",
+    "title",
+    "source_type",
+    "status",
+    "intent",
+    "current_step",
+    "risk_level",
+    "started_at",
+    "updated_at",
+    "finished_at"
+  ],
+  "properties": {
+    "task_id": { "type": "string" },
+    "title": { "type": "string" },
+    "source_type": {
+      "enum": ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"]
+    },
+    "status": {
+      "enum": [
+        "confirming_intent",
+        "processing",
+        "waiting_auth",
+        "waiting_input",
+        "paused",
+        "blocked",
+        "failed",
+        "completed",
+        "cancelled",
+        "ended_unfinished"
+      ]
+    },
+    "intent": {
+      "type": ["object", "null"],
+      "properties": {
+        "name": { "type": "string" },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "current_step": { "type": "string" },
+    "risk_level": {
+      "enum": ["green", "yellow", "red"]
+    },
+    "started_at": {
+      "type": ["string", "null"]
+    },
+    "updated_at": { "type": "string" },
+    "finished_at": {
+      "type": ["string", "null"]
+    }
+  }
+}

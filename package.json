@@ -1,0 +1,11 @@
+{
+  "name": "cialloclaw",
+  "private": true,
+  "packageManager": "pnpm@10.6.1",
+  "scripts": {
+    "dev": "pnpm --dir apps/desktop dev",
+    "dev:desktop": "pnpm --dir apps/desktop dev",
+    "dev:service": "go run ./services/local-service/cmd/server",
+    "test:service": "go test ./services/local-service/..."
+  }
+}
