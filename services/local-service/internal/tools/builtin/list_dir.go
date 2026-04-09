@@ -58,6 +58,8 @@ func (t *ListDirTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCon
 
 	safePath, err := execCtx.Platform.EnsureWithinWorkspace(absPath)
 	if err != nil {
+		// workspace 外路径必须显式映射为统一边界错误，
+		// 这样上层 executor、测试和后续审批链路都可以稳定识别该场景。
 		return nil, fmt.Errorf("%w: %v", tools.ErrWorkspaceBoundaryDenied, err)
 	}
 
