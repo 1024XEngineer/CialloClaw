@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -10,6 +11,7 @@ import (
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -42,6 +44,7 @@ type Service struct {
 	model     *model.Service
 	tools     *tools.Registry
 	plugin    *plugin.Service
+	executor  *execution.Service
 }
 
 // NewService 创建并返回Service。
@@ -69,6 +72,12 @@ func NewService(
 		tools:     tools,
 		plugin:    plugin,
 	}
+}
+
+// WithExecutor 把真实执行服务挂入 orchestrator。
+func (s *Service) WithExecutor(executorService *execution.Service) *Service {
+	s.executor = executorService
+	return s
 }
 
 // Snapshot 处理当前模块的相关逻辑。
@@ -143,7 +152,6 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
 	deliveryResult := map[string]any(nil)
-	artifacts := []map[string]any(nil)
 	if !suggestion.RequiresConfirm {
 		if requiresAuthorization(suggestion.Intent) {
 			pendingExecution := s.buildPendingExecution(task, suggestion.Intent)
@@ -157,13 +165,11 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 				"bubble_message": bubble,
 			}, nil
 		}
-		deliveryType := resolveTaskDeliveryType(task, suggestion.Intent)
-		deliveryResult = s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, suggestion.ResultTitle, previewTextForDeliveryType(deliveryType))
-		artifacts = s.delivery.BuildArtifact(task.TaskID, suggestion.ResultTitle, deliveryResult)
-		if _, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts); ok {
-			task, _ = s.runEngine.GetTask(task.TaskID)
+		var err error
+		task, bubble, deliveryResult, _, err = s.executeTask(task, snapshot, suggestion.Intent)
+		if err != nil {
+			return nil, err
 		}
-		s.attachPostDeliveryHandoffs(task.TaskID, task.RunID, snapshot, suggestion.Intent, deliveryResult, artifacts)
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			task, _ = s.runEngine.GetTask(task.TaskID)
@@ -232,14 +238,13 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		return response, nil
 	}
 
-	deliveryType := resolveTaskDeliveryType(task, suggestion.Intent)
-	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, suggestion.ResultTitle, previewTextForDeliveryType(deliveryType))
-	artifacts := s.delivery.BuildArtifact(task.TaskID, suggestion.ResultTitle, deliveryResult)
-	if _, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts); ok {
-		task, _ = s.runEngine.GetTask(task.TaskID)
-		response["task"] = taskMap(task)
+	var err error
+	task, bubble, deliveryResult, _, err := s.executeTask(task, snapshot, suggestion.Intent)
+	if err != nil {
+		return nil, err
 	}
-	s.attachPostDeliveryHandoffs(task.TaskID, task.RunID, snapshot, suggestion.Intent, deliveryResult, artifacts)
+	response["task"] = taskMap(task)
+	response["bubble_message"] = bubble
 	response["delivery_result"] = deliveryResult
 	return response, nil
 }
@@ -289,17 +294,10 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	snapshot := snapshotFromTask(updatedTask)
 	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
-	resultTitle, resultPreview, resultBubbleText := resultSpecFromIntent(intentValue)
-	deliveryType := resolveTaskDeliveryType(updatedTask, intentValue)
-	resultPreview = previewTextForDeliveryType(deliveryType)
-	deliveryResult := s.delivery.BuildDeliveryResult(updatedTask.TaskID, deliveryType, resultTitle, resultPreview)
-	artifacts := s.delivery.BuildArtifact(updatedTask.TaskID, resultTitle, deliveryResult)
-	resultBubble := s.delivery.BuildBubbleMessage(updatedTask.TaskID, "result", resultBubbleText, updatedTask.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok = s.runEngine.CompleteTask(updatedTask.TaskID, deliveryResult, resultBubble, artifacts)
-	if !ok {
-		return nil, ErrTaskNotFound
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
+	if err != nil {
+		return nil, err
 	}
-	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue, deliveryResult, artifacts)
 
 	return map[string]any{
 		"task":            taskMap(updatedTask),
@@ -695,20 +693,18 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	deliveryType := stringValue(pendingExecution, "delivery_type", deliveryTypeFromIntent(task.Intent))
 	deliveryType = resolveTaskDeliveryType(task, task.Intent)
 	resultPreview = previewTextForDeliveryType(deliveryType)
-	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, resultTitle, resultPreview)
-	artifacts := s.delivery.BuildArtifact(task.TaskID, resultTitle, deliveryResult)
-	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, resultBubble, artifacts)
-	if !ok {
-		return nil, ErrTaskNotFound
+	_, _, _, _ = resultTitle, resultPreview, resultBubbleText, deliveryType
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(processingTask, snapshotFromTask(processingTask), processingTask.Intent)
+	if err != nil {
+		return nil, err
 	}
 	updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
-	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), updatedTask.Intent, deliveryResult, artifacts)
 
 	return map[string]any{
 		"authorization_record": authorizationRecord,
 		"task":                 taskMap(updatedTask),
 		"bubble_message":       resultBubble,
+		"delivery_result":      deliveryResult,
 		"impact_scope":         impactScope,
 	}, nil
 }
@@ -810,7 +806,7 @@ func currentStepForSuggestion(requiresConfirm bool) string {
 	if requiresConfirm {
 		return "intent_confirmation"
 	}
-	return "return_result"
+	return "generate_output"
 }
 
 // bubbleTypeForSuggestion 处理当前模块的相关逻辑。
@@ -1687,4 +1683,70 @@ func truncateText(value string, maxLength int) string {
 }
 
 // dateTimeLayout 定义当前模块的基础变量。
+func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, "generate_output", "开始生成正式结果")
+	if !ok {
+		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+	}
+
+	resultTitle, _, resultBubbleText := resultSpecFromIntent(taskIntent)
+	deliveryType := resolveTaskDeliveryType(processingTask, taskIntent)
+
+	if s.executor == nil {
+		deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(
+			processingTask.TaskID,
+			deliveryType,
+			resultTitle,
+			previewTextForDeliveryType(deliveryType),
+			targetPathFromIntent(taskIntent),
+		)
+		artifacts := s.delivery.BuildArtifact(processingTask.TaskID, resultTitle, deliveryResult)
+		resultBubble := s.delivery.BuildBubbleMessage(processingTask.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
+		updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, deliveryResult, resultBubble, artifacts)
+		if !ok {
+			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+		}
+		s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, deliveryResult, artifacts)
+		return updatedTask, resultBubble, deliveryResult, artifacts, nil
+	}
+
+	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
+		TaskID:       processingTask.TaskID,
+		RunID:        processingTask.RunID,
+		Title:        processingTask.Title,
+		Intent:       taskIntent,
+		Snapshot:     snapshot,
+		DeliveryType: deliveryType,
+		ResultTitle:  resultTitle,
+	})
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, nil, fmt.Errorf("execute task %s: %w", processingTask.TaskID, err)
+	}
+
+	if executionResult.ToolName != "" {
+		if recordedTask, ok := s.runEngine.RecordToolCall(
+			processingTask.TaskID,
+			executionResult.ToolName,
+			executionResult.ToolInput,
+			executionResult.ToolOutput,
+			executionResult.DurationMS,
+		); ok {
+			processingTask = recordedTask
+		}
+	}
+
+	resultBubble := s.delivery.BuildBubbleMessage(
+		processingTask.TaskID,
+		"result",
+		firstNonEmptyString(executionResult.BubbleText, resultBubbleText),
+		processingTask.UpdatedAt.Format(dateTimeLayout),
+	)
+	updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, executionResult.DeliveryResult, resultBubble, executionResult.Artifacts)
+	if !ok {
+		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+	}
+	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionResult.Artifacts)
+	return updatedTask, resultBubble, executionResult.DeliveryResult, executionResult.Artifacts, nil
+}
+
 const dateTimeLayout = time.RFC3339

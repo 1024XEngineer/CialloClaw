@@ -3,12 +3,15 @@ package bootstrap
 
 import (
 	"context"
+	"os"
+	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -38,20 +41,36 @@ func New(cfg config.Config) (*App, error) {
 	_ = audit.NewService()
 	_ = checkpoint.NewService()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
-	_ = platform.NewLocalFileSystemAdapter(pathPolicy)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	_ = platform.LocalExecutionBackend{}
+
+	modelService := model.NewService(cfg.Model)
+	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if apiKey != "" {
+		if configuredModelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+			ModelConfig: cfg.Model,
+			APIKey:      apiKey,
+		}); err == nil {
+			modelService = configuredModelService
+		}
+	}
+
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	pluginService := plugin.NewService()
+	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
 
 	orchestratorService := orchestrator.NewService(
 		contextsvc.NewService(),
 		intent.NewService(),
 		runengine.NewEngine(),
-		delivery.NewService(),
+		deliveryService,
 		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
 		risk.NewService(),
-		model.NewService(cfg.Model),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithExecutor(executionService)
 
 	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService}, nil
 }
