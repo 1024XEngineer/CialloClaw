@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:shell-ball": "tsc -p tsconfig.shell-ball-test.json && node -e \"require('node:fs').mkdirSync('.cache/shell-ball-tests', { recursive: true }); require('node:fs').writeFileSync('.cache/shell-ball-tests/package.json', '{\\\"type\\\":\\\"commonjs\\\"}');\" && node --test .cache/shell-ball-tests/features/shell-ball/shellBall.contract.test.js"
   },
   "dependencies": {
     "@cialloclaw/protocol": "workspace:*",

@@ -3,20 +3,26 @@ package platform
 
 import (
 	"errors"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
 // FileSystemAdapter 定义当前模块的接口约束。
 type FileSystemAdapter interface {
+	fs.FS
+	fs.ReadDirFS
+	fs.ReadFileFS
+	fs.StatFS
+	fs.SubFS
 	Join(parts ...string) string
 	Clean(path string) string
 	Abs(path string) (string, error)
 	Rel(base, target string) (string, error)
 	Normalize(path string) string
 	EnsureWithinWorkspace(path string) (string, error)
-	ReadFile(path string) ([]byte, error)
 	WriteFile(path string, content []byte) error
 	Move(src, dst string) error
 	MkdirAll(path string) error
@@ -68,19 +74,40 @@ func (p *LocalPathPolicy) Normalize(path string) string {
 
 // EnsureWithinWorkspace 处理当前模块的相关逻辑。
 func (p *LocalPathPolicy) EnsureWithinWorkspace(path string) (string, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
+	candidates := make([]string, 0, 2)
+	if filepath.IsAbs(path) {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return "", err
+		}
+		candidates = append(candidates, absPath)
+	} else {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return "", err
+		}
+		candidates = append(candidates, absPath)
+		candidates = append(candidates, filepath.Join(p.workspaceRoot, path))
 	}
 
-	cleanTarget := filepath.Clean(absPath)
-	rootWithSeparator := p.workspaceRoot + string(os.PathSeparator)
-
-	if cleanTarget == p.workspaceRoot || strings.HasPrefix(cleanTarget, rootWithSeparator) {
-		return cleanTarget, nil
+	for _, candidate := range candidates {
+		if safePath, ok := p.ensureCandidateWithinWorkspace(candidate); ok {
+			return safePath, nil
+		}
 	}
 
 	return "", errors.New("path outside workspace")
+}
+
+func (p *LocalPathPolicy) ensureCandidateWithinWorkspace(candidate string) (string, bool) {
+	cleanTarget := filepath.Clean(candidate)
+	rootWithSeparator := p.workspaceRoot + string(os.PathSeparator)
+
+	if cleanTarget == p.workspaceRoot || strings.HasPrefix(cleanTarget, rootWithSeparator) {
+		return cleanTarget, true
+	}
+
+	return "", false
 }
 
 // LocalFileSystemAdapter 定义当前模块的数据结构。
@@ -91,6 +118,16 @@ type LocalFileSystemAdapter struct {
 // NewLocalFileSystemAdapter 创建并返回LocalFileSystemAdapter。
 func NewLocalFileSystemAdapter(policy *LocalPathPolicy) *LocalFileSystemAdapter {
 	return &LocalFileSystemAdapter{policy: policy}
+}
+
+// Open 处理当前模块的相关逻辑。
+func (a *LocalFileSystemAdapter) Open(name string) (fs.File, error) {
+	fsPath, err := normalizeFSPath("open", name)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.workspaceFS().Open(fsPath)
 }
 
 // Join 处理当前模块的相关逻辑。
@@ -125,12 +162,42 @@ func (a *LocalFileSystemAdapter) EnsureWithinWorkspace(path string) (string, err
 
 // ReadFile 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
-	safePath, err := a.policy.EnsureWithinWorkspace(path)
+	fsPath, err := normalizeFSPath("read", path)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.ReadFile(safePath)
+	return fs.ReadFile(a.workspaceFS(), fsPath)
+}
+
+// ReadDir 处理当前模块的相关逻辑。
+func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
+	fsPath, err := normalizeFSPath("readdir", path)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs.ReadDir(a.workspaceFS(), fsPath)
+}
+
+// Stat 处理当前模块的相关逻辑。
+func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
+	fsPath, err := normalizeFSPath("stat", path)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs.Stat(a.workspaceFS(), fsPath)
+}
+
+// Sub 处理当前模块的相关逻辑。
+func (a *LocalFileSystemAdapter) Sub(dir string) (fs.FS, error) {
+	fsPath, err := normalizeFSPath("sub", dir)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs.Sub(a.workspaceFS(), fsPath)
 }
 
 // WriteFile 处理当前模块的相关逻辑。
@@ -174,6 +241,30 @@ func (a *LocalFileSystemAdapter) MkdirAll(path string) error {
 	}
 
 	return os.MkdirAll(safePath, 0o755)
+}
+
+func (a *LocalFileSystemAdapter) workspaceFS() fs.FS {
+	return os.DirFS(a.policy.workspaceRoot)
+}
+
+func normalizeFSPath(op, name string) (string, error) {
+	if name == "." {
+		return ".", nil
+	}
+	if name == "" {
+		return "", &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
+	}
+
+	if name != filepath.ToSlash(name) {
+		return "", &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
+	}
+
+	normalized := path.Clean(name)
+	if normalized != name || !fs.ValidPath(normalized) {
+		return "", &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
+	}
+
+	return normalized, nil
 }
 
 // LocalExecutionBackend 定义当前模块的数据结构。

@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "./.cache/shell-ball-tests",
+    "rootDir": "./src"
+  },
+  "include": [
+    "src/features/shell-ball/shellBall.contract.test.ts",
+    "src/features/shell-ball/shellBall.types.ts",
+    "src/features/shell-ball/shellBall.demo.ts",
+    "src/features/shell-ball/shellBall.motion.ts",
+    "src/stores/shellBallStore.ts"
+  ]
+}
