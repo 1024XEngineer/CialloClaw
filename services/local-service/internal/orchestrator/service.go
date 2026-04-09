@@ -84,6 +84,28 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", true)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
+	if s.intent.Analyze(snapshot.Text) == "waiting_input" {
+		task := s.runEngine.CreateTask(runengine.CreateTaskInput{
+			SessionID:   stringValue(params, "session_id", ""),
+			Title:       "等待补充输入",
+			SourceType:  suggestion.TaskSourceType,
+			Status:      "waiting_input",
+			Intent:      nil,
+			CurrentStep: "collect_input",
+			RiskLevel:   s.risk.DefaultLevel(),
+			Timeline:    initialTimeline("waiting_input", "collect_input"),
+		})
+
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先告诉我你希望我处理什么内容。", task.StartedAt.Format(dateTimeLayout))
+		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+			task, _ = s.runEngine.GetTask(task.TaskID)
+		}
+
+		return map[string]any{
+			"task":           taskMap(task),
+			"bubble_message": bubble,
+		}, nil
+	}
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:   stringValue(params, "session_id", ""),
@@ -722,9 +744,15 @@ func bubbleTextForStart(suggestion intent.Suggestion) string {
 // initialTimeline 处理当前模块的相关逻辑。
 func initialTimeline(status, currentStep string) []runengine.TaskStepRecord {
 	stepStatus := "running"
-	if status == "confirming_intent" {
+	if status == "confirming_intent" || status == "waiting_input" {
 		stepStatus = "pending"
 	}
+
+	outputSummary := "等待继续处理"
+	if status == "waiting_input" {
+		outputSummary = "等待用户补充输入"
+	}
+
 	return []runengine.TaskStepRecord{
 		{
 			StepID:        fmt.Sprintf("step_%s", currentStep),
@@ -732,7 +760,7 @@ func initialTimeline(status, currentStep string) []runengine.TaskStepRecord {
 			Status:        stepStatus,
 			OrderIndex:    1,
 			InputSummary:  "已识别到当前任务对象",
-			OutputSummary: "等待继续处理",
+			OutputSummary: outputSummary,
 		},
 	}
 }

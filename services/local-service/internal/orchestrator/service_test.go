@@ -85,6 +85,67 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
+// TestServiceSubmitInputEmptyTextReturnsWaitingInput 验证空文本提交会进入 waiting_input。
+func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		runengine.NewEngine(),
+		delivery.NewService(),
+		memory.NewService(),
+		risk.NewService(),
+		model.NewService(modelConfig()),
+		tools.NewRegistry(),
+		plugin.NewService(),
+	)
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "   ",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "waiting_input" {
+		t.Fatalf("expected waiting_input status, got %v", task["status"])
+	}
+	if task["current_step"] != "collect_input" {
+		t.Fatalf("expected collect_input current_step, got %v", task["current_step"])
+	}
+	if task["intent"] != nil {
+		intentValue, ok := task["intent"].(map[string]any)
+		if !ok || len(intentValue) != 0 {
+			t.Fatalf("expected waiting_input task to keep empty intent, got %v", task["intent"])
+		}
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected waiting_input bubble type status, got %v", bubble["type"])
+	}
+
+	taskID := task["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected waiting_input task to exist in runtime")
+	}
+	if record.FinishedAt != nil {
+		t.Fatal("expected waiting_input task to keep finished_at nil")
+	}
+	if len(record.MemoryReadPlans) != 0 || len(record.MemoryWritePlans) != 0 {
+		t.Fatal("expected waiting_input task not to attach memory handoff plans")
+	}
+}
+
 // TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs 验证ServiceDirectStartBuildsMemoryAndDeliveryHandoffs。
 func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	service := NewService(
