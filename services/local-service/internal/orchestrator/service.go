@@ -94,7 +94,6 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		CurrentStep: currentStepForSuggestion(suggestion.RequiresConfirm),
 		RiskLevel:   s.risk.DefaultLevel(),
 		Timeline:    initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
-		Finished:    !suggestion.RequiresConfirm,
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
@@ -152,7 +151,6 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		CurrentStep: currentStepForSuggestion(suggestion.RequiresConfirm),
 		RiskLevel:   s.risk.DefaultLevel(),
 		Timeline:    initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
-		Finished:    !suggestion.RequiresConfirm,
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 

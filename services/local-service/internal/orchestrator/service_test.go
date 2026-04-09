@@ -129,6 +129,9 @@ func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	if record.StorageWritePlan == nil || len(record.ArtifactPlans) == 0 {
 		t.Fatal("expected delivery handoff plans to be attached")
 	}
+	if record.FinishedAt == nil {
+		t.Fatal("expected direct completion flow to set finished_at only after completion")
+	}
 
 	notifications, ok := service.runEngine.PendingNotifications(taskID)
 	if !ok {
@@ -143,6 +146,58 @@ func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	}
 	if !hasDeliveryReady {
 		t.Fatal("expected delivery.ready notification to be queued")
+	}
+}
+
+// TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt 验证等待授权前不会提前写入 finished_at。
+func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		runengine.NewEngine(),
+		delivery.NewService(),
+		memory.NewService(),
+		risk.NewService(),
+		model.NewService(modelConfig()),
+		tools.NewRegistry(),
+		plugin.NewService(),
+	)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []any{"workspace/input.md"},
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	startedTask := startResult["task"].(map[string]any)
+	if startedTask["status"] != "waiting_auth" {
+		t.Fatalf("expected waiting_auth status, got %v", startedTask["status"])
+	}
+	if startedTask["finished_at"] != nil {
+		t.Fatalf("expected waiting_auth task to keep finished_at nil, got %v", startedTask["finished_at"])
+	}
+
+	taskID := startedTask["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.FinishedAt != nil {
+		t.Fatal("expected runtime waiting_auth task to keep finished_at nil")
 	}
 }
 

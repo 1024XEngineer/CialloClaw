@@ -80,7 +80,6 @@ type CreateTaskInput struct {
 	DeliveryResult   map[string]any
 	Artifacts        []map[string]any
 	MirrorReferences []map[string]any
-	Finished         bool
 }
 
 // InspectorConfig 描述当前模块配置。
@@ -197,11 +196,6 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		MirrorReferences:  cloneMapSlice(input.MirrorReferences),
 		SecuritySummary:   buildSecuritySummary(input.RiskLevel, nil),
 		CurrentStepStatus: currentTimelineStatus(stepTimeline),
-	}
-
-	if input.Finished {
-		finishedAt := createdAt
-		record.FinishedAt = &finishedAt
 	}
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
