@@ -20,12 +20,15 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 // App 定义当前模块的数据结构。
 type App struct {
-	server  *rpc.Server
-	storage *storage.Service
+	server       *rpc.Server
+	storage      *storage.Service
+	toolRegistry *tools.Registry
+	toolExecutor *tools.ToolExecutor
 }
 
 // New 创建并返回当前能力。
@@ -40,6 +43,11 @@ func New(cfg config.Config) (*App, error) {
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	_ = platform.NewLocalFileSystemAdapter(pathPolicy)
 	_ = platform.LocalExecutionBackend{}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 
 	orchestratorService := orchestrator.NewService(
 		contextsvc.NewService(),
@@ -49,11 +57,11 @@ func New(cfg config.Config) (*App, error) {
 		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
 		risk.NewService(),
 		model.NewService(cfg.Model),
-		tools.NewRegistry(),
+		toolRegistry,
 		plugin.NewService(),
 	)
 
-	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService}, nil
+	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService, toolRegistry: toolRegistry, toolExecutor: toolExecutor}, nil
 }
 
 // Start 启动当前能力。
