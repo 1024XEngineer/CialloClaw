@@ -3,8 +3,11 @@ package runengine
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 // TestEngineTaskLifecycle 验证EngineTaskLifecycle。
@@ -420,5 +423,98 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	}
 	if restarted.MemoryReadPlans != nil || restarted.MemoryWritePlans != nil || restarted.MirrorReferences != nil {
 		t.Fatal("expected restart to clear handoff and mirror snapshots")
+	}
+}
+
+func TestEngineWithStorePersistsTaskLifecycleAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-engine.db")
+	store, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+
+	engine, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore returned error: %v", err)
+	}
+	engine.now = func() time.Time { return time.Date(2026, 4, 10, 8, 0, 0, 0, time.UTC) }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_persist",
+		Title:       "persist me",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "input",
+			OutputSummary: "working",
+		}},
+	})
+
+	if _, ok := engine.MarkWaitingApprovalWithPlan(
+		task.TaskID,
+		map[string]any{
+			"approval_id": "appr_001",
+			"task_id":     task.TaskID,
+			"risk_level":  "yellow",
+			"status":      "pending",
+		},
+		map[string]any{
+			"task_id":       task.TaskID,
+			"delivery_type": "workspace_document",
+		},
+		map[string]any{"task_id": task.TaskID, "type": "status", "text": "waiting auth"},
+	); !ok {
+		t.Fatal("expected task to enter waiting_auth")
+	}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, []map[string]any{{"kind": "retrieval"}}, []map[string]any{{"kind": "summary_write"}}); !ok {
+		t.Fatal("expected memory plans to persist")
+	}
+	if _, ok := engine.SetDeliveryPlans(task.TaskID, map[string]any{"target_path": "workspace/result.md"}, []map[string]any{{"artifact_id": "art_001"}}); !ok {
+		t.Fatal("expected delivery plans to persist")
+	}
+
+	reloaded, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore reload returned error: %v", err)
+	}
+
+	persisted, ok := reloaded.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected persisted task to reload from sqlite")
+	}
+	if persisted.RunID != task.RunID {
+		t.Fatalf("expected run_id to round-trip, got %s want %s", persisted.RunID, task.RunID)
+	}
+	if persisted.Status != "waiting_auth" {
+		t.Fatalf("expected waiting_auth to round-trip, got %s", persisted.Status)
+	}
+	if persisted.PendingExecution["delivery_type"] != "workspace_document" {
+		t.Fatalf("expected pending execution to round-trip, got %+v", persisted.PendingExecution)
+	}
+	if len(persisted.MemoryReadPlans) != 1 || len(persisted.ArtifactPlans) != 1 {
+		t.Fatalf("expected persisted plans to reload, got %+v", persisted)
+	}
+
+	nextTask := reloaded.CreateTask(CreateTaskInput{
+		SessionID:   "sess_persist_2",
+		Title:       "new task after reload",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "rewrite"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	if nextTask.TaskID == task.TaskID {
+		t.Fatalf("expected identifier allocation to continue after reload, got duplicate %s", nextTask.TaskID)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
 	}
 }

@@ -2,11 +2,14 @@
 package runengine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 const (
@@ -125,6 +128,7 @@ type Engine struct {
 	mu           sync.RWMutex
 	nextID       uint64
 	now          func() time.Time
+	taskStore    storage.TaskRunStore
 	tasks        map[string]*TaskRecord
 	taskOrder    []string
 	sessionOrder []string
@@ -137,8 +141,19 @@ type Engine struct {
 
 // NewEngine 创建一套新的内存态引擎，并填充主链路需要的默认设置和巡检配置。
 func NewEngine() *Engine {
+	engine, _ := newEngine(nil)
+	return engine
+}
+
+// NewEngineWithStore 创建带有 task/run 持久化存储的引擎实例。
+func NewEngineWithStore(taskStore storage.TaskRunStore) (*Engine, error) {
+	return newEngine(taskStore)
+}
+
+func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 	engine := &Engine{
 		now:          time.Now,
+		taskStore:    taskStore,
 		tasks:        map[string]*TaskRecord{},
 		taskOrder:    []string{},
 		sessionOrder: []string{},
@@ -164,7 +179,11 @@ func NewEngine() *Engine {
 		},
 	}
 
-	return engine
+	if err := engine.loadPersistedTaskRuns(context.Background()); err != nil {
+		return nil, err
+	}
+
+	return engine, nil
 }
 
 // CurrentState 处理当前模块的相关逻辑。
@@ -245,6 +264,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 
 	e.tasks[taskID] = record
 	e.taskOrder = append([]string{taskID}, e.taskOrder...)
+	e.persistTaskLocked(record)
 
 	return record.clone()
 }
@@ -323,6 +343,7 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -347,6 +368,7 @@ func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRec
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -370,6 +392,7 @@ func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord,
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -408,6 +431,7 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 			"delivery_result": cloneMap(record.DeliveryResult),
 		})
 	}
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -432,6 +456,7 @@ func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[strin
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -468,6 +493,7 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 		"task_id":         record.TaskID,
 		"delivery_result": cloneMap(record.DeliveryResult),
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -546,6 +572,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), nil
 }
@@ -596,6 +623,7 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 		"task_id":          record.TaskID,
 		"approval_request": cloneMap(record.ApprovalRequest),
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -621,6 +649,7 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 		latestRestorePoint = cloneMap(existingRestorePoint)
 	}
 	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePoint)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
@@ -652,6 +681,7 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -691,6 +721,7 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -728,6 +759,7 @@ func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, write
 	if writePlans != nil {
 		record.MemoryWritePlans = cloneMapSlice(writePlans)
 	}
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
@@ -746,6 +778,7 @@ func (e *Engine) SetMirrorReferences(taskID string, mirrorReferences []map[strin
 	}
 
 	record.MirrorReferences = cloneMapSlice(mirrorReferences)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
@@ -761,6 +794,7 @@ func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any
 
 	record.StorageWritePlan = cloneMap(storageWritePlan)
 	record.ArtifactPlans = cloneMapSlice(artifactPlans)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
@@ -793,6 +827,7 @@ func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) 
 
 	notifications := cloneNotifications(record.Notifications)
 	record.Notifications = nil
+	e.persistTaskLocked(record)
 	return notifications, true
 }
 
@@ -1012,8 +1047,51 @@ func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName string, input,
 
 // nextIdentifier 处理当前模块的相关逻辑。
 func (e *Engine) nextIdentifier(prefix string) string {
+	if e.taskStore != nil {
+		identifier, err := e.taskStore.AllocateIdentifier(context.Background(), prefix)
+		if err == nil {
+			return identifier
+		}
+	}
+
 	e.nextID++
 	return fmt.Sprintf("%s_%03d", prefix, e.nextID)
+}
+
+func (e *Engine) loadPersistedTaskRuns(ctx context.Context) error {
+	if e.taskStore == nil {
+		return nil
+	}
+
+	records, err := e.taskStore.LoadTaskRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("load persisted task runs: %w", err)
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	seenSessions := make(map[string]struct{}, len(records))
+	for _, persisted := range records {
+		record := taskRecordFromStorage(persisted)
+		e.tasks[record.TaskID] = &record
+		e.taskOrder = append(e.taskOrder, record.TaskID)
+		if _, seen := seenSessions[record.SessionID]; !seen {
+			e.sessionOrder = append(e.sessionOrder, record.SessionID)
+			seenSessions[record.SessionID] = struct{}{}
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) persistTaskLocked(record *TaskRecord) {
+	if e.taskStore == nil || record == nil {
+		return
+	}
+
+	_ = e.taskStore.SaveTaskRun(context.Background(), taskRecordToStorage(record.clone()))
 }
 
 // clone 处理当前模块的相关逻辑。
@@ -1372,4 +1450,163 @@ func buildDefaultSettings() map[string]any {
 			"budget_auto_downgrade": true,
 		},
 	}
+}
+
+func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
+	return storage.TaskRunRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineToStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		Notifications:     notificationsToStorage(record.Notifications),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
+	return TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineFromStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		Notifications:     notificationsFromStorage(record.Notifications),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func timelineToStorage(timeline []TaskStepRecord) []storage.TaskStepSnapshot {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	result := make([]storage.TaskStepSnapshot, len(timeline))
+	for index, step := range timeline {
+		result[index] = storage.TaskStepSnapshot{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+
+	return result
+}
+
+func timelineFromStorage(timeline []storage.TaskStepSnapshot) []TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	result := make([]TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+
+	return result
+}
+
+func notificationsToStorage(values []NotificationRecord) []storage.NotificationSnapshot {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]storage.NotificationSnapshot, len(values))
+	for index, value := range values {
+		result[index] = storage.NotificationSnapshot{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
+	return result
+}
+
+func notificationsFromStorage(values []storage.NotificationSnapshot) []NotificationRecord {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]NotificationRecord, len(values))
+	for index, value := range values {
+		result[index] = NotificationRecord{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
+	return result
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+	return &cloned
 }

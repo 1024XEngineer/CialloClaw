@@ -35,6 +35,9 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.storage.MemoryStore() == nil {
 		t.Fatal("expected storage memory store to be available")
 	}
+	if app.storage.TaskRunStore() == nil {
+		t.Fatal("expected storage task/run store to be available")
+	}
 	capabilities := app.storage.Capabilities()
 	if !capabilities.SupportsMemoryStore {
 		t.Fatalf("expected storage capabilities to expose memory store: %+v", app.storage.Capabilities())

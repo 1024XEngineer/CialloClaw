@@ -96,12 +96,12 @@ func TestSQLiteMemoryStoreSaveSearchAndListRecent(t *testing.T) {
 func TestNewServicePrefersSQLiteMemoryStoreWhenConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service.db")
 	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
 
 	store, ok := service.MemoryStore().(*SQLiteMemoryStore)
 	if !ok {
 		t.Fatalf("expected SQLiteMemoryStore, got %T", service.MemoryStore())
 	}
-	defer func() { _ = store.Close() }()
 
 	mode, err := store.journalMode(context.Background())
 	if err != nil {

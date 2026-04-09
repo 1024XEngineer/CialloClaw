@@ -9,7 +9,9 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - Report whether the storage service is configured
 - Provide a typed descriptor snapshot for upper layers
 - Expose a storage-local memory persistence contract with an in-memory implementation
+- Expose a storage-local task/run persistence contract with both SQLite-backed and in-memory implementations
 - Prefer a SQLite-backed memory store with WAL when a database path is configured
+- Prefer a SQLite-backed task/run store with WAL when a database path is configured
 - Report a typed capability snapshot for future module integration
 - Expose whether SQLite initialization fell back to in-memory behavior
 - Expose retrieval-hit persistence and FTS5/sqlite-vec skeleton capabilities for later memory integration
@@ -20,13 +22,15 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - Adapter contract: `platform.StorageAdapter`
 - Required configuration: non-empty `DatabasePath()`
 - Memory persistence contract prefers SQLite + WAL and falls back to in-memory storage if SQLite initialization is unavailable
+- Task/run persistence contract prefers SQLite + WAL and falls back to in-memory storage if SQLite initialization is unavailable
 - SQLite-backed memory writes require non-empty `memory_summary_id`, `task_id`, `run_id`, `summary`, and RFC3339 `created_at`
+- SQLite-backed task/run writes require non-empty `task_id`, `session_id`, `run_id`, `status`, and non-zero `started_at` / `updated_at`
 - SQLite-backed retrieval-hit writes require non-empty hit identifiers and RFC3339 `created_at`
 - FTS5 is initialized as the current local full-text skeleton, while sqlite-vec remains a storage-level skeleton placeholder only
 
 ## Boundary Rules
 
-- `task` / `run` orchestration does not belong here
+- `task` / `run` orchestration does not belong here; only persistence-facing contracts and repository implementations live here
 - RPC response assembly does not belong here
 - Memory retrieval business logic does not belong here; only storage-facing contracts and temporary local implementations live here
 - Artifact and Stronghold implementations do not belong here yet

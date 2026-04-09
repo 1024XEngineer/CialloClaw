@@ -59,11 +59,16 @@ func New(cfg config.Config) (*App, error) {
 	toolRegistry := tools.NewRegistry()
 	pluginService := plugin.NewService()
 	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
+	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 
 	orchestratorService := orchestrator.NewService(
 		contextsvc.NewService(),
 		intent.NewService(),
-		runengine.NewEngine(),
+		runEngine,
 		deliveryService,
 		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
 		risk.NewService(),

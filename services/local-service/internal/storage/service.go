@@ -42,7 +42,9 @@ type Descriptor struct {
 type Service struct {
 	adapter          platform.StorageAdapter
 	memoryStore      MemoryStore
+	taskRunStore     TaskRunStore
 	memoryStoreName  string
+	taskRunStoreName string
 	retrievalBackend string
 	storeInitErr     error
 	fallbackActive   bool
@@ -51,9 +53,11 @@ type Service struct {
 // NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
+	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	memoryStoreName := memoryStoreBackendInMemory
+	taskRunStoreName := memoryStoreBackendInMemory
 	retrievalBackend := memoryRetrievalBackendInMemory
-	var storeInitErr error
+	storeInitErrors := make([]error, 0, 2)
 	fallbackActive := false
 
 	if adapter != nil {
@@ -65,16 +69,30 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				retrievalBackend = memoryRetrievalBackendSQLite
 			}
 			if err != nil {
-				storeInitErr = fmt.Errorf("initialize sqlite memory store: %w", err)
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite memory store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteTaskRunStore, err := NewSQLiteTaskRunStore(databasePath)
+			if err == nil {
+				taskRunStore = sqliteTaskRunStore
+				taskRunStoreName = memoryStoreBackendSQLite
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite task_run store: %w", err))
 				fallbackActive = true
 			}
 		}
 	}
 
+	storeInitErr := errors.Join(storeInitErrors...)
+
 	return &Service{
 		adapter:          adapter,
 		memoryStore:      memoryStore,
+		taskRunStore:     taskRunStore,
 		memoryStoreName:  memoryStoreName,
+		taskRunStoreName: taskRunStoreName,
 		retrievalBackend: retrievalBackend,
 		storeInitErr:     storeInitErr,
 		fallbackActive:   fallbackActive,
@@ -130,7 +148,7 @@ func (s *Service) Descriptor() Descriptor {
 // Capabilities 处理当前模块的相关逻辑。
 func (s *Service) Capabilities() CapabilitySnapshot {
 	configured := s.Configured()
-	structuredReady := configured && s.storeInitErr == nil && s.memoryStoreName == memoryStoreBackendSQLite
+	structuredReady := configured && s.storeInitErr == nil && s.memoryStoreName == memoryStoreBackendSQLite && s.taskRunStoreName == memoryStoreBackendSQLite
 
 	return CapabilitySnapshot{
 		Backend:                s.Backend(),
@@ -153,11 +171,19 @@ func (s *Service) MemoryStore() MemoryStore {
 	return s.memoryStore
 }
 
+func (s *Service) TaskRunStore() TaskRunStore {
+	return s.taskRunStore
+}
+
 // Close 处理当前模块的相关逻辑。
 func (s *Service) Close() error {
+	errs := make([]error, 0, 2)
 	if closer, ok := s.memoryStore.(interface{ Close() error }); ok {
-		return closer.Close()
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.taskRunStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
