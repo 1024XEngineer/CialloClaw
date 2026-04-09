@@ -2,6 +2,7 @@
 package runengine
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -12,6 +13,12 @@ const (
 	defaultWorkspaceRoot   = "workspace"
 	defaultTaskSourcePath  = "workspace/todos"
 	defaultRecoveryPathObj = "workspace/temp.md"
+)
+
+var (
+	ErrTaskNotFound        = errors.New("task not found")
+	ErrTaskStatusInvalid   = errors.New("task status invalid")
+	ErrTaskAlreadyFinished = errors.New("task already finished")
 )
 
 // TaskRecord 描述当前模块记录。
@@ -421,38 +428,79 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 // ControlTask 控制Task。
 
 // ControlTask 处理 pause/resume/cancel/restart 等用户控制动作。
-func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, bool) {
+func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	record, ok := e.tasks[taskID]
 	if !ok {
-		return TaskRecord{}, false
+		return TaskRecord{}, ErrTaskNotFound
 	}
 
 	now := e.now()
 	switch action {
 	case "pause":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
+		if record.Status != "processing" {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "paused"
 	case "resume":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
+		if record.Status != "paused" {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "processing"
 	case "cancel":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
 		record.Status = "cancelled"
 		record.FinishedAt = &now
+		record.ApprovalRequest = nil
+		record.PendingExecution = nil
+		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.Timeline = advanceTimeline(record.Timeline, "task_cancelled", "cancelled", "任务已取消")
+		record.CurrentStep = "task_cancelled"
 	case "restart":
+		if !record.isFinished() {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "processing"
 		record.FinishedAt = nil
+		record.CurrentStep = "generate_output"
+		record.DeliveryResult = nil
+		record.Artifacts = nil
+		record.BubbleMessage = nil
+		record.ApprovalRequest = nil
+		record.PendingExecution = nil
+		record.Authorization = nil
+		record.ImpactScope = nil
+		record.StorageWritePlan = nil
+		record.ArtifactPlans = nil
+		record.MemoryReadPlans = nil
+		record.MemoryWritePlans = nil
+		record.MirrorReferences = nil
+		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
+	default:
+		return TaskRecord{}, ErrTaskStatusInvalid
 	}
 
 	record.UpdatedAt = now
 	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
 
-	return record.clone(), true
+	return record.clone(), nil
 }
 
 // MarkWaitingApproval 处理当前模块的相关逻辑。

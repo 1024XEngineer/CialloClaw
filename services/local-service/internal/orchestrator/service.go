@@ -22,7 +22,11 @@ import (
 // ErrTaskNotFound 定义当前模块的基础变量。
 
 // ErrTaskNotFound 表示调用方给出的 task_id 在当前运行态中不存在。
-var ErrTaskNotFound = errors.New("task not found")
+var (
+	ErrTaskNotFound        = errors.New("task not found")
+	ErrTaskStatusInvalid   = errors.New("task status invalid")
+	ErrTaskAlreadyFinished = errors.New("task already finished")
+)
 
 // Service 提供当前模块的服务能力。
 
@@ -381,10 +385,22 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	action := stringValue(params, "action", "pause")
+	if !isSupportedTaskControlAction(action) {
+		return nil, fmt.Errorf("unsupported task control action: %s", action)
+	}
 	bubble := s.delivery.BuildBubbleMessage(taskID, "status", controlBubbleText(action), currentTimeFromTask(s.runEngine, taskID))
-	updatedTask, ok := s.runEngine.ControlTask(taskID, action, bubble)
-	if !ok {
-		return nil, ErrTaskNotFound
+	updatedTask, err := s.runEngine.ControlTask(taskID, action, bubble)
+	if err != nil {
+		switch {
+		case errors.Is(err, runengine.ErrTaskNotFound):
+			return nil, ErrTaskNotFound
+		case errors.Is(err, runengine.ErrTaskStatusInvalid):
+			return nil, ErrTaskStatusInvalid
+		case errors.Is(err, runengine.ErrTaskAlreadyFinished):
+			return nil, ErrTaskAlreadyFinished
+		default:
+			return nil, err
+		}
 	}
 
 	return map[string]any{
@@ -863,6 +879,15 @@ func controlBubbleText(action string) string {
 		return "任务已重新开始"
 	default:
 		return "任务状态已更新"
+	}
+}
+
+func isSupportedTaskControlAction(action string) bool {
+	switch action {
+	case "pause", "resume", "cancel", "restart":
+		return true
+	default:
+		return false
 	}
 }
 

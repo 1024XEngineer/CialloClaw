@@ -224,6 +224,22 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_task_not_found",
 		}
 	}
+	if errors.Is(err, orchestrator.ErrTaskStatusInvalid) {
+		return nil, &rpcError{
+			Code:    1001004,
+			Message: "TASK_STATUS_INVALID",
+			Detail:  err.Error(),
+			TraceID: "trace_task_status_invalid",
+		}
+	}
+	if errors.Is(err, orchestrator.ErrTaskAlreadyFinished) {
+		return nil, &rpcError{
+			Code:    1001005,
+			Message: "TASK_ALREADY_FINISHED",
+			Detail:  err.Error(),
+			TraceID: "trace_task_already_finished",
+		}
+	}
 
 	return nil, &rpcError{
 		Code:    errInvalidParams,
