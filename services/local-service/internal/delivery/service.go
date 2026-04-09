@@ -87,6 +87,11 @@ func (s *Service) BuildBubbleMessage(taskID, bubbleType, text, createdAt string)
 // BuildDeliveryResult 生成对外返回的 delivery_result。
 // 当交付类型是 workspace_document 时，这里还会同步约定 workspace 内的相对输出路径。
 func (s *Service) BuildDeliveryResult(taskID, deliveryType, title, previewText string) map[string]any {
+	return s.BuildDeliveryResultWithTargetPath(taskID, deliveryType, title, previewText, "")
+}
+
+// BuildDeliveryResultWithTargetPath 生成带显式输出路径的 delivery_result。
+func (s *Service) BuildDeliveryResultWithTargetPath(taskID, deliveryType, title, previewText, targetPath string) map[string]any {
 	payload := map[string]any{
 		"path":    nil,
 		"url":     nil,
@@ -94,7 +99,7 @@ func (s *Service) BuildDeliveryResult(taskID, deliveryType, title, previewText s
 	}
 
 	if deliveryType == "workspace_document" {
-		payload["path"] = path.Join(defaultWorkspaceRoot, fmt.Sprintf("%s.md", slugify(title, taskID)))
+		payload["path"] = resolveWorkspaceTargetPath(targetPath, fmt.Sprintf("%s.md", slugify(title, taskID)))
 	}
 
 	return map[string]any{
@@ -125,7 +130,7 @@ func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]
 			"artifact_id":   fmt.Sprintf("art_%s", taskID),
 			"task_id":       taskID,
 			"artifact_type": "generated_doc",
-			"title":         fmt.Sprintf("%s.md", title),
+			"title":         artifactTitle(path, title),
 			"path":          path,
 			"mime_type":     "text/markdown",
 		},
@@ -235,4 +240,37 @@ func slugify(title, fallback string) string {
 	}
 
 	return trimmed
+}
+
+func resolveWorkspaceTargetPath(targetPath, fallbackName string) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if normalized == "" {
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+
+	cleaned := path.Clean(normalized)
+	switch cleaned {
+	case ".", "/", "":
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+
+	if strings.HasPrefix(cleaned, "../") {
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+	if cleaned == defaultWorkspaceRoot {
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+	if strings.HasPrefix(cleaned, defaultWorkspaceRoot+"/") {
+		return cleaned
+	}
+
+	return path.Join(defaultWorkspaceRoot, cleaned)
+}
+
+func artifactTitle(targetPath, fallbackTitle string) string {
+	if trimmed := strings.TrimSpace(targetPath); trimmed != "" {
+		return path.Base(trimmed)
+	}
+
+	return fmt.Sprintf("%s.md", fallbackTitle)
 }
