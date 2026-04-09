@@ -100,14 +100,15 @@ func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *Too
 		return precheckInput
 	}
 
-	absPath, err := execCtx.Platform.Abs(targetPath)
-	if err == nil {
-		precheckInput.Workspace.TargetPath = absPath
-	}
-
-	_, ensureErr := execCtx.Platform.EnsureWithinWorkspace(precheckInput.Workspace.TargetPath)
+	safePath, ensureErr := execCtx.Platform.EnsureWithinWorkspace(targetPath)
 	within := ensureErr == nil
 	precheckInput.Workspace.Within = boolPtr(within)
+	if ensureErr == nil {
+		precheckInput.Workspace.TargetPath = safePath
+		if absPath, err := execCtx.Platform.Abs(safePath); err == nil {
+			precheckInput.Workspace.TargetPath = absPath
+		}
+	}
 	return precheckInput
 }
 

@@ -13,6 +13,9 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
+const readFilePreviewLimit = 200
+const readFileTextType = "text/plain"
+
 // ---------------------------------------------------------------------------
 // ReadFileTool：读取工作区内文件的内置工具
 // ---------------------------------------------------------------------------
@@ -73,72 +76,98 @@ func (t *ReadFileTool) Validate(input map[string]any) error {
 // 不直接调用 os.ReadFile 或任何平台 API。
 // 读取前通过 Platform.EnsureWithinWorkspace 校验路径合法性。
 func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
+	_ = ctx
+
 	pathStr := input["path"].(string)
-
-	if execCtx.Platform != nil {
-		absPath, err := execCtx.Platform.Abs(pathStr)
-		if err != nil {
-			return nil, fmt.Errorf("resolve absolute path: %w", err)
-		}
-		pathStr = absPath
-
-		safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
-		if err != nil {
-			return nil, fmt.Errorf("path outside workspace: %w", err)
-		}
-		pathStr = safePath
+	if execCtx == nil || execCtx.Platform == nil {
+		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	if execCtx.Platform != nil {
-		content, err := execCtx.Platform.ReadFile(pathStr)
-		if err != nil {
-			return &tools.ToolResult{
-				ToolName: t.meta.Name,
-				Error: &tools.ToolResultError{
-					Message: fmt.Sprintf("read file failed: %v", err),
-				},
-			}, err
-		}
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
+	if err != nil {
+		return nil, tools.ErrWorkspaceBoundaryDenied
+	}
+	if absPath, err := execCtx.Platform.Abs(safePath); err == nil {
+		pathStr = absPath
+	} else {
+		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
+	}
 
+	content, err := execCtx.Platform.ReadFile(pathStr)
+	if err != nil {
 		return &tools.ToolResult{
 			ToolName: t.meta.Name,
-			Output: map[string]any{
-				"path":    pathStr,
-				"content": string(content),
+			Error: &tools.ToolResultError{
+				Message: fmt.Sprintf("read file failed: %v", err),
 			},
-		}, nil
+		}, fmt.Errorf("%w: %v", tools.ErrToolExecutionFailed, err)
 	}
 
-	// 当 Platform 不可用时返回占位结果，不直接操作文件系统
+	rawOutput := map[string]any{
+		"path":      pathStr,
+		"content":   string(content),
+		"mime_type": readFileTextType,
+		"text_type": readFileTextType,
+	}
+
 	return &tools.ToolResult{
-		ToolName: t.meta.Name,
-		Output: map[string]any{
-			"path":    pathStr,
-			"content": "",
-		},
+		ToolName:      t.meta.Name,
+		RawOutput:     rawOutput,
+		SummaryOutput: buildReadFileSummary(rawOutput),
 	}, nil
 }
 
 // DryRun 执行预检查，验证路径合法性但不实际读取文件。
 func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
-	pathStr := input["path"].(string)
+	_ = ctx
 
-	if execCtx.Platform != nil {
-		absPath, err := execCtx.Platform.Abs(pathStr)
-		if err != nil {
-			return nil, fmt.Errorf("resolve absolute path: %w", err)
-		}
-		if _, err := execCtx.Platform.EnsureWithinWorkspace(absPath); err != nil {
-			return nil, fmt.Errorf("path outside workspace: %w", err)
-		}
+	pathStr := input["path"].(string)
+	if execCtx == nil || execCtx.Platform == nil {
+		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	}
+
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
+	if err != nil {
+		return nil, tools.ErrWorkspaceBoundaryDenied
+	}
+	if absPath, err := execCtx.Platform.Abs(safePath); err == nil {
+		pathStr = absPath
+	} else {
+		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
 	}
 
 	return &tools.ToolResult{
 		ToolName: t.meta.Name,
-		Output: map[string]any{
-			"dry_run": true,
-			"path":    pathStr,
-			"valid":   true,
+		RawOutput: map[string]any{
+			"dry_run":   true,
+			"path":      pathStr,
+			"valid":     true,
+			"mime_type": readFileTextType,
+			"text_type": readFileTextType,
+		},
+		SummaryOutput: map[string]any{
+			"dry_run":   true,
+			"path":      pathStr,
+			"valid":     true,
+			"mime_type": readFileTextType,
 		},
 	}, nil
+}
+
+func buildReadFileSummary(raw map[string]any) map[string]any {
+	content, _ := raw["content"].(string)
+	return map[string]any{
+		"path":            raw["path"],
+		"mime_type":       raw["mime_type"],
+		"text_type":       raw["text_type"],
+		"content_preview": previewReadFileText(content, readFilePreviewLimit),
+	}
+}
+
+func previewReadFileText(input string, limit int) string {
+	trimmed := strings.TrimSpace(input)
+	if len(trimmed) <= limit {
+		return trimmed
+	}
+	return trimmed[:limit]
 }
