@@ -1,4 +1,4 @@
-# Agent.md
+# AGENTS.md
 
 本文件定义 CialloClaw 仓库内 Coding Agent 的统一执行规则。Agent 在修改代码、文档、协议、配置、目录结构前，必须先遵守本文件。若与局部实现、临时约定、个人习惯冲突，以本文件为准。规则来源于《CialloClaw 开发统一规范（修订版 v10）》的可执行整理版。
 

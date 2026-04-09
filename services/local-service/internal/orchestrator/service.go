@@ -317,7 +317,9 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	group := stringValue(params, "group", "unfinished")
 	limit := intValue(params, "limit", 20)
 	offset := intValue(params, "offset", 0)
-	tasks, total := s.runEngine.ListTasks(group, limit, offset)
+	sortBy := stringValue(params, "sort_by", "updated_at")
+	sortOrder := stringValue(params, "sort_order", "desc")
+	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
 
 	items := make([]map[string]any, 0, len(tasks))
 	for _, task := range tasks {
@@ -426,7 +428,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 // DashboardOverviewGet 处理当前模块的相关逻辑。
 func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
-	tasks, _ := s.runEngine.ListTasks("unfinished", 1, 0)
+	tasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 1, 0)
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
 	var focusSummary map[string]any
 	if len(tasks) > 0 {
@@ -460,7 +462,7 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, error) {
 	module := stringValue(params, "module", "mirror")
 	tab := stringValue(params, "tab", "daily_summary")
-	tasks, _ := s.runEngine.ListTasks("finished", 20, 0)
+	tasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 20, 0)
 	return map[string]any{
 		"module": module,
 		"tab":    tab,
@@ -477,7 +479,7 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 // MirrorOverviewGet 处理当前模块的相关逻辑。
 func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
-	tasks, _ := s.runEngine.ListTasks("finished", 20, 0)
+	tasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 20, 0)
 	completedCount := len(tasks)
 	if completedCount == 0 {
 		completedCount = 1

@@ -231,7 +231,7 @@ func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 }
 
 // ListTasks 列出Tasks。
-func (e *Engine) ListTasks(group string, limit, offset int) ([]TaskRecord, int) {
+func (e *Engine) ListTasks(group, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -247,6 +247,7 @@ func (e *Engine) ListTasks(group string, limit, offset int) ([]TaskRecord, int) 
 		}
 		filtered = append(filtered, record.clone())
 	}
+	sortTaskRecords(filtered, sortBy, sortOrder)
 
 	total := len(filtered)
 	if offset >= total {
@@ -1022,6 +1023,56 @@ func firstNonEmpty(primary, fallback string) string {
 		return primary
 	}
 	return fallback
+}
+
+func sortTaskRecords(records []TaskRecord, sortBy, sortOrder string) {
+	if len(records) <= 1 {
+		return
+	}
+
+	sortBy = normalizeTaskSortBy(sortBy)
+	sortOrder = normalizeTaskSortOrder(sortOrder)
+
+	sort.SliceStable(records, func(i, j int) bool {
+		left, right := taskSortValue(records[i], sortBy), taskSortValue(records[j], sortBy)
+		if left.Equal(right) {
+			return records[i].UpdatedAt.After(records[j].UpdatedAt)
+		}
+		if sortOrder == "asc" {
+			return left.Before(right)
+		}
+		return left.After(right)
+	})
+}
+
+func taskSortValue(record TaskRecord, sortBy string) time.Time {
+	switch sortBy {
+	case "started_at":
+		return record.StartedAt
+	case "finished_at":
+		if record.FinishedAt != nil {
+			return *record.FinishedAt
+		}
+		return time.Time{}
+	default:
+		return record.UpdatedAt
+	}
+}
+
+func normalizeTaskSortBy(sortBy string) string {
+	switch sortBy {
+	case "started_at", "finished_at":
+		return sortBy
+	default:
+		return "updated_at"
+	}
+}
+
+func normalizeTaskSortOrder(sortOrder string) string {
+	if sortOrder == "asc" {
+		return sortOrder
+	}
+	return "desc"
 }
 
 // stringSlice 处理当前模块的相关逻辑。

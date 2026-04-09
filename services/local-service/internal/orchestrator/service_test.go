@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"testing"
+	"time"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
@@ -725,6 +726,71 @@ func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 }
 
 // modelConfig 处理当前模块的相关逻辑。
+func TestServiceTaskListSupportsSortParams(t *testing.T) {
+	service := newTestService()
+
+	firstResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "first finished task",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start first task failed: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	secondResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "second finished task",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start second task failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "started_at",
+		"sort_order": "asc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) < 2 {
+		t.Fatalf("expected at least two finished tasks, got %d", len(items))
+	}
+
+	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
+	secondTaskID := secondResult["task"].(map[string]any)["task_id"].(string)
+	if items[0]["task_id"] != firstTaskID || items[1]["task_id"] != secondTaskID {
+		t.Fatalf("expected started_at asc order %s -> %s, got %v -> %v", firstTaskID, secondTaskID, items[0]["task_id"], items[1]["task_id"])
+	}
+}
+
 func modelConfig() serviceconfig.ModelConfig {
 	return serviceconfig.ModelConfig{
 		Provider: "openai_responses",

@@ -62,7 +62,7 @@ func TestEngineTaskLifecycle(t *testing.T) {
 		t.Fatal("expected finished_at to be set on completion")
 	}
 
-	finishedTasks, total := engine.ListTasks("finished", 10, 0)
+	finishedTasks, total := engine.ListTasks("finished", "updated_at", "desc", 10, 0)
 	if total != 1 || len(finishedTasks) != 1 {
 		t.Fatalf("expected completed task to appear in finished list, total=%d len=%d", total, len(finishedTasks))
 	}
@@ -218,5 +218,71 @@ func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
 	taskSources := inspector["task_sources"].([]string)
 	if len(taskSources) != 1 || taskSources[0] != "workspace/todos" {
 		t.Fatalf("expected task_sources to default to workspace/todos, got %v", taskSources)
+	}
+}
+
+func TestEngineListTasksSupportsSorting(t *testing.T) {
+	engine := NewEngine()
+	currentTime := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return currentTime }
+
+	createTask := func(title string) TaskRecord {
+		task := engine.CreateTask(CreateTaskInput{
+			SessionID:   "sess_sort",
+			Title:       title,
+			SourceType:  "hover_input",
+			Status:      "processing",
+			Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+			CurrentStep: "return_result",
+			RiskLevel:   "green",
+			Timeline: []TaskStepRecord{{
+				Name:          "return_result",
+				Status:        "running",
+				OrderIndex:    1,
+				InputSummary:  "task input",
+				OutputSummary: "task output",
+			}},
+		})
+		currentTime = currentTime.Add(time.Minute)
+		return task
+	}
+
+	first := createTask("first")
+	second := createTask("second")
+	third := createTask("third")
+
+	if _, ok := engine.ControlTask(first.TaskID, "pause", map[string]any{"task_id": first.TaskID, "type": "status"}); !ok {
+		t.Fatal("expected first task update to succeed")
+	}
+	currentTime = currentTime.Add(time.Minute)
+	if _, ok := engine.CompleteTask(second.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": second.TaskID, "type": "result"}, nil); !ok {
+		t.Fatal("expected second task completion to succeed")
+	}
+	currentTime = currentTime.Add(time.Minute)
+	if _, ok := engine.CompleteTask(third.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": third.TaskID, "type": "result"}, nil); !ok {
+		t.Fatal("expected third task completion to succeed")
+	}
+
+	updatedAsc, _ := engine.ListTasks("unfinished", "updated_at", "asc", 10, 0)
+	if len(updatedAsc) != 1 || updatedAsc[0].TaskID != first.TaskID {
+		t.Fatalf("expected unfinished list to keep first task after update sort, got %+v", updatedAsc)
+	}
+
+	startedAsc, _ := engine.ListTasks("finished", "started_at", "asc", 10, 0)
+	if len(startedAsc) != 2 {
+		t.Fatalf("expected two finished tasks, got %d", len(startedAsc))
+	}
+	if startedAsc[0].TaskID != second.TaskID || startedAsc[1].TaskID != third.TaskID {
+		t.Fatalf("expected started_at asc order second -> third, got %s -> %s", startedAsc[0].TaskID, startedAsc[1].TaskID)
+	}
+
+	finishedDesc, _ := engine.ListTasks("finished", "finished_at", "desc", 10, 0)
+	if finishedDesc[0].TaskID != third.TaskID || finishedDesc[1].TaskID != second.TaskID {
+		t.Fatalf("expected finished_at desc order third -> second, got %s -> %s", finishedDesc[0].TaskID, finishedDesc[1].TaskID)
+	}
+
+	defaultSorted, _ := engine.ListTasks("finished", "unknown_field", "unknown_order", 10, 0)
+	if defaultSorted[0].TaskID != third.TaskID || defaultSorted[1].TaskID != second.TaskID {
+		t.Fatalf("expected invalid sort options to fall back to updated_at desc, got %s -> %s", defaultSorted[0].TaskID, defaultSorted[1].TaskID)
 	}
 }
