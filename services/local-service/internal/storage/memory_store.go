@@ -13,21 +13,48 @@ const defaultMemoryListLimit = 5
 
 // InMemoryMemoryStore 定义当前模块的数据结构。
 type InMemoryMemoryStore struct {
-	mu        sync.RWMutex
-	summaries []MemorySummaryRecord
+	mu            sync.RWMutex
+	summaries     []MemorySummaryRecord
+	retrievalHits []MemoryRetrievalRecord
 }
 
 // NewInMemoryMemoryStore 创建并返回InMemoryMemoryStore。
 func NewInMemoryMemoryStore() *InMemoryMemoryStore {
-	return &InMemoryMemoryStore{summaries: make([]MemorySummaryRecord, 0)}
+	return &InMemoryMemoryStore{
+		summaries:     make([]MemorySummaryRecord, 0),
+		retrievalHits: make([]MemoryRetrievalRecord, 0),
+	}
 }
 
 // SaveSummary 处理当前模块的相关逻辑。
 func (s *InMemoryMemoryStore) SaveSummary(_ context.Context, summary MemorySummaryRecord) error {
+	if err := validateMemorySummaryRecord(summary); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.summaries = append(s.summaries, summary)
+	return nil
+}
+
+// SaveRetrievalHits 处理当前模块的相关逻辑。
+func (s *InMemoryMemoryStore) SaveRetrievalHits(_ context.Context, hits []MemoryRetrievalRecord) error {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	for _, hit := range hits {
+		if err := validateMemoryRetrievalRecord(hit); err != nil {
+			return err
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.retrievalHits = append(s.retrievalHits, hits...)
 	return nil
 }
 

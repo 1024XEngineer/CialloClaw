@@ -10,9 +10,9 @@ import (
 func TestInMemoryMemoryStoreSearchReturnsRankedMatches(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 	seed := []MemorySummaryRecord{
-		{MemorySummaryID: "mem_001", TaskID: "task_old_001", RunID: "run_old_001", Summary: "user prefers markdown summary"},
-		{MemorySummaryID: "mem_002", TaskID: "task_old_002", RunID: "run_old_002", Summary: "user likes markdown"},
-		{MemorySummaryID: "mem_003", TaskID: "task_001", RunID: "run_001", Summary: "current task markdown summary"},
+		{MemorySummaryID: "mem_001", TaskID: "task_old_001", RunID: "run_old_001", Summary: "user prefers markdown summary", CreatedAt: "2026-04-08T10:00:00Z"},
+		{MemorySummaryID: "mem_002", TaskID: "task_old_002", RunID: "run_old_002", Summary: "user likes markdown", CreatedAt: "2026-04-08T10:01:00Z"},
+		{MemorySummaryID: "mem_003", TaskID: "task_001", RunID: "run_001", Summary: "current task markdown summary", CreatedAt: "2026-04-08T10:02:00Z"},
 	}
 
 	for _, summary := range seed {
@@ -38,9 +38,9 @@ func TestInMemoryMemoryStoreSearchReturnsRankedMatches(t *testing.T) {
 func TestInMemoryMemoryStoreListRecentSummariesReturnsLatestFirst(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 	seed := []MemorySummaryRecord{
-		{MemorySummaryID: "mem_001", Summary: "first"},
-		{MemorySummaryID: "mem_002", Summary: "second"},
-		{MemorySummaryID: "mem_003", Summary: "third"},
+		{MemorySummaryID: "mem_001", TaskID: "task_001", RunID: "run_001", Summary: "first", CreatedAt: "2026-04-08T10:00:00Z"},
+		{MemorySummaryID: "mem_002", TaskID: "task_002", RunID: "run_002", Summary: "second", CreatedAt: "2026-04-08T10:01:00Z"},
+		{MemorySummaryID: "mem_003", TaskID: "task_003", RunID: "run_003", Summary: "third", CreatedAt: "2026-04-08T10:02:00Z"},
 	}
 
 	for _, summary := range seed {
@@ -66,7 +66,13 @@ func TestInMemoryMemoryStoreListRecentSummariesReturnsLatestFirst(t *testing.T) 
 func TestInMemoryMemoryStoreUsesDefaultLimitWhenNonPositive(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 	for i := 0; i < 6; i++ {
-		if err := store.SaveSummary(context.Background(), MemorySummaryRecord{MemorySummaryID: string(rune('a' + i))}); err != nil {
+		if err := store.SaveSummary(context.Background(), MemorySummaryRecord{
+			MemorySummaryID: string(rune('a' + i)),
+			TaskID:          "task_default",
+			RunID:           "run_default",
+			Summary:         "summary",
+			CreatedAt:       "2026-04-08T10:00:00Z",
+		}); err != nil {
 			t.Fatalf("SaveSummary returned error: %v", err)
 		}
 	}
@@ -78,5 +84,28 @@ func TestInMemoryMemoryStoreUsesDefaultLimitWhenNonPositive(t *testing.T) {
 
 	if len(recent) != defaultMemoryListLimit {
 		t.Fatalf("expected default limit %d, got %d", defaultMemoryListLimit, len(recent))
+	}
+}
+
+// TestInMemoryMemoryStoreSaveRetrievalHitsStoresRecords 验证InMemoryMemoryStoreSaveRetrievalHitsStoresRecords。
+func TestInMemoryMemoryStoreSaveRetrievalHitsStoresRecords(t *testing.T) {
+	store := NewInMemoryMemoryStore()
+
+	err := store.SaveRetrievalHits(context.Background(), []MemoryRetrievalRecord{{
+		RetrievalHitID: "hit_001",
+		TaskID:         "task_001",
+		RunID:          "run_001",
+		MemoryID:       "mem_001",
+		Score:          0.9,
+		Source:         memoryRetrievalBackendInMemory,
+		Summary:        "memory hit",
+		CreatedAt:      "2026-04-08T10:00:00Z",
+	}})
+	if err != nil {
+		t.Fatalf("SaveRetrievalHits returned error: %v", err)
+	}
+
+	if len(store.retrievalHits) != 1 || store.retrievalHits[0].RetrievalHitID != "hit_001" {
+		t.Fatalf("unexpected retrieval hits: %+v", store.retrievalHits)
 	}
 }

@@ -138,8 +138,14 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if !capabilities.SupportsMemoryStore || capabilities.SupportsArtifactStore || capabilities.SupportsSecretStore {
 		t.Fatalf("unexpected unsupported capabilities enabled: %+v", capabilities)
 	}
+	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
+		t.Fatalf("expected retrieval and search skeleton capabilities to be enabled: %+v", capabilities)
+	}
 	if capabilities.MemoryStoreBackend != memoryStoreBackendSQLite || capabilities.FallbackActive {
 		t.Fatalf("unexpected backend state: %+v", capabilities)
+	}
+	if capabilities.MemoryRetrievalBackend != memoryRetrievalBackendSQLite {
+		t.Fatalf("unexpected retrieval backend: %+v", capabilities)
 	}
 }
 
@@ -179,6 +185,20 @@ func TestMemoryStoreReturnsWorkingImplementation(t *testing.T) {
 	}
 	if len(recent) != 1 || recent[0].MemorySummaryID != "mem_001" {
 		t.Fatalf("unexpected recent summaries: %+v", recent)
+	}
+
+	err = store.SaveRetrievalHits(context.Background(), []MemoryRetrievalRecord{{
+		RetrievalHitID: "hit_001",
+		TaskID:         "task_001",
+		RunID:          "run_001",
+		MemoryID:       "mem_001",
+		Score:          0.9,
+		Source:         memoryRetrievalBackendSQLite,
+		Summary:        "summary",
+		CreatedAt:      "2026-04-08T10:01:00Z",
+	}})
+	if err != nil {
+		t.Fatalf("SaveRetrievalHits returned error: %v", err)
 	}
 }
 

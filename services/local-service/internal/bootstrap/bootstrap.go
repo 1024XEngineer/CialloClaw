@@ -24,7 +24,8 @@ import (
 
 // App 定义当前模块的数据结构。
 type App struct {
-	server *rpc.Server
+	server  *rpc.Server
+	storage *storage.Service
 }
 
 // New 创建并返回当前能力。
@@ -36,7 +37,7 @@ func New(cfg config.Config) (*App, error) {
 
 	_ = audit.NewService()
 	_ = checkpoint.NewService()
-	_ = storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	_ = platform.NewLocalFileSystemAdapter(pathPolicy)
 	_ = platform.LocalExecutionBackend{}
 
@@ -45,17 +46,25 @@ func New(cfg config.Config) (*App, error) {
 		intent.NewService(),
 		runengine.NewEngine(),
 		delivery.NewService(),
-		memory.NewService(),
+		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
 		risk.NewService(),
 		model.NewService(cfg.Model),
 		tools.NewRegistry(),
 		plugin.NewService(),
 	)
 
-	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService)}, nil
+	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService}, nil
 }
 
 // Start 启动当前能力。
 func (a *App) Start(ctx context.Context) error {
 	return a.server.Start(ctx)
+}
+
+func (a *App) Close() error {
+	if a.storage == nil {
+		return nil
+	}
+
+	return a.storage.Close()
 }

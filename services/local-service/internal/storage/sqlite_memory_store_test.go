@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,10 @@ func TestNewSQLiteMemoryStoreInitializesWALMode(t *testing.T) {
 	if mode != "wal" {
 		t.Fatalf("expected wal journal mode, got %q", mode)
 	}
+
+	assertTableExists(t, store.db, sqliteFTSTableName)
+	assertTableExists(t, store.db, "retrieval_hits")
+	assertTableExists(t, store.db, sqliteVectorStubTableName)
 }
 
 // TestSQLiteMemoryStoreSaveSearchAndListRecent 验证SQLiteMemoryStoreSaveSearchAndListRecent。
@@ -69,6 +74,22 @@ func TestSQLiteMemoryStoreSaveSearchAndListRecent(t *testing.T) {
 	if recent[0].MemorySummaryID != "mem_003" || recent[1].MemorySummaryID != "mem_002" {
 		t.Fatalf("unexpected recent summaries: %+v", recent)
 	}
+
+	err = store.SaveRetrievalHits(context.Background(), []MemoryRetrievalRecord{{
+		RetrievalHitID: "hit_001",
+		TaskID:         "task_001",
+		RunID:          "run_001",
+		MemoryID:       "mem_001",
+		Score:          0.9,
+		Source:         sqliteMemorySource,
+		Summary:        "user prefers markdown summary",
+		CreatedAt:      time.Date(2026, 4, 8, 10, 3, 0, 0, time.UTC).Format(time.RFC3339),
+	}})
+	if err != nil {
+		t.Fatalf("SaveRetrievalHits returned error: %v", err)
+	}
+
+	assertRetrievalHitCount(t, store.db, 1)
 }
 
 // TestNewServicePrefersSQLiteMemoryStoreWhenConfigured 验证NewServicePrefersSQLiteMemoryStoreWhenConfigured。
@@ -109,5 +130,53 @@ func TestSQLiteMemoryStoreRejectsInvalidSummaryRecord(t *testing.T) {
 	})
 	if !errors.Is(err, ErrMemoryCreatedAtInvalid) {
 		t.Fatalf("expected ErrMemoryCreatedAtInvalid, got %v", err)
+	}
+}
+
+// TestSQLiteMemoryStoreRejectsInvalidRetrievalHitRecord 验证SQLiteMemoryStoreRejectsInvalidRetrievalHitRecord。
+func TestSQLiteMemoryStoreRejectsInvalidRetrievalHitRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-hit.db")
+	store, err := NewSQLiteMemoryStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteMemoryStore returned error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	err = store.SaveRetrievalHits(context.Background(), []MemoryRetrievalRecord{{
+		RetrievalHitID: "hit_001",
+		TaskID:         "task_001",
+		RunID:          "run_001",
+		MemoryID:       "mem_001",
+		Score:          0.9,
+		Source:         sqliteMemorySource,
+		Summary:        "summary",
+		CreatedAt:      "invalid-time",
+	}})
+	if !errors.Is(err, ErrRetrievalHitCreatedAtInvalid) {
+		t.Fatalf("expected ErrRetrievalHitCreatedAtInvalid, got %v", err)
+	}
+}
+
+func assertTableExists(t *testing.T, db *sql.DB, tableName string) {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE name = ?`, tableName).Scan(&count); err != nil {
+		t.Fatalf("query sqlite_master failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected table %s to exist", tableName)
+	}
+}
+
+func assertRetrievalHitCount(t *testing.T, db *sql.DB, expected int) {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM retrieval_hits`).Scan(&count); err != nil {
+		t.Fatalf("query retrieval_hits count failed: %v", err)
+	}
+	if count != expected {
+		t.Fatalf("expected retrieval hit count %d, got %d", expected, count)
 	}
 }

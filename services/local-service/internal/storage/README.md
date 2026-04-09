@@ -12,6 +12,7 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - Prefer a SQLite-backed memory store with WAL when a database path is configured
 - Report a typed capability snapshot for future module integration
 - Expose whether SQLite initialization fell back to in-memory behavior
+- Expose retrieval-hit persistence and FTS5/sqlite-vec skeleton capabilities for later memory integration
 
 ## Current P0 Boundary
 
@@ -20,6 +21,8 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - Required configuration: non-empty `DatabasePath()`
 - Memory persistence contract prefers SQLite + WAL and falls back to in-memory storage if SQLite initialization is unavailable
 - SQLite-backed memory writes require non-empty `memory_summary_id`, `task_id`, `run_id`, `summary`, and RFC3339 `created_at`
+- SQLite-backed retrieval-hit writes require non-empty hit identifiers and RFC3339 `created_at`
+- FTS5 is initialized as the current local full-text skeleton, while sqlite-vec remains a storage-level skeleton placeholder only
 
 ## Boundary Rules
 
@@ -28,7 +31,7 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - Memory retrieval business logic does not belong here; only storage-facing contracts and temporary local implementations live here
 - Artifact and Stronghold implementations do not belong here yet
 - Protocol schema ownership stays in `/packages/protocol`
-- Current SQLite search implementation is only a minimal repository path, not the final FTS/vec retrieval design
+- Current SQLite search implementation uses an FTS5 skeleton plus fallback SQL scanning, and is still not the final FTS/vec retrieval design
 - Callers that create the storage service should close it so SQLite handles are released
 
 ## Known Unfrozen Decisions

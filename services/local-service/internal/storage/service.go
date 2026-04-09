@@ -14,15 +14,21 @@ const backendName = "sqlite_wal"
 
 // ErrAdapterNotConfigured 定义当前模块的基础变量。
 var ErrAdapterNotConfigured = errors.New("storage adapter not configured")
+
 // ErrDatabasePathRequired 定义当前模块的基础变量。
 var ErrDatabasePathRequired = errors.New("storage database path is required")
+
 // ErrStructuredStoreUnavailable 定义当前模块的基础变量。
 var ErrStructuredStoreUnavailable = errors.New("storage structured store unavailable")
 
 // memoryStoreBackendInMemory 定义当前模块的基础变量。
 const memoryStoreBackendInMemory = "in_memory"
+
 // memoryStoreBackendSQLite 定义当前模块的基础变量。
 const memoryStoreBackendSQLite = "sqlite_wal"
+
+const memoryRetrievalBackendInMemory = "in_memory"
+const memoryRetrievalBackendSQLite = "sqlite_fts5+sqlite_vec"
 
 // Descriptor 定义当前模块的数据结构。
 type Descriptor struct {
@@ -34,17 +40,19 @@ type Descriptor struct {
 
 // Service 提供当前模块的服务能力。
 type Service struct {
-	adapter         platform.StorageAdapter
-	memoryStore     MemoryStore
-	memoryStoreName string
-	storeInitErr    error
-	fallbackActive  bool
+	adapter          platform.StorageAdapter
+	memoryStore      MemoryStore
+	memoryStoreName  string
+	retrievalBackend string
+	storeInitErr     error
+	fallbackActive   bool
 }
 
 // NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
 	memoryStoreName := memoryStoreBackendInMemory
+	retrievalBackend := memoryRetrievalBackendInMemory
 	var storeInitErr error
 	fallbackActive := false
 
@@ -54,6 +62,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			if err == nil {
 				memoryStore = sqliteStore
 				memoryStoreName = memoryStoreBackendSQLite
+				retrievalBackend = memoryRetrievalBackendSQLite
 			}
 			if err != nil {
 				storeInitErr = fmt.Errorf("initialize sqlite memory store: %w", err)
@@ -63,11 +72,12 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	}
 
 	return &Service{
-		adapter:         adapter,
-		memoryStore:     memoryStore,
-		memoryStoreName: memoryStoreName,
-		storeInitErr:    storeInitErr,
-		fallbackActive:  fallbackActive,
+		adapter:          adapter,
+		memoryStore:      memoryStore,
+		memoryStoreName:  memoryStoreName,
+		retrievalBackend: retrievalBackend,
+		storeInitErr:     storeInitErr,
+		fallbackActive:   fallbackActive,
 	}
 }
 
@@ -127,9 +137,13 @@ func (s *Service) Capabilities() CapabilitySnapshot {
 		Configured:             configured,
 		SupportsStructuredData: structuredReady,
 		SupportsMemoryStore:    s.memoryStore != nil,
+		SupportsRetrievalHits:  s.memoryStore != nil,
+		SupportsFTS5:           structuredReady,
+		SupportsSQLiteVecStub:  structuredReady,
 		SupportsArtifactStore:  false,
 		SupportsSecretStore:    false,
 		MemoryStoreBackend:     s.memoryStoreName,
+		MemoryRetrievalBackend: s.retrievalBackend,
 		FallbackActive:         s.fallbackActive,
 	}
 }
