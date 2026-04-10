@@ -18,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -45,6 +46,7 @@ type Service struct {
 	tools     *tools.Registry
 	plugin    *plugin.Service
 	executor  *execution.Service
+	inspector *taskinspector.Service
 }
 
 // NewService 创建并返回Service。
@@ -71,12 +73,21 @@ func NewService(
 		model:     model,
 		tools:     tools,
 		plugin:    plugin,
+		inspector: taskinspector.NewService(nil),
 	}
 }
 
 // WithExecutor 把真实执行服务挂入 orchestrator。
 func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 	s.executor = executorService
+	return s
+}
+
+// WithTaskInspector 挂接任务巡检运行态服务。
+func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Service {
+	if inspectorService != nil {
+		s.inspector = inspectorService
+	}
 	return s
 }
 
@@ -429,17 +440,25 @@ func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]a
 
 // TaskInspectorRun 处理 agent.task_inspector.run，返回巡检摘要和建议。
 func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error) {
-	_ = params
+	config := s.runEngine.InspectorConfig()
+	targetSources := stringSliceValue(params["target_sources"])
+	notepadItems, _ := s.runEngine.NotepadItems("", 0, 0)
+	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+
+	result := s.inspector.Run(taskinspector.RunInput{
+		Reason:          stringValue(params, "reason", ""),
+		TargetSources:   targetSources,
+		Config:          config,
+		UnfinishedTasks: unfinishedTasks,
+		FinishedTasks:   finishedTasks,
+		NotepadItems:    notepadItems,
+	})
+
 	return map[string]any{
-		"inspection_id": "insp_001",
-		"summary": map[string]any{
-			"parsed_files":     3,
-			"identified_items": 12,
-			"due_today":        2,
-			"overdue":          1,
-			"stale":            3,
-		},
-		"suggestions": []string{"优先处理今天到期的复盘邮件", "下周评审材料建议先生成草稿"},
+		"inspection_id": result.InspectionID,
+		"summary":       result.Summary,
+		"suggestions":   append([]string(nil), result.Suggestions...),
 	}, nil
 }
 
@@ -1750,3 +1769,29 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 }
 
 const dateTimeLayout = time.RFC3339
+
+func stringSliceValue(rawValue any) []string {
+	values, ok := rawValue.([]string)
+	if ok {
+		return append([]string(nil), values...)
+	}
+
+	anyValues, ok := rawValue.([]any)
+	if !ok {
+		return nil
+	}
+
+	result := make([]string, 0, len(anyValues))
+	for _, rawItem := range anyValues {
+		item, ok := rawItem.(string)
+		if ok && strings.TrimSpace(item) != "" {
+			result = append(result, item)
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+
+	return result
+}

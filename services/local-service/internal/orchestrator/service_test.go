@@ -21,6 +21,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -53,7 +54,8 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	deliveryService := delivery.NewService()
 	toolRegistry := tools.NewRegistry()
 	pluginService := plugin.NewService()
-	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, deliveryService, toolRegistry, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -65,7 +67,7 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithExecutor(executor)
+	).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
 
 	return service, workspaceRoot
 }
@@ -149,6 +151,50 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 	if record.DeliveryResult == nil {
 		t.Fatal("expected confirmation flow to persist delivery result")
+	}
+}
+
+func TestTaskInspectorRunAggregatesRuntimeState(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "inspector output")
+
+	todosDir := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(todosDir, "inbox.md"), []byte("- [ ] review task\n- [x] archive task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"reason":         "startup_scan",
+		"target_sources": []any{"workspace/todos"},
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+
+	inspectionID, ok := result["inspection_id"].(string)
+	if !ok || !strings.HasPrefix(inspectionID, "insp_") {
+		t.Fatalf("expected runtime inspection_id, got %+v", result["inspection_id"])
+	}
+
+	summary, ok := result["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary payload, got %+v", result["summary"])
+	}
+	if summary["parsed_files"] != 1 {
+		t.Fatalf("expected parsed_files to reflect workspace scan, got %+v", summary)
+	}
+	if summary["identified_items"] == nil || summary["identified_items"].(int) < 3 {
+		t.Fatalf("expected identified_items to include file and notepad items, got %+v", summary)
+	}
+	if summary["due_today"] != 1 {
+		t.Fatalf("expected due_today to reflect runtime notepad state, got %+v", summary)
+	}
+
+	suggestions, ok := result["suggestions"].([]string)
+	if !ok || len(suggestions) == 0 {
+		t.Fatalf("expected runtime suggestions, got %+v", result["suggestions"])
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
@@ -66,6 +67,7 @@ func New(cfg config.Config) (*App, error) {
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
 	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
+	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
 		_ = storageService.Close()
@@ -82,7 +84,7 @@ func New(cfg config.Config) (*App, error) {
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithExecutor(executionService)
+	).WithExecutor(executionService).WithTaskInspector(inspectorService)
 
 	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService, toolRegistry: toolRegistry, toolExecutor: toolExecutor}, nil
 }
