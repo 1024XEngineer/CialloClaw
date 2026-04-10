@@ -31,6 +31,7 @@ export type ControlPanelSaveResult = {
   needRestart: boolean;
   updatedKeys: string[];
   effectiveSettings: Partial<SettingsSnapshot["settings"]>;
+  effectiveInspector: AgentTaskInspectorConfigGetResult;
   source: ControlPanelSource;
 };
 
@@ -115,6 +116,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       needRestart: false,
       updatedKeys: ["general", "floating_ball", "memory", "task_automation", "data_log"],
       effectiveSettings: data.settings,
+      effectiveInspector: data.inspector,
       source: "mock",
     };
   }
@@ -147,6 +149,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       ...settingsResult.effective_settings,
       task_automation: inspectorResult.effective_config,
     },
+    effectiveInspector: inspectorResult.effective_config,
     source: "rpc",
   };
 }

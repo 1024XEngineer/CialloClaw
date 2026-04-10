@@ -211,6 +211,7 @@ export function ControlPanelApp() {
       const result = await saveControlPanelData(draft);
       const nextData: ControlPanelData = {
         ...draft,
+        inspector: result.effectiveInspector,
         settings: {
           ...draft.settings,
           ...result.effectiveSettings,
