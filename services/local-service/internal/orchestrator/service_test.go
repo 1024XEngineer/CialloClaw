@@ -22,6 +22,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 // TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
@@ -52,8 +53,12 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
 	deliveryService := delivery.NewService()
 	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
-	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, deliveryService, toolRegistry, pluginService)
+	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -1148,6 +1153,13 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	}
 	if record.LatestToolCall["tool_name"] != "write_file" {
 		t.Fatalf("expected runtime task to record write_file tool call, got %v", record.LatestToolCall["tool_name"])
+	}
+	output, ok := record.LatestToolCall["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
+	}
+	if output["summary_output"] == nil {
+		t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
 	}
 }
 

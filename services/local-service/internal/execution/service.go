@@ -22,6 +22,7 @@ type Service struct {
 	model      *model.Service
 	delivery   *delivery.Service
 	tools      *tools.Registry
+	executor   *tools.ToolExecutor
 	plugin     *plugin.Service
 }
 
@@ -54,6 +55,7 @@ func NewService(
 	modelService *model.Service,
 	deliveryService *delivery.Service,
 	toolRegistry *tools.Registry,
+	toolExecutor *tools.ToolExecutor,
 	pluginService *plugin.Service,
 ) *Service {
 	return &Service{
@@ -61,6 +63,7 @@ func NewService(
 		model:      modelService,
 		delivery:   deliveryService,
 		tools:      toolRegistry,
+		executor:   toolExecutor,
 		plugin:     pluginService,
 	}
 }
@@ -86,6 +89,14 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 			"available_tools": s.availableToolNames(),
 			"workers":         s.availableWorkers(),
 		},
+	}
+
+	if toolResult, ok, err := s.executeThroughToolExecutor(ctx, request, deliveryResult, outputText); err != nil {
+		return Result{}, err
+	} else if ok {
+		toolResult.ToolInput = result.ToolInput
+		toolResult.DurationMS = time.Since(startedAt).Milliseconds()
+		return toolResult, nil
 	}
 
 	if deliveryType == "workspace_document" {
@@ -124,6 +135,161 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		"content_size": len(outputText),
 	}
 	return result, nil
+}
+
+func (s *Service) executeThroughToolExecutor(ctx context.Context, request Request, deliveryResult map[string]any, outputText string) (Result, bool, error) {
+	toolName, toolInput, ok := s.resolveToolExecution(request, deliveryResult, outputText)
+	if !ok || s.executor == nil {
+		return Result{}, false, nil
+	}
+
+	workspacePath := workspacePathFromDeliveryResult(deliveryResult)
+	toolResult, err := s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
+		TaskID:        request.TaskID,
+		RunID:         request.RunID,
+		WorkspacePath: workspacePath,
+		Platform:      s.fileSystem,
+	}, toolName, toolInput)
+	if err != nil {
+		return Result{}, false, fmt.Errorf("execute tool %s: %w", toolName, err)
+	}
+
+	result := Result{
+		Content:        outputText,
+		DeliveryResult: deliveryResult,
+		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
+		ToolName:       toolName,
+		ToolOutput:     mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput),
+	}
+	if toolName == "write_file" {
+		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
+		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", deliveryPayloadPath(deliveryResult))
+		if content, ok := toolResult.RawOutput["content"].(string); ok && strings.TrimSpace(content) != "" {
+			result.Content = content
+		}
+	} else {
+		bubbleText := toolBubbleText(toolName, toolResult)
+		result.BubbleText = bubbleText
+		result.Content = bubbleText
+	}
+
+	return result, true, nil
+}
+
+func (s *Service) resolveToolExecution(request Request, deliveryResult map[string]any, outputText string) (string, map[string]any, bool) {
+	intentName := stringValue(request.Intent, "name", "")
+	args := mapValue(request.Intent, "arguments")
+
+	if intentName == "write_file" || request.DeliveryType == "workspace_document" {
+		targetPath := firstNonEmpty(targetPathFromIntent(request.Intent), deliveryPayloadPath(deliveryResult))
+		writePath := workspaceFSPath(targetPath)
+		if writePath == "" {
+			return "", nil, false
+		}
+		content := workspaceDocumentContent(request.ResultTitle, outputText)
+		return "write_file", map[string]any{
+			"path":    writePath,
+			"content": content,
+		}, true
+	}
+
+	if s.tools == nil || intentName == "" {
+		return "", nil, false
+	}
+	if _, err := s.tools.Get(intentName); err != nil {
+		return "", nil, false
+	}
+
+	switch intentName {
+	case "read_file":
+		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
+		if pathValue == "" {
+			return "", nil, false
+		}
+		return intentName, map[string]any{"path": pathValue}, true
+	case "list_dir":
+		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
+		if pathValue == "" {
+			return "", nil, false
+		}
+		input := map[string]any{"path": pathValue}
+		if limit, ok := args["limit"]; ok {
+			input["limit"] = limit
+		}
+		return intentName, input, true
+	case "exec_command":
+		input := map[string]any{}
+		for _, key := range []string{"command", "args", "working_dir"} {
+			if value, ok := args[key]; ok {
+				input[key] = value
+			}
+		}
+		if len(input) == 0 {
+			return "", nil, false
+		}
+		return intentName, input, true
+	default:
+		return "", nil, false
+	}
+}
+
+func mergeToolOutputs(rawOutput, summaryOutput map[string]any) map[string]any {
+	if len(rawOutput) == 0 && len(summaryOutput) == 0 {
+		return nil
+	}
+	merged := map[string]any{}
+	for key, value := range rawOutput {
+		merged[key] = value
+	}
+	if len(summaryOutput) > 0 {
+		merged["summary_output"] = summaryOutput
+	}
+	return merged
+}
+
+func toolArtifactsFromResult(taskID string, result *tools.ToolExecutionResult) []map[string]any {
+	if result == nil || len(result.Artifacts) == 0 {
+		return nil
+	}
+	artifacts := make([]map[string]any, 0, len(result.Artifacts))
+	for _, artifact := range result.Artifacts {
+		artifacts = append(artifacts, map[string]any{
+			"artifact_id":   "",
+			"task_id":       taskID,
+			"artifact_type": artifact.ArtifactType,
+			"title":         artifact.Title,
+			"path":          artifact.Path,
+			"mime_type":     artifact.MimeType,
+		})
+	}
+	return artifacts
+}
+
+func workspacePathFromDeliveryResult(deliveryResult map[string]any) string {
+	pathValue := deliveryPayloadPath(deliveryResult)
+	if pathValue == "" {
+		return "workspace"
+	}
+	if normalized := workspaceFSPath(pathValue); normalized != "" {
+		return normalized
+	}
+	return "workspace"
+}
+
+func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
+	if result == nil {
+		return fmt.Sprintf("%s 执行完成。", toolName)
+	}
+	if preview := stringValue(result.SummaryOutput, "content_preview", ""); preview != "" {
+		return preview
+	}
+	if preview := stringValue(result.SummaryOutput, "stdout_preview", ""); preview != "" {
+		return preview
+	}
+	if count, ok := result.SummaryOutput["entry_count"]; ok {
+		return fmt.Sprintf("%s 执行完成，当前目录条目数：%v。", toolName, count)
+	}
+	return fmt.Sprintf("%s 执行完成。", toolName)
 }
 
 func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot) string {

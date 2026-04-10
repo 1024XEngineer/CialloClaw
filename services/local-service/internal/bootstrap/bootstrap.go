@@ -65,7 +65,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
+	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
 		_ = storageService.Close()

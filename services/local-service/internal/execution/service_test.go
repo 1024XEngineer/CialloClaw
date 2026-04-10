@@ -14,6 +14,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 type stubModelClient struct {
@@ -39,12 +40,18 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 	if err != nil {
 		t.Fatalf("new local path policy: %v", err)
 	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 
 	return NewService(
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
 		delivery.NewService(),
-		tools.NewRegistry(),
+		toolRegistry,
+		toolExecutor,
 		plugin.NewService(),
 	), workspaceRoot
 }
@@ -67,6 +74,9 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 
 	if result.ToolName != "write_file" {
 		t.Fatalf("expected write_file tool, got %s", result.ToolName)
+	}
+	if result.ToolOutput["summary_output"] == nil {
+		t.Fatalf("expected write_file to flow through ToolExecutor summary output, got %+v", result.ToolOutput)
 	}
 	if len(result.Artifacts) != 1 {
 		t.Fatalf("expected one artifact, got %d", len(result.Artifacts))
@@ -112,5 +122,38 @@ func TestExecuteBubbleReturnsGeneratedText(t *testing.T) {
 	}
 	if len(result.Artifacts) != 0 {
 		t.Fatalf("expected bubble delivery not to create artifacts, got %d", len(result.Artifacts))
+	}
+}
+
+func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(readPath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(readPath, []byte("hello from file"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_003",
+		RunID:        "run_003",
+		Title:        "读取文件",
+		Intent:       map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取文件"},
+		DeliveryType: "bubble",
+		ResultTitle:  "读取结果",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ToolName != "read_file" {
+		t.Fatalf("expected read_file tool, got %s", result.ToolName)
+	}
+	if result.ToolOutput["summary_output"] == nil {
+		t.Fatalf("expected direct builtin execution to include summary_output, got %+v", result.ToolOutput)
+	}
+	if !strings.Contains(result.BubbleText, "hello from file") {
+		t.Fatalf("expected bubble text to include file preview, got %s", result.BubbleText)
 	}
 }

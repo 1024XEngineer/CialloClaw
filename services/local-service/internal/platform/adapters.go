@@ -122,7 +122,7 @@ func NewLocalFileSystemAdapter(policy *LocalPathPolicy) *LocalFileSystemAdapter 
 
 // Open 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) Open(name string) (fs.File, error) {
-	fsPath, err := normalizeFSPath("open", name)
+	fsPath, err := a.resolveFSPath("open", name)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (a *LocalFileSystemAdapter) EnsureWithinWorkspace(path string) (string, err
 
 // ReadFile 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
-	fsPath, err := normalizeFSPath("read", path)
+	fsPath, err := a.resolveFSPath("read", path)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
 
 // ReadDir 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
-	fsPath, err := normalizeFSPath("readdir", path)
+	fsPath, err := a.resolveFSPath("readdir", path)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
 
 // Stat 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
-	fsPath, err := normalizeFSPath("stat", path)
+	fsPath, err := a.resolveFSPath("stat", path)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
 
 // Sub 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) Sub(dir string) (fs.FS, error) {
-	fsPath, err := normalizeFSPath("sub", dir)
+	fsPath, err := a.resolveFSPath("sub", dir)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +245,23 @@ func (a *LocalFileSystemAdapter) MkdirAll(path string) error {
 
 func (a *LocalFileSystemAdapter) workspaceFS() fs.FS {
 	return os.DirFS(a.policy.workspaceRoot)
+}
+
+func (a *LocalFileSystemAdapter) resolveFSPath(op, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		relPath, err := filepath.Rel(a.policy.workspaceRoot, name)
+		if err == nil {
+			cleanRel := filepath.Clean(relPath)
+			if cleanRel == "." {
+				return ".", nil
+			}
+			if cleanRel != ".." && !strings.HasPrefix(cleanRel, ".."+string(os.PathSeparator)) {
+				name = filepath.ToSlash(cleanRel)
+			}
+		}
+	}
+
+	return normalizeFSPath(op, filepath.ToSlash(name))
 }
 
 func normalizeFSPath(op, name string) (string, error) {
