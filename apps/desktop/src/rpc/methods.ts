@@ -1,4 +1,8 @@
 import type {
+  AgentNotepadConvertToTaskParams,
+  AgentNotepadConvertToTaskResult,
+  AgentNotepadListParams,
+  AgentNotepadListResult,
   AgentSettingsGetParams,
   AgentSettingsGetResult,
   AgentSettingsUpdateParams,
@@ -19,6 +23,8 @@ import type {
   AgentMirrorOverviewGetResult,
   AgentTaskConfirmParams,
   AgentTaskConfirmResult,
+  AgentTaskControlParams,
+  AgentTaskControlResult,
   AgentTaskDetailGetParams,
   AgentTaskDetailGetResult,
   AgentTaskListParams,
@@ -47,6 +53,18 @@ export function listTasks(params: AgentTaskListParams) {
 // getTaskDetail 处理当前模块的相关逻辑。
 export function getTaskDetail(params: AgentTaskDetailGetParams) {
   return rpcClient.request<AgentTaskDetailGetResult>(RPC_METHODS.AGENT_TASK_DETAIL_GET, params);
+}
+
+export function controlTask(params: AgentTaskControlParams) {
+  return rpcClient.request<AgentTaskControlResult>(RPC_METHODS.AGENT_TASK_CONTROL, params);
+}
+
+export function listNotepad(params: AgentNotepadListParams) {
+  return rpcClient.request<AgentNotepadListResult>(RPC_METHODS.AGENT_NOTEPAD_LIST, params);
+}
+
+export function convertNotepadToTask(params: AgentNotepadConvertToTaskParams) {
+  return rpcClient.request<AgentNotepadConvertToTaskResult>(RPC_METHODS.AGENT_NOTEPAD_CONVERT_TO_TASK, params);
 }
 
 export function getMirrorOverview(params: AgentMirrorOverviewGetParams) {

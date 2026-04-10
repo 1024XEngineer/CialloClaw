@@ -210,7 +210,15 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
         type="button"
       >
         <div className="dashboard-orbit-center__shell">
-          <ShellBallMascot motionConfig={motionConfig} visualState={visualState} />
+          <ShellBallMascot
+            motionConfig={motionConfig}
+            onPressEnd={() => false}
+            onPressMove={() => {}}
+            onPressStart={() => {}}
+            onPrimaryClick={() => {}}
+            visualState={visualState}
+            voicePreview={null}
+          />
         </div>
       </button>
 
