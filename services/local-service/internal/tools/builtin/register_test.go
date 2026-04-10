@@ -6,10 +6,10 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-func TestDefaultToolsReturnsFourCoreTools(t *testing.T) {
+func TestDefaultToolsReturnsFiveCoreTools(t *testing.T) {
 	items := DefaultTools()
-	if len(items) != 4 {
-		t.Fatalf("expected 4 tools, got %d", len(items))
+	if len(items) != 5 {
+		t.Fatalf("expected 5 tools, got %d", len(items))
 	}
 
 	names := []string{
@@ -17,8 +17,9 @@ func TestDefaultToolsReturnsFourCoreTools(t *testing.T) {
 		items[1].Metadata().Name,
 		items[2].Metadata().Name,
 		items[3].Metadata().Name,
+		items[4].Metadata().Name,
 	}
-	expected := []string{"read_file", "write_file", "list_dir", "exec_command"}
+	expected := []string{"generate_text", "read_file", "write_file", "list_dir", "exec_command"}
 	for index, want := range expected {
 		if names[index] != want {
 			t.Fatalf("expected tool %q at index %d, got %q", want, index, names[index])
@@ -34,8 +35,8 @@ func TestRegisterBuiltinTools(t *testing.T) {
 	}
 
 	items := registry.List()
-	if len(items) != 4 {
-		t.Fatalf("expected 4 registered tools, got %d", len(items))
+	if len(items) != 5 {
+		t.Fatalf("expected 5 registered tools, got %d", len(items))
 	}
 	for _, item := range items {
 		if item.Source != tools.ToolSourceBuiltin {

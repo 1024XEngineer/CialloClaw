@@ -129,6 +129,74 @@ func TestEngineExecutionProgressAndToolCall(t *testing.T) {
 }
 
 // TestEngineAuthorizationAndHandoffState 验证EngineAuthorizationAndHandoffState。
+func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-audit.db")
+	store, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+
+	engine, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore returned error: %v", err)
+	}
+	engine.now = func() time.Time { return time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC) }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_audit",
+		Title:       "persist audit",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+
+	appended, ok := engine.AppendAuditData(task.TaskID, []map[string]any{{
+		"audit_id":   "audit_001",
+		"task_id":    task.TaskID,
+		"type":       "model",
+		"action":     "generate_text",
+		"summary":    "generate text output",
+		"target":     "summarize",
+		"result":     "success",
+		"created_at": time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}, map[string]any{
+		"total_tokens":   36,
+		"estimated_cost": 0.0,
+		"request_id":     "req_test",
+	})
+	if !ok {
+		t.Fatal("expected append audit data to succeed")
+	}
+	if len(appended.AuditRecords) != 1 {
+		t.Fatalf("expected audit record on runtime task, got %+v", appended.AuditRecords)
+	}
+	if appended.TokenUsage["total_tokens"] != 36 {
+		t.Fatalf("expected token usage on runtime task, got %+v", appended.TokenUsage)
+	}
+
+	reloaded, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore reload returned error: %v", err)
+	}
+
+	persisted, ok := reloaded.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to reload from sqlite")
+	}
+	if len(persisted.AuditRecords) != 1 {
+		t.Fatalf("expected audit records to round-trip through storage, got %+v", persisted.AuditRecords)
+	}
+	if persisted.TokenUsage["total_tokens"] != float64(36) && persisted.TokenUsage["total_tokens"] != 36 {
+		t.Fatalf("expected token usage to round-trip through storage, got %+v", persisted.TokenUsage)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
 func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	engine := NewEngine()
 	fixedTime := time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC)
@@ -270,6 +338,94 @@ func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
 	taskSources := inspector["task_sources"].([]string)
 	if len(taskSources) != 1 || taskSources[0] != "workspace/todos" {
 		t.Fatalf("expected task_sources to default to workspace/todos, got %v", taskSources)
+	}
+}
+
+func TestEngineNotepadItemsNormalizeAndSortRuntimeState(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+
+	engine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_later",
+			"title":            "later item",
+			"bucket":           "later",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(48 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "review later",
+		},
+		{
+			"item_id":          "todo_overdue",
+			"title":            "overdue item",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(-2 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "finish now",
+		},
+		{
+			"item_id":          "todo_today",
+			"title":            "today item",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(3 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "translate",
+		},
+	})
+
+	items, total := engine.NotepadItems("", 10, 0)
+	if total != 3 || len(items) != 3 {
+		t.Fatalf("expected three runtime notepad items, total=%d len=%d", total, len(items))
+	}
+	if items[0]["item_id"] != "todo_overdue" || items[0]["status"] != "overdue" {
+		t.Fatalf("expected overdue item to sort first by due time, got %+v", items[0])
+	}
+	if items[1]["item_id"] != "todo_today" || items[1]["status"] != "due_today" {
+		t.Fatalf("expected due_today item to remain normalized, got %+v", items[1])
+	}
+
+	upcomingItems, total := engine.NotepadItems("upcoming", 10, 0)
+	if total != 2 || len(upcomingItems) != 2 {
+		t.Fatalf("expected two upcoming items, total=%d len=%d", total, len(upcomingItems))
+	}
+}
+
+func TestEngineCompleteNotepadItemMovesItemToClosedBucket(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	engine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_convert",
+			"title":            "convert item",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(2 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "summarize",
+		},
+	})
+
+	completed, ok := engine.CompleteNotepadItem("todo_convert")
+	if !ok {
+		t.Fatal("expected notepad item completion to succeed")
+	}
+	if completed["bucket"] != "closed" || completed["status"] != "completed" {
+		t.Fatalf("expected completed notepad item to move to closed bucket, got %+v", completed)
+	}
+	if completed["due_at"] != nil {
+		t.Fatalf("expected completed notepad item to clear due_at, got %+v", completed["due_at"])
+	}
+
+	closedItems, total := engine.NotepadItems("closed", 10, 0)
+	if total != 1 || len(closedItems) != 1 {
+		t.Fatalf("expected one closed item after completion, total=%d len=%d", total, len(closedItems))
+	}
+	if closedItems[0]["item_id"] != "todo_convert" {
+		t.Fatalf("expected closed list to contain completed item, got %+v", closedItems[0])
 	}
 }
 

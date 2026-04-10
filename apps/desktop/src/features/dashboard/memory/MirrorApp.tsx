@@ -38,6 +38,8 @@ type CardSummary = {
   badge: string;
   tone: string;
   mainLine: string;
+  detailLine: string;
+  accent: "sky" | "warm" | "sage" | "rose";
   emphasis?: "default" | "number" | "memory";
 };
 type DragState = {
@@ -65,6 +67,16 @@ const DEFAULT_MODULE_POSITIONS: ModulePositions = {
   completedTasks: { x: 0, y: 0 },
   generatedOutputs: { x: 0, y: 0 },
   memory: { x: 0, y: 0 },
+};
+const ORBITAL_MODULE_TARGETS: Record<DraggableModuleKey, { x: number; y: number }> = {
+  history: { x: 0.04, y: 0.16 },
+  profile: { x: 0.34, y: 0.04 },
+  activeHours: { x: 0.68, y: 0.08 },
+  preferredOutput: { x: 0.82, y: 0.34 },
+  daily: { x: 0.72, y: 0.68 },
+  completedTasks: { x: 0.42, y: 0.82 },
+  generatedOutputs: { x: 0.12, y: 0.7 },
+  memory: { x: 0.02, y: 0.44 },
 };
 
 function formatMirrorDate(value: string) {
@@ -244,7 +256,7 @@ function resolveSettledPosition(target: ModulePosition, occupied: ModulePosition
   return bestDistance === Number.POSITIVE_INFINITY ? null : bestCandidate;
 }
 
-function getDefaultModuleTargets(bounds: BoardBounds, grid: BoardGrid, size: ModuleSize): ModulePositions {
+function getGridModuleTargets(bounds: BoardBounds, grid: BoardGrid, size: ModuleSize): ModulePositions {
   const availableWidth = Math.max(size.width, bounds.maxX - bounds.minX + size.width);
   const availableHeight = Math.max(size.height, bounds.maxY - bounds.minY + size.height);
   const gridHeight = grid.rows * size.height + Math.max(0, grid.rows - 1) * CARD_CLEARANCE;
@@ -266,6 +278,34 @@ function getDefaultModuleTargets(bounds: BoardBounds, grid: BoardGrid, size: Mod
   });
 
   return positions;
+}
+
+function getOrbitalModuleTargets(bounds: BoardBounds) {
+  const positions = { ...DEFAULT_MODULE_POSITIONS };
+  const travelX = Math.max(0, bounds.maxX - bounds.minX);
+  const travelY = Math.max(0, bounds.maxY - bounds.minY);
+
+  MODULE_KEYS.forEach((key) => {
+    const target = ORBITAL_MODULE_TARGETS[key];
+    positions[key] = {
+      x: Math.round(bounds.minX + travelX * target.x),
+      y: Math.round(bounds.minY + travelY * target.y),
+    };
+  });
+
+  return positions;
+}
+
+function getDefaultModuleTargets(bounds: BoardBounds, grid: BoardGrid, size: ModuleSize): ModulePositions {
+  const availableWidth = bounds.maxX - bounds.minX + size.width;
+  const availableHeight = bounds.maxY - bounds.minY + size.height;
+  const canUseOrbitalLayout = availableWidth >= size.width * 3.6 && availableHeight >= size.height * 3.15;
+
+  if (!canUseOrbitalLayout) {
+    return getGridModuleTargets(bounds, grid, size);
+  }
+
+  return getOrbitalModuleTargets(bounds);
 }
 
 function normalizeModulePositions(targets: ModulePositions, layout: BoardLayout) {
@@ -809,6 +849,8 @@ export function MirrorApp() {
       return {
         badge: `${overview.history_summary.length} 条片段`,
         tone: "processing",
+        detailLine: overview.history_summary[1] ?? "轻触查看完整历史脉络。",
+        accent: "rose",
         mainLine: overview.history_summary[0] ?? "暂无历史概要",
       };
     }
@@ -817,6 +859,8 @@ export function MirrorApp() {
       return {
         badge: "用户画像",
         tone: "green",
+        detailLine: profile?.preferred_output ?? "等待新的画像补全。",
+        accent: "sage",
         mainLine: profile?.work_style ?? "暂无用户画像",
       };
     }
@@ -825,6 +869,8 @@ export function MirrorApp() {
       return {
         badge: "活跃时段",
         tone: "green",
+        detailLine: "镜像捕捉到的高频在线节奏。",
+        accent: "sky",
         mainLine: profile?.active_hours ?? "未记录",
       };
     }
@@ -833,6 +879,8 @@ export function MirrorApp() {
       return {
         badge: "偏好交付",
         tone: "processing",
+        detailLine: profile?.work_style ?? "等待新的偏好摘要。",
+        accent: "warm",
         mainLine: profile?.preferred_output ?? "未记录",
       };
     }
@@ -841,6 +889,10 @@ export function MirrorApp() {
       return {
         badge: dailySummary ? formatShortMirrorDate(dailySummary.date) : "暂无记录",
         tone: "processing",
+        detailLine: dailySummary
+          ? `${dailySummary.completed_tasks} 项任务 · ${dailySummary.generated_outputs} 份输出`
+          : "等待新的日报同步。",
+        accent: "sky",
         mainLine: dailySummary ? formatMirrorDate(dailySummary.date) : "暂无日报",
       };
     }
@@ -849,6 +901,8 @@ export function MirrorApp() {
       return {
         badge: "今日完成",
         tone: "processing",
+        detailLine: "已经落到镜面里的任务完成数。",
+        accent: "warm",
         mainLine: `${dailySummary?.completed_tasks ?? 0} 项任务`,
         emphasis: "number",
       };
@@ -858,6 +912,8 @@ export function MirrorApp() {
       return {
         badge: "输出数量",
         tone: "processing",
+        detailLine: "今日沉淀进镜像的输出线索。",
+        accent: "rose",
         mainLine: `${dailySummary?.generated_outputs ?? 0} 份输出`,
         emphasis: "number",
       };
@@ -866,6 +922,8 @@ export function MirrorApp() {
     return {
       badge: `${overview.memory_references.length} 条记忆`,
       tone: "processing",
+      detailLine: latestMemoryReference?.reason ?? "等待新的记忆调用记录。",
+      accent: "sage",
       mainLine: latestMemoryReference?.memory_id ?? "暂无记忆",
       emphasis: "memory",
     };
@@ -886,6 +944,7 @@ export function MirrorApp() {
       <div
         key={key}
         className={`mirror-page__draggable mirror-page__draggable--${key}${isDragging ? " is-dragging" : ""}${isExpanded ? " is-active" : ""}${boardReady ? " is-ready" : ""}`}
+        data-accent={summary.accent}
         style={{
           height: `${cardSize.height}px`,
           transform: `translate3d(${modulePositions[key].x}px, ${modulePositions[key].y}px, 0)`,
@@ -904,17 +963,107 @@ export function MirrorApp() {
       >
         <section className="mirror-page__card-surface" aria-hidden="true">
           <div className="mirror-page__card-shell">
-            <StatusBadge tone={summary.tone}>{summary.badge}</StatusBadge>
+            <div className="mirror-page__card-top">
+              <div className="mirror-page__card-heading">
+                <p className="mirror-page__card-kicker">{getModuleEyebrow(key)}</p>
+                <p className="mirror-page__card-title">{getModuleTitle(key)}</p>
+              </div>
+              <StatusBadge tone={summary.tone}>{summary.badge}</StatusBadge>
+            </div>
             <p className={summaryClassName}>{summary.mainLine}</p>
+            <p className="mirror-page__card-detail">{summary.detailLine}</p>
+            <p className="mirror-page__module-hint">拖动整理 · 点按查看</p>
           </div>
         </section>
       </div>
     );
   };
 
+  const summaryDateLabel = dailySummary ? formatShortMirrorDate(dailySummary.date) : "暂无日报";
+
   return (
     <main className="app-shell mirror-page">
       <div className="mirror-page__canvas mirror-page__canvas--full" ref={canvasRef} aria-label="Mirror 卡片工作板">
+        <section className="mirror-page__scene" aria-label="Mirror 中央陪伴视图">
+          <div className="mirror-page__hero-copy">
+            <p className="mirror-page__eyebrow">Mirror companion hub</p>
+            <h1 className="mirror-page__title">让镜像围着今天的你轻轻旋转</h1>
+            <p className="mirror-page__lede">
+              中央陪伴球负责收拢今天的镜像语气，周围浮卡继续保留可拖动的整理方式；点开任意卡片，仍然可以查看完整历史、画像、日报与记忆细节。
+            </p>
+          </div>
+
+          <div className="mirror-page__companion-shell">
+            <div className="mirror-page__companion-halo" />
+            <div className="mirror-page__companion-orbit mirror-page__companion-orbit--outer" />
+            <div className="mirror-page__companion-orbit mirror-page__companion-orbit--mid" />
+            <div className="mirror-page__companion-orbit mirror-page__companion-orbit--inner" />
+            <div className="mirror-page__companion-spark mirror-page__companion-spark--left" />
+            <div className="mirror-page__companion-spark mirror-page__companion-spark--right" />
+
+            <div className="mirror-page__mascot-shell">
+              <div className="mirror-page__mascot-shadow" />
+              <div className="mirror-page__mascot-float">
+                <div className="mirror-page__mascot-tail" />
+                <div className="mirror-page__mascot-wing mirror-page__mascot-wing--left" />
+                <div className="mirror-page__mascot-wing mirror-page__mascot-wing--right" />
+                <div className="mirror-page__mascot-body">
+                  <div className="mirror-page__mascot-crest">
+                    <span className="mirror-page__mascot-feather mirror-page__mascot-feather--left" />
+                    <span className="mirror-page__mascot-feather mirror-page__mascot-feather--center" />
+                    <span className="mirror-page__mascot-feather mirror-page__mascot-feather--right" />
+                  </div>
+                  <div className="mirror-page__mascot-belly" />
+                  <div className="mirror-page__mascot-cheek mirror-page__mascot-cheek--left" />
+                  <div className="mirror-page__mascot-cheek mirror-page__mascot-cheek--right" />
+                  <div className="mirror-page__mascot-face">
+                    <div className="mirror-page__mascot-eyes">
+                      <span className="mirror-page__mascot-eye" />
+                      <span className="mirror-page__mascot-eye" />
+                    </div>
+                    <div className="mirror-page__mascot-beak" />
+                  </div>
+                </div>
+              </div>
+              <div className="mirror-page__mascot-perch" />
+            </div>
+
+            <article className="mirror-page__insight-shell">
+              <div className="mirror-page__insight-header">
+                <p className="mirror-page__insight-label">镜像洞察</p>
+                <StatusBadge tone="processing">{formatInsightBadgeLabel(insight.badge)}</StatusBadge>
+              </div>
+              <h2 className="mirror-page__insight-title">{insight.title}</h2>
+              <p className="mirror-page__insight-description">{insight.description}</p>
+              {latestMemoryReference ? (
+                <div className="mirror-page__citation">
+                  <p className="mirror-page__citation-header">
+                    <BookMarked className="mirror-page__citation-icon" />
+                    最近记忆引用
+                  </p>
+                  <p className="mirror-page__citation-id">{latestMemoryReference.memory_id}</p>
+                  <p className="mirror-page__citation-summary">{latestMemoryReference.reason}</p>
+                </div>
+              ) : null}
+            </article>
+
+            <div className="mirror-page__companion-metrics" aria-hidden="true">
+              <article className="mirror-page__companion-metric mirror-page__companion-metric--date">
+                <p className="mirror-page__micro-label">最近日报</p>
+                <p className="mirror-page__companion-value">{summaryDateLabel}</p>
+              </article>
+              <article className="mirror-page__companion-metric mirror-page__companion-metric--tasks">
+                <p className="mirror-page__micro-label">今日完成</p>
+                <p className="mirror-page__companion-value">{dailySummary?.completed_tasks ?? 0} 项</p>
+              </article>
+              <article className="mirror-page__companion-metric mirror-page__companion-metric--memory">
+                <p className="mirror-page__micro-label">记忆引用</p>
+                <p className="mirror-page__companion-value">{overview.memory_references.length} 条</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
         <aside className={`mirror-page__source-status ${sourceStatus.className}`} aria-label="Mirror 数据来源状态">
           <StatusBadge tone={source === "rpc" ? "green" : "processing"}>{sourceStatus.badge}</StatusBadge>
           <div className="mirror-page__source-copy">

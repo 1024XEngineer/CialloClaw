@@ -83,13 +83,14 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
+	normalizedPath := normalizeWorkspaceToolPath(pathStr)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizedPath)
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
-	pathStr = safePath
+	readPath := readFileToolPath(pathStr, normalizedPath, safePath)
 
-	content, err := execCtx.Platform.ReadFile(pathStr)
+	content, err := execCtx.Platform.ReadFile(readPath)
 	if err != nil {
 		return &tools.ToolResult{
 			ToolName: t.meta.Name,
@@ -100,7 +101,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	}
 
 	rawOutput := map[string]any{
-		"path":      pathStr,
+		"path":      safePath,
 		"content":   string(content),
 		"mime_type": readFileTextType,
 		"text_type": readFileTextType,
@@ -122,28 +123,38 @@ func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCon
 		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
+	normalizedPath := normalizeWorkspaceToolPath(pathStr)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizedPath)
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
-	pathStr = safePath
 
 	return &tools.ToolResult{
 		ToolName: t.meta.Name,
 		RawOutput: map[string]any{
 			"dry_run":   true,
-			"path":      pathStr,
+			"path":      safePath,
 			"valid":     true,
 			"mime_type": readFileTextType,
 			"text_type": readFileTextType,
 		},
 		SummaryOutput: map[string]any{
 			"dry_run":   true,
-			"path":      pathStr,
+			"path":      safePath,
 			"valid":     true,
 			"mime_type": readFileTextType,
 		},
 	}, nil
+}
+
+func readFileToolPath(originalPath, normalizedPath, safePath string) string {
+	if isToolAbsolutePath(originalPath) {
+		return safePath
+	}
+	if normalizedPath == "" {
+		return safePath
+	}
+	return normalizedPath
 }
 
 func buildReadFileSummary(raw map[string]any) map[string]any {

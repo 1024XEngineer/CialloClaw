@@ -1,27 +1,33 @@
-import type { CSSProperties, PointerEvent } from "react";
+import { useRef } from "react";
+import type { CSSProperties, MouseEvent, PointerEvent } from "react";
 import { AudioLines, ShieldAlert } from "lucide-react";
 import { cn } from "../../../utils/cn";
+import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
 
 type ShellBallMascotProps = {
   visualState: ShellBallVisualState;
+  voicePreview: ShellBallVoicePreview;
   motionConfig: ShellBallMotionConfig;
   onPrimaryClick: () => void;
   onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
-  onPressEnd: () => void;
+  onPressEnd: (event: PointerEvent<HTMLButtonElement>) => boolean;
 };
 
 type MotionStyle = CSSProperties & Record<string, string>;
 
 export function ShellBallMascot({
   visualState,
+  voicePreview,
   motionConfig,
   onPrimaryClick,
   onPressStart,
   onPressMove,
   onPressEnd,
 }: ShellBallMascotProps) {
+  const suppressClickRef = useRef(false);
+
   const floatStyle: MotionStyle = {
     "--shell-ball-float-distance": `${motionConfig.floatOffsetY}px`,
     "--shell-ball-float-duration": `${motionConfig.floatDurationMs}ms`,
@@ -63,11 +69,33 @@ export function ShellBallMascot({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
 
-    onPressEnd();
+    const handled = onPressEnd(event);
+    if (!handled) {
+      return;
+    }
+
+    suppressClickRef.current = true;
+    globalThis.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+  }
+
+  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    onPrimaryClick();
   }
 
   return (
-    <div className="shell-ball-mascot" data-state={visualState} data-tone={motionConfig.accentTone}>
+    <div
+      className={cn("shell-ball-mascot", voicePreview !== null && `shell-ball-mascot--preview-${voicePreview}`)}
+      data-state={visualState}
+      data-tone={motionConfig.accentTone}
+      data-voice-preview={voicePreview ?? undefined}
+    >
       <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--back" />
       <div className="shell-ball-mascot__shadow" />
 
@@ -130,7 +158,8 @@ export function ShellBallMascot({
         type="button"
         className="shell-ball-mascot__hotspot"
         aria-label="Shell-ball mascot"
-        onClick={onPrimaryClick}
+        data-shell-ball-zone="voice-hotspot"
+        onClick={handleClick}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}

@@ -4,6 +4,8 @@ package storage
 import (
 	"context"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 // CapabilitySnapshot 定义当前模块的数据结构。
@@ -12,12 +14,14 @@ type CapabilitySnapshot struct {
 	Configured             bool
 	SupportsStructuredData bool
 	SupportsMemoryStore    bool
+	SupportsToolCallSink   bool
 	SupportsRetrievalHits  bool
 	SupportsFTS5           bool
 	SupportsSQLiteVecStub  bool
 	SupportsArtifactStore  bool
 	SupportsSecretStore    bool
 	MemoryStoreBackend     string
+	ToolCallStoreBackend   string
 	MemoryRetrievalBackend string
 	FallbackActive         bool
 }
@@ -89,12 +93,14 @@ type TaskRunRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
+	TokenUsage        map[string]any
 	MemoryReadPlans   []map[string]any
 	MemoryWritePlans  []map[string]any
 	StorageWritePlan  map[string]any
@@ -110,4 +116,9 @@ type TaskRunStore interface {
 	AllocateIdentifier(ctx context.Context, prefix string) (string, error)
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
+}
+
+// ToolCallStore 定义 tool_call 持久化契约。
+type ToolCallStore interface {
+	SaveToolCall(ctx context.Context, record tools.ToolCallRecord) error
 }

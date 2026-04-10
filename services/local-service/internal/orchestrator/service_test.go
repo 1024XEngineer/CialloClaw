@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -24,6 +25,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 // TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
@@ -39,6 +41,12 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 		Provider:   "openai_responses",
 		ModelID:    "gpt-5.4",
 		OutputText: s.output,
+		Usage: model.TokenUsage{
+			InputTokens:  12,
+			OutputTokens: 24,
+			TotalTokens:  36,
+		},
+		LatencyMS: 42,
 	}, nil
 }
 
@@ -52,11 +60,16 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	}
 
 	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
+	auditService := audit.NewService()
 	deliveryService := delivery.NewService()
 	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, modelService, audit.NewService(), deliveryService, toolRegistry, pluginService)
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, modelService, auditService, checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -68,7 +81,7 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
+	).WithAudit(auditService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
 
 	return service, workspaceRoot
 }
@@ -196,6 +209,258 @@ func TestTaskInspectorRunAggregatesRuntimeState(t *testing.T) {
 	suggestions, ok := result["suggestions"].([]string)
 	if !ok || len(suggestions) == 0 {
 		t.Fatalf("expected runtime suggestions, got %+v", result["suggestions"])
+	}
+}
+
+func TestServiceNotepadListReturnsRuntimeItemsByBucket(t *testing.T) {
+	service := newTestService()
+	now := time.Now().UTC()
+	service.runEngine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_today",
+			"title":            "translate daily notes",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(2 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "translate",
+		},
+		{
+			"item_id":          "todo_later",
+			"title":            "rewrite later draft",
+			"bucket":           "later",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(48 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "rewrite",
+		},
+	})
+
+	result, err := service.NotepadList(map[string]any{
+		"group":  "upcoming",
+		"limit":  float64(20),
+		"offset": float64(0),
+	})
+	if err != nil {
+		t.Fatalf("notepad list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one upcoming notepad item, got %d", len(items))
+	}
+	if items[0]["item_id"] != "todo_today" {
+		t.Fatalf("expected runtime list to keep todo_today, got %+v", items[0])
+	}
+	if items[0]["status"] != "due_today" {
+		t.Fatalf("expected runtime list to normalize due_today status, got %v", items[0]["status"])
+	}
+}
+
+func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing.T) {
+	service := newTestService()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	service.runEngine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_translate",
+			"title":            "translate the meeting notes",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(3 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "translate into English",
+		},
+	})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_translate",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["title"] != "translate the meeting notes" {
+		t.Fatalf("expected converted task title to come from runtime notepad item, got %v", task["title"])
+	}
+	if task["source_type"] != "todo" {
+		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
+	}
+
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "translate" {
+		t.Fatalf("expected runtime notepad conversion to infer translate intent, got %v", intentValue["name"])
+	}
+
+	taskID := task["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.MemoryReadPlans) == 0 {
+		t.Fatal("expected converted task to attach memory read plans")
+	}
+
+	upcomingItems, total := service.runEngine.NotepadItems("upcoming", 10, 0)
+	if total != 1 || len(upcomingItems) != 1 {
+		t.Fatalf("expected converted todo item to stay open until task finishes, total=%d len=%d", total, len(upcomingItems))
+	}
+	if upcomingItems[0]["item_id"] != "todo_translate" || upcomingItems[0]["status"] == "completed" {
+		t.Fatalf("expected notepad item to remain open, got %+v", upcomingItems[0])
+	}
+}
+
+func TestServiceExecutionAuditIDsStayUniqueAcrossToolAndTaskRecords(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime output")
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_audit",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "解释一下这段内容",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	recordedTask, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain available")
+	}
+	if len(recordedTask.AuditRecords) == 0 {
+		t.Fatal("expected task audit records to be appended")
+	}
+
+	firstTaskAuditID, _ := recordedTask.AuditRecords[0]["audit_id"].(string)
+	if firstTaskAuditID == "" {
+		t.Fatalf("expected persisted task audit id, got %+v", recordedTask.AuditRecords[0])
+	}
+	if firstTaskAuditID == "audit_001" {
+		t.Fatalf("expected shared audit service to advance ids before task audit persistence, got %q", firstTaskAuditID)
+	}
+}
+
+func TestServiceRecommendationGetUsesRuntimeTaskState(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_recommend",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "tiny note",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskTitle := startResult["task"].(map[string]any)["title"].(string)
+	result, err := service.RecommendationGet(map[string]any{
+		"source": "floating_ball",
+		"scene":  "hover",
+		"context": map[string]any{
+			"page_title": "Dashboard",
+			"app_name":   "desktop",
+		},
+	})
+	if err != nil {
+		t.Fatalf("recommendation get failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatal("expected runtime recommendation items")
+	}
+	if !strings.Contains(items[0]["text"].(string), taskTitle) {
+		t.Fatalf("expected recommendation text to reference runtime task title, got %v", items[0]["text"])
+	}
+}
+
+func TestServiceRecommendationFeedbackSubmitAppliesCooldown(t *testing.T) {
+	service := newTestService()
+	params := map[string]any{
+		"source": "floating_ball",
+		"scene":  "selected_text",
+		"context": map[string]any{
+			"page_title":     "Article",
+			"app_name":       "desktop",
+			"selection_text": "This paragraph should be translated before publishing externally.",
+		},
+	}
+
+	first, err := service.RecommendationGet(params)
+	if err != nil {
+		t.Fatalf("recommendation get failed: %v", err)
+	}
+	items := first["items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatal("expected recommendation items before feedback")
+	}
+
+	feedbackResult, err := service.RecommendationFeedbackSubmit(map[string]any{
+		"recommendation_id": items[0]["recommendation_id"],
+		"feedback":          "negative",
+	})
+	if err != nil {
+		t.Fatalf("recommendation feedback submit failed: %v", err)
+	}
+	if feedbackResult["applied"] != true {
+		t.Fatalf("expected recommendation feedback to apply, got %+v", feedbackResult)
+	}
+
+	second, err := service.RecommendationGet(params)
+	if err != nil {
+		t.Fatalf("second recommendation get failed: %v", err)
+	}
+	if second["cooldown_hit"] != true {
+		t.Fatalf("expected cooldown hit after negative feedback, got %+v", second)
+	}
+	if len(second["items"].([]map[string]any)) != 0 {
+		t.Fatalf("expected cooldown hit to suppress recommendation items, got %+v", second["items"])
+	}
+}
+
+func TestServiceSubmitInputWithFilesDoesNotWaitForInput(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_files",
+		"source":     "floating_ball",
+		"input": map[string]any{
+			"files": []any{"workspace/notes.md"},
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":    "Workspace",
+				"app_name": "desktop",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] == "waiting_input" {
+		t.Fatalf("expected file input to enter task flow instead of waiting_input, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected file input to map to dragged_file source_type, got %v", task["source_type"])
 	}
 }
 
@@ -1093,6 +1358,97 @@ func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 	}
 }
 
+func TestServiceSecuritySummaryIncludesRuntimeTokenUsage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed token summary")
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "collect runtime token summary",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected completed runtime task to remain available")
+	}
+	if len(record.AuditRecords) == 0 {
+		t.Fatal("expected executor-backed task to carry audit records")
+	}
+
+	securityResult, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	tokenCostSummary := securityResult["summary"].(map[string]any)["token_cost_summary"].(map[string]any)
+	if tokenCostSummary["current_task_tokens"] != 36 {
+		t.Fatalf("expected current_task_tokens to reflect runtime usage, got %+v", tokenCostSummary)
+	}
+	if tokenCostSummary["today_tokens"] != 36 {
+		t.Fatalf("expected today_tokens to reflect runtime usage, got %+v", tokenCostSummary)
+	}
+	if tokenCostSummary["budget_auto_downgrade"] != true {
+		t.Fatalf("expected budget_auto_downgrade to remain true, got %+v", tokenCostSummary)
+	}
+}
+
+func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "dashboard audit trail")
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "build dashboard audit trail",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "security",
+		"tab":    "audit",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	highlights := moduleResult["highlights"].([]string)
+	foundAuditHighlight := false
+	for _, highlight := range highlights {
+		if strings.Contains(highlight, "generate_text") || strings.Contains(highlight, "publish_result") {
+			foundAuditHighlight = true
+			break
+		}
+	}
+	if !foundAuditHighlight {
+		t.Fatalf("expected dashboard highlights to expose runtime audit trail, got %+v", highlights)
+	}
+}
+
 func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	service := newTestService()
 
@@ -1199,12 +1555,18 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	output, ok := record.LatestToolCall["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
-	}
-	if output["model_invocation"] == nil {
-		t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
-	}
-	if output["audit_record"] == nil {
-		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+		if output["summary_output"] == nil {
+			t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
+		}
+		if output["model_invocation"] == nil {
+			t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
+		}
+		if output["audit_record"] == nil {
+			t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+		}
+		if output["recovery_point"] != nil {
+			t.Fatalf("expected no recovery_point for create flow, got %+v", output)
+		}
 	}
 }
 

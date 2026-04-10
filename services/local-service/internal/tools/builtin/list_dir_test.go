@@ -78,7 +78,14 @@ func (s *stubListDirPlatform) ReadDir(path string) ([]fs.DirEntry, error) {
 	if s.readDirErr != nil {
 		return nil, s.readDirErr
 	}
-	return s.entries[filepath.Clean(path)], nil
+	clean := filepath.Clean(path)
+	if entries, ok := s.entries[clean]; ok {
+		return entries, nil
+	}
+	if !isStubAbsolutePath(clean) {
+		return s.entries[filepath.Join(s.workspaceRoot, clean)], nil
+	}
+	return nil, nil
 }
 func (s *stubListDirPlatform) ReadFile(path string) ([]byte, error)        { return nil, fs.ErrNotExist }
 func (s *stubListDirPlatform) WriteFile(path string, content []byte) error { return nil }

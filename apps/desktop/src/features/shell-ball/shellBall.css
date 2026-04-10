@@ -1,4 +1,4 @@
-.shell-ball-page {
+.shell-ball-surface {
   --shell-ball-paper: rgba(255, 251, 244, 0.88);
   --shell-ball-paper-strong: rgba(255, 253, 249, 0.96);
   --shell-ball-paper-soft: rgba(251, 246, 238, 0.72);
@@ -11,86 +11,42 @@
   --shell-ball-sky: #6a91c8;
   --shell-ball-teal: #4f9da7;
   --shell-ball-slate: #8f9aa5;
-  background:
-    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.92), transparent 24%),
-    radial-gradient(circle at 84% 6%, rgba(242, 219, 182, 0.72), transparent 18%),
-    radial-gradient(circle at 50% 100%, rgba(202, 180, 143, 0.12), transparent 34%),
-    linear-gradient(180deg, #f8f3eb 0%, #efe5d8 52%, #e8decd 100%);
   color: var(--shell-ball-ink);
-}
-
-.shell-ball-page__frame {
   display: grid;
   gap: 1.1rem;
+  justify-items: center;
   margin: 0 auto;
-  max-width: 1120px;
+  max-width: 36rem;
+  min-height: 0;
+  padding: 0.85rem 0.85rem 1rem;
   position: relative;
   width: 100%;
 }
 
-.shell-ball-page__hero,
-.shell-ball-switcher {
-  backdrop-filter: blur(12px);
+.shell-ball-surface::before {
   background:
-    linear-gradient(180deg, rgba(255, 253, 249, 0.92), rgba(248, 241, 231, 0.88)),
-    var(--shell-ball-paper);
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  box-shadow:
-    0 28px 80px -56px rgba(71, 65, 53, 0.34),
-    0 1px 0 rgba(255, 255, 255, 0.72) inset;
-}
-
-.shell-ball-page__hero {
-  border-radius: 40px;
-  display: grid;
-  gap: clamp(1.4rem, 2.8vw, 2.3rem);
-  overflow: hidden;
-  padding: clamp(1.3rem, 2.5vw, 2.2rem);
-  position: relative;
-}
-
-.shell-ball-page__hero::before,
-.shell-ball-page__hero::after {
+    radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.42), transparent 28%),
+    radial-gradient(circle at 82% 14%, rgba(242, 219, 182, 0.32), transparent 20%),
+    radial-gradient(circle at 50% 100%, rgba(202, 180, 143, 0.09), transparent 30%);
   content: "";
   inset: 0;
   pointer-events: none;
   position: absolute;
 }
 
-.shell-ball-page__hero::before {
-  background:
-    radial-gradient(circle at 78% 14%, rgba(255, 255, 255, 0.85), transparent 22%),
-    linear-gradient(120deg, rgba(255, 255, 255, 0.48), transparent 42%);
-}
-
-.shell-ball-page__hero::after {
-  background-image:
-    linear-gradient(rgba(141, 126, 105, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(141, 126, 105, 0.04) 1px, transparent 1px);
-  background-size: 96px 96px;
-  mask-image: linear-gradient(180deg, black, rgba(0, 0, 0, 0.14));
-}
-
-.shell-ball-page__hero-copy,
-.shell-ball-page__interaction-stack,
-.shell-ball-page__interaction-region,
-.shell-ball-page__interaction-core,
-.shell-ball-page__switcher-shell,
+.shell-ball-surface__core,
 .shell-ball-switcher {
   position: relative;
   z-index: 1;
 }
 
-.shell-ball-page__hero-copy {
+.shell-ball-surface__core {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.95rem;
   justify-items: center;
-  margin: 0 auto;
-  max-width: 42rem;
-  text-align: center;
+  width: 100%;
 }
 
-.shell-ball-page__eyebrow,
 .shell-ball-switcher__eyebrow,
 .shell-ball-switcher__button-state {
   font-family: var(--font-mono);
@@ -98,46 +54,29 @@
   text-transform: uppercase;
 }
 
-.shell-ball-page__eyebrow,
 .shell-ball-switcher__eyebrow {
   color: rgba(110, 123, 137, 0.82);
   font-size: 0.68rem;
   margin: 0;
 }
 
-.shell-ball-page__headline-copy {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.shell-ball-page__title,
 .shell-ball-switcher__title {
   color: var(--shell-ball-ink);
   letter-spacing: -0.04em;
   margin: 0;
 }
 
-.shell-ball-page__title {
-  font-size: clamp(2rem, 3.4vw, 3.2rem);
-  line-height: 0.98;
-}
-
-.shell-ball-page__lede,
 .shell-ball-switcher__note {
   color: var(--shell-ball-copy);
   line-height: 1.72;
   margin: 0;
 }
 
-.shell-ball-page__lede {
-  font-size: 0.95rem;
-  margin: 0 auto;
-  max-width: 32rem;
-}
-
-.shell-ball-page__interaction-stack {
+.shell-ball-surface__stack {
   display: grid;
-  gap: clamp(1rem, 2vw, 1.7rem);
+  gap: clamp(0.85rem, 1.8vw, 1.35rem);
+  justify-items: center;
+  width: 100%;
 }
 
 .shell-ball-bubble-zone {
@@ -204,28 +143,36 @@
   --shell-ball-bubble-accent: rgba(79, 157, 167, 0.24);
 }
 
-.shell-ball-page__interaction-region {
+.shell-ball-surface__interaction-shell {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+}
+
+.shell-ball-surface__host-drag-zone {
+  height: clamp(0.75rem, 2vw, 1rem);
+  pointer-events: none;
+  width: min(100%, 18rem);
+}
+
+.shell-ball-surface__interaction-zone {
   align-items: center;
   display: grid;
   justify-items: center;
+  width: 100%;
 }
 
-.shell-ball-page__interaction-core {
+.shell-ball-surface__body {
   align-items: center;
   display: grid;
-  gap: clamp(1rem, 2vw, 1.55rem);
+  gap: clamp(0.85rem, 1.6vw, 1.35rem);
   justify-items: center;
-  min-height: clamp(23rem, 40vw, 31rem);
-  padding: clamp(0.35rem, 1vw, 0.6rem) 0 0.25rem;
-  width: min(100%, 34rem);
+  min-height: clamp(20rem, 34vw, 27rem);
+  padding: 0.15rem 0 0.25rem;
+  width: min(100%, 28rem);
 }
 
-.shell-ball-page__interaction-core:not(:has(.shell-ball-input-bar)) {
-  min-height: clamp(20rem, 34vw, 26rem);
-  padding-bottom: 1.2rem;
-}
-
-.shell-ball-page__mascot-shell {
+.shell-ball-surface__mascot-shell {
   align-items: center;
   display: flex;
   justify-content: center;
@@ -260,6 +207,16 @@
     box-shadow 180ms ease,
     border-color 180ms ease,
     background 180ms ease;
+}
+
+.shell-ball-input-bar__preview {
+  align-self: center;
+  color: var(--shell-ball-copy);
+  font-size: 0.72rem;
+  font-weight: 600;
+  grid-column: 1 / 2;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .shell-ball-input-bar::before {
@@ -388,6 +345,22 @@
     0 1px 0 rgba(255, 255, 255, 0.92) inset;
 }
 
+.shell-ball-input-bar--preview-lock {
+  border-color: rgba(79, 157, 167, 0.34);
+  box-shadow:
+    0 28px 42px -28px rgba(63, 108, 115, 0.36),
+    0 0 0 4px rgba(79, 157, 167, 0.12),
+    0 1px 0 rgba(255, 255, 255, 0.92) inset;
+}
+
+.shell-ball-input-bar--preview-cancel {
+  border-color: rgba(193, 141, 70, 0.34);
+  box-shadow:
+    0 28px 42px -28px rgba(130, 92, 34, 0.34),
+    0 0 0 4px rgba(193, 141, 70, 0.12),
+    0 1px 0 rgba(255, 255, 255, 0.92) inset;
+}
+
 .shell-ball-input-bar--voice .shell-ball-input-bar__field {
   color: #335862;
 }
@@ -408,21 +381,27 @@
   transform: translateY(8px) scale(0.98);
 }
 
-.shell-ball-page__switcher-shell {
+.shell-ball-surface__switcher-shell {
   display: flex;
   justify-content: center;
+  opacity: 0.76;
+  width: 100%;
 }
 
 .shell-ball-switcher {
   background:
-    linear-gradient(180deg, rgba(255, 253, 249, 0.78), rgba(246, 239, 229, 0.72)),
-    rgba(255, 251, 244, 0.66);
-  border-radius: 26px;
+    linear-gradient(180deg, rgba(255, 253, 249, 0.64), rgba(246, 239, 229, 0.58)),
+    rgba(255, 251, 244, 0.54);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 22px;
+  box-shadow:
+    0 20px 44px -34px rgba(71, 65, 53, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.6) inset;
   display: grid;
   gap: 0.85rem;
-  max-width: 1000px;
-  opacity: 0.92;
-  padding: 0.95rem 1rem;
+  max-width: 960px;
+  opacity: 0.9;
+  padding: 0.85rem 0.95rem;
   width: 100%;
 }
 
@@ -914,6 +893,21 @@
   box-shadow: 0 14px 26px -18px rgba(89, 140, 152, 0.34);
 }
 
+.shell-ball-mascot--preview-lock .shell-ball-mascot__perch {
+  box-shadow: 0 16px 28px -16px rgba(76, 148, 151, 0.42);
+}
+
+.shell-ball-mascot--preview-cancel .shell-ball-mascot__perch {
+  box-shadow: 0 16px 28px -16px rgba(193, 141, 70, 0.44);
+}
+
+.shell-ball-mascot--preview-lock .shell-ball-mascot__hotspot:focus-visible,
+.shell-ball-mascot--preview-cancel .shell-ball-mascot__hotspot:focus-visible {
+  box-shadow:
+    0 0 0 4px rgba(255, 248, 236, 0.95),
+    0 0 0 7px color-mix(in srgb, var(--shell-ball-accent, #6a91c8) 58%, white);
+}
+
 .shell-ball-mascot[data-tone="sky"] .shell-ball-mascot__orbital--back {
   --shell-ball-accent: var(--shell-ball-sky);
 }
@@ -1086,17 +1080,9 @@
 }
 
 @media (max-width: 720px) {
-  .shell-ball-page {
+  .shell-ball-surface {
     overflow-x: hidden;
-  }
-
-  .shell-ball-page__hero {
-    border-radius: 30px;
-    padding-inline: 1rem;
-  }
-
-  .shell-ball-page__title {
-    max-width: none;
+    padding: 0.75rem 0.55rem 0.9rem;
   }
 
   .shell-ball-bubble-zone {
@@ -1104,7 +1090,7 @@
     padding-inline: 0;
   }
 
-  .shell-ball-page__interaction-core {
+  .shell-ball-surface__body {
     min-height: 20.5rem;
     width: 100%;
   }

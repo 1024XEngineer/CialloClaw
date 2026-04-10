@@ -2,7 +2,9 @@
 package intent
 
 import (
+	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 )
@@ -47,6 +49,17 @@ func (s *Service) Analyze(input string) string {
 	return "confirming_intent"
 }
 
+func (s *Service) AnalyzeSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+	if strings.TrimSpace(snapshot.Text) == "" &&
+		strings.TrimSpace(snapshot.SelectionText) == "" &&
+		strings.TrimSpace(snapshot.ErrorText) == "" &&
+		len(snapshot.Files) == 0 {
+		return "waiting_input"
+	}
+
+	return "confirming_intent"
+}
+
 // Suggest 处理当前模块的相关逻辑。
 
 // Suggest 根据上下文快照和可选的显式 intent 生成任务建议。
@@ -60,16 +73,12 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	intentName := stringValue(intent, "name")
 	sourceType := sourceTypeFromSnapshot(snapshot)
 	requiresConfirm := confirmRequired
-	if !requiresConfirm {
-		requiresConfirm = intentName == "summarize" && (snapshot.InputType == "file" || snapshot.InputType == "text_selection")
+	if !requiresConfirm && len(explicitIntent) == 0 {
+		requiresConfirm = requiresConfirmation(snapshot, intentName)
 	}
 
-	directDeliveryType := "bubble"
-	resultPreview := "结果已通过气泡返回"
-	if intentName == "summarize" || intentName == "rewrite" {
-		directDeliveryType = "workspace_document"
-		resultPreview = "已为你写入文档并打开"
-	}
+	directDeliveryType := directDeliveryTypeForSnapshot(snapshot, intentName)
+	resultPreview := previewForDeliveryType(directDeliveryType)
 
 	return Suggestion{
 		Intent:             intent,
@@ -89,34 +98,29 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 // 这条默认路径服务于 P0 主链路的“先承接，再确认或执行”流程。
 func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[string]any {
 	if snapshot.ErrorText != "" || snapshot.InputType == "error" {
-		return map[string]any{
-			"name":      "explain",
-			"arguments": map[string]any{},
-		}
+		return intentPayload("explain")
+	}
+
+	if detected := detectIntentFromText(snapshot.Text); detected != "" {
+		return intentPayload(detected)
 	}
 
 	if len(snapshot.Files) > 0 || snapshot.InputType == "file" {
-		return map[string]any{
-			"name": "summarize",
-			"arguments": map[string]any{
-				"style": "key_points",
-			},
-		}
+		return intentPayload("summarize")
 	}
 
 	if snapshot.SelectionText != "" || snapshot.InputType == "text_selection" {
-		return map[string]any{
-			"name":      "explain",
-			"arguments": map[string]any{},
+		if isLongContent(snapshot.SelectionText) {
+			return intentPayload("summarize")
 		}
+		return intentPayload("explain")
 	}
 
-	return map[string]any{
-		"name": "summarize",
-		"arguments": map[string]any{
-			"style": "key_points",
-		},
+	if isQuestionText(snapshot.Text) {
+		return intentPayload("explain")
 	}
+
+	return intentPayload("summarize")
 }
 
 // buildTaskTitle 处理当前模块的相关逻辑。
@@ -124,23 +128,24 @@ func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[str
 // buildTaskTitle 生成面向 task 视角的标题文本。
 // 标题会直接进入 task 列表、dashboard 和后续 memory 摘要，因此这里尽量保持面向用户可读。
 func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
+	subject := subjectText(snapshot)
 	switch intentName {
 	case "rewrite":
-		return "改写当前内容"
+		return "改写：" + subject
 	case "translate":
-		return "翻译当前内容"
+		return "翻译：" + subject
 	case "explain":
 		if snapshot.ErrorText != "" || snapshot.InputType == "error" {
-			return "解释当前错误信息"
+			return "解释错误：" + subject
 		}
-		return "解释当前选中内容"
+		return "解释：" + subject
 	case "summarize":
 		if len(snapshot.Files) > 0 || snapshot.InputType == "file" {
-			return "整理并总结拖入文件"
+			return "总结文件：" + subject
 		}
-		return "总结当前内容"
+		return "总结：" + subject
 	default:
-		return "处理当前任务对象"
+		return "处理：" + subject
 	}
 }
 
@@ -195,8 +200,142 @@ func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 	case "recommendation_click":
 		return "hover_input"
 	default:
+		if len(snapshot.Files) > 0 || snapshot.InputType == "file" {
+			return "dragged_file"
+		}
+		if snapshot.ErrorText != "" || snapshot.InputType == "error" {
+			return "error_signal"
+		}
+		if snapshot.SelectionText != "" || snapshot.InputType == "text_selection" {
+			return "selected_text"
+		}
 		return "hover_input"
 	}
+}
+
+func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName string) bool {
+	switch {
+	case snapshot.InputType == "file":
+		return true
+	case snapshot.InputType == "text_selection":
+		return intentName != "translate"
+	case isLongContent(snapshot.Text):
+		return intentName == "summarize" || intentName == "rewrite"
+	default:
+		return false
+	}
+}
+
+func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
+	switch intentName {
+	case "rewrite":
+		return "workspace_document"
+	case "summarize":
+		if len(snapshot.Files) > 0 || isLongContent(snapshot.SelectionText) || isLongContent(snapshot.Text) {
+			return "workspace_document"
+		}
+	case "translate":
+		if len(snapshot.Files) > 0 {
+			return "workspace_document"
+		}
+	}
+	return "bubble"
+}
+
+func previewForDeliveryType(deliveryType string) string {
+	if deliveryType == "workspace_document" {
+		return "已为你写入文档并打开"
+	}
+	return "结果已通过气泡返回"
+}
+
+func detectIntentFromText(text string) string {
+	value := strings.ToLower(strings.TrimSpace(text))
+	switch {
+	case value == "":
+		return ""
+	case strings.Contains(value, "翻译") || strings.HasPrefix(value, "translate") || strings.HasPrefix(value, "翻成"):
+		return "translate"
+	case strings.Contains(value, "改写") || strings.HasPrefix(value, "rewrite") || strings.Contains(value, "润色"):
+		return "rewrite"
+	case strings.Contains(value, "解释") || strings.HasPrefix(value, "explain") || isQuestionText(value):
+		return "explain"
+	default:
+		return ""
+	}
+}
+
+func intentPayload(name string) map[string]any {
+	switch name {
+	case "rewrite":
+		return map[string]any{
+			"name": "rewrite",
+			"arguments": map[string]any{
+				"tone": "professional",
+			},
+		}
+	case "translate":
+		return map[string]any{
+			"name": "translate",
+			"arguments": map[string]any{
+				"target_language": "en",
+			},
+		}
+	case "explain":
+		return map[string]any{
+			"name":      "explain",
+			"arguments": map[string]any{},
+		}
+	default:
+		return map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		}
+	}
+}
+
+func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
+	switch {
+	case len(snapshot.Files) > 0:
+		return filepath.Base(snapshot.Files[0])
+	case strings.TrimSpace(snapshot.SelectionText) != "":
+		return truncateText(snapshot.SelectionText, 18)
+	case strings.TrimSpace(snapshot.Text) != "":
+		return truncateText(snapshot.Text, 18)
+	case strings.TrimSpace(snapshot.ErrorText) != "":
+		return truncateText(snapshot.ErrorText, 18)
+	case strings.TrimSpace(snapshot.PageTitle) != "":
+		return truncateText(snapshot.PageTitle, 18)
+	default:
+		return "当前内容"
+	}
+}
+
+func isQuestionText(text string) bool {
+	value := strings.TrimSpace(strings.ToLower(text))
+	switch {
+	case strings.Contains(value, "?"), strings.Contains(value, "？"),
+		strings.Contains(value, "why"), strings.Contains(value, "how"),
+		strings.Contains(value, "什么"), strings.Contains(value, "为什么"), strings.Contains(value, "怎么"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isLongContent(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 80
+}
+
+func truncateText(value string, maxLength int) string {
+	if utf8.RuneCountInString(value) <= maxLength {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:maxLength]) + "..."
 }
 
 // stringValue 处理当前模块的相关逻辑。

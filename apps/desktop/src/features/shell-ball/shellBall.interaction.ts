@@ -5,15 +5,23 @@ import type {
   ShellBallVisualState,
 } from "./shellBall.types";
 
-export const SHELL_BALL_LONG_PRESS_MS = 300;
-export const SHELL_BALL_LOCK_DELTA_PX = 24;
-export const SHELL_BALL_CANCEL_DELTA_PX = 24;
+export const SHELL_BALL_HOVER_INTENT_MS = 240;
+export const SHELL_BALL_LEAVE_GRACE_MS = 180;
+export const SHELL_BALL_LONG_PRESS_MS = 420;
+export const SHELL_BALL_LOCK_DELTA_PX = 48;
+export const SHELL_BALL_CANCEL_DELTA_PX = 48;
+export const SHELL_BALL_VERTICAL_PRIORITY_RATIO = 1.25;
 export const SHELL_BALL_CONFIRMING_MS = 600;
 export const SHELL_BALL_WAITING_AUTH_MS = 700;
 export const SHELL_BALL_PROCESSING_MS = 1200;
 
+export type ShellBallVoicePreview = "lock" | "cancel" | null;
+
+export type ShellBallGestureAxisIntent = "vertical" | "horizontal";
+
 type ShellBallControllerDispatchOptions = {
   regionActive?: boolean;
+  hoverRetained?: boolean;
 };
 
 type ShellBallScheduledTransition =
@@ -26,6 +34,27 @@ type ShellBallScheduledTransition =
       kind: "processing_return";
       ms: number;
     };
+
+type ShellBallHoverTimingEvent = Extract<
+  ShellBallInteractionEvent,
+  "pointer_enter_hotspot" | "pointer_leave_region"
+>;
+
+type ShellBallHoverTimingResolution = {
+  transition: ShellBallTransitionResult;
+  cancelPending: boolean;
+};
+
+type ShellBallResolvedInteraction = {
+  transition: ShellBallTransitionResult;
+  cancelPending: boolean;
+};
+
+type ShellBallHoverRetentionInput = {
+  regionActive: boolean;
+  inputFocused: boolean;
+  hasDraft: boolean;
+};
 
 type ShellBallInteractionController = {
   dispatch: (event: ShellBallInteractionEvent, options?: ShellBallControllerDispatchOptions) => ShellBallVisualState;
@@ -54,22 +83,140 @@ export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBall
   }
 }
 
+export function shouldRetainShellBallHoverInput(input: ShellBallHoverRetentionInput): boolean {
+  return !input.regionActive && (input.inputFocused || input.hasDraft);
+}
+
+export function getShellBallGestureAxisIntent(input: {
+  deltaX: number;
+  deltaY: number;
+}): ShellBallGestureAxisIntent {
+  const verticalDistance = Math.abs(input.deltaY);
+  const horizontalDistance = Math.abs(input.deltaX);
+
+  if (verticalDistance >= horizontalDistance * SHELL_BALL_VERTICAL_PRIORITY_RATIO) {
+    return "vertical";
+  }
+
+  return "horizontal";
+}
+
+export function shouldPreviewShellBallVoiceGesture(input: { deltaX: number; deltaY: number }): boolean {
+  return getShellBallGestureAxisIntent(input) === "vertical";
+}
+
+export function getShellBallVoicePreview(input: { deltaX: number; deltaY: number }): ShellBallVoicePreview {
+  const { deltaX, deltaY } = input;
+
+  if (!shouldPreviewShellBallVoiceGesture({ deltaX, deltaY })) {
+    return null;
+  }
+
+  if (deltaY <= -SHELL_BALL_LOCK_DELTA_PX) {
+    return "lock";
+  }
+
+  if (deltaY >= SHELL_BALL_CANCEL_DELTA_PX) {
+    return "cancel";
+  }
+
+  return null;
+}
+
+export function resolveShellBallVoiceReleaseEvent(
+  preview: ShellBallVoicePreview,
+): Extract<ShellBallInteractionEvent, "voice_lock" | "voice_cancel" | "voice_finish"> {
+  switch (preview) {
+    case "lock":
+      return "voice_lock";
+    case "cancel":
+      return "voice_cancel";
+    default:
+      return "voice_finish";
+  }
+}
+
+export function resolveShellBallHoverTiming(input: {
+  current: ShellBallVisualState;
+  event: ShellBallHoverTimingEvent;
+  hoverRetained?: boolean;
+}): ShellBallHoverTimingResolution {
+  const { current, event, hoverRetained = false } = input;
+
+  if (event === "pointer_enter_hotspot") {
+    if (current === "idle") {
+      return {
+        transition: {
+          next: "idle",
+          autoAdvanceTo: "hover_input",
+          autoAdvanceMs: SHELL_BALL_HOVER_INTENT_MS,
+        },
+        cancelPending: false,
+      };
+    }
+
+    return {
+      transition: { next: current },
+      cancelPending: current === "hover_input",
+    };
+  }
+
+  if (hoverRetained && current === "hover_input") {
+    return {
+      transition: { next: current },
+      cancelPending: true,
+    };
+  }
+
+  if (current === "hover_input") {
+    return {
+      transition: {
+        next: "hover_input",
+        autoAdvanceTo: "idle",
+        autoAdvanceMs: SHELL_BALL_LEAVE_GRACE_MS,
+      },
+      cancelPending: false,
+    };
+  }
+
+  return {
+    transition: { next: current },
+    cancelPending: current === "idle",
+  };
+}
+
+function resolveShellBallInteraction(input: {
+  current: ShellBallVisualState;
+  event: ShellBallInteractionEvent;
+  regionActive: boolean;
+  hoverRetained?: boolean;
+}): ShellBallResolvedInteraction {
+  const { current, event, regionActive, hoverRetained = false } = input;
+
+  if (event === "pointer_enter_hotspot" || event === "pointer_leave_region") {
+    return resolveShellBallHoverTiming({ current, event, hoverRetained });
+  }
+
+  return {
+    transition: resolveShellBallTransition({
+      current,
+      event,
+      regionActive,
+      hoverRetained,
+    }),
+    cancelPending: false,
+  };
+}
+
 export function resolveShellBallTransition(input: {
   current: ShellBallVisualState;
   event: ShellBallInteractionEvent;
   regionActive: boolean;
+  hoverRetained?: boolean;
 }): ShellBallTransitionResult {
   const { current, event, regionActive } = input;
 
   switch (event) {
-    case "pointer_enter_hotspot":
-      return { next: current === "idle" ? "hover_input" : current };
-
-    case "pointer_leave_region":
-      return {
-        next: current === "idle" || current === "hover_input" ? "idle" : current,
-      };
-
     case "submit_text":
       if (current === "hover_input") {
         return {
@@ -118,6 +265,10 @@ export function resolveShellBallTransition(input: {
       }
 
       return { next: current };
+
+    case "pointer_enter_hotspot":
+    case "pointer_leave_region":
+      return resolveShellBallHoverTiming({ current, event, hoverRetained: input.hoverRetained }).transition;
   }
 }
 
@@ -128,6 +279,7 @@ export function createShellBallInteractionController(deps: {
 }): ShellBallInteractionController {
   let currentState = deps.initialState;
   let regionActive = currentState !== "idle";
+  let hoverRetained = false;
   let pendingHandle: unknown;
   let disposed = false;
 
@@ -165,10 +317,24 @@ export function createShellBallInteractionController(deps: {
   }
 
   function applyScheduledTarget(target: ShellBallVisualState) {
+    applyState(target, { scheduleProcessingReturn: true });
+  }
+
+  function applyState(
+    target: ShellBallVisualState,
+    options: {
+      scheduleProcessingReturn: boolean;
+      cancelExisting?: boolean;
+    },
+  ) {
     const previousState = currentState;
+    if (options.cancelExisting) {
+      cancelPending();
+    }
+
     currentState = target;
 
-    if (currentState === "processing" && previousState !== "processing") {
+    if (options.scheduleProcessingReturn && currentState === "processing" && previousState !== "processing") {
       scheduleTransition(getProcessingReturnTransition());
     }
   }
@@ -185,20 +351,24 @@ export function createShellBallInteractionController(deps: {
       regionActive = options.regionActive;
     }
 
+    if (options?.hoverRetained !== undefined) {
+      hoverRetained = options.hoverRetained;
+    }
+
     const previousState = currentState;
-    const result = resolveShellBallTransition({
+    const resolved = resolveShellBallInteraction({
       current: currentState,
       event,
       regionActive,
+      hoverRetained,
     });
-
-    if (result.next !== previousState) {
-      cancelPending();
-    }
-
-    currentState = result.next;
+    const result = resolved.transition;
 
     if (result.autoAdvanceMs !== undefined) {
+      applyState(result.next, {
+        cancelExisting: resolved.cancelPending || result.next !== previousState,
+        scheduleProcessingReturn: false,
+      });
       scheduleTransition({
         kind: "state",
         target: result.autoAdvanceTo,
@@ -207,9 +377,10 @@ export function createShellBallInteractionController(deps: {
       return currentState;
     }
 
-    if (currentState === "processing" && previousState !== "processing") {
-      scheduleTransition(getProcessingReturnTransition());
-    }
+    applyState(result.next, {
+      cancelExisting: resolved.cancelPending || result.next !== previousState,
+      scheduleProcessingReturn: true,
+    });
 
     return currentState;
   }
@@ -227,8 +398,11 @@ export function createShellBallInteractionController(deps: {
       regionActive = options.regionActive;
     }
 
-    cancelPending();
-    currentState = state;
+    if (options?.hoverRetained !== undefined) {
+      hoverRetained = options.hoverRetained;
+    }
+
+    applyState(state, { cancelExisting: true, scheduleProcessingReturn: true });
     return currentState;
   }
 
