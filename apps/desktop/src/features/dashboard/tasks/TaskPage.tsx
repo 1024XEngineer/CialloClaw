@@ -93,6 +93,15 @@ export function TaskPage() {
     feedbackTimeoutRef.current = window.setTimeout(() => setFeedback(null), 2400);
   }
 
+  useEffect(() => {
+    if (!detailOpen || !taskDetailQuery.isError) {
+      return;
+    }
+
+    setDetailOpen(false);
+    showFeedback("任务详情加载失败，请稍后重试。");
+  }, [detailOpen, taskDetailQuery.isError]);
+
   const taskControlMutation = useMutation({
     mutationFn: ({ action, taskId }: { action: "pause" | "resume" | "cancel" | "restart"; taskId: string }) => controlTaskByAction(taskId, action),
     onSuccess: (outcome) => {
@@ -132,6 +141,20 @@ export function TaskPage() {
             <div className="task-preview-page__column task-preview-page__column--loading" />
             <div className="task-preview-page__detail task-preview-page__detail--loading" />
           </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (taskBucketsQuery.isError && !taskBucketsQuery.data) {
+    return (
+      <main className="app-shell task-preview-page">
+        <div className="task-preview-page__frame">
+          <TaskEmptyState
+            copy="任务列表暂时没有成功返回。请确认本地服务可用后重试；开发态如需 mock，请显式开启任务页 mock 模式。"
+            eyebrow="任务加载失败"
+            title="现在无法读取任务预览"
+          />
         </div>
       </main>
     );

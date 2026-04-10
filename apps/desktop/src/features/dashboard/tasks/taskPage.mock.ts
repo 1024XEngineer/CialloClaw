@@ -640,6 +640,10 @@ export function getTaskExperience(taskId: string) {
   return taskExperiences[taskId];
 }
 
+export function hasMockTaskData(taskId: string) {
+  return taskId in mockDetailsState;
+}
+
 export function getMockTaskBuckets() {
   const items: TaskListItem[] = mockTasksState.map((task) => ({
     task,

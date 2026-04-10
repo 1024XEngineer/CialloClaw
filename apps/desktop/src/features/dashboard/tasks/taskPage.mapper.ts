@@ -140,9 +140,17 @@ export function getTaskPrimaryActions(task: Task): TaskPrimaryAction[] {
     ];
   }
 
-  if (task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused" || task.status === "blocked") {
+  if (task.status === "paused") {
     return [
       { action: "resume", label: "继续", tooltip: "恢复当前任务并继续推进。" },
+      { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
+      { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
+      { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
+    ];
+  }
+
+  if (task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "blocked" || task.status === "confirming_intent") {
+    return [
       { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
       { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
       { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
@@ -172,7 +180,7 @@ export function sortTasksByLatest(items: TaskListItem[]) {
 }
 
 export function describeTaskPreview(task: Task, currentStep: string) {
-  if (task.status === "completed" || task.status === "cancelled" || task.status === "ended_unfinished") {
+  if (isTaskEnded(task)) {
     return `${formatStatusLabel(task.status)} · ${formatTimestamp(task.finished_at)}`;
   }
 
@@ -180,7 +188,7 @@ export function describeTaskPreview(task: Task, currentStep: string) {
 }
 
 export function isTaskEnded(task: Task) {
-  return task.status === "completed" || task.status === "cancelled" || task.status === "ended_unfinished";
+  return task.status === "completed" || task.status === "cancelled" || task.status === "ended_unfinished" || task.status === "failed";
 }
 
 export function getTaskPreviewStatusLabel(status: Task["status"]) {
