@@ -69,12 +69,14 @@ func (t *WriteFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteC
 		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	safePath, err := execCtx.Platform.EnsureWithinWorkspace(parsed.Path)
+	normalizedPath := normalizeWorkspaceToolPath(parsed.Path)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizedPath)
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
 
-	created, overwritten, err := detectWriteMode(execCtx.Platform, safePath)
+	statPath := writeFileStatPath(parsed.Path, normalizedPath, safePath)
+	created, overwritten, err := detectWriteMode(execCtx.Platform, statPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: inspect target path: %v", tools.ErrToolExecutionFailed, err)
 	}
@@ -103,12 +105,14 @@ func (t *WriteFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCo
 		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	safePath, err := execCtx.Platform.EnsureWithinWorkspace(parsed.Path)
+	normalizedPath := normalizeWorkspaceToolPath(parsed.Path)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizedPath)
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
 
-	created, overwritten, err := detectWriteMode(execCtx.Platform, safePath)
+	statPath := writeFileStatPath(parsed.Path, normalizedPath, safePath)
+	created, overwritten, err := detectWriteMode(execCtx.Platform, statPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: inspect target path: %v", tools.ErrToolExecutionFailed, err)
 	}
@@ -189,4 +193,14 @@ func buildWriteFileSummary(raw map[string]any) map[string]any {
 		"overwritten":   raw["overwritten"],
 		"mime_type":     raw["mime_type"],
 	}
+}
+
+func writeFileStatPath(originalPath, normalizedPath, safePath string) string {
+	if isToolAbsolutePath(originalPath) {
+		return safePath
+	}
+	if normalizedPath == "" {
+		return safePath
+	}
+	return normalizedPath
 }

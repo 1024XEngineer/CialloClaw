@@ -57,8 +57,11 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.toolRegistry == nil || app.toolExecutor == nil {
 		t.Fatal("expected tool registry and executor to be wired")
 	}
-	if app.toolRegistry.Count() != 4 {
-		t.Fatalf("expected 4 builtin tools to be registered, got %d", app.toolRegistry.Count())
+	if app.toolRegistry.Count() != 5 {
+		t.Fatalf("expected 5 builtin tools to be registered, got %d", app.toolRegistry.Count())
+	}
+	if _, err := app.toolRegistry.Get("generate_text"); err != nil {
+		t.Fatalf("expected generate_text to be registered, got %v", err)
 	}
 	if _, err := app.toolRegistry.Get("read_file"); err != nil {
 		t.Fatalf("expected read_file to be registered, got %v", err)

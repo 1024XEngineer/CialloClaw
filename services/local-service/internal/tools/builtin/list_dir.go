@@ -51,12 +51,17 @@ func (t *ListDirTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCon
 		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
+	normalizedPath := normalizeWorkspaceToolPath(pathStr)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizedPath)
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
 
-	entries, err := execCtx.Platform.ReadDir(safePath)
+	readPath := normalizedPath
+	if isToolAbsolutePath(pathStr) || readPath == "" {
+		readPath = safePath
+	}
+	entries, err := execCtx.Platform.ReadDir(readPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: list directory failed: %v", tools.ErrToolExecutionFailed, err)
 	}
@@ -88,7 +93,7 @@ func (t *ListDirTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCont
 		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
 	}
 
-	safePath, err := execCtx.Platform.EnsureWithinWorkspace(pathStr)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizeWorkspaceToolPath(pathStr))
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
