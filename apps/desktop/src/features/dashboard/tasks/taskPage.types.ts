@@ -1,6 +1,7 @@
 import type {
   AgentTaskControlResult,
   AgentTaskDetailGetResult,
+  JsonRpcPage,
   Task,
   TaskControlAction,
 } from "@cialloclaw/protocol";
@@ -63,9 +64,14 @@ export type TaskListItem = {
   experience: TaskExperience;
 };
 
+export type TaskBucketPageData = {
+  items: TaskListItem[];
+  page: JsonRpcPage;
+};
+
 export type TaskBucketsData = {
-  unfinished: TaskListItem[];
-  finished: TaskListItem[];
+  unfinished: TaskBucketPageData;
+  finished: TaskBucketPageData;
   source: TaskDataSource;
 };
 

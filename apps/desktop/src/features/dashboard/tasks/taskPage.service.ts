@@ -7,13 +7,22 @@ import type {
 } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
-import type { TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
+import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
+
+const INITIAL_TASK_PAGE_LIMIT: Record<TaskListGroup, number> = {
+  finished: 24,
+  unfinished: 12,
+};
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
     client_time: new Date().toISOString(),
     trace_id: `trace_${scope}_${Date.now()}`,
   };
+}
+
+function allowMockFallback() {
+  return import.meta.env.DEV || import.meta.env.VITE_CIALLOCLAW_TASKS_USE_MOCK === "true";
 }
 
 function createFallbackExperience(task: Task): TaskExperience {
@@ -57,30 +66,45 @@ function mapTasks(items: Task[]): TaskListItem[] {
   }));
 }
 
-async function listTasksByGroup(group: TaskListGroup) {
-  return listTasks({
-    group,
-    limit: group === "finished" ? 24 : 12,
-    offset: 0,
-    request_meta: createRequestMeta(`task_list_${group}`),
-    sort_by: group === "finished" ? "finished_at" : "updated_at",
-    sort_order: "desc",
-  });
+function getTaskListSortBy(group: TaskListGroup) {
+  return group === "finished" ? "finished_at" : "updated_at";
 }
 
-export async function loadTaskBuckets(): Promise<TaskBucketsData> {
+export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number }): Promise<TaskBucketPageData> {
+  const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
+  const offset = options?.offset ?? 0;
+  const result = await listTasks({
+    group,
+    limit,
+    offset,
+    request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
+    sort_by: getTaskListSortBy(group),
+    sort_order: "desc",
+  });
+
+  return {
+    items: mapTasks(result.items),
+    page: result.page,
+  };
+}
+
+export async function loadTaskBuckets(options?: { unfinishedLimit?: number; finishedLimit?: number }): Promise<TaskBucketsData> {
   try {
     const [unfinishedResult, finishedResult] = await Promise.all([
-      listTasksByGroup("unfinished"),
-      listTasksByGroup("finished"),
+      loadTaskBucketPage("unfinished", { limit: options?.unfinishedLimit }),
+      loadTaskBucketPage("finished", { limit: options?.finishedLimit }),
     ]);
 
     return {
-      finished: mapTasks(finishedResult.items),
+      finished: finishedResult,
       source: "rpc",
-      unfinished: mapTasks(unfinishedResult.items),
+      unfinished: unfinishedResult,
     };
   } catch (error) {
+    if (!allowMockFallback()) {
+      throw error;
+    }
+
     console.warn("Task buckets RPC unavailable, using local mock fallback.", error);
     return getMockTaskBuckets();
   }
@@ -100,6 +124,10 @@ export async function loadTaskDetailData(taskId: string): Promise<TaskDetailData
       task: detail.task,
     };
   } catch (error) {
+    if (!allowMockFallback()) {
+      throw error;
+    }
+
     console.warn("Task detail RPC unavailable, using local mock fallback.", error);
     return getMockTaskDetail(taskId);
   }
@@ -118,6 +146,10 @@ export async function controlTaskByAction(taskId: string, action: TaskControlAct
       source: "rpc",
     };
   } catch (error) {
+    if (!allowMockFallback()) {
+      throw error;
+    }
+
     console.warn(`Task control RPC unavailable for ${action}, using local mock fallback.`, error);
     return runMockTaskControl(taskId, action);
   }
