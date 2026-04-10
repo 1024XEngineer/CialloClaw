@@ -10,6 +10,32 @@ export const shellBallVisualStates = [
 
 export type ShellBallVisualState = (typeof shellBallVisualStates)[number];
 
+export type ShellBallInteractionEvent =
+  | "pointer_enter_hotspot"
+  | "pointer_leave_region"
+  | "submit_text"
+  | "attach_file"
+  | "press_start"
+  | "voice_lock"
+  | "voice_cancel"
+  | "voice_finish"
+  | "primary_click_locked_voice_end"
+  | "auto_advance";
+
+export type ShellBallInputBarMode = "hidden" | "interactive" | "readonly" | "voice";
+
+export type ShellBallTransitionResult =
+  | {
+      next: ShellBallVisualState;
+      autoAdvanceTo: ShellBallVisualState;
+      autoAdvanceMs: number;
+    }
+  | {
+      next: ShellBallVisualState;
+      autoAdvanceTo?: never;
+      autoAdvanceMs?: never;
+    };
+
 export type ShellBallPanelMode = "hidden" | "peek" | "compact" | "full";
 
 export type ShellBallBadgeTone = "status" | "intent_confirm" | "processing" | "waiting_auth";

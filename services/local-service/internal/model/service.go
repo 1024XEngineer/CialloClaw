@@ -19,15 +19,28 @@ type Service struct {
 
 // ErrClientNotConfigured 定义当前模块的基础变量。
 var ErrClientNotConfigured = errors.New("model client not configured")
+
 // ErrModelProviderRequired 定义当前模块的基础变量。
 var ErrModelProviderRequired = errors.New("model provider is required")
+
 // ErrModelProviderUnsupported 定义当前模块的基础变量。
 var ErrModelProviderUnsupported = errors.New("model provider unsupported")
 
+// ErrSecretSourceFailed 定义当前模块的基础变量。
+var ErrSecretSourceFailed = errors.New("model secret source failed")
+
+// SecretSource 是面向 Stronghold 等机密存储能力的最小接口。
+//
+// 当前阶段只定义边界，不绑定具体实现。
+type SecretSource interface {
+	ResolveModelAPIKey(provider string) (string, error)
+}
+
 // ServiceConfig 描述当前模块配置。
 type ServiceConfig struct {
-	ModelConfig config.ModelConfig
-	APIKey      string
+	ModelConfig  config.ModelConfig
+	APIKey       string
+	SecretSource SecretSource
 }
 
 // NewService 创建并返回Service。
@@ -114,10 +127,22 @@ func ValidateModelConfig(cfg config.ModelConfig) error {
 
 // buildClient 处理当前模块的相关逻辑。
 func buildClient(cfg ServiceConfig) (Client, error) {
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(cfg.ModelConfig.APIKey)
+	}
+	if apiKey == "" && cfg.SecretSource != nil {
+		resolvedKey, err := cfg.SecretSource.ResolveModelAPIKey(strings.TrimSpace(cfg.ModelConfig.Provider))
+		if err != nil {
+			return nil, errors.Join(ErrSecretSourceFailed, err)
+		}
+		apiKey = strings.TrimSpace(resolvedKey)
+	}
+
 	switch strings.TrimSpace(cfg.ModelConfig.Provider) {
 	case OpenAIResponsesProvider:
 		return NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
-			APIKey:   cfg.APIKey,
+			APIKey:   apiKey,
 			Endpoint: strings.TrimSpace(cfg.ModelConfig.Endpoint),
 			ModelID:  strings.TrimSpace(cfg.ModelConfig.ModelID),
 		})

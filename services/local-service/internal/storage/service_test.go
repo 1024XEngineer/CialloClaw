@@ -3,9 +3,12 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 // stubAdapter 定义当前模块的数据结构。
@@ -65,7 +68,9 @@ func TestConfiguredReturnsFalseWhenPathEmpty(t *testing.T) {
 
 // TestConfiguredReturnsTrueWhenAdapterAndPathPresent 验证ConfiguredReturnsTrueWhenAdapterAndPathPresent。
 func TestConfiguredReturnsTrueWhenAdapterAndPathPresent(t *testing.T) {
-	service := NewService(stubAdapter{databasePath: "D:/CialloClaw/data.db"})
+	path := filepath.Join(t.TempDir(), "configured.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
 
 	if !service.Configured() {
 		t.Fatal("expected service to be configured")
@@ -94,7 +99,9 @@ func TestValidateReturnsErrorWhenPathMissing(t *testing.T) {
 
 // TestValidatePassesWhenAdapterConfigured 验证ValidatePassesWhenAdapterConfigured。
 func TestValidatePassesWhenAdapterConfigured(t *testing.T) {
-	service := NewService(stubAdapter{databasePath: "D:/CialloClaw/data.db"})
+	path := filepath.Join(t.TempDir(), "validate.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
 
 	if err := service.Validate(); err != nil {
 		t.Fatalf("expected valid storage service, got %v", err)
@@ -207,5 +214,77 @@ func TestCloseIsSafeWithoutConfiguredStore(t *testing.T) {
 	service := NewService(nil)
 	if err := service.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestToolCallSinkReturnsWorkingImplementation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tool-calls.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	sink := service.ToolCallSink()
+	if sink == nil {
+		t.Fatal("expected tool call sink to be available")
+	}
+	err := sink.SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_001",
+		RunID:      "run_001",
+		TaskID:     "task_001",
+		StepID:     "step_001",
+		ToolName:   "write_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "workspace/result.md"},
+		Output:     map[string]any{"bytes_written": 128},
+		DurationMS: 12,
+	})
+	if err != nil {
+		t.Fatalf("SaveToolCall returned error: %v", err)
+	}
+
+	sqliteSink, ok := service.toolCallStore.(*SQLiteToolCallStore)
+	if !ok {
+		t.Fatalf("expected sqlite tool call store, got %T", service.toolCallStore)
+	}
+	assertToolCallCount(t, sqliteSink.db, 1)
+}
+
+func TestTaskRunStoreReturnsWorkingImplementation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-runs.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	store := service.TaskRunStore()
+	taskID, err := store.AllocateIdentifier(context.Background(), "task")
+	if err != nil {
+		t.Fatalf("AllocateIdentifier returned error: %v", err)
+	}
+	if taskID != "task_001" {
+		t.Fatalf("expected sqlite-backed task identifier, got %q", taskID)
+	}
+
+	record := sampleTaskRunRecord()
+	record.TaskID = taskID
+	if err := store.SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("SaveTaskRun returned error: %v", err)
+	}
+
+	records, err := store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns returned error: %v", err)
+	}
+	if len(records) != 1 || records[0].TaskID != taskID {
+		t.Fatalf("unexpected persisted task runs: %+v", records)
+	}
+}
+
+func assertToolCallCount(t *testing.T, db *sql.DB, expected int) {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM tool_calls`).Scan(&count); err != nil {
+		t.Fatalf("query tool_calls count failed: %v", err)
+	}
+	if count != expected {
+		t.Fatalf("expected tool call count %d, got %d", expected, count)
 	}
 }

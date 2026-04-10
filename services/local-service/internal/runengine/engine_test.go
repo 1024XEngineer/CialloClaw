@@ -2,8 +2,12 @@
 package runengine
 
 import (
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 // TestEngineTaskLifecycle 验证EngineTaskLifecycle。
@@ -76,7 +80,123 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	}
 }
 
+// TestEngineExecutionProgressAndToolCall 验证真实执行阶段的 timeline 和 tool_call 会被记录。
+func TestEngineExecutionProgressAndToolCall(t *testing.T) {
+	engine := NewEngine()
+	engine.now = func() time.Time { return time.Date(2026, 4, 8, 10, 30, 0, 0, time.UTC) }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_exec",
+		Title:       "执行测试任务",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "等待生成",
+		}},
+	})
+
+	started, ok := engine.BeginExecution(task.TaskID, "generate_output", "开始生成正式结果")
+	if !ok {
+		t.Fatal("expected begin execution to succeed")
+	}
+	if started.CurrentStep != "generate_output" {
+		t.Fatalf("expected current step to remain generate_output, got %s", started.CurrentStep)
+	}
+	if started.Timeline[len(started.Timeline)-1].OutputSummary != "开始生成正式结果" {
+		t.Fatalf("expected execution summary to update timeline, got %v", started.Timeline[len(started.Timeline)-1].OutputSummary)
+	}
+
+	recorded, ok := engine.RecordToolCall(task.TaskID, "write_file", map[string]any{"path": "workspace/result.md"}, map[string]any{"bytes": 128}, 32)
+	if !ok {
+		t.Fatal("expected tool call recording to succeed")
+	}
+	if recorded.LatestToolCall["tool_name"] != "write_file" {
+		t.Fatalf("expected latest tool call to be write_file, got %v", recorded.LatestToolCall["tool_name"])
+	}
+	if recorded.LatestToolCall["duration_ms"] != int64(32) {
+		t.Fatalf("expected duration_ms to be preserved, got %v", recorded.LatestToolCall["duration_ms"])
+	}
+	if recorded.LatestEvent["type"] != "tool_call.completed" {
+		t.Fatalf("expected latest event to reflect tool_call.completed, got %v", recorded.LatestEvent["type"])
+	}
+}
+
 // TestEngineAuthorizationAndHandoffState 验证EngineAuthorizationAndHandoffState。
+func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-audit.db")
+	store, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+
+	engine, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore returned error: %v", err)
+	}
+	engine.now = func() time.Time { return time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC) }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_audit",
+		Title:       "persist audit",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+
+	appended, ok := engine.AppendAuditData(task.TaskID, []map[string]any{{
+		"audit_id":   "audit_001",
+		"task_id":    task.TaskID,
+		"type":       "model",
+		"action":     "generate_text",
+		"summary":    "generate text output",
+		"target":     "summarize",
+		"result":     "success",
+		"created_at": time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}, map[string]any{
+		"total_tokens":   36,
+		"estimated_cost": 0.0,
+		"request_id":     "req_test",
+	})
+	if !ok {
+		t.Fatal("expected append audit data to succeed")
+	}
+	if len(appended.AuditRecords) != 1 {
+		t.Fatalf("expected audit record on runtime task, got %+v", appended.AuditRecords)
+	}
+	if appended.TokenUsage["total_tokens"] != 36 {
+		t.Fatalf("expected token usage on runtime task, got %+v", appended.TokenUsage)
+	}
+
+	reloaded, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore reload returned error: %v", err)
+	}
+
+	persisted, ok := reloaded.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to reload from sqlite")
+	}
+	if len(persisted.AuditRecords) != 1 {
+		t.Fatalf("expected audit records to round-trip through storage, got %+v", persisted.AuditRecords)
+	}
+	if persisted.TokenUsage["total_tokens"] != float64(36) && persisted.TokenUsage["total_tokens"] != 36 {
+		t.Fatalf("expected token usage to round-trip through storage, got %+v", persisted.TokenUsage)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
 func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	engine := NewEngine()
 	fixedTime := time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC)
@@ -221,6 +341,94 @@ func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
 	}
 }
 
+func TestEngineNotepadItemsNormalizeAndSortRuntimeState(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+
+	engine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_later",
+			"title":            "later item",
+			"bucket":           "later",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(48 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "review later",
+		},
+		{
+			"item_id":          "todo_overdue",
+			"title":            "overdue item",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(-2 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "finish now",
+		},
+		{
+			"item_id":          "todo_today",
+			"title":            "today item",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(3 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "translate",
+		},
+	})
+
+	items, total := engine.NotepadItems("", 10, 0)
+	if total != 3 || len(items) != 3 {
+		t.Fatalf("expected three runtime notepad items, total=%d len=%d", total, len(items))
+	}
+	if items[0]["item_id"] != "todo_overdue" || items[0]["status"] != "overdue" {
+		t.Fatalf("expected overdue item to sort first by due time, got %+v", items[0])
+	}
+	if items[1]["item_id"] != "todo_today" || items[1]["status"] != "due_today" {
+		t.Fatalf("expected due_today item to remain normalized, got %+v", items[1])
+	}
+
+	upcomingItems, total := engine.NotepadItems("upcoming", 10, 0)
+	if total != 2 || len(upcomingItems) != 2 {
+		t.Fatalf("expected two upcoming items, total=%d len=%d", total, len(upcomingItems))
+	}
+}
+
+func TestEngineCompleteNotepadItemMovesItemToClosedBucket(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	engine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_convert",
+			"title":            "convert item",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(2 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "summarize",
+		},
+	})
+
+	completed, ok := engine.CompleteNotepadItem("todo_convert")
+	if !ok {
+		t.Fatal("expected notepad item completion to succeed")
+	}
+	if completed["bucket"] != "closed" || completed["status"] != "completed" {
+		t.Fatalf("expected completed notepad item to move to closed bucket, got %+v", completed)
+	}
+	if completed["due_at"] != nil {
+		t.Fatalf("expected completed notepad item to clear due_at, got %+v", completed["due_at"])
+	}
+
+	closedItems, total := engine.NotepadItems("closed", 10, 0)
+	if total != 1 || len(closedItems) != 1 {
+		t.Fatalf("expected one closed item after completion, total=%d len=%d", total, len(closedItems))
+	}
+	if closedItems[0]["item_id"] != "todo_convert" {
+		t.Fatalf("expected closed list to contain completed item, got %+v", closedItems[0])
+	}
+}
+
 func TestEngineListTasksSupportsSorting(t *testing.T) {
 	engine := NewEngine()
 	currentTime := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
@@ -251,8 +459,8 @@ func TestEngineListTasksSupportsSorting(t *testing.T) {
 	second := createTask("second")
 	third := createTask("third")
 
-	if _, ok := engine.ControlTask(first.TaskID, "pause", map[string]any{"task_id": first.TaskID, "type": "status"}); !ok {
-		t.Fatal("expected first task update to succeed")
+	if _, err := engine.ControlTask(first.TaskID, "pause", map[string]any{"task_id": first.TaskID, "type": "status"}); err != nil {
+		t.Fatalf("expected first task update to succeed: %v", err)
 	}
 	currentTime = currentTime.Add(time.Minute)
 	if _, ok := engine.CompleteTask(second.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": second.TaskID, "type": "result"}, nil); !ok {
@@ -284,5 +492,185 @@ func TestEngineListTasksSupportsSorting(t *testing.T) {
 	defaultSorted, _ := engine.ListTasks("finished", "unknown_field", "unknown_order", 10, 0)
 	if defaultSorted[0].TaskID != third.TaskID || defaultSorted[1].TaskID != second.TaskID {
 		t.Fatalf("expected invalid sort options to fall back to updated_at desc, got %s -> %s", defaultSorted[0].TaskID, defaultSorted[1].TaskID)
+	}
+}
+
+func TestEngineControlTaskRejectsInvalidTransitions(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_control",
+		Title:       "task control transition test",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "intent_confirmation",
+			Status:        "pending",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "waiting for confirm",
+		}},
+	})
+
+	if _, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status"}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected resume from confirming_intent to be invalid, got %v", err)
+	}
+
+	if _, err := engine.ControlTask(task.TaskID, "pause", map[string]any{"task_id": task.TaskID, "type": "status"}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected pause from confirming_intent to be invalid, got %v", err)
+	}
+
+	completed, ok := engine.CompleteTask(task.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": task.TaskID, "type": "result"}, nil)
+	if !ok || completed.Status != "completed" {
+		t.Fatalf("expected task to complete for finished-state checks, got %#v ok=%v", completed, ok)
+	}
+
+	if _, err := engine.ControlTask(task.TaskID, "cancel", map[string]any{"task_id": task.TaskID, "type": "status"}); !errors.Is(err, ErrTaskAlreadyFinished) {
+		t.Fatalf("expected cancel on completed task to return ErrTaskAlreadyFinished, got %v", err)
+	}
+}
+
+func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_restart",
+		Title:       "restart finished task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "generating output",
+		}},
+	})
+
+	deliveryResult := map[string]any{"type": "workspace_document", "payload": map[string]any{"path": "workspace/result.md"}}
+	artifacts := []map[string]any{{"artifact_id": "art_test", "task_id": task.TaskID, "path": "workspace/result.md"}}
+	completed, ok := engine.CompleteTask(task.TaskID, deliveryResult, map[string]any{"task_id": task.TaskID, "type": "result"}, artifacts)
+	if !ok || completed.Status != "completed" {
+		t.Fatalf("expected task to complete before restart, got %#v ok=%v", completed, ok)
+	}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, []map[string]any{{"kind": "retrieval"}}, []map[string]any{{"kind": "summary_write"}}); !ok {
+		t.Fatal("expected memory plans to be stored before restart")
+	}
+	if _, ok := engine.SetMirrorReferences(task.TaskID, []map[string]any{{"memory_id": "mem_write_task_001_1"}}); !ok {
+		t.Fatal("expected mirror references to be stored before restart")
+	}
+
+	restarted, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("expected restart on completed task to succeed: %v", err)
+	}
+	if restarted.Status != "processing" {
+		t.Fatalf("expected restarted task to return to processing, got %s", restarted.Status)
+	}
+	if restarted.FinishedAt != nil {
+		t.Fatal("expected restart to clear finished_at")
+	}
+	if restarted.DeliveryResult != nil || len(restarted.Artifacts) != 0 {
+		t.Fatal("expected restart to clear finished delivery outputs")
+	}
+	if restarted.MemoryReadPlans != nil || restarted.MemoryWritePlans != nil || restarted.MirrorReferences != nil {
+		t.Fatal("expected restart to clear handoff and mirror snapshots")
+	}
+}
+
+func TestEngineWithStorePersistsTaskLifecycleAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-engine.db")
+	store, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+
+	engine, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore returned error: %v", err)
+	}
+	engine.now = func() time.Time { return time.Date(2026, 4, 10, 8, 0, 0, 0, time.UTC) }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_persist",
+		Title:       "persist me",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "input",
+			OutputSummary: "working",
+		}},
+	})
+
+	if _, ok := engine.MarkWaitingApprovalWithPlan(
+		task.TaskID,
+		map[string]any{
+			"approval_id": "appr_001",
+			"task_id":     task.TaskID,
+			"risk_level":  "yellow",
+			"status":      "pending",
+		},
+		map[string]any{
+			"task_id":       task.TaskID,
+			"delivery_type": "workspace_document",
+		},
+		map[string]any{"task_id": task.TaskID, "type": "status", "text": "waiting auth"},
+	); !ok {
+		t.Fatal("expected task to enter waiting_auth")
+	}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, []map[string]any{{"kind": "retrieval"}}, []map[string]any{{"kind": "summary_write"}}); !ok {
+		t.Fatal("expected memory plans to persist")
+	}
+	if _, ok := engine.SetDeliveryPlans(task.TaskID, map[string]any{"target_path": "workspace/result.md"}, []map[string]any{{"artifact_id": "art_001"}}); !ok {
+		t.Fatal("expected delivery plans to persist")
+	}
+
+	reloaded, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore reload returned error: %v", err)
+	}
+
+	persisted, ok := reloaded.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected persisted task to reload from sqlite")
+	}
+	if persisted.RunID != task.RunID {
+		t.Fatalf("expected run_id to round-trip, got %s want %s", persisted.RunID, task.RunID)
+	}
+	if persisted.Status != "waiting_auth" {
+		t.Fatalf("expected waiting_auth to round-trip, got %s", persisted.Status)
+	}
+	if persisted.PendingExecution["delivery_type"] != "workspace_document" {
+		t.Fatalf("expected pending execution to round-trip, got %+v", persisted.PendingExecution)
+	}
+	if len(persisted.MemoryReadPlans) != 1 || len(persisted.ArtifactPlans) != 1 {
+		t.Fatalf("expected persisted plans to reload, got %+v", persisted)
+	}
+
+	nextTask := reloaded.CreateTask(CreateTaskInput{
+		SessionID:   "sess_persist_2",
+		Title:       "new task after reload",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "rewrite"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	if nextTask.TaskID == task.TaskID {
+		t.Fatalf("expected identifier allocation to continue after reload, got duplicate %s", nextTask.TaskID)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
 	}
 }

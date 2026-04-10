@@ -9,6 +9,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -19,13 +20,17 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 // App 定义当前模块的数据结构。
 type App struct {
-	server  *rpc.Server
-	storage *storage.Service
+	server       *rpc.Server
+	storage      *storage.Service
+	toolRegistry *tools.Registry
+	toolExecutor *tools.ToolExecutor
 }
 
 // New 创建并返回当前能力。
@@ -35,25 +40,56 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	_ = audit.NewService()
-	_ = checkpoint.NewService()
+	auditService := audit.NewService()
+	checkpointService := checkpoint.NewService()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
-	_ = platform.NewLocalFileSystemAdapter(pathPolicy)
-	_ = platform.LocalExecutionBackend{}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executionBackend := platform.LocalExecutionBackend{}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	toolExecutor := tools.NewToolExecutor(
+		toolRegistry,
+		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
+	)
+
+	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+		ModelConfig: cfg.Model,
+	})
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+
+	deliveryService := delivery.NewService()
+	pluginService := plugin.NewService()
+	executionService := execution.NewService(fileSystem, executionBackend, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	inspectorService := taskinspector.NewService(fileSystem)
+	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 
 	orchestratorService := orchestrator.NewService(
 		contextsvc.NewService(),
 		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
+		runEngine,
+		deliveryService,
 		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
 		risk.NewService(),
-		model.NewService(cfg.Model),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithAudit(auditService).WithExecutor(executionService).WithTaskInspector(inspectorService)
 
-	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService}, nil
+	return &App{
+		server:       rpc.NewServer(cfg.RPC, orchestratorService),
+		storage:      storageService,
+		toolRegistry: toolRegistry,
+		toolExecutor: toolExecutor,
+	}, nil
 }
 
 // Start 启动当前能力。

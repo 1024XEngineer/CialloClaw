@@ -1,11 +1,20 @@
 // 该文件负责本地服务配置结构与默认值。
 package config
 
+import (
+	"os"
+	"strings"
+)
+
 // ModelConfig 描述当前模块配置。
 type ModelConfig struct {
-	Provider string
-	ModelID  string
-	Endpoint string
+	Provider            string
+	ModelID             string
+	Endpoint            string
+	APIKey              string
+	SingleTaskLimit     float64
+	DailyLimit          float64
+	BudgetAutoDowngrade bool
 }
 
 // RPCConfig 描述当前模块配置。
@@ -34,9 +43,13 @@ func Load() Config {
 		WorkspaceRoot: "workspace",
 		DatabasePath:  "data/cialloclaw.db",
 		Model: ModelConfig{
-			Provider: "openai_responses",
-			ModelID:  "gpt-5.4",
-			Endpoint: "https://api.openai.com/v1/responses",
+			Provider:            "openai_responses",
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			APIKey:              strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
 		},
 	}
 }

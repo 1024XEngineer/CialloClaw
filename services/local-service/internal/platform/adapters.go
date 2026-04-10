@@ -2,12 +2,17 @@
 package platform
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 // FileSystemAdapter 定义当前模块的接口约束。
@@ -45,6 +50,7 @@ type OSCapabilityAdapter interface {
 // ExecutionBackendAdapter 定义当前模块的接口约束。
 type ExecutionBackendAdapter interface {
 	Name() string
+	RunCommand(ctx context.Context, command string, args []string, workingDir string) (tools.CommandExecutionResult, error)
 }
 
 // StorageAdapter 定义当前模块的接口约束。
@@ -122,7 +128,7 @@ func NewLocalFileSystemAdapter(policy *LocalPathPolicy) *LocalFileSystemAdapter 
 
 // Open 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) Open(name string) (fs.File, error) {
-	fsPath, err := normalizeFSPath("open", name)
+	fsPath, err := a.resolveFSPath("open", name)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +168,7 @@ func (a *LocalFileSystemAdapter) EnsureWithinWorkspace(path string) (string, err
 
 // ReadFile 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
-	fsPath, err := normalizeFSPath("read", path)
+	fsPath, err := a.resolveFSPath("read", path)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +178,7 @@ func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
 
 // ReadDir 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
-	fsPath, err := normalizeFSPath("readdir", path)
+	fsPath, err := a.resolveFSPath("readdir", path)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +188,7 @@ func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
 
 // Stat 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
-	fsPath, err := normalizeFSPath("stat", path)
+	fsPath, err := a.resolveFSPath("stat", path)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +198,7 @@ func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
 
 // Sub 处理当前模块的相关逻辑。
 func (a *LocalFileSystemAdapter) Sub(dir string) (fs.FS, error) {
-	fsPath, err := normalizeFSPath("sub", dir)
+	fsPath, err := a.resolveFSPath("sub", dir)
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +253,23 @@ func (a *LocalFileSystemAdapter) workspaceFS() fs.FS {
 	return os.DirFS(a.policy.workspaceRoot)
 }
 
+func (a *LocalFileSystemAdapter) resolveFSPath(op, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		relPath, err := filepath.Rel(a.policy.workspaceRoot, name)
+		if err == nil {
+			cleanRel := filepath.Clean(relPath)
+			if cleanRel == "." {
+				return ".", nil
+			}
+			if cleanRel != ".." && !strings.HasPrefix(cleanRel, ".."+string(os.PathSeparator)) {
+				name = filepath.ToSlash(cleanRel)
+			}
+		}
+	}
+
+	return normalizeFSPath(op, filepath.ToSlash(name))
+}
+
 func normalizeFSPath(op, name string) (string, error) {
 	if name == "." {
 		return ".", nil
@@ -273,6 +296,30 @@ type LocalExecutionBackend struct{}
 // Name 处理当前模块的相关逻辑。
 func (LocalExecutionBackend) Name() string {
 	return "docker"
+}
+
+// RunCommand 执行最小受控命令。
+func (LocalExecutionBackend) RunCommand(ctx context.Context, command string, args []string, workingDir string) (tools.CommandExecutionResult, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
+	if strings.TrimSpace(workingDir) != "" {
+		cmd.Dir = workingDir
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	result := tools.CommandExecutionResult{
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
+	}
+	if cmd.ProcessState != nil {
+		result.ExitCode = cmd.ProcessState.ExitCode()
+	}
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // LocalStorageAdapter 定义当前模块的数据结构。

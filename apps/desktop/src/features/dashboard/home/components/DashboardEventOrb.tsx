@@ -42,15 +42,14 @@ export function DashboardEventOrb({ event, onDismiss, onExpand }: DashboardEvent
   const startAngleRef = useRef(Math.random() * 360);
   const phaseRef = useRef<Phase>("dormant");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hoveredRef = useRef(false);
+  const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recedeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const interactionRef = useRef(false);
 
   const { duration = 5200 } = event;
   const Icon = icons[stateData.module];
   const PriorityIcon = priorityDots[event.priority];
-
-  useEffect(() => {
-    hoveredRef.current = hovered;
-  }, [hovered]);
 
   useEffect(() => {
     const speed = 1.8;
@@ -72,49 +71,73 @@ export function DashboardEventOrb({ event, onDismiss, onExpand }: DashboardEvent
     return () => cancelAnimationFrame(animRef.current);
   }, []);
 
+  const clearDismissTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const clearPhaseTimers = useCallback(() => {
+    if (enterTimerRef.current) {
+      clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
+    if (settleTimerRef.current) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+    if (recedeTimerRef.current) {
+      clearTimeout(recedeTimerRef.current);
+      recedeTimerRef.current = null;
+    }
+    clearDismissTimer();
+  }, [clearDismissTimer]);
+
   const startRecede = useCallback(() => {
     if (phaseRef.current === "receding" || phaseRef.current === "gone") {
       return;
     }
 
+    clearPhaseTimers();
     phaseRef.current = "receding";
     setPhase("receding");
     setTextVisible(false);
 
-    setTimeout(() => {
+    recedeTimerRef.current = setTimeout(() => {
       phaseRef.current = "gone";
       setPhase("gone");
       onDismiss(event.id);
     }, 800);
-  }, [event.id, onDismiss]);
+  }, [clearPhaseTimers, event.id, onDismiss]);
+
+  const scheduleDismiss = useCallback(
+    (nextDuration: number) => {
+      clearDismissTimer();
+      timerRef.current = setTimeout(() => {
+        if (!interactionRef.current) {
+          startRecede();
+        }
+      }, nextDuration);
+    },
+    [clearDismissTimer, startRecede],
+  );
 
   useEffect(() => {
-    const t0 = setTimeout(() => {
+    enterTimerRef.current = setTimeout(() => {
       phaseRef.current = "emerging";
       setPhase("emerging");
 
-      const t1 = setTimeout(() => {
+      settleTimerRef.current = setTimeout(() => {
         setTextVisible(true);
         phaseRef.current = "present";
         setPhase("present");
-
-        timerRef.current = setTimeout(() => {
-          if (!hoveredRef.current) {
-            startRecede();
-          }
-        }, duration);
+        scheduleDismiss(duration);
       }, 700);
-
-      return () => clearTimeout(t1);
     }, 80);
 
-    return () => {
-      clearTimeout(t0);
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
-    };
-  }, [duration, startRecede]);
+    return clearPhaseTimers;
+  }, [clearPhaseTimers, duration, scheduleDismiss]);
 
   useEffect(() => {
     const handleMove = (nativeEvent: MouseEvent) => {
@@ -158,11 +181,10 @@ export function DashboardEventOrb({ event, onDismiss, onExpand }: DashboardEvent
       };
 
       if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
+        clearDismissTimer();
       }
     },
-    [dragOffset],
+    [clearDismissTimer, dragOffset],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -170,25 +192,44 @@ export function DashboardEventOrb({ event, onDismiss, onExpand }: DashboardEvent
       return;
     }
 
-    if (phase === "present" && !hoveredRef.current) {
-      timerRef.current = setTimeout(() => startRecede(), 2500);
+    if (phase === "present" && !interactionRef.current) {
+      scheduleDismiss(2500);
     }
-  }, [isDragging, phase, startRecede]);
+  }, [isDragging, phase, scheduleDismiss]);
+
+  const setInteracting = useCallback(
+    (nextInteracting: boolean) => {
+      interactionRef.current = nextInteracting;
+
+      if (nextInteracting) {
+        clearDismissTimer();
+        return;
+      }
+
+      if (phaseRef.current === "present" && !isDraggingRef.current) {
+        scheduleDismiss(1800);
+      }
+    },
+    [clearDismissTimer, scheduleDismiss],
+  );
 
   const handleMouseEnter = useCallback(() => {
     setHovered(true);
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
+    setInteracting(true);
+  }, [setInteracting]);
 
   const handleMouseLeave = useCallback(() => {
     setHovered(false);
-    if (phase === "present" && !isDragging) {
-      timerRef.current = setTimeout(() => startRecede(), 1800);
-    }
-  }, [isDragging, phase, startRecede]);
+    setInteracting(false);
+  }, [setInteracting]);
+
+  const handleFocus = useCallback(() => {
+    setInteracting(true);
+  }, [setInteracting]);
+
+  const handleBlur = useCallback(() => {
+    setInteracting(false);
+  }, [setInteracting]);
 
   const handleDismiss = useCallback(
     (eventObject: React.MouseEvent<HTMLButtonElement>) => {
@@ -248,6 +289,8 @@ export function DashboardEventOrb({ event, onDismiss, onExpand }: DashboardEvent
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onMouseUp={handleMouseUp}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       role="button"
       tabIndex={0}
       style={{

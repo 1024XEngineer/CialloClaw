@@ -1,4 +1,14 @@
 import type {
+  AgentSettingsGetParams,
+  AgentSettingsGetResult,
+  AgentSettingsUpdateParams,
+  AgentSettingsUpdateResult,
+  AgentTaskInspectorConfigGetParams,
+  AgentTaskInspectorConfigGetResult,
+  AgentTaskInspectorConfigUpdateParams,
+  AgentTaskInspectorConfigUpdateResult,
+  AgentTaskInspectorRunParams,
+  AgentTaskInspectorRunResult,
   AgentSecurityPendingListParams,
   AgentSecurityPendingListResult,
   AgentSecurityRespondParams,
@@ -59,4 +69,24 @@ export function listSecurityPending(params: AgentSecurityPendingListParams) {
 
 export function respondSecurity(params: AgentSecurityRespondParams) {
   return rpcClient.request<AgentSecurityRespondResult>(RPC_METHODS.AGENT_SECURITY_RESPOND, params);
+}
+
+export function getSettings(params: AgentSettingsGetParams) {
+  return rpcClient.request<AgentSettingsGetResult>(RPC_METHODS.AGENT_SETTINGS_GET, params);
+}
+
+export function updateSettings(params: AgentSettingsUpdateParams) {
+  return rpcClient.request<AgentSettingsUpdateResult>(RPC_METHODS.AGENT_SETTINGS_UPDATE, params);
+}
+
+export function getTaskInspectorConfig(params: AgentTaskInspectorConfigGetParams) {
+  return rpcClient.request<AgentTaskInspectorConfigGetResult>(RPC_METHODS.AGENT_TASK_INSPECTOR_CONFIG_GET, params);
+}
+
+export function updateTaskInspectorConfig(params: AgentTaskInspectorConfigUpdateParams) {
+  return rpcClient.request<AgentTaskInspectorConfigUpdateResult>(RPC_METHODS.AGENT_TASK_INSPECTOR_CONFIG_UPDATE, params);
+}
+
+export function runTaskInspector(params: AgentTaskInspectorRunParams) {
+  return rpcClient.request<AgentTaskInspectorRunResult>(RPC_METHODS.AGENT_TASK_INSPECTOR_RUN, params);
 }

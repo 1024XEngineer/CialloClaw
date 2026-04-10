@@ -19,6 +19,21 @@ type mockClient struct {
 	called   bool
 }
 
+type stubSecretSource struct {
+	apiKey string
+	err    error
+}
+
+func (s stubSecretSource) ResolveModelAPIKey(provider string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	if provider == "" {
+		return "", nil
+	}
+	return s.apiKey, nil
+}
+
 // GenerateText 处理当前模块的相关逻辑。
 func (m *mockClient) GenerateText(_ context.Context, request GenerateTextRequest) (GenerateTextResponse, error) {
 	m.called = true
@@ -140,11 +155,14 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 
 	service, err := NewServiceFromConfig(ServiceConfig{
 		ModelConfig: config.ModelConfig{
-			Provider: OpenAIResponsesProvider,
-			ModelID:  "gpt-5.4",
-			Endpoint: server.URL,
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            server.URL,
+			APIKey:              "test-key",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
 		},
-		APIKey: "test-key",
 	})
 	if err != nil {
 		t.Fatalf("NewServiceFromConfig returned error: %v", err)
@@ -157,6 +175,37 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 
 	if response.OutputText != "service ok" {
 		t.Fatalf("output mismatch: got %q", response.OutputText)
+	}
+}
+
+// TestNewServiceFromConfigUsesModelConfigAPIKey 验证NewServiceFromConfigUsesModelConfigAPIKey。
+func TestNewServiceFromConfigUsesModelConfigAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer model-config-key" {
+			t.Fatalf("authorization header mismatch: got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_service","output_text":"service ok","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	service, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            server.URL,
+			APIKey:              "model-config-key",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServiceFromConfig returned error: %v", err)
+	}
+
+	if _, err := service.GenerateText(context.Background(), GenerateTextRequest{Input: "hello"}); err != nil {
+		t.Fatalf("GenerateText returned error: %v", err)
 	}
 }
 
@@ -183,5 +232,54 @@ func TestGenerateTextResponseInvocationRecord(t *testing.T) {
 
 	if record.Usage.TotalTokens != 15 || record.LatencyMS != 123 {
 		t.Fatalf("record metrics mismatch: got %+v", record)
+	}
+}
+
+// TestNewServiceFromConfigUsesSecretSourceAPIKey 验证NewServiceFromConfigUsesSecretSourceAPIKey。
+func TestNewServiceFromConfigUsesSecretSourceAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-source-key" {
+			t.Fatalf("authorization header mismatch: got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_secret","output_text":"secret ok","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	service, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            server.URL,
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+		SecretSource: stubSecretSource{apiKey: "secret-source-key"},
+	})
+	if err != nil {
+		t.Fatalf("NewServiceFromConfig returned error: %v", err)
+	}
+
+	if _, err := service.GenerateText(context.Background(), GenerateTextRequest{Input: "hello"}); err != nil {
+		t.Fatalf("GenerateText returned error: %v", err)
+	}
+}
+
+// TestNewServiceFromConfigReturnsSecretSourceError 验证NewServiceFromConfigReturnsSecretSourceError。
+func TestNewServiceFromConfigReturnsSecretSourceError(t *testing.T) {
+	_, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+		SecretSource: stubSecretSource{err: errors.New("secret lookup failed")},
+	})
+	if !errors.Is(err, ErrSecretSourceFailed) {
+		t.Fatalf("expected ErrSecretSourceFailed, got %v", err)
 	}
 }

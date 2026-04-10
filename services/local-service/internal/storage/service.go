@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 // backendName 定义当前模块的基础变量。
@@ -40,20 +41,28 @@ type Descriptor struct {
 
 // Service 提供当前模块的服务能力。
 type Service struct {
-	adapter          platform.StorageAdapter
-	memoryStore      MemoryStore
-	memoryStoreName  string
-	retrievalBackend string
-	storeInitErr     error
-	fallbackActive   bool
+	adapter           platform.StorageAdapter
+	memoryStore       MemoryStore
+	taskRunStore      TaskRunStore
+	toolCallStore     ToolCallStore
+	memoryStoreName   string
+	taskRunStoreName  string
+	toolCallStoreName string
+	retrievalBackend  string
+	storeInitErr      error
+	fallbackActive    bool
 }
 
 // NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
+	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
+	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	memoryStoreName := memoryStoreBackendInMemory
+	taskRunStoreName := memoryStoreBackendInMemory
+	toolCallStoreName := memoryStoreBackendInMemory
 	retrievalBackend := memoryRetrievalBackendInMemory
-	var storeInitErr error
+	storeInitErrors := make([]error, 0, 2)
 	fallbackActive := false
 
 	if adapter != nil {
@@ -65,19 +74,45 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				retrievalBackend = memoryRetrievalBackendSQLite
 			}
 			if err != nil {
-				storeInitErr = fmt.Errorf("initialize sqlite memory store: %w", err)
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite memory store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteTaskRunStore, err := NewSQLiteTaskRunStore(databasePath)
+			if err == nil {
+				taskRunStore = sqliteTaskRunStore
+				taskRunStoreName = memoryStoreBackendSQLite
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite task_run store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteToolCallStore, err := NewSQLiteToolCallStore(databasePath)
+			if err == nil {
+				toolCallStore = sqliteToolCallStore
+				toolCallStoreName = memoryStoreBackendSQLite
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite tool_call store: %w", err))
 				fallbackActive = true
 			}
 		}
 	}
 
+	storeInitErr := errors.Join(storeInitErrors...)
+
 	return &Service{
-		adapter:          adapter,
-		memoryStore:      memoryStore,
-		memoryStoreName:  memoryStoreName,
-		retrievalBackend: retrievalBackend,
-		storeInitErr:     storeInitErr,
-		fallbackActive:   fallbackActive,
+		adapter:           adapter,
+		memoryStore:       memoryStore,
+		taskRunStore:      taskRunStore,
+		toolCallStore:     toolCallStore,
+		memoryStoreName:   memoryStoreName,
+		taskRunStoreName:  taskRunStoreName,
+		toolCallStoreName: toolCallStoreName,
+		retrievalBackend:  retrievalBackend,
+		storeInitErr:      storeInitErr,
+		fallbackActive:    fallbackActive,
 	}
 }
 
@@ -130,19 +165,21 @@ func (s *Service) Descriptor() Descriptor {
 // Capabilities 处理当前模块的相关逻辑。
 func (s *Service) Capabilities() CapabilitySnapshot {
 	configured := s.Configured()
-	structuredReady := configured && s.storeInitErr == nil && s.memoryStoreName == memoryStoreBackendSQLite
+	structuredReady := configured && s.storeInitErr == nil && s.memoryStoreName == memoryStoreBackendSQLite && s.taskRunStoreName == memoryStoreBackendSQLite
 
 	return CapabilitySnapshot{
 		Backend:                s.Backend(),
 		Configured:             configured,
 		SupportsStructuredData: structuredReady,
 		SupportsMemoryStore:    s.memoryStore != nil,
+		SupportsToolCallSink:   s.toolCallStore != nil,
 		SupportsRetrievalHits:  s.memoryStore != nil,
 		SupportsFTS5:           structuredReady,
 		SupportsSQLiteVecStub:  structuredReady,
 		SupportsArtifactStore:  false,
 		SupportsSecretStore:    false,
 		MemoryStoreBackend:     s.memoryStoreName,
+		ToolCallStoreBackend:   s.toolCallStoreName,
 		MemoryRetrievalBackend: s.retrievalBackend,
 		FallbackActive:         s.fallbackActive,
 	}
@@ -153,11 +190,26 @@ func (s *Service) MemoryStore() MemoryStore {
 	return s.memoryStore
 }
 
+func (s *Service) TaskRunStore() TaskRunStore {
+	return s.taskRunStore
+}
+
+func (s *Service) ToolCallSink() tools.ToolCallSink {
+	return s.toolCallStore
+}
+
 // Close 处理当前模块的相关逻辑。
 func (s *Service) Close() error {
+	errs := make([]error, 0, 2)
 	if closer, ok := s.memoryStore.(interface{ Close() error }); ok {
-		return closer.Close()
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.taskRunStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.toolCallStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
 	}
 
-	return nil
+	return errors.Join(errs...)
 }

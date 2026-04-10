@@ -53,9 +53,49 @@ Because the current change scope is limited to `services/local-service/internal/
 
 The remaining blockers that require changes outside this directory are:
 
-- Replace the temporary local HTTP payload implementation with the official OpenAI Responses SDK
 - Move model input/output contracts into `/packages/protocol`
 - Add `api_key` and budget-related settings into the shared config and secret-management path
-- Switch bootstrap wiring to `NewServiceFromConfig(...)` so startup fails fast on invalid model configuration
 
-Inside the current module-only scope, the package now preserves `task_id`, `run_id`, `request_id`, usage, and latency through `GenerateTextResponse` and `InvocationRecord`, but this is still a temporary local contract until protocol-level types are introduced.
+Inside the current module-only scope, the package now preserves `task_id`, `run_id`, `request_id`, usage, and latency through `GenerateTextResponse` and `InvocationRecord`, and those structures are mirrored to `/packages/protocol/types/core.ts`. The Go types remain temporary backend mirrors until a cross-language protocol generation path is introduced.
+
+## Current Validation Path
+
+- Unit tests cover the minimal request/response path with `httptest`
+- `bootstrap` now wires model service through `NewServiceFromConfig(...)` and fails fast on invalid configuration
+- An opt-in live smoke test can be run with:
+  - `RUN_LIVE_OPENAI_RESPONSES_TEST=1`
+  - `OPENAI_API_KEY`
+  - optional `OPENAI_RESPONSES_ENDPOINT`
+  - optional `OPENAI_RESPONSES_MODEL`
+
+The live smoke test stays skipped by default unless `RUN_LIVE_OPENAI_RESPONSES_TEST=1`, so CI remains deterministic even when a shell or CI runner happens to export `OPENAI_API_KEY`.
+
+## Current Protocol Alignment
+
+- The minimal model request/response/invocation structures are now registered in `/packages/protocol/types/core.ts`
+- The Go structures in `internal/model/types.go` remain temporary backend mirrors until a cross-language protocol generation path is introduced
+- Field names and JSON tags are aligned with protocol naming so later migration cost is reduced
+
+## Current Config Path
+
+- `config.ModelConfig` now carries:
+  - `provider`
+  - `model_id`
+  - `endpoint`
+  - `api_key`
+  - `single_task_limit`
+  - `daily_limit`
+  - `budget_auto_downgrade`
+- `bootstrap` consumes the config-backed API key instead of directly reading the environment
+- `ServiceConfig.APIKey` remains as a temporary fallback input so the module can migrate without breaking existing tests and callers in one step
+
+## Secret Integration Boundary
+
+- `ServiceConfig` now supports an optional `SecretSource`
+- `SecretSource` is a Stronghold-ready boundary for resolving provider API keys without binding this module to a concrete secret backend yet
+- Current resolution order is:
+  1. `ServiceConfig.APIKey`
+  2. `ModelConfig.APIKey`
+  3. `SecretSource.ResolveModelAPIKey(provider)`
+
+This keeps the module ready for Stronghold integration while avoiding direct coupling before the secret-management path is frozen.

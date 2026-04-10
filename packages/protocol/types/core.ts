@@ -329,6 +329,43 @@ export interface TokenCostSummary {
   budget_auto_downgrade: boolean;
 }
 
+// ModelTokenUsage 定义模型调用的最小 token 计量结构。
+export interface ModelTokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+// ModelGenerateTextRequest 定义模型最小文本生成请求结构。
+export interface ModelGenerateTextRequest {
+  task_id: string;
+  run_id: string;
+  input: string;
+}
+
+// ModelGenerateTextResponse 定义模型最小文本生成返回结构。
+export interface ModelGenerateTextResponse {
+  task_id: string;
+  run_id: string;
+  request_id: string;
+  provider: string;
+  model_id: string;
+  output_text: string;
+  usage: ModelTokenUsage;
+  latency_ms: number;
+}
+
+// ModelInvocationRecord 定义模型调用记录的最小结构。
+export interface ModelInvocationRecord {
+  task_id: string;
+  run_id: string;
+  request_id: string;
+  provider: string;
+  model_id: string;
+  usage: ModelTokenUsage;
+  latency_ms: number;
+}
+
 // MirrorReference 定义当前模块的接口约束。
 export interface MirrorReference {
   memory_id: string;

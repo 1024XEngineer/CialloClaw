@@ -17,8 +17,6 @@ import { cn } from "@/utils/cn";
 import "@/features/shell-ball/shellBall.css";
 import "@/features/dashboard/home/dashboardHome.css";
 
-const allOrbitConfigs = [...dashboardEntranceOrbs, ...dashboardDecorOrbs];
-
 function getRouteForModule(module: DashboardHomeModuleKey) {
   const routes = {
     tasks: "/tasks",
@@ -52,9 +50,7 @@ function getCenterState(activeStateKey: DashboardHomeEventStateKey | null) {
 
 export function DashboardHome() {
   const navigate = useNavigate();
-  const [pulse, setPulse] = useState(0);
   const [orbDragOffset, setOrbDragOffset] = useState({ x: 0, y: 0 });
-  const [angles, setAngles] = useState<Record<string, number>>(() => Object.fromEntries(allOrbitConfigs.map((config) => [config.key, config.orbitOffset])));
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
   const [activeStateKey, setActiveStateKey] = useState<DashboardHomeEventStateKey | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -62,8 +58,6 @@ export function DashboardHome() {
   const summonIndexRef = useRef(0);
   const summonIdRef = useRef(0);
   const summonTimerRef = useRef<number | null>(null);
-  const animationFrameRef = useRef(0);
-  const lastFrameRef = useRef(0);
 
   const activeState = activeStateKey ? dashboardHomeStates[activeStateKey] : null;
   const activeModule = hoveredEntranceKey
@@ -73,31 +67,6 @@ export function DashboardHome() {
   const currentFocusLine = activeState?.headline ?? summons[0]?.message ?? "让中心球和 4 个入口球一起构成今天的任务轨道。";
   const currentReasonLine = activeState?.subline ?? summons[0]?.reason ?? "长按中心球可以直接进入语音模式，四个入口球会始终保持最显眼的位置。";
   const isOverlayOpen = Boolean(activeState || voiceOpen);
-
-  useEffect(() => {
-    const animate = (timestamp: number) => {
-      const now = timestamp / 1000;
-      setPulse(Math.sin(now * 1.24) * 0.5 + 0.5);
-
-      const dt = lastFrameRef.current ? (timestamp - lastFrameRef.current) / 1000 : 0;
-      lastFrameRef.current = timestamp;
-
-      if (dt > 0 && dt < 0.1) {
-        setAngles((previous) => {
-          const next = { ...previous };
-          allOrbitConfigs.forEach((config) => {
-            next[config.key] = (previous[config.key] + config.orbitSpeed * dt) % 360;
-          });
-          return next;
-        });
-      }
-
-      animationFrameRef.current = window.requestAnimationFrame(animate);
-    };
-
-    animationFrameRef.current = window.requestAnimationFrame(animate);
-    return () => window.cancelAnimationFrame(animationFrameRef.current);
-  }, []);
 
   const scheduleSummon = useCallback(() => {
     const template = dashboardSummonTemplates[summonIndexRef.current % dashboardSummonTemplates.length];
@@ -153,7 +122,7 @@ export function DashboardHome() {
         return;
       }
 
-      if (!event.ctrlKey) {
+      if (!event.ctrlKey && !event.metaKey) {
         return;
       }
 
@@ -217,15 +186,15 @@ export function DashboardHome() {
 
         <div className="dashboard-orbit-home__shortcut-pill">
           <Keyboard className="h-3.5 w-3.5" />
-          Ctrl + 1 2 3 4 5
+          Ctrl / Cmd + 1 2 3 4 5
         </div>
       </header>
 
       <div className="dashboard-orbit-home__canvas">
-        <DashboardOrbitRings offset={orbDragOffset} pulse={pulse} />
+        <DashboardOrbitRings offset={orbDragOffset} />
 
         {dashboardDecorOrbs.map((config) => (
-          <DashboardDecorOrb key={config.key} config={config} dimmed={isOverlayOpen} offset={orbDragOffset} rotationAngle={angles[config.key]} />
+          <DashboardDecorOrb key={config.key} config={config} dimmed={isOverlayOpen} offset={orbDragOffset} />
         ))}
 
         {dashboardEntranceOrbs.map((config) => (
@@ -234,11 +203,9 @@ export function DashboardHome() {
             config={config}
             dimmed={Boolean(activeState && activeState.module !== config.module) || voiceOpen}
             isHovered={hoveredEntranceKey === config.key}
-            onOrbitAngleChange={(key, nextAngle) => setAngles((previous) => ({ ...previous, [key]: nextAngle }))}
             offset={orbDragOffset}
             onClick={() => handleModuleNavigate(config.module)}
             onHoverChange={(hovered) => setHoveredEntranceKey(hovered ? config.key : null)}
-            rotationAngle={angles[config.key]}
           />
         ))}
 

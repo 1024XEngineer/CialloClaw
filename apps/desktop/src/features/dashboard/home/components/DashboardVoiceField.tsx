@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,11 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
   const [currentSequenceIndex, setCurrentSequenceIndex] = useState(0);
   const timerRef = useRef<number | null>(null);
   const executionTimersRef = useRef<number[]>([]);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
 
   const activeSequence = sequences[currentSequenceIndex % sequences.length];
   const mascotState: ShellBallVisualState = stage === "listening" ? "voice_listening" : stage === "executing" ? "voice_locked" : stage === "understanding" ? "processing" : "hover_input";
@@ -63,6 +68,24 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
 
     return clearTimer;
   }, [clearTimer, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      closeButtonRef.current?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      if (previousFocusRef.current && document.contains(previousFocusRef.current)) {
+        previousFocusRef.current.focus();
+      }
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     clearTimer();
@@ -125,6 +148,43 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
     setStage("listening");
   }
 
+  function handlePanelKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+
+    if (!focusable || focusable.length === 0) {
+      event.preventDefault();
+      panelRef.current?.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+
+    if (event.shiftKey && activeElement === first) {
+      event.preventDefault();
+      last.focus();
+      return;
+    }
+
+    if (!event.shiftKey && activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   if (!isOpen) {
     return null;
   }
@@ -133,6 +193,7 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
     <AnimatePresence>
       <motion.div
         animate={{ opacity: 1 }}
+        aria-hidden="false"
         className="dashboard-voice-field"
         exit={{ opacity: 0 }}
         initial={{ opacity: 0 }}
@@ -140,18 +201,27 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
       >
         <motion.div
           animate={{ opacity: 1, scale: 1, y: 0 }}
+          aria-describedby={descriptionId}
+          aria-labelledby={titleId}
+          aria-modal="true"
           className="dashboard-voice-field__panel"
           exit={{ opacity: 0, scale: 0.96, y: 16 }}
           initial={{ opacity: 0, scale: 0.96, y: 12 }}
           onClick={(event) => event.stopPropagation()}
+          onKeyDown={handlePanelKeyDown}
+          ref={panelRef}
+          role="dialog"
+          tabIndex={-1}
           transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
         >
           <div className="dashboard-voice-field__header">
             <div>
               <p className="dashboard-orbit-panel__eyebrow">voice field</p>
-              <h2 className="dashboard-voice-field__title">语音陪伴场</h2>
+              <h2 className="dashboard-voice-field__title" id={titleId}>
+                语音陪伴场
+              </h2>
             </div>
-            <Button className="dashboard-orbit-panel__close" onClick={onClose} size="icon-sm" variant="ghost">
+            <Button className="dashboard-orbit-panel__close" onClick={onClose} ref={closeButtonRef} size="icon-sm" variant="ghost">
               <X className="h-4 w-4" />
               <span className="sr-only">关闭语音场</span>
             </Button>
@@ -185,7 +255,7 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
                       ? "你是想让我…"
                       : "正在处理…"}
             </p>
-            <p className="dashboard-voice-field__subline">
+            <p className="dashboard-voice-field__subline" id={descriptionId}>
               {stage === "confirming"
                 ? summary
                 : stage === "executing"

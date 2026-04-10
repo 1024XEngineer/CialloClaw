@@ -3,10 +3,9 @@ import type { CSSProperties } from "react";
 
 type DashboardOrbitRingsProps = {
   offset: { x: number; y: number };
-  pulse: number;
 };
 
-export function DashboardOrbitRings({ offset, pulse }: DashboardOrbitRingsProps) {
+export function DashboardOrbitRings({ offset }: DashboardOrbitRingsProps) {
   const particles = useMemo(
     () =>
       Array.from({ length: 8 }).map((_, index) => ({
@@ -23,7 +22,7 @@ export function DashboardOrbitRings({ offset, pulse }: DashboardOrbitRingsProps)
 
   return (
     <div className="dashboard-orbit-rings" style={fieldStyle}>
-      <div className="dashboard-orbit-rings__halo" style={{ opacity: 0.52 + pulse * 0.18 }} />
+      <div className="dashboard-orbit-rings__halo" />
       <div className="dashboard-orbit-rings__ring dashboard-orbit-rings__ring--entrance" />
       <div className="dashboard-orbit-rings__ring dashboard-orbit-rings__ring--event" />
       <div className="dashboard-orbit-rings__ring dashboard-orbit-rings__ring--decor" />
@@ -40,7 +39,6 @@ export function DashboardOrbitRings({ offset, pulse }: DashboardOrbitRingsProps)
               animationDelay: `${index * 0.35}s`,
               height: `${particle.size}px`,
               left: `calc(50% + ${x}px)`,
-              opacity: 0.18 + pulse * 0.08,
               top: `calc(50% + ${y}px)`,
               width: `${particle.size}px`,
             }}

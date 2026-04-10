@@ -2,16 +2,26 @@
 package runengine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 const (
 	defaultWorkspaceRoot   = "workspace"
 	defaultTaskSourcePath  = "workspace/todos"
 	defaultRecoveryPathObj = "workspace/temp.md"
+)
+
+var (
+	ErrTaskNotFound        = errors.New("task not found")
+	ErrTaskStatusInvalid   = errors.New("task status invalid")
+	ErrTaskAlreadyFinished = errors.New("task already finished")
 )
 
 // TaskRecord 描述当前模块记录。
@@ -37,12 +47,14 @@ type TaskRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
+	TokenUsage        map[string]any
 	MemoryReadPlans   []map[string]any
 	MemoryWritePlans  []map[string]any
 	StorageWritePlan  map[string]any
@@ -118,6 +130,7 @@ type Engine struct {
 	mu           sync.RWMutex
 	nextID       uint64
 	now          func() time.Time
+	taskStore    storage.TaskRunStore
 	tasks        map[string]*TaskRecord
 	taskOrder    []string
 	sessionOrder []string
@@ -130,8 +143,19 @@ type Engine struct {
 
 // NewEngine 创建一套新的内存态引擎，并填充主链路需要的默认设置和巡检配置。
 func NewEngine() *Engine {
+	engine, _ := newEngine(nil)
+	return engine
+}
+
+// NewEngineWithStore 创建带有 task/run 持久化存储的引擎实例。
+func NewEngineWithStore(taskStore storage.TaskRunStore) (*Engine, error) {
+	return newEngine(taskStore)
+}
+
+func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 	engine := &Engine{
 		now:          time.Now,
+		taskStore:    taskStore,
 		tasks:        map[string]*TaskRecord{},
 		taskOrder:    []string{},
 		sessionOrder: []string{},
@@ -143,21 +167,15 @@ func NewEngine() *Engine {
 			RemindBeforeDeadline: true,
 			RemindWhenStale:      false,
 		},
-		settings: buildDefaultSettings(),
-		notepadItems: []map[string]any{
-			{
-				"item_id":          "todo_001",
-				"title":            "整理 Q3 复盘要点",
-				"bucket":           "upcoming",
-				"status":           "due_today",
-				"type":             "one_time",
-				"due_at":           "2026-04-07T18:00:00+08:00",
-				"agent_suggestion": "先生成一个 3 点摘要",
-			},
-		},
+		settings:     buildDefaultSettings(),
+		notepadItems: buildDefaultNotepadItems(time.Now()),
 	}
 
-	return engine
+	if err := engine.loadPersistedTaskRuns(context.Background()); err != nil {
+		return nil, err
+	}
+
+	return engine, nil
 }
 
 // CurrentState 处理当前模块的相关逻辑。
@@ -231,7 +249,6 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 	}
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
-	record.LatestToolCall = e.buildToolCall(record, "read_file")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": taskID,
 		"status":  record.Status,
@@ -239,6 +256,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 
 	e.tasks[taskID] = record
 	e.taskOrder = append([]string{taskID}, e.taskOrder...)
+	e.persistTaskLocked(record)
 
 	return record.clone()
 }
@@ -317,6 +335,32 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// BeginExecution 把任务推进到真实执行步骤，并刷新 timeline 与事件。
+func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "processing"
+	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	record.UpdatedAt = e.now()
+	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", outputSummary)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -340,6 +384,7 @@ func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord,
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -378,6 +423,32 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 			"delivery_result": cloneMap(record.DeliveryResult),
 		})
 	}
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// RecordToolCall 记录主链路最近一次完成的 tool_call 兼容层快照。
+func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[string]any, durationMS int64) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.LatestToolCall = e.buildToolCallRecord(record, toolName, input, output, durationMS, nil)
+	record.LatestEvent = e.buildEventWithPayload(record, "tool_call.completed", map[string]any{
+		"status":    record.Status,
+		"tool_name": toolName,
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -414,6 +485,7 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 		"task_id":         record.TaskID,
 		"delivery_result": cloneMap(record.DeliveryResult),
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -421,38 +493,80 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 // ControlTask 控制Task。
 
 // ControlTask 处理 pause/resume/cancel/restart 等用户控制动作。
-func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, bool) {
+func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	record, ok := e.tasks[taskID]
 	if !ok {
-		return TaskRecord{}, false
+		return TaskRecord{}, ErrTaskNotFound
 	}
 
 	now := e.now()
 	switch action {
 	case "pause":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
+		if record.Status != "processing" {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "paused"
 	case "resume":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
+		if record.Status != "paused" {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "processing"
 	case "cancel":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
 		record.Status = "cancelled"
 		record.FinishedAt = &now
+		record.ApprovalRequest = nil
+		record.PendingExecution = nil
+		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.Timeline = advanceTimeline(record.Timeline, "task_cancelled", "cancelled", "任务已取消")
+		record.CurrentStep = "task_cancelled"
 	case "restart":
+		if !record.isFinished() {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "processing"
 		record.FinishedAt = nil
+		record.CurrentStep = "generate_output"
+		record.DeliveryResult = nil
+		record.Artifacts = nil
+		record.BubbleMessage = nil
+		record.ApprovalRequest = nil
+		record.PendingExecution = nil
+		record.Authorization = nil
+		record.ImpactScope = nil
+		record.StorageWritePlan = nil
+		record.ArtifactPlans = nil
+		record.MemoryReadPlans = nil
+		record.MemoryWritePlans = nil
+		record.MirrorReferences = nil
+		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
+	default:
+		return TaskRecord{}, ErrTaskStatusInvalid
 	}
 
 	record.UpdatedAt = now
 	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
-	return record.clone(), true
+	return record.clone(), nil
 }
 
 // MarkWaitingApproval 处理当前模块的相关逻辑。
@@ -501,6 +615,7 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 		"task_id":          record.TaskID,
 		"approval_request": cloneMap(record.ApprovalRequest),
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -526,6 +641,7 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 		latestRestorePoint = cloneMap(existingRestorePoint)
 	}
 	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePoint)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
@@ -557,6 +673,7 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -596,6 +713,7 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
@@ -633,10 +751,28 @@ func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, write
 	if writePlans != nil {
 		record.MemoryWritePlans = cloneMapSlice(writePlans)
 	}
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
 // SetDeliveryPlans 设置DeliveryPlans。
+
+// SetDeliveryPlans 记录 workspace 写入计划和 artifact 持久化计划。
+// SetMirrorReferences 记录任务挂接后的镜像引用快照。
+// SetMirrorReferences 记录任务挂接后的镜像引用快照。
+func (e *Engine) SetMirrorReferences(taskID string, mirrorReferences []map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.MirrorReferences = cloneMapSlice(mirrorReferences)
+	e.persistTaskLocked(record)
+	return record.clone(), true
+}
 
 // SetDeliveryPlans 记录 workspace 写入计划和 artifact 持久化计划。
 func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any, artifactPlans []map[string]any) (TaskRecord, bool) {
@@ -650,6 +786,7 @@ func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any
 
 	record.StorageWritePlan = cloneMap(storageWritePlan)
 	record.ArtifactPlans = cloneMapSlice(artifactPlans)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
@@ -682,6 +819,7 @@ func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) 
 
 	notifications := cloneNotifications(record.Notifications)
 	record.Notifications = nil
+	e.persistTaskLocked(record)
 	return notifications, true
 }
 
@@ -832,13 +970,15 @@ func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any
 
 	filtered := make([]map[string]any, 0, len(e.notepadItems))
 	for _, item := range e.notepadItems {
+		normalized := normalizeNotepadItem(item, e.now())
 		if group != "" {
-			if bucket, ok := item["bucket"].(string); !ok || bucket != group {
+			if bucket, ok := normalized["bucket"].(string); !ok || bucket != group {
 				continue
 			}
 		}
-		filtered = append(filtered, cloneMap(item))
+		filtered = append(filtered, normalized)
 	}
+	sortNotepadItems(filtered)
 
 	total := len(filtered)
 	if offset >= total {
@@ -853,10 +993,70 @@ func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any
 	return filtered[offset:end], total
 }
 
+func (e *Engine) NotepadItem(itemID string) (map[string]any, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	item, _, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, false
+	}
+
+	return normalizeNotepadItem(item, e.now()), true
+}
+
+func (e *Engine) ReplaceNotepadItems(items []map[string]any) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.notepadItems = cloneMapSlice(items)
+}
+
+func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	item, index, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, false
+	}
+
+	updated := cloneMap(item)
+	updated["bucket"] = "closed"
+	updated["status"] = "completed"
+	updated["due_at"] = nil
+	e.notepadItems[index] = updated
+	return normalizeNotepadItem(updated, e.now()), true
+}
+
+func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, tokenUsage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	if len(auditRecords) > 0 {
+		record.AuditRecords = append(record.AuditRecords, cloneMapSlice(auditRecords)...)
+	}
+	if len(tokenUsage) > 0 {
+		record.TokenUsage = cloneMap(tokenUsage)
+	}
+	record.UpdatedAt = e.now()
+	e.persistTaskLocked(record)
+	return record.clone(), true
+}
+
 // buildEvent 处理当前模块的相关逻辑。
 
 // buildEvent 为当前任务生成一条兼容层 Event 记录。
 func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any {
+	return e.buildEventWithPayload(record, eventType, map[string]any{"status": record.Status})
+}
+
+func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, payload map[string]any) map[string]any {
 	return map[string]any{
 		"event_id":   e.nextIdentifier("evt"),
 		"run_id":     record.RunID,
@@ -864,7 +1064,7 @@ func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any
 		"step_id":    timelineCurrentStepID(record.Timeline),
 		"type":       eventType,
 		"level":      "info",
-		"payload":    map[string]any{"status": record.Status},
+		"payload":    cloneMap(payload),
 		"created_at": e.now().Format(time.RFC3339),
 	}
 }
@@ -873,6 +1073,14 @@ func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any
 
 // buildToolCall 为当前任务生成一条兼容层 ToolCall 记录。
 func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
+	return e.buildToolCallRecord(record, toolName, map[string]any{}, map[string]any{}, 120, nil)
+}
+
+func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
+	if durationMS <= 0 {
+		durationMS = 1
+	}
+
 	return map[string]any{
 		"tool_call_id": e.nextIdentifier("tool"),
 		"run_id":       record.RunID,
@@ -880,17 +1088,60 @@ func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]a
 		"step_id":      timelineCurrentStepID(record.Timeline),
 		"tool_name":    toolName,
 		"status":       "succeeded",
-		"input":        map[string]any{},
-		"output":       map[string]any{},
-		"error_code":   nil,
-		"duration_ms":  120,
+		"input":        cloneMap(input),
+		"output":       cloneMap(output),
+		"error_code":   errorCode,
+		"duration_ms":  durationMS,
 	}
 }
 
 // nextIdentifier 处理当前模块的相关逻辑。
 func (e *Engine) nextIdentifier(prefix string) string {
+	if e.taskStore != nil {
+		identifier, err := e.taskStore.AllocateIdentifier(context.Background(), prefix)
+		if err == nil {
+			return identifier
+		}
+	}
+
 	e.nextID++
 	return fmt.Sprintf("%s_%03d", prefix, e.nextID)
+}
+
+func (e *Engine) loadPersistedTaskRuns(ctx context.Context) error {
+	if e.taskStore == nil {
+		return nil
+	}
+
+	records, err := e.taskStore.LoadTaskRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("load persisted task runs: %w", err)
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	seenSessions := make(map[string]struct{}, len(records))
+	for _, persisted := range records {
+		record := taskRecordFromStorage(persisted)
+		e.tasks[record.TaskID] = &record
+		e.taskOrder = append(e.taskOrder, record.TaskID)
+		if _, seen := seenSessions[record.SessionID]; !seen {
+			e.sessionOrder = append(e.sessionOrder, record.SessionID)
+			seenSessions[record.SessionID] = struct{}{}
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) persistTaskLocked(record *TaskRecord) {
+	if e.taskStore == nil || record == nil {
+		return
+	}
+
+	_ = e.taskStore.SaveTaskRun(context.Background(), taskRecordToStorage(record.clone()))
 }
 
 // clone 处理当前模块的相关逻辑。
@@ -903,12 +1154,14 @@ func (r TaskRecord) clone() TaskRecord {
 	clone.BubbleMessage = cloneMap(r.BubbleMessage)
 	clone.DeliveryResult = cloneMap(r.DeliveryResult)
 	clone.Artifacts = cloneMapSlice(r.Artifacts)
+	clone.AuditRecords = cloneMapSlice(r.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(r.MirrorReferences)
 	clone.SecuritySummary = cloneMap(r.SecuritySummary)
 	clone.ApprovalRequest = cloneMap(r.ApprovalRequest)
 	clone.PendingExecution = cloneMap(r.PendingExecution)
 	clone.Authorization = cloneMap(r.Authorization)
 	clone.ImpactScope = cloneMap(r.ImpactScope)
+	clone.TokenUsage = cloneMap(r.TokenUsage)
 	clone.MemoryReadPlans = cloneMapSlice(r.MemoryReadPlans)
 	clone.MemoryWritePlans = cloneMapSlice(r.MemoryWritePlans)
 	clone.StorageWritePlan = cloneMap(r.StorageWritePlan)
@@ -1208,6 +1461,160 @@ func mergeMaps(target map[string]any, patch map[string]any) {
 	}
 }
 
+func buildDefaultNotepadItems(now time.Time) []map[string]any {
+	base := now.In(time.FixedZone("CST", 8*60*60))
+	dueToday := time.Date(base.Year(), base.Month(), base.Day(), 18, 0, 0, 0, base.Location())
+	if dueToday.Before(base) {
+		dueToday = base.Add(2 * time.Hour)
+	}
+	later := dueToday.Add(48 * time.Hour)
+	recurring := dueToday.Add(7 * 24 * time.Hour)
+	completedAt := dueToday.Add(-24 * time.Hour)
+
+	return []map[string]any{
+		{
+			"item_id":          "todo_001",
+			"title":            "整理本周会议纪要",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "one_time",
+			"due_at":           dueToday.Format(time.RFC3339),
+			"agent_suggestion": "先生成一个结构化摘要",
+		},
+		{
+			"item_id":          "todo_002",
+			"title":            "补齐下周评审材料",
+			"bucket":           "later",
+			"status":           "normal",
+			"type":             "one_time",
+			"due_at":           later.Format(time.RFC3339),
+			"agent_suggestion": "可以先整理提纲再扩写成文档",
+		},
+		{
+			"item_id":          "todo_003",
+			"title":            "每周项目复盘",
+			"bucket":           "recurring_rule",
+			"status":           "normal",
+			"type":             "recurring",
+			"due_at":           recurring.Format(time.RFC3339),
+			"agent_suggestion": "建议生成固定模板后重复复用",
+		},
+		{
+			"item_id":          "todo_004",
+			"title":            "已归档的日报整理",
+			"bucket":           "closed",
+			"status":           "completed",
+			"type":             "one_time",
+			"due_at":           completedAt.Format(time.RFC3339),
+			"agent_suggestion": nil,
+		},
+	}
+}
+
+func (e *Engine) findNotepadItem(itemID string) (map[string]any, int, bool) {
+	for index, item := range e.notepadItems {
+		if stringValue(item, "item_id", "") == itemID {
+			return item, index, true
+		}
+	}
+	return nil, -1, false
+}
+
+func normalizeNotepadItem(item map[string]any, now time.Time) map[string]any {
+	normalized := cloneMap(item)
+	normalized["status"] = deriveNotepadStatus(item, now)
+	return normalized
+}
+
+func deriveNotepadStatus(item map[string]any, now time.Time) string {
+	status := stringValue(item, "status", "normal")
+	if status == "completed" || status == "cancelled" {
+		return status
+	}
+	if stringValue(item, "bucket", "") == "closed" {
+		return "completed"
+	}
+
+	dueAt, ok := parseNotepadDueTime(item)
+	if !ok {
+		return "normal"
+	}
+	nowAtDueZone := now.In(dueAt.Location())
+	if dueAt.Before(nowAtDueZone) {
+		return "overdue"
+	}
+	if sameDay(dueAt, nowAtDueZone) {
+		return "due_today"
+	}
+	return "normal"
+}
+
+func parseNotepadDueTime(item map[string]any) (time.Time, bool) {
+	dueAt := stringValue(item, "due_at", "")
+	if dueAt == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, dueAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func sameDay(left, right time.Time) bool {
+	return left.Year() == right.Year() && left.YearDay() == right.YearDay()
+}
+
+func sortNotepadItems(items []map[string]any) {
+	sort.Slice(items, func(i, j int) bool {
+		leftBucket := stringValue(items[i], "bucket", "")
+		rightBucket := stringValue(items[j], "bucket", "")
+		if leftBucket != rightBucket {
+			return todoBucketRank(leftBucket) < todoBucketRank(rightBucket)
+		}
+
+		leftDue, leftOK := parseNotepadDueTime(items[i])
+		rightDue, rightOK := parseNotepadDueTime(items[j])
+		switch {
+		case leftOK && rightOK && !leftDue.Equal(rightDue):
+			return leftDue.Before(rightDue)
+		case leftOK != rightOK:
+			return leftOK
+		}
+
+		return stringValue(items[i], "title", "") < stringValue(items[j], "title", "")
+	})
+}
+
+func todoBucketRank(bucket string) int {
+	switch bucket {
+	case "upcoming":
+		return 0
+	case "later":
+		return 1
+	case "recurring_rule":
+		return 2
+	case "closed":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func stringValue(values map[string]any, key, fallback string) string {
+	rawValue, ok := values[key]
+	if !ok {
+		return fallback
+	}
+
+	value, ok := rawValue.(string)
+	if !ok || value == "" {
+		return fallback
+	}
+
+	return value
+}
+
 // buildDefaultSettings 处理当前模块的相关逻辑。
 
 // buildDefaultSettings 构造主链路和工作台使用的默认设置快照。
@@ -1249,4 +1656,167 @@ func buildDefaultSettings() map[string]any {
 			"budget_auto_downgrade": true,
 		},
 	}
+}
+
+func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
+	return storage.TaskRunRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineToStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		Notifications:     notificationsToStorage(record.Notifications),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
+	return TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineFromStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		Notifications:     notificationsFromStorage(record.Notifications),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func timelineToStorage(timeline []TaskStepRecord) []storage.TaskStepSnapshot {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	result := make([]storage.TaskStepSnapshot, len(timeline))
+	for index, step := range timeline {
+		result[index] = storage.TaskStepSnapshot{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+
+	return result
+}
+
+func timelineFromStorage(timeline []storage.TaskStepSnapshot) []TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	result := make([]TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+
+	return result
+}
+
+func notificationsToStorage(values []NotificationRecord) []storage.NotificationSnapshot {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]storage.NotificationSnapshot, len(values))
+	for index, value := range values {
+		result[index] = storage.NotificationSnapshot{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
+	return result
+}
+
+func notificationsFromStorage(values []storage.NotificationSnapshot) []NotificationRecord {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]NotificationRecord, len(values))
+	for index, value := range values {
+		result[index] = NotificationRecord{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
+	return result
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+	return &cloned
 }

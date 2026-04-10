@@ -110,6 +110,7 @@
 }
 
 .dashboard-orbit-rings__halo {
+  animation: dashboard-orbit-halo 3.2s ease-in-out infinite;
   background: radial-gradient(circle, rgba(255, 255, 255, 0.54) 0%, rgba(250, 232, 220, 0.16) 36%, transparent 72%);
   height: 130%;
   width: 130%;
@@ -1016,6 +1017,18 @@
   50% {
     opacity: 0.35;
     transform: scale(0.72);
+  }
+}
+
+@keyframes dashboard-orbit-halo {
+  0%, 100% {
+    opacity: 0.52;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: translate(-50%, -50%) scale(1.03);
   }
 }
 

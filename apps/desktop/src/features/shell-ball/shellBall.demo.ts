@@ -1,4 +1,4 @@
-import type { ShellBallDemoViewModel, ShellBallPanelSection, ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallDemoViewModel, ShellBallVisualState } from "./shellBall.types";
 
 export const shellBallDemoFixtures = {
   idle: {
@@ -79,26 +79,4 @@ export const shellBallDemoFixtures = {
 
 export function getShellBallDemoViewModel(visualState: ShellBallVisualState) {
   return shellBallDemoFixtures[visualState];
-}
-
-export function getShellBallPanelSections(viewModel: ShellBallDemoViewModel): readonly ShellBallPanelSection[] {
-  if (viewModel.panelMode === "hidden") {
-    return [];
-  }
-
-  const sections: ShellBallPanelSection[] = ["badge", "title", "helperText"];
-
-  if (viewModel.panelMode !== "peek" || viewModel.showVoiceHint) {
-    sections.splice(2, 0, "subtitle");
-  }
-
-  if (viewModel.showRiskBlock) {
-    sections.push("risk");
-  }
-
-  if (viewModel.showVoiceHint) {
-    sections.push("voiceHint");
-  }
-
-  return sections;
 }

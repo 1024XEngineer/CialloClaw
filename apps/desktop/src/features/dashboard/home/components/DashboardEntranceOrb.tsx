@@ -8,11 +8,9 @@ type DashboardEntranceOrbProps = {
   config: DashboardEntranceOrbConfig;
   dimmed: boolean;
   isHovered: boolean;
-  onOrbitAngleChange: (key: string, nextAngle: number) => void;
   offset: { x: number; y: number };
   onClick: () => void;
   onHoverChange: (hovered: boolean) => void;
-  rotationAngle: number;
 };
 
 const entranceIcons = {
@@ -22,16 +20,37 @@ const entranceIcons = {
   safety: ShieldCheck,
 } as const;
 
-export function DashboardEntranceOrb({ config, dimmed, isHovered, onOrbitAngleChange, offset, onClick, onHoverChange, rotationAngle }: DashboardEntranceOrbProps) {
+export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClick, onHoverChange }: DashboardEntranceOrbProps) {
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSnapping, setIsSnapping] = useState(false);
+  const [rotationAngle, setRotationAngle] = useState(config.orbitOffset);
   const dragStartRef = useRef({ mouseX: 0, mouseY: 0 });
   const clickHandledRef = useRef(false);
   const movedRef = useRef(false);
   const draggingRef = useRef(false);
   const snapTimerRef = useRef<number | null>(null);
   const Icon = entranceIcons[config.module];
+
+  useEffect(() => {
+    let frame = 0;
+    let last = 0;
+
+    const animate = (timestamp: number) => {
+      const dt = last ? (timestamp - last) / 1000 : 0;
+      last = timestamp;
+
+      if (!draggingRef.current && dt > 0 && dt < 0.1) {
+        setRotationAngle((current) => (current + config.orbitSpeed * dt) % 360);
+      }
+
+      frame = window.requestAnimationFrame(animate);
+    };
+
+    frame = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(frame);
+  }, [config.orbitSpeed]);
+
   const rad = (rotationAngle * Math.PI) / 180;
   const orbitX = Math.cos(rad) * config.orbitRadius + offset.x * 0.16;
   const orbitY = Math.sin(rad) * config.orbitRadius + offset.y * 0.16;
@@ -85,13 +104,15 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, onOrbitAngleCh
       }
 
       setIsDragging(false);
-      const relX = event.clientX - window.innerWidth / 2;
-      const relY = event.clientY - window.innerHeight / 2;
+      const orbitCenterX = window.innerWidth / 2 + offset.x * 0.16;
+      const orbitCenterY = window.innerHeight / 2 + offset.y * 0.16;
+      const relX = event.clientX - orbitCenterX;
+      const relY = event.clientY - orbitCenterY;
       const dropAngle = (Math.atan2(relY, relX) * 180) / Math.PI;
       const normalizedAngle = ((dropAngle % 360) + 360) % 360;
       setDragPos(null);
       setIsSnapping(true);
-      onOrbitAngleChange(config.key, normalizedAngle);
+      setRotationAngle(normalizedAngle);
       if (snapTimerRef.current) {
         window.clearTimeout(snapTimerRef.current);
       }
@@ -108,7 +129,7 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, onOrbitAngleCh
         window.clearTimeout(snapTimerRef.current);
       }
     };
-  }, [config.key, onClick, onOrbitAngleChange]);
+  }, [offset.x, offset.y, onClick]);
   const style = {
     left: `calc(50% + ${x}px)`,
     top: `calc(50% + ${y}px)`,
