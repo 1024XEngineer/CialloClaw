@@ -51,7 +51,7 @@ scripts/
 
 - `docs/CialloClaw开发统一规范_修订版_v10.md`
 - `docs/CialloClaw_架构设计文档_修订版_v10.md`
-- `docs/Agent.md`
+- `AGENTS.md`
 
 ## 当前协议方向
 
@@ -74,4 +74,4 @@ pnpm --dir apps/desktop dev
 
 - 当前阶段重点是先冻结目录边界、协议真源和模块职责，再继续往 P0 主链路推进。
 - 业务实现仍然是最小骨架，下一步应继续接通真实的 JSON-RPC handler、task / run 状态映射、SQLite 落盘和 worker 编排。
-- 最高优先级约束仍以最新架构设计文档、开发统一规范 v10 与 `docs/Agent.md` 为准。
+- 最高优先级约束仍以最新架构设计文档、开发统一规范 v10 与 `AGENTS.md` 为准。

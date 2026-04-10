@@ -11,6 +11,9 @@ import (
 const defaultWorkspaceRoot = "workspace"
 
 // StorageWritePlan 定义当前模块的数据结构。
+
+// StorageWritePlan 描述正式交付物需要写入 workspace 时的最小落盘计划。
+// runengine 只保存这份计划，不直接执行真实文件写入。
 type StorageWritePlan struct {
 	TaskID       string
 	TargetPath   string
@@ -20,6 +23,9 @@ type StorageWritePlan struct {
 }
 
 // ArtifactPersistPlan 定义当前模块的数据结构。
+
+// ArtifactPersistPlan 描述 artifact 元数据后续需要如何持久化。
+// 它和 StorageWritePlan 分层存在，避免把大对象落盘和正式交付写入混成一件事。
 type ArtifactPersistPlan struct {
 	ArtifactID   string
 	TaskID       string
@@ -29,6 +35,9 @@ type ArtifactPersistPlan struct {
 }
 
 // ApprovalExecutionPlan 描述授权通过后继续执行所需的最小交付计划。
+
+// ApprovalExecutionPlan 描述命中风险并通过授权后，主链路需要恢复的最小交付计划。
+// 这里保存的是“恢复执行需要知道什么”，而不是完整运行态快照。
 type ApprovalExecutionPlan struct {
 	TaskID           string
 	DeliveryType     string
@@ -38,19 +47,29 @@ type ApprovalExecutionPlan struct {
 }
 
 // Service 提供当前模块的服务能力。
+
+// Service 负责把 runengine 的执行结果组装成对外 task-centric 语义。
+// 包括 bubble_message、delivery_result、artifact 计划，以及授权恢复后的默认交付配置。
 type Service struct{}
 
 // NewService 创建并返回Service。
+
+// NewService 创建交付服务。
 func NewService() *Service {
 	return &Service{}
 }
 
 // DefaultResultType 处理当前模块的相关逻辑。
+
+// DefaultResultType 返回当前主链路的默认正式交付类型。
 func (s *Service) DefaultResultType() string {
 	return "workspace_document"
 }
 
 // BuildBubbleMessage 构建BubbleMessage。
+
+// BuildBubbleMessage 生成统一的气泡消息结构。
+// orchestrator 在确认、授权、完成等节点都通过它构造对前端可直接消费的 bubble_message。
 func (s *Service) BuildBubbleMessage(taskID, bubbleType, text, createdAt string) map[string]any {
 	return map[string]any{
 		"bubble_id":  fmt.Sprintf("bubble_%s", taskID),
@@ -64,7 +83,15 @@ func (s *Service) BuildBubbleMessage(taskID, bubbleType, text, createdAt string)
 }
 
 // BuildDeliveryResult 构建DeliveryResult。
+
+// BuildDeliveryResult 生成对外返回的 delivery_result。
+// 当交付类型是 workspace_document 时，这里还会同步约定 workspace 内的相对输出路径。
 func (s *Service) BuildDeliveryResult(taskID, deliveryType, title, previewText string) map[string]any {
+	return s.BuildDeliveryResultWithTargetPath(taskID, deliveryType, title, previewText, "")
+}
+
+// BuildDeliveryResultWithTargetPath 生成带显式输出路径的 delivery_result。
+func (s *Service) BuildDeliveryResultWithTargetPath(taskID, deliveryType, title, previewText, targetPath string) map[string]any {
 	payload := map[string]any{
 		"path":    nil,
 		"url":     nil,
@@ -72,7 +99,7 @@ func (s *Service) BuildDeliveryResult(taskID, deliveryType, title, previewText s
 	}
 
 	if deliveryType == "workspace_document" {
-		payload["path"] = path.Join(defaultWorkspaceRoot, fmt.Sprintf("%s.md", slugify(title, taskID)))
+		payload["path"] = resolveWorkspaceTargetPath(targetPath, fmt.Sprintf("%s.md", slugify(title, taskID)))
 	}
 
 	return map[string]any{
@@ -84,6 +111,9 @@ func (s *Service) BuildDeliveryResult(taskID, deliveryType, title, previewText s
 }
 
 // BuildArtifact 构建Artifact。
+
+// BuildArtifact 从正式交付结果反推 artifact 列表。
+// 当前主链路只在生成 workspace 文档时附带一个 generated_doc artifact。
 func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]any) []map[string]any {
 	payload, ok := deliveryResult["payload"].(map[string]any)
 	if !ok {
@@ -100,7 +130,7 @@ func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]
 			"artifact_id":   fmt.Sprintf("art_%s", taskID),
 			"task_id":       taskID,
 			"artifact_type": "generated_doc",
-			"title":         fmt.Sprintf("%s.md", title),
+			"title":         artifactTitle(path, title),
 			"path":          path,
 			"mime_type":     "text/markdown",
 		},
@@ -108,6 +138,8 @@ func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]
 }
 
 // BuildStorageWritePlan 构建StorageWritePlan。
+
+// BuildStorageWritePlan 把 delivery_result 转成 runengine 保存的 workspace 写入计划。
 func (s *Service) BuildStorageWritePlan(taskID string, deliveryResult map[string]any) map[string]any {
 	payload, ok := deliveryResult["payload"].(map[string]any)
 	if !ok {
@@ -129,6 +161,8 @@ func (s *Service) BuildStorageWritePlan(taskID string, deliveryResult map[string
 }
 
 // BuildArtifactPersistPlans 构建ArtifactPersistPlans。
+
+// BuildArtifactPersistPlans 把 artifact 列表转换成后续持久化计划。
 func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[string]any) []map[string]any {
 	if len(artifacts) == 0 {
 		return nil
@@ -149,6 +183,9 @@ func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[strin
 }
 
 // BuildApprovalExecutionPlan 构建授权通过后的继续执行计划。
+
+// BuildApprovalExecutionPlan 为等待授权的任务构造恢复执行计划。
+// 不同 intent 会在这里得到不同的默认交付类型、结果标题和气泡文案。
 func (s *Service) BuildApprovalExecutionPlan(taskID string, intent map[string]any) map[string]any {
 	intentName, _ := intent["name"].(string)
 	plan := map[string]any{
@@ -185,6 +222,9 @@ func (s *Service) BuildApprovalExecutionPlan(taskID string, intent map[string]an
 }
 
 // slugify 处理当前模块的相关逻辑。
+
+// slugify 把结果标题转换成适合 workspace 文件名的片段。
+// 如果标题清洗后为空，则退回 task_id，避免生成不可用路径。
 func slugify(title, fallback string) string {
 	trimmed := strings.TrimSpace(title)
 	if trimmed == "" {
@@ -200,4 +240,37 @@ func slugify(title, fallback string) string {
 	}
 
 	return trimmed
+}
+
+func resolveWorkspaceTargetPath(targetPath, fallbackName string) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if normalized == "" {
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+
+	cleaned := path.Clean(normalized)
+	switch cleaned {
+	case ".", "/", "":
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+
+	if strings.HasPrefix(cleaned, "../") {
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+	if cleaned == defaultWorkspaceRoot {
+		return path.Join(defaultWorkspaceRoot, fallbackName)
+	}
+	if strings.HasPrefix(cleaned, defaultWorkspaceRoot+"/") {
+		return cleaned
+	}
+
+	return path.Join(defaultWorkspaceRoot, cleaned)
+}
+
+func artifactTitle(targetPath, fallbackTitle string) string {
+	if trimmed := strings.TrimSpace(targetPath); trimmed != "" {
+		return path.Base(trimmed)
+	}
+
+	return fmt.Sprintf("%s.md", fallbackTitle)
 }

@@ -2,10 +2,14 @@
 package runengine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 const (
@@ -14,7 +18,16 @@ const (
 	defaultRecoveryPathObj = "workspace/temp.md"
 )
 
+var (
+	ErrTaskNotFound        = errors.New("task not found")
+	ErrTaskStatusInvalid   = errors.New("task status invalid")
+	ErrTaskAlreadyFinished = errors.New("task already finished")
+)
+
 // TaskRecord 描述当前模块记录。
+
+// TaskRecord 是 runengine 在内存中维护的任务主记录。
+// 它同时承载对外 task 语义和对内 run 执行态之间的映射结果，是 4 号主链路最核心的状态对象。
 type TaskRecord struct {
 	TaskID            string
 	SessionID         string
@@ -51,6 +64,9 @@ type TaskRecord struct {
 }
 
 // TaskStepRecord 描述当前模块记录。
+
+// TaskStepRecord 表示 task 视角下的时间线步骤。
+// orchestrator 会根据它构造 timeline，用于 dashboard、task detail 和运行态追踪。
 type TaskStepRecord struct {
 	StepID        string
 	TaskID        string
@@ -62,6 +78,9 @@ type TaskStepRecord struct {
 }
 
 // NotificationRecord 描述当前模块记录。
+
+// NotificationRecord 保存尚未被前端消费的通知事件。
+// RPC 层会在响应之后继续回放这些通知，形成 task.updated / delivery.ready 等事件流。
 type NotificationRecord struct {
 	Method    string
 	Params    map[string]any
@@ -69,6 +88,9 @@ type NotificationRecord struct {
 }
 
 // CreateTaskInput 定义当前模块的数据结构。
+
+// CreateTaskInput 描述创建任务时 runengine 需要的一揽子初始化参数。
+// orchestrator 会在这里一次性传入标题、状态、intent、timeline 和初始展示信息。
 type CreateTaskInput struct {
 	SessionID         string
 	Title             string
@@ -87,6 +109,8 @@ type CreateTaskInput struct {
 }
 
 // InspectorConfig 描述当前模块配置。
+
+// InspectorConfig 保存任务巡检模块的当前配置快照。
 type InspectorConfig struct {
 	TaskSources          []string
 	InspectionInterval   map[string]any
@@ -97,10 +121,14 @@ type InspectorConfig struct {
 }
 
 // Engine 维护当前模块的运行状态。
+
+// Engine 是主链路运行态的内存状态机。
+// 它负责维护 task/run 映射、时间线推进、授权等待、交付计划、通知缓存以及设置项快照。
 type Engine struct {
 	mu           sync.RWMutex
 	nextID       uint64
 	now          func() time.Time
+	taskStore    storage.TaskRunStore
 	tasks        map[string]*TaskRecord
 	taskOrder    []string
 	sessionOrder []string
@@ -110,9 +138,22 @@ type Engine struct {
 }
 
 // NewEngine 创建并返回Engine。
+
+// NewEngine 创建一套新的内存态引擎，并填充主链路需要的默认设置和巡检配置。
 func NewEngine() *Engine {
+	engine, _ := newEngine(nil)
+	return engine
+}
+
+// NewEngineWithStore 创建带有 task/run 持久化存储的引擎实例。
+func NewEngineWithStore(taskStore storage.TaskRunStore) (*Engine, error) {
+	return newEngine(taskStore)
+}
+
+func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 	engine := &Engine{
 		now:          time.Now,
+		taskStore:    taskStore,
 		tasks:        map[string]*TaskRecord{},
 		taskOrder:    []string{},
 		sessionOrder: []string{},
@@ -138,10 +179,17 @@ func NewEngine() *Engine {
 		},
 	}
 
-	return engine
+	if err := engine.loadPersistedTaskRuns(context.Background()); err != nil {
+		return nil, err
+	}
+
+	return engine, nil
 }
 
 // CurrentState 处理当前模块的相关逻辑。
+
+// CurrentState 返回兼容层的 run_status。
+// 对外产品态仍以 task_status 为主，这里只保留 processing/completed 两态兼容。
 func (e *Engine) CurrentState() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -154,6 +202,8 @@ func (e *Engine) CurrentState() string {
 }
 
 // CurrentTaskStatus 处理当前模块的相关逻辑。
+
+// CurrentTaskStatus 返回当前主任务的 task_status。
 func (e *Engine) CurrentTaskStatus() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -166,6 +216,8 @@ func (e *Engine) CurrentTaskStatus() string {
 }
 
 // CreateTask 创建Task。
+
+// CreateTask 创建 task/run 映射，并把初始时间线、展示信息和安全摘要写入内存态。
 func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -205,7 +257,6 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 	}
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
-	record.LatestToolCall = e.buildToolCall(record, "read_file")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": taskID,
 		"status":  record.Status,
@@ -213,11 +264,14 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 
 	e.tasks[taskID] = record
 	e.taskOrder = append([]string{taskID}, e.taskOrder...)
+	e.persistTaskLocked(record)
 
 	return record.clone()
 }
 
 // GetTask 获取Task。
+
+// GetTask 根据 task_id 读取一份防御性复制后的任务快照。
 func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -231,7 +285,9 @@ func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 }
 
 // ListTasks 列出Tasks。
-func (e *Engine) ListTasks(group string, limit, offset int) ([]TaskRecord, int) {
+
+// ListTasks 按未完成/已完成分组列出任务，并在分页前应用统一排序规则。
+func (e *Engine) ListTasks(group, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -247,6 +303,7 @@ func (e *Engine) ListTasks(group string, limit, offset int) ([]TaskRecord, int) 
 		}
 		filtered = append(filtered, record.clone())
 	}
+	sortTaskRecords(filtered, sortBy, sortOrder)
 
 	total := len(filtered)
 	if offset >= total {
@@ -262,6 +319,9 @@ func (e *Engine) ListTasks(group string, limit, offset int) ([]TaskRecord, int) 
 }
 
 // ConfirmTask 确认Task。
+
+// ConfirmTask 把处于 confirming_intent 的任务推进到 processing。
+// 这里会更新 intent、当前步骤和气泡展示，并推进 timeline。
 func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -283,11 +343,39 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// BeginExecution 把任务推进到真实执行步骤，并刷新 timeline 与事件。
+func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "processing"
+	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	record.UpdatedAt = e.now()
+	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", outputSummary)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // UpdateIntent 更新Task当前生效意图。
+
+// UpdateIntent 在不改变整体任务身份的前提下覆盖当前生效意图。
 func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -304,11 +392,15 @@ func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord,
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // SetPresentation 设置Presentation。
+
+// SetPresentation 只更新任务的展示层信息，不改变主状态机结论。
+// 它常用于确认态、等待输入态或仅更新气泡的场景。
 func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, deliveryResult map[string]any, artifacts []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -339,11 +431,39 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 			"delivery_result": cloneMap(record.DeliveryResult),
 		})
 	}
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// RecordToolCall 记录主链路最近一次完成的 tool_call 兼容层快照。
+func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[string]any, durationMS int64) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.LatestToolCall = e.buildToolCallRecord(record, toolName, input, output, durationMS, nil)
+	record.LatestEvent = e.buildEventWithPayload(record, "tool_call.completed", map[string]any{
+		"status":    record.Status,
+		"tool_name": toolName,
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // CompleteTask 完成Task。
+
+// CompleteTask 把任务收敛到 completed，并写入正式交付结果、artifact 和恢复点摘要。
 func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -373,51 +493,100 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 		"task_id":         record.TaskID,
 		"delivery_result": cloneMap(record.DeliveryResult),
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // ControlTask 控制Task。
-func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, bool) {
+
+// ControlTask 处理 pause/resume/cancel/restart 等用户控制动作。
+func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	record, ok := e.tasks[taskID]
 	if !ok {
-		return TaskRecord{}, false
+		return TaskRecord{}, ErrTaskNotFound
 	}
 
 	now := e.now()
 	switch action {
 	case "pause":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
+		if record.Status != "processing" {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "paused"
 	case "resume":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
+		if record.Status != "paused" {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "processing"
 	case "cancel":
+		if record.isFinished() {
+			return TaskRecord{}, ErrTaskAlreadyFinished
+		}
 		record.Status = "cancelled"
 		record.FinishedAt = &now
+		record.ApprovalRequest = nil
+		record.PendingExecution = nil
+		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.Timeline = advanceTimeline(record.Timeline, "task_cancelled", "cancelled", "任务已取消")
+		record.CurrentStep = "task_cancelled"
 	case "restart":
+		if !record.isFinished() {
+			return TaskRecord{}, ErrTaskStatusInvalid
+		}
 		record.Status = "processing"
 		record.FinishedAt = nil
+		record.CurrentStep = "generate_output"
+		record.DeliveryResult = nil
+		record.Artifacts = nil
+		record.BubbleMessage = nil
+		record.ApprovalRequest = nil
+		record.PendingExecution = nil
+		record.Authorization = nil
+		record.ImpactScope = nil
+		record.StorageWritePlan = nil
+		record.ArtifactPlans = nil
+		record.MemoryReadPlans = nil
+		record.MemoryWritePlans = nil
+		record.MirrorReferences = nil
+		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
+	default:
+		return TaskRecord{}, ErrTaskStatusInvalid
 	}
 
 	record.UpdatedAt = now
 	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
-	return record.clone(), true
+	return record.clone(), nil
 }
 
 // MarkWaitingApproval 处理当前模块的相关逻辑。
+
+// MarkWaitingApproval 是等待授权态的简化入口。
 func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	return e.MarkWaitingApprovalWithPlan(taskID, approvalRequest, nil, bubbleMessage)
 }
 
 // MarkWaitingApprovalWithPlan 将任务切换为等待授权，并附带待恢复执行计划。
+
+// MarkWaitingApprovalWithPlan 把任务切换到 waiting_auth，并附带后续恢复执行所需的计划。
 func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[string]any, pendingExecution map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -454,11 +623,14 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 		"task_id":          record.TaskID,
 		"approval_request": cloneMap(record.ApprovalRequest),
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // ResolveAuthorization 处理Authorization。
+
+// ResolveAuthorization 记录本次授权结果，并清理挂起中的审批请求与待执行计划。
 func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]any, impactScope map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -477,10 +649,13 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 		latestRestorePoint = cloneMap(existingRestorePoint)
 	}
 	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePoint)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
 // ResumeAfterApproval 将已授权任务恢复到处理中状态，并保留后续执行计划。
+
+// ResumeAfterApproval 在用户允许后把任务从 waiting_auth 恢复到 processing。
 func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -506,11 +681,14 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // DenyAfterApproval 将已拒绝授权的任务收敛到结束状态。
+
+// DenyAfterApproval 在用户拒绝授权时终止任务，并保留授权记录与影响范围摘要。
 func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -543,11 +721,14 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 		"task_id": record.TaskID,
 		"status":  record.Status,
 	})
+	e.persistTaskLocked(record)
 
 	return record.clone(), true
 }
 
 // PendingExecutionPlan 返回等待授权任务保存的执行计划。
+
+// PendingExecutionPlan 返回任务在等待授权期间缓存的恢复执行计划。
 func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -561,6 +742,8 @@ func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
 }
 
 // SetMemoryPlans 设置MemoryPlans。
+
+// SetMemoryPlans 记录 memory 读取/写入计划，供主链路后续交接和观测使用。
 func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, writePlans []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -576,10 +759,30 @@ func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, write
 	if writePlans != nil {
 		record.MemoryWritePlans = cloneMapSlice(writePlans)
 	}
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
 // SetDeliveryPlans 设置DeliveryPlans。
+
+// SetDeliveryPlans 记录 workspace 写入计划和 artifact 持久化计划。
+// SetMirrorReferences 记录任务挂接后的镜像引用快照。
+// SetMirrorReferences 记录任务挂接后的镜像引用快照。
+func (e *Engine) SetMirrorReferences(taskID string, mirrorReferences []map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.MirrorReferences = cloneMapSlice(mirrorReferences)
+	e.persistTaskLocked(record)
+	return record.clone(), true
+}
+
+// SetDeliveryPlans 记录 workspace 写入计划和 artifact 持久化计划。
 func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any, artifactPlans []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -591,10 +794,13 @@ func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any
 
 	record.StorageWritePlan = cloneMap(storageWritePlan)
 	record.ArtifactPlans = cloneMapSlice(artifactPlans)
+	e.persistTaskLocked(record)
 	return record.clone(), true
 }
 
 // PendingNotifications 返回待处理的Notifications。
+
+// PendingNotifications 返回当前尚未被消费的通知快照。
 func (e *Engine) PendingNotifications(taskID string) ([]NotificationRecord, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -608,6 +814,8 @@ func (e *Engine) PendingNotifications(taskID string) ([]NotificationRecord, bool
 }
 
 // DrainNotifications 取出并清空Notifications。
+
+// DrainNotifications 取出并清空某个任务的通知队列。
 func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -619,10 +827,13 @@ func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) 
 
 	notifications := cloneNotifications(record.Notifications)
 	record.Notifications = nil
+	e.persistTaskLocked(record)
 	return notifications, true
 }
 
 // PendingApprovalRequests 返回待处理的ApprovalRequests。
+
+// PendingApprovalRequests 枚举当前所有待处理的审批请求。
 func (e *Engine) PendingApprovalRequests(limit, offset int) ([]map[string]any, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -650,11 +861,15 @@ func (e *Engine) PendingApprovalRequests(limit, offset int) ([]map[string]any, i
 }
 
 // TaskDetail 处理当前模块的相关逻辑。
+
+// TaskDetail 返回任务详情视图所需的完整任务快照。
 func (e *Engine) TaskDetail(taskID string) (TaskRecord, bool) {
 	return e.GetTask(taskID)
 }
 
 // InspectorConfig 处理当前模块的相关逻辑。
+
+// InspectorConfig 返回任务巡检配置的当前有效值。
 func (e *Engine) InspectorConfig() map[string]any {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -670,6 +885,8 @@ func (e *Engine) InspectorConfig() map[string]any {
 }
 
 // UpdateInspectorConfig 更新InspectorConfig。
+
+// UpdateInspectorConfig 用补丁方式更新巡检配置，并返回更新后的完整快照。
 func (e *Engine) UpdateInspectorConfig(values map[string]any) map[string]any {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -697,6 +914,8 @@ func (e *Engine) UpdateInspectorConfig(values map[string]any) map[string]any {
 }
 
 // Settings 设置tings。
+
+// Settings 返回当前内存中的设置快照。
 func (e *Engine) Settings() map[string]any {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -704,6 +923,8 @@ func (e *Engine) Settings() map[string]any {
 }
 
 // UpdateSettings 更新Settings。
+
+// UpdateSettings 合并设置补丁，并计算受影响字段、应用模式和是否需要重启。
 func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string, string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -749,6 +970,8 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 }
 
 // NotepadItems 处理当前模块的相关逻辑。
+
+// NotepadItems 返回便签模块在当前内存态中的示例数据。
 func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -777,7 +1000,13 @@ func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any
 }
 
 // buildEvent 处理当前模块的相关逻辑。
+
+// buildEvent 为当前任务生成一条兼容层 Event 记录。
 func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any {
+	return e.buildEventWithPayload(record, eventType, map[string]any{"status": record.Status})
+}
+
+func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, payload map[string]any) map[string]any {
 	return map[string]any{
 		"event_id":   e.nextIdentifier("evt"),
 		"run_id":     record.RunID,
@@ -785,13 +1014,23 @@ func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any
 		"step_id":    timelineCurrentStepID(record.Timeline),
 		"type":       eventType,
 		"level":      "info",
-		"payload":    map[string]any{"status": record.Status},
+		"payload":    cloneMap(payload),
 		"created_at": e.now().Format(time.RFC3339),
 	}
 }
 
 // buildToolCall 处理当前模块的相关逻辑。
+
+// buildToolCall 为当前任务生成一条兼容层 ToolCall 记录。
 func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
+	return e.buildToolCallRecord(record, toolName, map[string]any{}, map[string]any{}, 120, nil)
+}
+
+func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
+	if durationMS <= 0 {
+		durationMS = 1
+	}
+
 	return map[string]any{
 		"tool_call_id": e.nextIdentifier("tool"),
 		"run_id":       record.RunID,
@@ -799,20 +1038,65 @@ func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]a
 		"step_id":      timelineCurrentStepID(record.Timeline),
 		"tool_name":    toolName,
 		"status":       "succeeded",
-		"input":        map[string]any{},
-		"output":       map[string]any{},
-		"error_code":   nil,
-		"duration_ms":  120,
+		"input":        cloneMap(input),
+		"output":       cloneMap(output),
+		"error_code":   errorCode,
+		"duration_ms":  durationMS,
 	}
 }
 
 // nextIdentifier 处理当前模块的相关逻辑。
 func (e *Engine) nextIdentifier(prefix string) string {
+	if e.taskStore != nil {
+		identifier, err := e.taskStore.AllocateIdentifier(context.Background(), prefix)
+		if err == nil {
+			return identifier
+		}
+	}
+
 	e.nextID++
 	return fmt.Sprintf("%s_%03d", prefix, e.nextID)
 }
 
+func (e *Engine) loadPersistedTaskRuns(ctx context.Context) error {
+	if e.taskStore == nil {
+		return nil
+	}
+
+	records, err := e.taskStore.LoadTaskRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("load persisted task runs: %w", err)
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	seenSessions := make(map[string]struct{}, len(records))
+	for _, persisted := range records {
+		record := taskRecordFromStorage(persisted)
+		e.tasks[record.TaskID] = &record
+		e.taskOrder = append(e.taskOrder, record.TaskID)
+		if _, seen := seenSessions[record.SessionID]; !seen {
+			e.sessionOrder = append(e.sessionOrder, record.SessionID)
+			seenSessions[record.SessionID] = struct{}{}
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) persistTaskLocked(record *TaskRecord) {
+	if e.taskStore == nil || record == nil {
+		return
+	}
+
+	_ = e.taskStore.SaveTaskRun(context.Background(), taskRecordToStorage(record.clone()))
+}
+
 // clone 处理当前模块的相关逻辑。
+
+// clone 返回 TaskRecord 的深拷贝，避免外部持有内部状态引用。
 func (r TaskRecord) clone() TaskRecord {
 	clone := r
 	clone.Intent = cloneMap(r.Intent)
@@ -841,6 +1125,8 @@ func (r TaskRecord) clone() TaskRecord {
 }
 
 // queueNotification 处理当前模块的相关逻辑。
+
+// queueNotification 把一条通知追加到任务的待发送队列。
 func (r *TaskRecord) queueNotification(method string, params map[string]any) {
 	r.Notifications = append(r.Notifications, NotificationRecord{
 		Method:    method,
@@ -933,6 +1219,8 @@ func cloneNotifications(values []NotificationRecord) []NotificationRecord {
 }
 
 // currentTimelineStatus 处理当前模块的相关逻辑。
+
+// currentTimelineStatus 返回当前时间线最后一个步骤的状态。
 func currentTimelineStatus(timeline []TaskStepRecord) string {
 	if len(timeline) == 0 {
 		return "pending"
@@ -942,6 +1230,9 @@ func currentTimelineStatus(timeline []TaskStepRecord) string {
 }
 
 // advanceTimeline 处理当前模块的相关逻辑。
+
+// advanceTimeline 推进 task timeline。
+// 如果步骤名发生变化，会先完成上一个步骤，再追加一个新的步骤记录。
 func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary string) []TaskStepRecord {
 	if len(timeline) == 0 {
 		return []TaskStepRecord{{
@@ -976,6 +1267,8 @@ func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary 
 }
 
 // buildSecuritySummary 处理当前模块的相关逻辑。
+
+// buildSecuritySummary 生成任务详情里展示的最小安全摘要。
 func buildSecuritySummary(riskLevel string, latestRestorePoint map[string]any) map[string]any {
 	return map[string]any{
 		"security_status":        "normal",
@@ -997,6 +1290,8 @@ func latestRestorePointFromSummary(summary map[string]any) map[string]any {
 }
 
 // buildRecoveryPoint 处理当前模块的相关逻辑。
+
+// buildRecoveryPoint 生成任务完成时附带的恢复点元数据。
 func buildRecoveryPoint(taskID string, createdAt time.Time) map[string]any {
 	return map[string]any{
 		"recovery_point_id": fmt.Sprintf("rp_%d", createdAt.UnixNano()),
@@ -1022,6 +1317,57 @@ func firstNonEmpty(primary, fallback string) string {
 		return primary
 	}
 	return fallback
+}
+
+// sortTaskRecords 按协议约定的排序字段和方向整理任务列表。
+func sortTaskRecords(records []TaskRecord, sortBy, sortOrder string) {
+	if len(records) <= 1 {
+		return
+	}
+
+	sortBy = normalizeTaskSortBy(sortBy)
+	sortOrder = normalizeTaskSortOrder(sortOrder)
+
+	sort.SliceStable(records, func(i, j int) bool {
+		left, right := taskSortValue(records[i], sortBy), taskSortValue(records[j], sortBy)
+		if left.Equal(right) {
+			return records[i].UpdatedAt.After(records[j].UpdatedAt)
+		}
+		if sortOrder == "asc" {
+			return left.Before(right)
+		}
+		return left.After(right)
+	})
+}
+
+func taskSortValue(record TaskRecord, sortBy string) time.Time {
+	switch sortBy {
+	case "started_at":
+		return record.StartedAt
+	case "finished_at":
+		if record.FinishedAt != nil {
+			return *record.FinishedAt
+		}
+		return time.Time{}
+	default:
+		return record.UpdatedAt
+	}
+}
+
+func normalizeTaskSortBy(sortBy string) string {
+	switch sortBy {
+	case "started_at", "finished_at":
+		return sortBy
+	default:
+		return "updated_at"
+	}
+}
+
+func normalizeTaskSortOrder(sortOrder string) string {
+	if sortOrder == "asc" {
+		return sortOrder
+	}
+	return "desc"
 }
 
 // stringSlice 处理当前模块的相关逻辑。
@@ -1064,6 +1410,8 @@ func mergeMaps(target map[string]any, patch map[string]any) {
 }
 
 // buildDefaultSettings 处理当前模块的相关逻辑。
+
+// buildDefaultSettings 构造主链路和工作台使用的默认设置快照。
 func buildDefaultSettings() map[string]any {
 	return map[string]any{
 		"general": map[string]any{
@@ -1102,4 +1450,163 @@ func buildDefaultSettings() map[string]any {
 			"budget_auto_downgrade": true,
 		},
 	}
+}
+
+func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
+	return storage.TaskRunRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineToStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		Notifications:     notificationsToStorage(record.Notifications),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
+	return TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineFromStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		Notifications:     notificationsFromStorage(record.Notifications),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func timelineToStorage(timeline []TaskStepRecord) []storage.TaskStepSnapshot {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	result := make([]storage.TaskStepSnapshot, len(timeline))
+	for index, step := range timeline {
+		result[index] = storage.TaskStepSnapshot{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+
+	return result
+}
+
+func timelineFromStorage(timeline []storage.TaskStepSnapshot) []TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	result := make([]TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+
+	return result
+}
+
+func notificationsToStorage(values []NotificationRecord) []storage.NotificationSnapshot {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]storage.NotificationSnapshot, len(values))
+	for index, value := range values {
+		result[index] = storage.NotificationSnapshot{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
+	return result
+}
+
+func notificationsFromStorage(values []storage.NotificationSnapshot) []NotificationRecord {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make([]NotificationRecord, len(values))
+	for index, value := range values {
+		result[index] = NotificationRecord{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+
+	return result
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+	return &cloned
 }

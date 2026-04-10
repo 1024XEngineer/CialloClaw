@@ -17,10 +17,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         "shell-ball": resolve(currentDirectory, "shell-ball.html"),
-      dashboard: resolve(currentDirectory, "dashboard.html"),
-      "control-panel": resolve(currentDirectory, "control-panel.html"),
-      security: resolve(currentDirectory, "security.html"),
-      mirror: resolve(currentDirectory, "mirror.html"),
+        dashboard: resolve(currentDirectory, "dashboard.html"),
+        "control-panel": resolve(currentDirectory, "control-panel.html"),
       },
     },
   },
