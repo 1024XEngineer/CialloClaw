@@ -102,7 +102,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	if toolResult, ok, err := s.executeThroughToolExecutor(ctx, request, deliveryResult, outputText); err != nil {
 		return Result{}, err
 	} else if ok {
-		toolResult.ToolInput = result.ToolInput
+		toolResult.ToolInput = mergeToolInputs(toolResult.ToolInput, result.ToolInput)
 		toolResult.DurationMS = time.Since(startedAt).Milliseconds()
 		return toolResult, nil
 	}
@@ -167,6 +167,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		DeliveryResult: deliveryResult,
 		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
 		ToolName:       toolName,
+		ToolInput:      toolInput,
 		ToolOutput:     mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput),
 	}
 	if toolName == "write_file" {
@@ -189,6 +190,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		bubbleText := toolBubbleText(toolName, toolResult)
 		result.BubbleText = bubbleText
 		result.Content = bubbleText
+		result.DeliveryResult = s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, "")
 	}
 
 	return result, true, nil
@@ -261,6 +263,20 @@ func mergeToolOutputs(rawOutput, summaryOutput map[string]any) map[string]any {
 	}
 	if len(summaryOutput) > 0 {
 		merged["summary_output"] = summaryOutput
+	}
+	return merged
+}
+
+func mergeToolInputs(toolInput, executionContext map[string]any) map[string]any {
+	if len(toolInput) == 0 && len(executionContext) == 0 {
+		return nil
+	}
+	merged := map[string]any{}
+	for key, value := range toolInput {
+		merged[key] = value
+	}
+	if len(executionContext) > 0 {
+		merged["execution_context"] = executionContext
 	}
 	return merged
 }

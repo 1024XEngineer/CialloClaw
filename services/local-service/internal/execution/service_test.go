@@ -79,6 +79,19 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	if result.ToolName != "write_file" {
 		t.Fatalf("expected write_file tool, got %s", result.ToolName)
 	}
+	executionContext, ok := result.ToolInput["execution_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution_context in tool input, got %+v", result.ToolInput)
+	}
+	if executionContext["intent_name"] != "write_file" {
+		t.Fatalf("expected intent_name in execution_context, got %+v", executionContext)
+	}
+	if result.ToolInput["path"] != "notes/output.md" {
+		t.Fatalf("expected tool input path to be preserved, got %+v", result.ToolInput)
+	}
+	if result.ToolInput["content"] == nil {
+		t.Fatalf("expected tool input content to be preserved, got %+v", result.ToolInput)
+	}
 	if result.ToolOutput["summary_output"] == nil {
 		t.Fatalf("expected write_file to flow through ToolExecutor summary output, got %+v", result.ToolOutput)
 	}
@@ -163,10 +176,23 @@ func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
 	if result.ToolName != "read_file" {
 		t.Fatalf("expected read_file tool, got %s", result.ToolName)
 	}
+	if result.ToolInput["path"] != "notes/source.txt" {
+		t.Fatalf("expected read_file path to be preserved, got %+v", result.ToolInput)
+	}
+	executionContext, ok := result.ToolInput["execution_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution_context in builtin tool input, got %+v", result.ToolInput)
+	}
+	if executionContext["intent_name"] != "read_file" {
+		t.Fatalf("expected read_file intent in execution_context, got %+v", executionContext)
+	}
 	if result.ToolOutput["summary_output"] == nil {
 		t.Fatalf("expected direct builtin execution to include summary_output, got %+v", result.ToolOutput)
 	}
 	if !strings.Contains(result.BubbleText, "hello from file") {
 		t.Fatalf("expected bubble text to include file preview, got %s", result.BubbleText)
+	}
+	if deliveryType, ok := result.DeliveryResult["type"].(string); !ok || deliveryType != "bubble" {
+		t.Fatalf("expected bubble delivery result, got %+v", result.DeliveryResult)
 	}
 }
