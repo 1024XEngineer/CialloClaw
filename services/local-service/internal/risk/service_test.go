@@ -61,20 +61,34 @@ func TestServiceAssess(t *testing.T) {
 			},
 		},
 		{
-			name: "out_of_workspace_requires_approval",
+			name: "command_requires_approval_red",
+			input: AssessmentInput{
+				OperationName:       "exec_command",
+				CapabilityAvailable: true,
+				CommandPreview:      "powershell Get-Process",
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelRed,
+				ApprovalRequired: true,
+				Reason:           ReasonCommandApproval,
+			},
+		},
+		{
+			name: "out_of_workspace_denied",
 			input: AssessmentInput{
 				OperationName:       "write_file",
 				TargetObject:        "D:/outside/report.md",
 				CapabilityAvailable: true,
+				WorkspaceKnown:      true,
 				ImpactScope: ImpactScope{
 					Files:          []string{"D:/outside/report.md"},
 					OutOfWorkspace: true,
 				},
 			},
 			want: AssessmentResult{
-				RiskLevel:        RiskLevelRed,
-				ApprovalRequired: true,
-				Reason:           ReasonOutOfWorkspace,
+				RiskLevel: RiskLevelRed,
+				Deny:      true,
+				Reason:    ReasonOutOfWorkspace,
 				ImpactScope: ImpactScope{
 					Files:          []string{"D:/outside/report.md"},
 					OutOfWorkspace: true,
@@ -82,20 +96,35 @@ func TestServiceAssess(t *testing.T) {
 			},
 		},
 		{
-			name: "overwrite_requires_yellow_approval",
+			name: "write_file_unknown_workspace_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "write_file",
+				TargetObject:        "",
+				CapabilityAvailable: true,
+				WorkspaceKnown:      false,
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelYellow,
+				ApprovalRequired: true,
+				Reason:           ReasonWorkspaceUnknown,
+			},
+		},
+		{
+			name: "overwrite_requires_checkpoint",
 			input: AssessmentInput{
 				OperationName:       "write_file",
 				TargetObject:        "D:/workspace/report.md",
 				CapabilityAvailable: true,
+				WorkspaceKnown:      true,
 				ImpactScope: ImpactScope{
 					Files:                 []string{"D:/workspace/report.md"},
 					OverwriteOrDeleteRisk: true,
 				},
 			},
 			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonOverwriteOrDelete,
+				RiskLevel:          RiskLevelYellow,
+				CheckpointRequired: true,
+				Reason:             ReasonOverwriteOrDelete,
 				ImpactScope: ImpactScope{
 					Files:                 []string{"D:/workspace/report.md"},
 					OverwriteOrDeleteRisk: true,
@@ -113,6 +142,9 @@ func TestServiceAssess(t *testing.T) {
 			}
 			if got.ApprovalRequired != tc.want.ApprovalRequired {
 				t.Fatalf("expected approval_required %v, got %v", tc.want.ApprovalRequired, got.ApprovalRequired)
+			}
+			if got.CheckpointRequired != tc.want.CheckpointRequired {
+				t.Fatalf("expected checkpoint_required %v, got %v", tc.want.CheckpointRequired, got.CheckpointRequired)
 			}
 			if got.Deny != tc.want.Deny {
 				t.Fatalf("expected deny %v, got %v", tc.want.Deny, got.Deny)

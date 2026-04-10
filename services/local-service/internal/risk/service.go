@@ -21,9 +21,11 @@ func (s *Service) DefaultLevel() string {
 // 当前规则保持保守：
 // 1. 能力不可用 => red + deny
 // 2. 命中危险命令 => red + deny
-// 3. 超出工作区 => red + approval_required
-// 4. 存在覆盖/删除风险 => yellow + approval_required
-// 5. 其他 => green
+// 3. 命中需审批命令 => red + approval_required
+// 4. 超出工作区 => red + deny
+// 5. write_file 且工作区信息未知 => yellow + approval_required
+// 6. 存在覆盖/删除风险 => yellow + checkpoint_required
+// 7. 其他 => green
 //
 // 注意：
 // - 这里不直接生成 ApprovalRequest；
@@ -50,16 +52,30 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
-	if input.ImpactScope.OutOfWorkspace {
+	if isApprovalCommand(input.CommandPreview) {
 		result.RiskLevel = RiskLevelRed
 		result.ApprovalRequired = true
+		result.Reason = ReasonCommandApproval
+		return result
+	}
+
+	if input.ImpactScope.OutOfWorkspace {
+		result.RiskLevel = RiskLevelRed
+		result.Deny = true
 		result.Reason = ReasonOutOfWorkspace
+		return result
+	}
+
+	if input.OperationName == "write_file" && (!input.WorkspaceKnown || strings.TrimSpace(input.TargetObject) == "") {
+		result.RiskLevel = RiskLevelYellow
+		result.ApprovalRequired = true
+		result.Reason = ReasonWorkspaceUnknown
 		return result
 	}
 
 	if input.ImpactScope.OverwriteOrDeleteRisk {
 		result.RiskLevel = RiskLevelYellow
-		result.ApprovalRequired = true
+		result.CheckpointRequired = true
 		result.Reason = ReasonOverwriteOrDelete
 		return result
 	}
@@ -82,6 +98,30 @@ func isDeniedCommand(commandPreview string) bool {
 	}
 
 	for _, pattern := range deniedPatterns {
+		if strings.Contains(preview, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isApprovalCommand(commandPreview string) bool {
+	preview := strings.ToLower(strings.TrimSpace(commandPreview))
+	if preview == "" {
+		return false
+	}
+
+	approvalPatterns := []string{
+		"curl ",
+		"wget ",
+		"powershell",
+		"chmod ",
+		"chown ",
+		"git clean",
+	}
+
+	for _, pattern := range approvalPatterns {
 		if strings.Contains(preview, pattern) {
 			return true
 		}

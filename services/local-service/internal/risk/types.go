@@ -15,7 +15,9 @@ const (
 	ReasonOutOfWorkspace    = "out_of_workspace"
 	ReasonOverwriteOrDelete = "overwrite_or_delete_risk"
 	ReasonCommandNotAllowed = "command_not_allowed"
+	ReasonCommandApproval   = "command_requires_approval"
 	ReasonCapabilityDenied  = "capability_denied"
+	ReasonWorkspaceUnknown  = "workspace_unknown"
 	ReasonNormal            = "normal"
 )
 
@@ -38,6 +40,7 @@ type AssessmentInput struct {
 	OperationName       string
 	TargetObject        string
 	CapabilityAvailable bool
+	WorkspaceKnown      bool
 	CommandPreview      string
 	ImpactScope         ImpactScope
 }
@@ -48,9 +51,10 @@ type AssessmentInput struct {
 // deny 表示当前模块建议直接拦截，不进入执行；
 // reason 用于上层构造统一错误或审批原因，但不直接等同完整协议对象。
 type AssessmentResult struct {
-	RiskLevel        RiskLevel
-	ApprovalRequired bool
-	Deny             bool
-	Reason           string
-	ImpactScope      ImpactScope
+	RiskLevel          RiskLevel
+	ApprovalRequired   bool
+	CheckpointRequired bool
+	Deny               bool
+	Reason             string
+	ImpactScope        ImpactScope
 }
