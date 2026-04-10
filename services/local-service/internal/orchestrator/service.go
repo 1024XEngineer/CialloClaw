@@ -480,16 +480,33 @@ func (s *Service) NotepadList(params map[string]any) (map[string]any, error) {
 
 // NotepadConvertToTask 处理 agent.notepad.convert_to_task。
 func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, error) {
-	_ = params
+	itemID := stringValue(params, "item_id", "")
+	if itemID == "" {
+		return nil, fmt.Errorf("item_id is required")
+	}
+
+	item, ok := s.runEngine.NotepadItem(itemID)
+	if !ok {
+		return nil, fmt.Errorf("notepad item not found: %s", itemID)
+	}
+
+	if status := stringValue(item, "status", "normal"); status == "completed" || status == "cancelled" {
+		return nil, fmt.Errorf("notepad item is already closed: %s", itemID)
+	}
+
+	itemTitle := stringValue(item, "title", "待办事项")
+	taskIntent := notepadIntent(item)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		Title:       "整理 Q3 复盘要点",
+		Title:       itemTitle,
 		SourceType:  "todo",
 		Status:      "confirming_intent",
-		Intent:      defaultIntentMap("summarize"),
+		Intent:      taskIntent,
 		CurrentStep: "intent_confirmation",
 		RiskLevel:   s.risk.DefaultLevel(),
 		Timeline:    initialTimeline("confirming_intent", "intent_confirmation"),
 	})
+	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
+	_, _ = s.runEngine.CompleteNotepadItem(itemID)
 
 	return map[string]any{
 		"task": taskMap(task),
@@ -942,6 +959,33 @@ func defaultIntentMap(name string) map[string]any {
 	return map[string]any{
 		"name":      name,
 		"arguments": arguments,
+	}
+}
+
+func notepadIntent(item map[string]any) map[string]any {
+	title := strings.ToLower(stringValue(item, "title", ""))
+	suggestion := strings.ToLower(stringValue(item, "agent_suggestion", ""))
+	combined := title + " " + suggestion
+
+	switch {
+	case strings.Contains(combined, "翻译") || strings.Contains(combined, "translate"):
+		return defaultIntentMap("translate")
+	case strings.Contains(combined, "改写") || strings.Contains(combined, "rewrite"):
+		return defaultIntentMap("rewrite")
+	case strings.Contains(combined, "解释") || strings.Contains(combined, "explain"):
+		return defaultIntentMap("explain")
+	default:
+		return defaultIntentMap("summarize")
+	}
+}
+
+func notepadSnapshot(item map[string]any) contextsvc.TaskContextSnapshot {
+	return contextsvc.TaskContextSnapshot{
+		Source:    "dashboard",
+		InputType: "text",
+		Text:      stringValue(item, "title", ""),
+		PageTitle: "notepad",
+		AppName:   "dashboard",
 	}
 }
 
