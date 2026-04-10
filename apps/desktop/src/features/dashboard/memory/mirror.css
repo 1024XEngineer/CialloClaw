@@ -86,6 +86,22 @@
   overflow: hidden;
 }
 
+.mirror-page__source-status {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.7rem;
+  left: 1rem;
+  position: absolute;
+  top: 1rem;
+  z-index: 4;
+}
+
+.mirror-page__source-copy {
+  color: var(--mirror-muted);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
 .mirror-page__canvas::before {
   background:
     radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.22), transparent 20%),
@@ -1251,6 +1267,16 @@
 }
 
 @media (max-width: 760px) {
+  .mirror-page__source-status {
+    left: 0.85rem;
+    right: 0.85rem;
+    top: 0.85rem;
+  }
+
+  .mirror-page__source-copy {
+    display: none;
+  }
+
   .mirror-page__detail-layer {
     padding: 1rem;
   }

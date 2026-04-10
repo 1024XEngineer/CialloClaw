@@ -31,7 +31,11 @@ type ModuleSizes = Record<MirrorDirectionKey, ModuleSize>;
 type BoardBounds = { minX: number; minY: number; maxX: number; maxY: number };
 type BoardGrid = { columns: number; rows: number };
 type OccupiedModule = { position: ModulePosition; size: ModuleSize };
+type LayoutMode = "default" | "compact";
 type BoardLayout = {
+  canvasWidth: number;
+  canvasHeight: number;
+  mode: LayoutMode;
   bounds: BoardBounds;
   memoryBounds: BoardBounds;
   regularSize: ModuleSize;
@@ -66,6 +70,10 @@ const DRAG_THRESHOLD = 8;
 const BOARD_PADDING = 12;
 const CARD_CLEARANCE = 10;
 const CARD_STEP = 16;
+const COMPACT_MEMORY_GAP = 14;
+const MIN_COMPACT_CARD_WIDTH = 92;
+const MIN_COMPACT_CARD_HEIGHT = 92;
+const MIN_COMPACT_MEMORY_HEIGHT = 132;
 const DEFAULT_CARD_SIZE: ModuleSize = { width: 260, height: 168 };
 const DEFAULT_MEMORY_CARD_SIZE: ModuleSize = { width: 480, height: 320 };
 const PINNED_MEMORY_CARD_OFFSET = { x: 20, y: 104 };
@@ -310,7 +318,146 @@ function getPinnedMemoryTarget(bounds: BoardBounds) {
   );
 }
 
+function getCompactLayout(canvasWidth: number, canvasHeight: number): BoardLayout {
+  const canvasInnerWidth = Math.max(1, canvasWidth - BOARD_PADDING * 2);
+  const canvasInnerHeight = Math.max(1, canvasHeight - BOARD_PADDING * 2);
+  let bestLayout: BoardLayout | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let columns = 1; columns <= FLOATING_MIRROR_DIRECTION_KEYS.length; columns += 1) {
+    const rows = Math.ceil(FLOATING_MIRROR_DIRECTION_KEYS.length / columns);
+    const regularWidth = Math.floor((canvasInnerWidth - CARD_CLEARANCE * (columns - 1)) / columns);
+
+    if (regularWidth < MIN_COMPACT_CARD_WIDTH) {
+      continue;
+    }
+
+    const maxMemoryHeight =
+      canvasInnerHeight -
+      COMPACT_MEMORY_GAP -
+      rows * MIN_COMPACT_CARD_HEIGHT -
+      CARD_CLEARANCE * Math.max(0, rows - 1);
+
+    if (maxMemoryHeight < MIN_COMPACT_MEMORY_HEIGHT) {
+      continue;
+    }
+
+    const memoryHeight = clampValue(Math.floor(canvasHeight * 0.28), MIN_COMPACT_MEMORY_HEIGHT, Math.min(248, maxMemoryHeight));
+    const availableRegularHeight =
+      canvasInnerHeight - memoryHeight - COMPACT_MEMORY_GAP - CARD_CLEARANCE * Math.max(0, rows - 1);
+    const regularHeight = clampValue(
+      Math.floor(Math.min(availableRegularHeight / rows, regularWidth * 0.72)),
+      MIN_COMPACT_CARD_HEIGHT,
+      172,
+    );
+    const score = regularWidth * regularHeight;
+
+    if (score <= bestScore) {
+      continue;
+    }
+
+    const regularSize = {
+      width: regularWidth,
+      height: regularHeight,
+    } satisfies ModuleSize;
+    const memorySize = {
+      width: canvasInnerWidth,
+      height: memoryHeight,
+    } satisfies ModuleSize;
+    const bounds = getBoardBounds(canvasWidth, canvasHeight, regularSize);
+    const memoryBounds = getBoardBounds(canvasWidth, canvasHeight, memorySize);
+
+    bestLayout = {
+      canvasWidth,
+      canvasHeight,
+      mode: "compact",
+      bounds,
+      memoryBounds,
+      regularSize,
+      moduleSizes: getModuleSizes(regularSize, memorySize),
+      grid: { columns, rows },
+      candidates: buildBoardCandidates(bounds),
+    };
+    bestScore = score;
+  }
+
+  if (bestLayout) {
+    return bestLayout;
+  }
+
+  const fallbackGrid = { columns: FLOATING_MIRROR_DIRECTION_KEYS.length, rows: 1 } satisfies BoardGrid;
+  const regularSize = {
+    width: Math.max(1, Math.floor((canvasInnerWidth - CARD_CLEARANCE * (fallbackGrid.columns - 1)) / fallbackGrid.columns)),
+    height: clampValue(Math.floor(canvasInnerHeight * 0.26), 1, 136),
+  } satisfies ModuleSize;
+  const memoryHeight = Math.max(1, canvasInnerHeight - regularSize.height - COMPACT_MEMORY_GAP);
+  const memorySize = {
+    width: canvasInnerWidth,
+    height: memoryHeight,
+  } satisfies ModuleSize;
+
+  return {
+    canvasWidth,
+    canvasHeight,
+    mode: "compact",
+    bounds: getBoardBounds(canvasWidth, canvasHeight, regularSize),
+    memoryBounds: getBoardBounds(canvasWidth, canvasHeight, memorySize),
+    regularSize,
+    moduleSizes: getModuleSizes(regularSize, memorySize),
+    grid: fallbackGrid,
+    candidates: buildBoardCandidates(getBoardBounds(canvasWidth, canvasHeight, regularSize)),
+  };
+}
+
+function getCompactModuleTargets(layout: BoardLayout): ModulePositions {
+  const positions = { ...DEFAULT_MODULE_POSITIONS };
+  const memoryWidth = layout.moduleSizes.memory.width;
+  const memoryHeight = layout.moduleSizes.memory.height;
+  const regularSize = layout.regularSize;
+  const horizontalGap = CARD_CLEARANCE;
+  const verticalGap = CARD_CLEARANCE;
+  const memoryPosition = clampPosition(
+    {
+      x: Math.round((layout.memoryBounds.minX + layout.memoryBounds.maxX) / 2),
+      y: layout.memoryBounds.minY,
+    },
+    layout.memoryBounds,
+  );
+  const rows = layout.grid.rows;
+  const contentHeight =
+    rows * regularSize.height + Math.max(0, rows - 1) * verticalGap;
+  const startY = clampValue(
+    memoryPosition.y + memoryHeight + COMPACT_MEMORY_GAP,
+    layout.bounds.minY,
+    Math.max(layout.bounds.minY, layout.bounds.maxY - contentHeight + regularSize.height),
+  );
+
+  positions.memory = memoryPosition;
+
+  FLOATING_MIRROR_DIRECTION_KEYS.forEach((key, index) => {
+    const row = Math.floor(index / layout.grid.columns);
+    const remainingCards = FLOATING_MIRROR_DIRECTION_KEYS.length - row * layout.grid.columns;
+    const cardsInRow = Math.min(layout.grid.columns, remainingCards);
+    const rowWidth = cardsInRow * regularSize.width + Math.max(0, cardsInRow - 1) * horizontalGap;
+    const rowStartX = layout.bounds.minX + Math.max(0, (memoryWidth - rowWidth) / 2);
+
+    positions[key] = clampPosition(
+      {
+        x: rowStartX + (index % layout.grid.columns) * (regularSize.width + horizontalGap),
+        y: startY + row * (regularSize.height + verticalGap),
+      },
+      layout.bounds,
+    );
+  });
+
+  return positions;
+}
+
 function normalizeModulePositions(targets: ModulePositions, layout: BoardLayout) {
+  if (layout.mode === "compact") {
+    return getCompactModuleTargets(layout);
+  }
+
   const nextPositions = { ...DEFAULT_MODULE_POSITIONS };
   const pinnedMemoryPosition = getPinnedMemoryTarget(layout.memoryBounds);
   const occupied: OccupiedModule[] = [{ position: pinnedMemoryPosition, size: layout.moduleSizes.memory }];
@@ -321,7 +468,7 @@ function normalizeModulePositions(targets: ModulePositions, layout: BoardLayout)
     const settledPosition = resolveSettledPosition(targets[key], layout.moduleSizes[key], occupied, layout);
 
     if (!settledPosition) {
-      throw new Error("Mirror board could not find a non-overlapping position for every card.");
+      return getCompactModuleTargets(getCompactLayout(layout.canvasWidth, layout.canvasHeight));
     }
 
     nextPositions[key] = settledPosition;
@@ -358,18 +505,17 @@ function pickFloatingModulePositions(positions: ModulePositions): Record<Floatin
   };
 }
 
-function getInitialModulePositions(): ModulePositions {
-  return {
-    ...DEFAULT_MODULE_POSITIONS,
-    ...(loadMirrorFloatingPositions() ?? {}),
-  };
-}
-
 export function MirrorApp() {
+  const storedFloatingPositionsRef = useRef(loadMirrorFloatingPositions());
+  const hasStoredFloatingPositionsRef = useRef(storedFloatingPositionsRef.current !== null);
   const [mirrorData, setMirrorData] = useState<MirrorOverviewData | null>(null);
-  const [modulePositions, setModulePositions] = useState<ModulePositions>(getInitialModulePositions);
+  const [modulePositions, setModulePositions] = useState<ModulePositions>(() => ({
+    ...DEFAULT_MODULE_POSITIONS,
+    ...(storedFloatingPositionsRef.current ?? {}),
+  }));
   const [moduleStack, setModuleStack] = useState<MirrorDirectionKey[]>(INITIAL_MODULE_STACK);
   const [moduleSizes, setModuleSizes] = useState<ModuleSizes>(DEFAULT_MODULE_SIZES);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("default");
   const [draggingKey, setDraggingKey] = useState<FloatingMirrorDirectionKey | null>(null);
   const [activeDetailKey, setActiveDetailKey] = useState<MirrorDirectionKey | null>(null);
   const [boardReady, setBoardReady] = useState(false);
@@ -449,6 +595,10 @@ export function MirrorApp() {
       return null;
     }
 
+    if (canvas.clientWidth <= 760 || canvas.clientHeight <= 560) {
+      return getCompactLayout(canvas.clientWidth, canvas.clientHeight);
+    }
+
     const grid = getBoardGrid(canvas.clientWidth, canvas.clientHeight);
     const regularSize = getBoardCardSize(canvas.clientWidth, canvas.clientHeight, grid);
     const memorySize = getMemoryCardSize(canvas.clientWidth, canvas.clientHeight);
@@ -456,6 +606,9 @@ export function MirrorApp() {
     const memoryBounds = getBoardBounds(canvas.clientWidth, canvas.clientHeight, memorySize);
 
     return {
+      canvasWidth: canvas.clientWidth,
+      canvasHeight: canvas.clientHeight,
+      mode: "default",
       bounds,
       memoryBounds,
       regularSize,
@@ -471,6 +624,10 @@ export function MirrorApp() {
 
       if (!layout) {
         return target;
+      }
+
+      if (layout.mode === "compact") {
+        return positions[key];
       }
 
       const occupied = INITIAL_MODULE_STACK.filter((item) => item !== key).map((item) => ({
@@ -494,13 +651,14 @@ export function MirrorApp() {
         return;
       }
 
+      setLayoutMode(layout.mode);
       setModuleSizes(layout.moduleSizes);
       setModulePositions((currentPositions) => {
         const targets = hasPlacedModulesRef.current
           ? currentPositions
           : {
               ...getDefaultModuleTargets(layout.bounds, layout.grid, layout.regularSize),
-              ...pickFloatingModulePositions(currentPositions),
+              ...(hasStoredFloatingPositionsRef.current ? pickFloatingModulePositions(currentPositions) : {}),
             };
         return normalizeModulePositions(targets, layout);
       });
@@ -557,6 +715,10 @@ export function MirrorApp() {
   }
 
   const { overview, insight } = mirrorData;
+  const dataSourceBadge =
+    mirrorData.source === "rpc"
+      ? { label: "LIVE", tone: "green" as const, copy: "当前展示来自本地 JSON-RPC 服务。" }
+      : { label: "MOCK", tone: "processing" as const, copy: "JSON-RPC 不可用，当前展示本地回退数据。" };
   const dailySummary = overview.daily_summary;
   const profile = overview.profile;
   const latestMemoryReference = overview.memory_references[0] ?? null;
@@ -914,7 +1076,7 @@ export function MirrorApp() {
       .filter(Boolean)
       .join(" ");
 
-    const pointerHandlers = isPinnedMemoryCard
+    const pointerHandlers = isPinnedMemoryCard || layoutMode === "compact"
       ? {
           onClick: () => {
             bringModuleToFront(key);
@@ -943,7 +1105,7 @@ export function MirrorApp() {
         tabIndex={0}
         aria-haspopup="dialog"
         aria-expanded={isExpanded}
-        aria-label={`${getDirectionTitle(key)}，${isPinnedMemoryCard ? "可打开详情" : "可拖动并打开详情"}`}
+        aria-label={`${getDirectionTitle(key)}，${isPinnedMemoryCard || layoutMode === "compact" ? "可打开详情" : "可拖动并打开详情"}`}
         onKeyDown={handleModuleKeyDown(key)}
         {...pointerHandlers}
       >
@@ -978,6 +1140,10 @@ export function MirrorApp() {
   return (
     <main className="app-shell mirror-page">
       <div className="mirror-page__canvas mirror-page__canvas--full" ref={canvasRef} aria-label="Mirror 检片台">
+        <div className="mirror-page__source-status" aria-live="polite">
+          <StatusBadge tone={dataSourceBadge.tone}>{dataSourceBadge.label}</StatusBadge>
+          <p className="mirror-page__source-copy">{dataSourceBadge.copy}</p>
+        </div>
         <section className="mirror-page__scene" aria-hidden="true">
           <div className="mirror-page__desk-glow mirror-page__desk-glow--north" />
           <div className="mirror-page__desk-glow mirror-page__desk-glow--east" />
