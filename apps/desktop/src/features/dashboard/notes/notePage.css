@@ -1,0 +1,485 @@
+.note-preview-page {
+  --note-accent-soft: color-mix(in srgb, var(--note-accent, #f4b183) 16%, rgba(255, 255, 255, 0.82));
+  --note-accent-strong: color-mix(in srgb, var(--note-accent, #f4b183) 62%, #8a6843);
+  background:
+    radial-gradient(circle at 14% 16%, rgba(255, 255, 255, 0.84), transparent 24%),
+    radial-gradient(circle at 84% 10%, rgba(246, 220, 211, 0.4), transparent 20%),
+    radial-gradient(circle at 78% 24%, color-mix(in srgb, var(--note-accent, #f4b183) 12%, rgba(255, 255, 255, 0.18)) 0%, transparent 18%),
+    linear-gradient(180deg, #fbf6ef 0%, #f4ece2 56%, #ece5db 100%);
+  min-height: 100vh;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+}
+
+.app-shell.note-preview-page {
+  padding: 0;
+}
+
+.note-preview-page__frame {
+  display: grid;
+  gap: 1rem;
+  height: 100vh;
+  margin: 0 auto;
+  max-width: 1560px;
+  overflow: hidden;
+  padding: clamp(1rem, 2vw, 1.5rem);
+}
+
+.note-preview-page .dashboard-page__topbar,
+.note-preview-page .dashboard-page__hero,
+.note-preview-page .dashboard-page__grid {
+  position: relative;
+  z-index: 2;
+}
+
+.note-preview-page .dashboard-page__home-link,
+.note-preview-page .dashboard-page__module-link {
+  background: color-mix(in srgb, var(--note-paper-strong, rgba(255, 247, 238, 0.9)) 88%, var(--note-accent, #f4b183) 12%);
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 76%, var(--note-accent, #f4b183) 24%);
+  color: var(--note-ink, #5f544b);
+}
+
+.note-preview-page .dashboard-page__home-link:hover,
+.note-preview-page .dashboard-page__module-link:hover,
+.note-preview-page .dashboard-page__module-link.is-active {
+  background: color-mix(in srgb, var(--note-paper-strong, rgba(255, 247, 238, 0.9)) 78%, var(--note-accent, #f4b183) 22%);
+  border-color: color-mix(in srgb, var(--note-accent, #f4b183) 36%, rgba(194, 174, 154, 0.42));
+}
+
+.note-preview-page .dashboard-page__hero-copy,
+.note-preview-page .dashboard-card,
+.note-detail-shell,
+.note-empty-state {
+  backdrop-filter: blur(14px);
+  background:
+    linear-gradient(180deg, rgba(255, 253, 249, 0.92), rgba(247, 240, 231, 0.86)),
+    var(--note-paper, rgba(255, 251, 245, 0.8));
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 74%, var(--note-accent, #f4b183) 26%);
+  box-shadow: 0 24px 60px -46px rgba(120, 108, 95, 0.12);
+}
+
+.note-preview-page .dashboard-page__title-row h1,
+.note-preview-page .dashboard-page__description,
+.note-preview-page .dashboard-card p,
+.note-preview-page .dashboard-card li,
+.note-preview-page .dashboard-card span,
+.note-preview-page .dashboard-card__kicker {
+  color: var(--note-ink, #5f544b);
+}
+
+.note-preview-page .dashboard-page__title-icon {
+  color: var(--note-accent-strong);
+}
+
+.note-preview-page .dashboard-card__list li {
+  background: color-mix(in srgb, var(--note-paper-strong, rgba(255, 247, 238, 0.9)) 82%, var(--note-accent, #f4b183) 18%);
+}
+
+.note-preview-page__hero-status {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.note-preview-page__summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.note-preview-page__summary-item {
+  background: color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 84%, var(--note-accent, #f4b183) 16%);
+  border-radius: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 0.95rem;
+}
+
+.note-preview-page__summary-item span {
+  color: var(--note-copy, rgba(95, 84, 75, 0.68));
+  font-size: 0.74rem;
+}
+
+.note-preview-page__summary-item strong {
+  color: var(--note-ink, #5f544b);
+  font-size: 1.14rem;
+  letter-spacing: -0.04em;
+}
+
+.note-preview-page__grid {
+  align-items: stretch;
+  margin-top: 1.5rem;
+}
+
+.note-preview-page__grid .dashboard-card {
+  display: flex;
+  flex-direction: column;
+  height: 30rem;
+  min-height: 30rem;
+  overflow: hidden;
+}
+
+.note-preview-shell__header {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.8rem;
+  justify-content: space-between;
+}
+
+.note-preview-shell__description,
+.note-preview-finished-group__description {
+  color: var(--note-copy, rgba(95, 84, 75, 0.68));
+  font-size: 0.82rem;
+  line-height: 1.55;
+  margin: 0.12rem 0 0;
+}
+
+.note-preview-shell__count {
+  align-items: center;
+  background: color-mix(in srgb, var(--note-paper-strong, rgba(255, 247, 238, 0.9)) 82%, var(--note-accent, #f4b183) 18%);
+  border-radius: 999px;
+  color: var(--note-ink, #5f544b);
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 700;
+  justify-content: center;
+  min-width: 2.1rem;
+  padding: 0.42rem 0.75rem;
+}
+
+.note-preview-shell__toggle,
+.note-detail-actions__button {
+  background: color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 82%, var(--note-accent, #f4b183) 18%);
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 76%, var(--note-accent, #f4b183) 24%);
+  border-radius: 999px;
+  box-shadow: 0 14px 30px -24px rgba(120, 108, 95, 0.12);
+  color: var(--note-ink, #5f544b);
+}
+
+.note-preview-shell__list,
+.note-preview-finished-groups,
+.note-detail-shell__scroll {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.3rem;
+  scrollbar-color: color-mix(in srgb, var(--note-accent, #f4b183) 30%, rgba(156, 133, 113, 0.22)) transparent;
+  scrollbar-width: thin;
+}
+
+.note-preview-shell__list,
+.note-preview-finished-groups,
+.note-detail-list,
+.note-detail-resource-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.note-preview-shell__list::-webkit-scrollbar,
+.note-preview-finished-groups::-webkit-scrollbar,
+.note-detail-shell__scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.note-preview-shell__list::-webkit-scrollbar-track,
+.note-preview-finished-groups::-webkit-scrollbar-track,
+.note-detail-shell__scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+.note-preview-shell__list::-webkit-scrollbar-thumb,
+.note-preview-finished-groups::-webkit-scrollbar-thumb,
+.note-detail-shell__scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--note-accent, #f4b183) 28%, rgba(156, 133, 113, 0.22));
+  border-radius: 999px;
+}
+
+.note-preview-card {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 247, 0.9), rgba(246, 239, 231, 0.86)),
+    color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 88%, var(--note-accent, #f4b183) 12%);
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 76%, var(--note-accent, #f4b183) 24%);
+  border-radius: 1.45rem;
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.95rem;
+  text-align: left;
+}
+
+.note-preview-card--active {
+  border-color: color-mix(in srgb, var(--note-accent, #f4b183) 36%, rgba(194, 174, 154, 0.42));
+  box-shadow: 0 18px 36px -28px color-mix(in srgb, var(--note-accent, #f4b183) 18%, rgba(120, 108, 95, 0.12));
+}
+
+.note-preview-card--closed {
+  background:
+    linear-gradient(180deg, rgba(251, 246, 239, 0.84), rgba(244, 236, 227, 0.8)),
+    color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 94%, var(--note-accent, #f4b183) 6%);
+}
+
+.note-preview-card__top {
+  display: flex;
+  gap: 0.8rem;
+  justify-content: space-between;
+}
+
+.note-preview-card__title,
+.note-detail-shell__title,
+.note-detail-card__title,
+.note-detail-list__value,
+.note-detail-resource-item__title,
+.note-empty-state__title {
+  color: var(--note-ink, #5f544b);
+}
+
+.note-preview-card__title {
+  font-size: 0.98rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.note-preview-card__subtitle,
+.note-empty-state__copy,
+.note-detail-shell__subtitle,
+.note-detail-card__copy,
+.note-detail-list__label,
+.note-detail-resource-item__meta,
+.note-detail-resource-item__path,
+.note-preview-card__footer,
+.note-empty-state__eyebrow,
+.note-detail-shell__eyebrow,
+.note-detail-card__eyebrow {
+  color: var(--note-copy, rgba(95, 84, 75, 0.68));
+}
+
+.note-preview-card__subtitle,
+.note-preview-card__suggestion {
+  font-size: 0.84rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.note-preview-card__footer {
+  display: flex;
+  font-size: 0.78rem;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.note-preview-card__suggestion {
+  border-top: 1px dashed color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 64%, var(--note-accent, #f4b183) 36%);
+  padding-top: 0.7rem;
+}
+
+.note-preview-finished-group__title {
+  color: var(--note-ink, #5f544b);
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.note-detail-modal__backdrop {
+  background: rgba(189, 185, 178, 0.3);
+  border: 0;
+  inset: 0;
+  position: fixed;
+  z-index: 60;
+}
+
+.note-detail-modal {
+  inset: clamp(1rem, 3vw, 2rem);
+  position: fixed;
+  z-index: 70;
+}
+
+.note-detail-shell {
+  display: grid;
+  gap: 1rem;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100%;
+  margin: 0 auto;
+  max-width: 1080px;
+  padding: 1.2rem;
+}
+
+.note-detail-shell__header {
+  align-items: start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.note-detail-shell__status-wrap {
+  align-items: end;
+  display: grid;
+  gap: 0.65rem;
+  justify-items: end;
+}
+
+.note-detail-shell__close {
+  background: color-mix(in srgb, var(--note-paper-strong, rgba(255, 247, 238, 0.9)) 86%, var(--note-accent, #f4b183) 14%);
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 74%, var(--note-accent, #f4b183) 26%);
+  border-radius: 999px;
+}
+
+.note-detail-shell__feedback {
+  background: rgba(255, 244, 236, 0.9);
+  border: 1px solid rgba(244, 194, 153, 0.6);
+  border-radius: 999px;
+  color: #b66b2b;
+  display: inline-flex;
+  font-size: 0.76rem;
+  padding: 0.45rem 0.8rem;
+}
+
+.note-detail-shell__meta-grid,
+.note-detail-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.note-detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.note-detail-shell__meta-card,
+.note-detail-card,
+.note-detail-list__item,
+.note-detail-resource-item,
+.note-empty-state {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 247, 0.9), rgba(246, 239, 231, 0.86)),
+    color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 90%, var(--note-accent, #f4b183) 10%);
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 76%, var(--note-accent, #f4b183) 24%);
+  border-radius: 1.3rem;
+}
+
+.note-detail-shell__meta-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.82rem 0.92rem;
+}
+
+.note-detail-shell__meta-card span {
+  color: var(--note-copy, rgba(95, 84, 75, 0.68));
+  font-size: 0.75rem;
+}
+
+.note-detail-shell__meta-card strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.note-detail-shell__scroll {
+  min-height: 0;
+}
+
+.note-detail-shell__body {
+  display: grid;
+  gap: 1rem;
+  padding-right: 0.25rem;
+}
+
+.note-detail-card {
+  padding: 1rem;
+}
+
+.note-detail-card--spotlight {
+  background:
+    linear-gradient(180deg, rgba(255, 249, 242, 0.92), rgba(245, 239, 231, 0.88)),
+    color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 82%, var(--note-accent, #f4b183) 18%);
+}
+
+.note-detail-card__header {
+  margin-bottom: 0.85rem;
+}
+
+.note-detail-card__copy,
+.note-empty-state__copy {
+  line-height: 1.65;
+  margin: 0;
+}
+
+.note-detail-list__item,
+.note-detail-resource-item {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+}
+
+.note-detail-list__label,
+.note-detail-resource-item__meta,
+.note-detail-resource-item__path {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.18rem 0 0;
+}
+
+.note-detail-list__value,
+.note-detail-resource-item__title,
+.note-empty-state__title {
+  font-size: 0.96rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.note-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.note-empty-state {
+  display: grid;
+  gap: 0.65rem;
+  max-width: 34rem;
+  padding: 1.4rem;
+}
+
+.note-preview-page__header--loading,
+.note-preview-page__grid--loading {
+  animation: notePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes notePulse {
+  0%, 100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (max-width: 1180px) {
+  .note-preview-page__summary-grid,
+  .note-detail-shell__meta-grid,
+  .note-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .note-detail-modal {
+    inset: 1rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .note-preview-page__frame {
+    padding: 0.9rem;
+  }
+
+  .note-preview-page__summary-grid,
+  .note-detail-shell__meta-grid,
+  .note-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .note-detail-modal {
+    inset: 0.75rem;
+  }
+}

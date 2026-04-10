@@ -1,5 +1,5 @@
-import { DashboardPlaceholderPage } from "@/features/dashboard/shared/DashboardPlaceholderPage";
+import { NotePage } from "./NotePage";
 
 export function NotesPage() {
-  return <DashboardPlaceholderPage route="notes" />;
+  return <NotePage />;
 }

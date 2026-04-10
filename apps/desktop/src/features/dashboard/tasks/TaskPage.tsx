@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, CircleDashed, LayoutList } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -15,6 +15,7 @@ import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import "./taskPage.css";
 
 export function TaskPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -51,6 +52,16 @@ export function TaskPage() {
       return;
     }
 
+    const focusTaskId = (location.state as { focusTaskId?: string; openDetail?: boolean } | null)?.focusTaskId;
+    if (focusTaskId && allTasks.some((item) => item.task.task_id === focusTaskId)) {
+      setSelectedTaskId(focusTaskId);
+      if ((location.state as { openDetail?: boolean } | null)?.openDetail) {
+        setDetailOpen(true);
+      }
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
+
     const selectedExists = selectedTaskId ? allTasks.some((item) => item.task.task_id === selectedTaskId) : false;
     if (selectedExists) {
       return;
@@ -58,7 +69,7 @@ export function TaskPage() {
 
     const nextTask = unfinishedTasks.find((item) => item.task.status === "processing") ?? unfinishedTasks[0] ?? finishedTasks[0];
     setSelectedTaskId(nextTask.task.task_id);
-  }, [finishedTasks, selectedTaskId, unfinishedTasks]);
+  }, [finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
     enabled: Boolean(selectedTaskId),

@@ -1,4 +1,8 @@
 import type {
+  AgentNotepadConvertToTaskParams,
+  AgentNotepadConvertToTaskResult,
+  AgentNotepadListParams,
+  AgentNotepadListResult,
   AgentSettingsGetParams,
   AgentSettingsGetResult,
   AgentSettingsUpdateParams,
@@ -53,6 +57,14 @@ export function getTaskDetail(params: AgentTaskDetailGetParams) {
 
 export function controlTask(params: AgentTaskControlParams) {
   return rpcClient.request<AgentTaskControlResult>(RPC_METHODS.AGENT_TASK_CONTROL, params);
+}
+
+export function listNotepad(params: AgentNotepadListParams) {
+  return rpcClient.request<AgentNotepadListResult>(RPC_METHODS.AGENT_NOTEPAD_LIST, params);
+}
+
+export function convertNotepadToTask(params: AgentNotepadConvertToTaskParams) {
+  return rpcClient.request<AgentNotepadConvertToTaskResult>(RPC_METHODS.AGENT_NOTEPAD_CONVERT_TO_TASK, params);
 }
 
 export function getMirrorOverview(params: AgentMirrorOverviewGetParams) {

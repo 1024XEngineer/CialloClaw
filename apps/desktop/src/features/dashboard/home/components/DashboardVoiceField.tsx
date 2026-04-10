@@ -238,7 +238,15 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
             <div className="dashboard-voice-field__wave dashboard-voice-field__wave--middle" data-stage={stage} />
             <div className="dashboard-voice-field__wave dashboard-voice-field__wave--inner" data-stage={stage} />
             <div className="dashboard-voice-field__mascot-shell">
-              <ShellBallMascot motionConfig={motionConfig} visualState={mascotState} />
+              <ShellBallMascot
+                motionConfig={motionConfig}
+                onPressEnd={() => false}
+                onPressMove={() => {}}
+                onPressStart={() => {}}
+                onPrimaryClick={() => {}}
+                visualState={mascotState}
+                voicePreview={null}
+              />
             </div>
           </div>
 
