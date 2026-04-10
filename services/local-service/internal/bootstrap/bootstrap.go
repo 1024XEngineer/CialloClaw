@@ -23,12 +23,15 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 // App 定义当前模块的数据结构。
 type App struct {
-	server  *rpc.Server
-	storage *storage.Service
+	server       *rpc.Server
+	storage      *storage.Service
+	toolRegistry *tools.Registry
+	toolExecutor *tools.ToolExecutor
 }
 
 // New 创建并返回当前能力。
@@ -43,6 +46,11 @@ func New(cfg config.Config) (*App, error) {
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	_ = platform.LocalExecutionBackend{}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 
 	modelService := model.NewService(cfg.Model)
 	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
@@ -56,7 +64,6 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	deliveryService := delivery.NewService()
-	toolRegistry := tools.NewRegistry()
 	pluginService := plugin.NewService()
 	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
@@ -77,7 +84,7 @@ func New(cfg config.Config) (*App, error) {
 		pluginService,
 	).WithExecutor(executionService)
 
-	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService}, nil
+	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService, toolRegistry: toolRegistry, toolExecutor: toolExecutor}, nil
 }
 
 // Start 启动当前能力。
