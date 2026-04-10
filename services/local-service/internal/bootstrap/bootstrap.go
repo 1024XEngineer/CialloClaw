@@ -40,7 +40,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	_ = audit.NewService()
+	auditService := audit.NewService()
 	_ = checkpoint.NewService()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -61,7 +61,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
+	executionService := execution.NewService(fileSystem, modelService, auditService, deliveryService, toolRegistry, pluginService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {

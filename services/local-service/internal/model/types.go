@@ -37,6 +37,23 @@ type InvocationRecord struct {
 	LatencyMS int64      `json:"latency_ms"`
 }
 
+// Map 将最小调用记录转换为便于上层消费的结构化 map。
+func (r InvocationRecord) Map() map[string]any {
+	return map[string]any{
+		"task_id":    r.TaskID,
+		"run_id":     r.RunID,
+		"request_id": r.RequestID,
+		"provider":   r.Provider,
+		"model_id":   r.ModelID,
+		"usage": map[string]any{
+			"input_tokens":  r.Usage.InputTokens,
+			"output_tokens": r.Usage.OutputTokens,
+			"total_tokens":  r.Usage.TotalTokens,
+		},
+		"latency_ms": r.LatencyMS,
+	}
+}
+
 // GenerateTextResponse 描述最小文本生成返回。
 //
 // 字段与 protocol 中的 `ModelGenerateTextResponse` 对齐。

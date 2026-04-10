@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -55,7 +56,7 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	toolRegistry := tools.NewRegistry()
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, pluginService)
+	executor := execution.NewService(fileSystem, modelService, audit.NewService(), deliveryService, toolRegistry, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),

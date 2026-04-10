@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -43,6 +44,7 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 	return NewService(
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
+		audit.NewService(),
 		delivery.NewService(),
 		tools.NewRegistry(),
 		plugin.NewService(),
@@ -106,6 +108,18 @@ func TestExecuteBubbleReturnsGeneratedText(t *testing.T) {
 
 	if result.ToolName != "generate_text" {
 		t.Fatalf("expected generate_text tool, got %s", result.ToolName)
+	}
+	if result.ModelInvocation == nil {
+		t.Fatal("expected model invocation to be present")
+	}
+	if result.AuditRecord == nil {
+		t.Fatal("expected audit record to be present")
+	}
+	if result.ToolOutput["model_invocation"] == nil {
+		t.Fatalf("expected tool output to include model invocation, got %+v", result.ToolOutput)
+	}
+	if result.ToolOutput["audit_record"] == nil {
+		t.Fatalf("expected tool output to include audit record, got %+v", result.ToolOutput)
 	}
 	if result.BubbleText != "这段内容主要在解释当前问题的原因和处理方向。" {
 		t.Fatalf("expected bubble text to use generated output, got %s", result.BubbleText)

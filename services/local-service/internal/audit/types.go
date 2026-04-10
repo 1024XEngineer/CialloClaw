@@ -29,6 +29,20 @@ type Record struct {
 	CreatedAt string
 }
 
+// Map 将最小审计记录转换为便于上层消费的结构化 map。
+func (r Record) Map() map[string]any {
+	return map[string]any{
+		"audit_id":   r.AuditID,
+		"task_id":    r.TaskID,
+		"type":       r.Type,
+		"action":     r.Action,
+		"summary":    r.Summary,
+		"target":     r.Target,
+		"result":     r.Result,
+		"created_at": r.CreatedAt,
+	}
+}
+
 // Writer 是审计记录输出边界。
 //
 // 当前不直接绑定数据库实现，后续由 storage 或其他持久化层注入。
