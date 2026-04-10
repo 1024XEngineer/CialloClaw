@@ -9,6 +9,8 @@ import type {
   AgentMirrorOverviewGetResult,
   AgentTaskConfirmParams,
   AgentTaskConfirmResult,
+  AgentTaskControlParams,
+  AgentTaskControlResult,
   AgentTaskDetailGetParams,
   AgentTaskDetailGetResult,
   AgentTaskListParams,
@@ -37,6 +39,10 @@ export function listTasks(params: AgentTaskListParams) {
 // getTaskDetail 处理当前模块的相关逻辑。
 export function getTaskDetail(params: AgentTaskDetailGetParams) {
   return rpcClient.request<AgentTaskDetailGetResult>(RPC_METHODS.AGENT_TASK_DETAIL_GET, params);
+}
+
+export function controlTask(params: AgentTaskControlParams) {
+  return rpcClient.request<AgentTaskControlResult>(RPC_METHODS.AGENT_TASK_CONTROL, params);
 }
 
 export function getMirrorOverview(params: AgentMirrorOverviewGetParams) {

@@ -1,0 +1,146 @@
+.task-capsule-page {
+  background:
+    radial-gradient(circle at 16% 14%, rgba(255, 255, 255, 0.88), transparent 24%),
+    radial-gradient(circle at 88% 10%, rgba(217, 224, 237, 0.52), transparent 22%),
+    radial-gradient(circle at 78% 82%, rgba(255, 233, 214, 0.34), transparent 18%),
+    linear-gradient(180deg, #f7f3ee 0%, #f0ece8 48%, #ebe9e8 100%);
+  color: #22303d;
+  min-height: 100vh;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+}
+
+.app-shell.task-capsule-page {
+  padding: 0;
+}
+
+.task-capsule-page::before,
+.task-capsule-page::after {
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.task-capsule-page::before {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.34), transparent 34%),
+    radial-gradient(circle at 10% 94%, rgba(255, 255, 255, 0.4), transparent 24%);
+  opacity: 0.95;
+}
+
+.task-capsule-page::after {
+  background-image:
+    linear-gradient(rgba(135, 152, 176, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(135, 152, 176, 0.05) 1px, transparent 1px);
+  background-size: 116px 116px;
+  mask-image: linear-gradient(180deg, black, rgba(0, 0, 0, 0.08));
+  opacity: 0.48;
+}
+
+.task-capsule-page__frame {
+  display: grid;
+  gap: 1rem;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100vh;
+  margin: 0 auto;
+  max-width: 1600px;
+  padding: clamp(1.1rem, 2.6vw, 1.8rem);
+  position: relative;
+  z-index: 1;
+}
+
+.task-capsule-page__layout {
+  min-height: 0;
+}
+
+.task-capsule-card {
+  backdrop-filter: blur(18px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(247, 244, 240, 0.68)),
+    rgba(255, 252, 248, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 28px 80px -54px rgba(73, 86, 109, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.76) inset,
+    0 -1px 0 rgba(221, 228, 236, 0.3) inset;
+}
+
+.task-capsule-card--highlighted {
+  box-shadow:
+    0 34px 94px -56px rgba(104, 138, 188, 0.58),
+    0 0 0 1px rgba(160, 187, 223, 0.56) inset,
+    0 1px 0 rgba(255, 255, 255, 0.82) inset;
+}
+
+.task-capsule-tabs-card {
+  min-height: 0;
+}
+
+.task-capsule-tab-list [data-slot="tabs-trigger"]::after {
+  display: none;
+}
+
+.task-capsule-soft-button {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(242, 240, 236, 0.74)),
+    rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  box-shadow:
+    0 20px 34px -24px rgba(80, 92, 118, 0.32),
+    0 1px 0 rgba(255, 255, 255, 0.78) inset;
+  color: #334255;
+}
+
+.task-capsule-soft-button:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 241, 237, 0.86)),
+    rgba(255, 255, 255, 0.78);
+}
+
+.task-capsule-scroll [data-slot="scroll-area-thumb"] {
+  background: rgba(142, 158, 180, 0.38);
+}
+
+.task-capsule-sheet {
+  backdrop-filter: blur(22px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 244, 240, 0.78)),
+    rgba(255, 252, 248, 0.72);
+  border-left: 1px solid rgba(255, 255, 255, 0.85);
+  border-top-left-radius: 32px;
+  border-bottom-left-radius: 32px;
+  box-shadow:
+    -18px 0 48px -34px rgba(69, 82, 105, 0.38),
+    0 1px 0 rgba(255, 255, 255, 0.78) inset;
+}
+
+.task-capsule-step-card {
+  appearance: none;
+}
+
+@media (max-width: 1180px) {
+  .task-capsule-page {
+    overflow-y: auto;
+  }
+
+  .task-capsule-page__frame {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .task-capsule-sheet {
+    border-radius: 28px 0 0 28px;
+  }
+}
+
+@media (max-width: 720px) {
+  .task-capsule-page__frame {
+    padding: 1rem;
+  }
+
+  .task-capsule-sheet {
+    border-radius: 24px 0 0 24px;
+  }
+}

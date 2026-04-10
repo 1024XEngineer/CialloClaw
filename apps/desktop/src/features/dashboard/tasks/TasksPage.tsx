@@ -1,5 +1,5 @@
-import { DashboardPlaceholderPage } from "@/features/dashboard/shared/DashboardPlaceholderPage";
+import { TaskPage } from "./TaskPage";
 
 export function TasksPage() {
-  return <DashboardPlaceholderPage route="tasks" />;
+  return <TaskPage />;
 }
