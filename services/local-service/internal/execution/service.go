@@ -142,12 +142,25 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 			"model_invocation": cloneMap(result.ModelInvocation),
 			"audit_record":     cloneMap(result.AuditRecord),
 		})
+		enrichLatestToolCall(&result, map[string]any{
+			"path":             targetPath,
+			"artifact_count":   len(result.Artifacts),
+			"content_bytes":    len(documentContent),
+			"model_invocation": cloneMap(result.ModelInvocation),
+			"audit_record":     cloneMap(result.AuditRecord),
+		})
 		return result, nil
 	}
 
 	result.BubbleText = truncateBubbleText(trace.OutputText)
 	assignLatestToolTrace(&result, latestToolCall(result.ToolCalls))
 	enrichToolTrace(&result, map[string]any{
+		"preview_text":     previewText,
+		"content_size":     len(trace.OutputText),
+		"model_invocation": cloneMap(result.ModelInvocation),
+		"audit_record":     cloneMap(result.AuditRecord),
+	})
+	enrichLatestToolCall(&result, map[string]any{
 		"preview_text":     previewText,
 		"content_size":     len(trace.OutputText),
 		"model_invocation": cloneMap(result.ModelInvocation),
@@ -615,6 +628,20 @@ func enrichToolTrace(result *Result, extras map[string]any) {
 	}
 	for key, value := range extras {
 		result.ToolOutput[key] = value
+	}
+}
+
+func enrichLatestToolCall(result *Result, extras map[string]any) {
+	if result == nil || len(result.ToolCalls) == 0 || len(extras) == 0 {
+		return
+	}
+
+	lastIndex := len(result.ToolCalls) - 1
+	if result.ToolCalls[lastIndex].Output == nil {
+		result.ToolCalls[lastIndex].Output = map[string]any{}
+	}
+	for key, value := range extras {
+		result.ToolCalls[lastIndex].Output[key] = value
 	}
 }
 
