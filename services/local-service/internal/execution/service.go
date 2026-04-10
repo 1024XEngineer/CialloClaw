@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -21,8 +22,10 @@ import (
 // Service 负责在当前仓库代码范围内完成一条可运行的最小执行链路。
 type Service struct {
 	fileSystem platform.FileSystemAdapter
+	execution  tools.ExecutionCapability
 	model      *model.Service
 	audit      *audit.Service
+	checkpoint *checkpoint.Service
 	delivery   *delivery.Service
 	tools      *tools.Registry
 	executor   *tools.ToolExecutor
@@ -67,8 +70,10 @@ type generationTrace struct {
 // NewService 创建执行服务。
 func NewService(
 	fileSystem platform.FileSystemAdapter,
+	executionBackend tools.ExecutionCapability,
 	modelService *model.Service,
 	auditService *audit.Service,
+	checkpointService *checkpoint.Service,
 	deliveryService *delivery.Service,
 	toolRegistry *tools.Registry,
 	toolExecutor *tools.ToolExecutor,
@@ -80,8 +85,10 @@ func NewService(
 
 	return &Service{
 		fileSystem: fileSystem,
+		execution:  executionBackend,
 		model:      modelService,
 		audit:      auditService,
+		checkpoint: checkpointService,
 		delivery:   deliveryService,
 		tools:      toolRegistry,
 		executor:   toolExecutor,
@@ -93,6 +100,13 @@ func NewService(
 // Execute 执行当前任务的最小内容生成与落盘链路。
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
 	startedAt := time.Now()
+	if result, ok, err := s.executeDirectBuiltinTool(ctx, request); err != nil {
+		return Result{}, err
+	} else if ok {
+		result.DurationMS = time.Since(startedAt).Milliseconds()
+		return result, nil
+	}
+
 	inputText := s.buildExecutionInput(request.Snapshot)
 	trace, err := s.generateOutput(ctx, request, inputText)
 	if err != nil {
@@ -111,6 +125,25 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		ModelInvocation: cloneMap(trace.ModelInvocation),
 		AuditRecord:     cloneMap(trace.AuditRecord),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+		ToolInput: map[string]any{
+			"intent_name":     stringValue(request.Intent, "name", "summarize"),
+			"delivery_type":   deliveryType,
+			"input_preview":   truncateText(inputText, 96),
+			"available_tools": s.availableToolNames(),
+			"workers":         s.availableWorkers(),
+		},
+	}
+
+	if toolResult, ok, err := s.executeThroughToolExecutor(ctx, request, deliveryResult, trace.OutputText); err != nil {
+		return Result{}, err
+	} else if ok {
+		toolResult.ToolCalls = append(append([]tools.ToolCallRecord(nil), result.ToolCalls...), toolResult.ToolCalls...)
+		// 当请求已走 ToolExecutor 路径时，保留真实工具输入，
+		// 仅把 execution 层的通用上下文附加到 execution_context，
+		// 避免后续 ToolCall 记录丢失实际工具参数。
+		toolResult.ToolInput = mergeToolInputs(toolResult.ToolInput, result.ToolInput)
+		toolResult.DurationMS = time.Since(startedAt).Milliseconds()
+		return toolResult, nil
 	}
 
 	if deliveryType == "workspace_document" {
@@ -168,6 +201,313 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		"audit_record":     cloneMap(result.AuditRecord),
 	})
 	return result, nil
+}
+
+func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request) (Result, bool, error) {
+	intentName := stringValue(request.Intent, "name", "")
+	if intentName == "" || intentName == "write_file" {
+		return Result{}, false, nil
+	}
+	if s.executor == nil || s.tools == nil {
+		return Result{}, false, nil
+	}
+	if _, err := s.tools.Get(intentName); err != nil {
+		return Result{}, false, nil
+	}
+	args := mapValue(request.Intent, "arguments")
+	toolResult, err := s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
+		TaskID:        request.TaskID,
+		RunID:         request.RunID,
+		WorkspacePath: "workspace",
+		Platform:      s.fileSystem,
+		Execution:     s.execution,
+	}, intentName, args)
+	if err != nil {
+		return Result{}, false, fmt.Errorf("execute builtin tool %s: %w", intentName, err)
+	}
+	bubbleText := toolBubbleText(intentName, toolResult)
+	return Result{
+		Content:        bubbleText,
+		DeliveryResult: s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, ""),
+		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
+		BubbleText:     bubbleText,
+		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, map[string]any{"path": stringValue(args, "path", "")})},
+		ToolName:       intentName,
+		ToolInput: mergeToolInputs(args, map[string]any{
+			"intent_name":     intentName,
+			"delivery_type":   "bubble",
+			"available_tools": s.availableToolNames(),
+			"workers":         s.availableWorkers(),
+		}),
+		ToolOutput: normalizeFilesystemToolOutput(intentName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), args),
+	}, true, nil
+}
+
+func (s *Service) executeThroughToolExecutor(ctx context.Context, request Request, deliveryResult map[string]any, outputText string) (Result, bool, error) {
+	toolName, toolInput, ok := s.resolveToolExecution(request, deliveryResult, outputText)
+	if !ok || s.executor == nil {
+		return Result{}, false, nil
+	}
+
+	workspacePath := workspacePathFromDeliveryResult(deliveryResult)
+	toolResult, err := s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
+		TaskID:        request.TaskID,
+		RunID:         request.RunID,
+		WorkspacePath: workspacePath,
+		Platform:      s.fileSystem,
+		Execution:     s.execution,
+	}, toolName, toolInput)
+	if err != nil {
+		return Result{}, false, fmt.Errorf("execute tool %s: %w", toolName, err)
+	}
+
+	result := Result{
+		Content:        outputText,
+		DeliveryResult: deliveryResult,
+		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
+		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)},
+		ToolName:       toolName,
+		ToolInput:      toolInput,
+		ToolOutput:     normalizeFilesystemToolOutput(toolName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), toolInput),
+	}
+	if toolName == "write_file" {
+		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
+		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", deliveryPayloadPath(deliveryResult))
+		if content, ok := toolResult.RawOutput["content"].(string); ok && strings.TrimSpace(content) != "" {
+			result.Content = content
+		}
+		consumedOutput, consumedArtifact, err := s.consumeWriteFileCandidates(ctx, request.TaskID, toolResult.RawOutput)
+		if err != nil {
+			return Result{}, false, err
+		}
+		if consumedOutput != nil {
+			result.ToolOutput = normalizeFilesystemToolOutput(toolName, mergeToolOutputs(consumedOutput, toolResult.SummaryOutput), toolInput)
+		}
+		if consumedArtifact != nil {
+			result.Artifacts = append(result.Artifacts, consumedArtifact)
+		}
+	} else {
+		bubbleText := toolBubbleText(toolName, toolResult)
+		result.BubbleText = bubbleText
+		result.Content = bubbleText
+		result.DeliveryResult = s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, "")
+	}
+
+	return result, true, nil
+}
+
+func (s *Service) resolveToolExecution(request Request, deliveryResult map[string]any, outputText string) (string, map[string]any, bool) {
+	intentName := stringValue(request.Intent, "name", "")
+	args := mapValue(request.Intent, "arguments")
+
+	if intentName == "write_file" || request.DeliveryType == "workspace_document" {
+		targetPath := firstNonEmpty(targetPathFromIntent(request.Intent), deliveryPayloadPath(deliveryResult))
+		writePath := workspaceFSPath(targetPath)
+		if writePath == "" {
+			return "", nil, false
+		}
+		content := workspaceDocumentContent(request.ResultTitle, outputText)
+		return "write_file", map[string]any{
+			"path":    writePath,
+			"content": content,
+		}, true
+	}
+
+	if s.tools == nil || intentName == "" {
+		return "", nil, false
+	}
+	if _, err := s.tools.Get(intentName); err != nil {
+		return "", nil, false
+	}
+
+	switch intentName {
+	case "read_file":
+		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
+		if pathValue == "" {
+			return "", nil, false
+		}
+		return intentName, map[string]any{"path": pathValue}, true
+	case "list_dir":
+		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
+		if pathValue == "" {
+			return "", nil, false
+		}
+		input := map[string]any{"path": pathValue}
+		if limit, ok := args["limit"]; ok {
+			input["limit"] = limit
+		}
+		return intentName, input, true
+	case "exec_command":
+		input := map[string]any{}
+		for _, key := range []string{"command", "args", "working_dir"} {
+			if value, ok := args[key]; ok {
+				input[key] = value
+			}
+		}
+		if len(input) == 0 {
+			return "", nil, false
+		}
+		return intentName, input, true
+	default:
+		return "", nil, false
+	}
+}
+
+func mergeToolOutputs(rawOutput, summaryOutput map[string]any) map[string]any {
+	if len(rawOutput) == 0 && len(summaryOutput) == 0 {
+		return nil
+	}
+	merged := map[string]any{}
+	for key, value := range rawOutput {
+		merged[key] = value
+	}
+	if len(summaryOutput) > 0 {
+		merged["summary_output"] = summaryOutput
+	}
+	return merged
+}
+
+func mergeToolInputs(toolInput, executionContext map[string]any) map[string]any {
+	if len(toolInput) == 0 && len(executionContext) == 0 {
+		return nil
+	}
+	merged := map[string]any{}
+	for key, value := range toolInput {
+		merged[key] = value
+	}
+	if len(executionContext) > 0 {
+		merged["execution_context"] = executionContext
+	}
+	return merged
+}
+
+func normalizeFilesystemToolOutput(toolName string, output map[string]any, toolInput map[string]any) map[string]any {
+	if len(output) == 0 {
+		return nil
+	}
+	normalized := cloneOutput(output)
+	pathValue := stringValue(toolInput, "path", "")
+	if pathValue == "" {
+		return normalized
+	}
+	switch toolName {
+	case "read_file", "write_file", "list_dir":
+		normalized["path"] = pathValue
+	}
+	return normalized
+}
+
+func normalizeFilesystemToolCall(record tools.ToolCallRecord, toolInput map[string]any) tools.ToolCallRecord {
+	pathValue := stringValue(toolInput, "path", "")
+	if pathValue == "" {
+		return record
+	}
+	if record.Input == nil {
+		record.Input = map[string]any{}
+	}
+	record.Input["path"] = pathValue
+	if record.Output == nil {
+		record.Output = map[string]any{}
+	}
+	record.Output["path"] = pathValue
+	return record
+}
+
+func toolArtifactsFromResult(taskID string, result *tools.ToolExecutionResult) []map[string]any {
+	if result == nil || len(result.Artifacts) == 0 {
+		return nil
+	}
+	artifacts := make([]map[string]any, 0, len(result.Artifacts))
+	for _, artifact := range result.Artifacts {
+		artifacts = append(artifacts, map[string]any{
+			"artifact_id":   "",
+			"task_id":       taskID,
+			"artifact_type": artifact.ArtifactType,
+			"title":         artifact.Title,
+			"path":          artifact.Path,
+			"mime_type":     artifact.MimeType,
+		})
+	}
+	return artifacts
+}
+
+func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
+	if len(rawOutput) == 0 {
+		return nil, nil, nil
+	}
+
+	merged := cloneOutput(rawOutput)
+	if auditCandidate, ok := rawOutput["audit_candidate"].(map[string]any); ok && s.audit != nil {
+		recordInput, err := audit.BuildRecordInputFromCandidate(taskID, auditCandidate)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build audit record from candidate: %w", err)
+		}
+		if record, err := s.audit.Write(ctx, recordInput); err != nil {
+			return nil, nil, fmt.Errorf("write audit record from candidate: %w", err)
+		} else {
+			merged["audit_record"] = record.Map()
+		}
+	}
+
+	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil {
+		createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
+		}
+		if shouldCreate {
+			point, err := s.checkpoint.Create(ctx, createInput)
+			if err != nil {
+				return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+			}
+			merged["recovery_point"] = map[string]any{
+				"recovery_point_id": point.RecoveryPointID,
+				"task_id":           point.TaskID,
+				"summary":           point.Summary,
+				"created_at":        point.CreatedAt,
+				"objects":           point.Objects,
+			}
+		}
+	}
+
+	return merged, nil, nil
+}
+
+func cloneOutput(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func workspacePathFromDeliveryResult(deliveryResult map[string]any) string {
+	pathValue := deliveryPayloadPath(deliveryResult)
+	if pathValue == "" {
+		return "workspace"
+	}
+	if normalized := workspaceFSPath(pathValue); normalized != "" {
+		return normalized
+	}
+	return "workspace"
+}
+
+func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
+	if result == nil {
+		return fmt.Sprintf("%s 执行完成。", toolName)
+	}
+	if preview := stringValue(result.SummaryOutput, "content_preview", ""); preview != "" {
+		return preview
+	}
+	if preview := stringValue(result.SummaryOutput, "stdout_preview", ""); preview != "" {
+		return preview
+	}
+	if count, ok := result.SummaryOutput["entry_count"]; ok {
+		return fmt.Sprintf("%s 执行完成，当前目录条目数：%v。", toolName, count)
+	}
+	return fmt.Sprintf("%s 执行完成。", toolName)
 }
 
 func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot) string {

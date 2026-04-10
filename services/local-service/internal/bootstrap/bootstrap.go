@@ -41,16 +41,18 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	auditService := audit.NewService()
-	_ = checkpoint.NewService()
+	checkpointService := checkpoint.NewService()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	_ = platform.LocalExecutionBackend{}
-
+	executionBackend := platform.LocalExecutionBackend{}
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		return nil, err
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(
+		toolRegistry,
+		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
+	)
 
 	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
 		ModelConfig: cfg.Model,
@@ -62,7 +64,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, modelService, auditService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	executionService := execution.NewService(fileSystem, executionBackend, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {

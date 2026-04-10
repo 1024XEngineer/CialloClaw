@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -59,15 +60,16 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	}
 
 	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
+	auditService := audit.NewService()
 	deliveryService := delivery.NewService()
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
-		t.Fatalf("RegisterBuiltinTools returned error: %v", err)
+		t.Fatalf("register builtin tools: %v", err)
 	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	auditService := audit.NewService()
-	executor := execution.NewService(fileSystem, modelService, auditService, deliveryService, toolRegistry, nil, pluginService)
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, modelService, auditService, checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -1553,12 +1555,18 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	output, ok := record.LatestToolCall["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
-	}
-	if output["model_invocation"] == nil {
-		t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
-	}
-	if output["audit_record"] == nil {
-		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+		if output["summary_output"] == nil {
+			t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
+		}
+		if output["model_invocation"] == nil {
+			t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
+		}
+		if output["audit_record"] == nil {
+			t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+		}
+		if output["recovery_point"] != nil {
+			t.Fatalf("expected no recovery_point for create flow, got %+v", output)
+		}
 	}
 }
 
