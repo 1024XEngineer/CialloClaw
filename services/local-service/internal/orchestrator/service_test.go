@@ -1196,6 +1196,16 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	if record.LatestToolCall["tool_name"] != "write_file" {
 		t.Fatalf("expected runtime task to record write_file tool call, got %v", record.LatestToolCall["tool_name"])
 	}
+	output, ok := record.LatestToolCall["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
+	}
+	if output["model_invocation"] == nil {
+		t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
+	}
+	if output["audit_record"] == nil {
+		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+	}
 }
 
 func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
@@ -1230,6 +1240,16 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 	if record.LatestToolCall["tool_name"] != "generate_text" {
 		t.Fatalf("expected runtime task to record generate_text tool call, got %v", record.LatestToolCall["tool_name"])
+	}
+	output, ok := record.LatestToolCall["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
+	}
+	if output["model_invocation"] == nil {
+		t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
+	}
+	if output["audit_record"] == nil {
+		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
 	}
 }
 

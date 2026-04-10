@@ -70,6 +70,18 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	if result.ToolName != "write_file" {
 		t.Fatalf("expected write_file tool, got %s", result.ToolName)
 	}
+	if result.ModelInvocation == nil {
+		t.Fatal("expected model invocation to be present for workspace document flow")
+	}
+	if result.AuditRecord == nil {
+		t.Fatal("expected audit record to be present for workspace document flow")
+	}
+	if result.ToolOutput["model_invocation"] == nil {
+		t.Fatalf("expected tool output to include model invocation, got %+v", result.ToolOutput)
+	}
+	if result.ToolOutput["audit_record"] == nil {
+		t.Fatalf("expected tool output to include audit record, got %+v", result.ToolOutput)
+	}
 	if len(result.Artifacts) != 1 {
 		t.Fatalf("expected one artifact, got %d", len(result.Artifacts))
 	}
