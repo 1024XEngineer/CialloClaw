@@ -22,6 +22,7 @@ import {
   SHELL_BALL_WAITING_AUTH_MS,
 } from "./shellBall.interaction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
+import { ShellBallApp } from "./ShellBallApp";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
@@ -587,6 +588,19 @@ test("shell-ball input bar surfaces voice preview guidance to the UI", () => {
 
   assert.match(markup, /data-voice-preview="cancel"/);
   assert.match(markup, /Release to cancel/);
+});
+
+test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {
+  const markup = renderToStaticMarkup(createElement(ShellBallApp));
+
+  assert.doesNotMatch(markup, /shell-ball phase 1/i);
+  assert.doesNotMatch(markup, /小胖啾近场承接/);
+  assert.doesNotMatch(markup, /demo-only 第一阶段边界/);
+  assert.doesNotMatch(markup, /<main/i);
+  assert.match(markup, /shell-ball-surface/);
+  assert.match(markup, /shell-ball-bubble-zone/);
+  assert.match(markup, /shell-ball-mascot/);
+  assert.match(markup, /Shell-ball demo switcher/);
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {
