@@ -4,12 +4,14 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+
+	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 )
 
 const (
-	RiskLevelGreen  = "green"
-	RiskLevelYellow = "yellow"
-	RiskLevelRed    = "red"
+	RiskLevelGreen  = string(risksvc.RiskLevelGreen)
+	RiskLevelYellow = string(risksvc.RiskLevelYellow)
+	RiskLevelRed    = string(risksvc.RiskLevelRed)
 )
 
 // WorkspaceBoundaryInfo 描述当前工具调用涉及的工作区边界信息。
@@ -49,26 +51,31 @@ type RiskPrechecker interface {
 }
 
 // DefaultRiskPrechecker 提供最小可用的默认策略。
-type DefaultRiskPrechecker struct{}
+type DefaultRiskPrechecker struct {
+	service *risksvc.Service
+}
+
+func NewDefaultRiskPrechecker(service *risksvc.Service) DefaultRiskPrechecker {
+	return DefaultRiskPrechecker{service: service}
+}
+
+func (p DefaultRiskPrechecker) riskService() *risksvc.Service {
+	if p.service != nil {
+		return p.service
+	}
+	return risksvc.NewService()
+}
 
 // Precheck implements RiskPrechecker.
-func (DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInput) (RiskPrecheckResult, error) {
-	result := RiskPrecheckResult{RiskLevel: RiskLevelGreen}
-
-	switch input.ToolName {
-	case "read_file":
-		return result, nil
-	case "write_file":
-		return evaluateWriteFileRisk(input), nil
-	case "exec_command":
-		return evaluateExecCommandRisk(input), nil
-	default:
-		if input.Metadata.RiskHint == RiskLevelRed {
-			result.RiskLevel = RiskLevelRed
-			result.ApprovalRequired = true
-		}
-		return result, nil
-	}
+func (p DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInput) (RiskPrecheckResult, error) {
+	assessment := p.riskService().Assess(buildAssessmentInput(input))
+	return RiskPrecheckResult{
+		RiskLevel:          string(assessment.RiskLevel),
+		ApprovalRequired:   assessment.ApprovalRequired,
+		CheckpointRequired: assessment.CheckpointRequired,
+		Deny:               assessment.Deny,
+		DenyReason:         assessment.Reason,
+	}, nil
 }
 
 // BuildRiskPrecheckInput 从执行上下文中提取风险判定所需的最小信息。
@@ -112,60 +119,31 @@ func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *Too
 	return precheckInput
 }
 
-func evaluateWriteFileRisk(input RiskPrecheckInput) RiskPrecheckResult {
-	result := RiskPrecheckResult{
-		RiskLevel:          RiskLevelYellow,
-		CheckpointRequired: true,
+func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
+	outOfWorkspace := false
+	workspaceKnown := false
+	if input.Workspace.Within != nil {
+		workspaceKnown = true
+		outOfWorkspace = !*input.Workspace.Within
 	}
 
-	if input.Workspace.TargetPath == "" {
-		result.ApprovalRequired = true
-		result.DenyReason = "write target path is missing"
-		return result
+	assessment := risksvc.AssessmentInput{
+		OperationName:       input.ToolName,
+		TargetObject:        input.Workspace.TargetPath,
+		CapabilityAvailable: true,
+		WorkspaceKnown:      workspaceKnown,
+		CommandPreview:      normalizeCommandString(input.Input),
+		ImpactScope: risksvc.ImpactScope{
+			Files:          filesFromTarget(input.Workspace.TargetPath),
+			OutOfWorkspace: outOfWorkspace,
+		},
 	}
 
-	if input.Workspace.Within == nil {
-		result.ApprovalRequired = true
-		result.DenyReason = "workspace boundary is unknown"
-		return result
+	if input.ToolName == "write_file" {
+		assessment.ImpactScope.OverwriteOrDeleteRisk = workspaceKnown && !outOfWorkspace
 	}
 
-	if !*input.Workspace.Within {
-		result.RiskLevel = RiskLevelRed
-		result.Deny = true
-		result.DenyReason = "write target is outside workspace boundary"
-	}
-
-	return result
-}
-
-func evaluateExecCommandRisk(input RiskPrecheckInput) RiskPrecheckResult {
-	command := normalizeCommandString(input.Input)
-	if command == "" {
-		return RiskPrecheckResult{
-			RiskLevel:        RiskLevelYellow,
-			ApprovalRequired: true,
-			DenyReason:       "command content is missing",
-		}
-	}
-
-	if matchesDangerousCommand(command) {
-		return RiskPrecheckResult{
-			RiskLevel:  RiskLevelRed,
-			Deny:       true,
-			DenyReason: "command is blocked by local risk policy",
-		}
-	}
-
-	if matchesApprovalCommand(command) {
-		return RiskPrecheckResult{
-			RiskLevel:        RiskLevelRed,
-			ApprovalRequired: true,
-			DenyReason:       "command requires approval before execution",
-		}
-	}
-
-	return RiskPrecheckResult{RiskLevel: RiskLevelYellow}
+	return assessment
 }
 
 func extractTargetPath(input map[string]any) (string, bool) {
@@ -191,43 +169,16 @@ func normalizeCommandString(input map[string]any) string {
 	return ""
 }
 
-func matchesDangerousCommand(command string) bool {
-	patterns := []string{
-		"rm -rf",
-		"del /f",
-		"rd /s /q",
-		"format ",
-		"mkfs",
-		"shutdown",
-		"reboot",
-		"diskpart",
-	}
-	return matchesAnyPattern(command, patterns)
-}
-
-func matchesApprovalCommand(command string) bool {
-	patterns := []string{
-		"curl ",
-		"wget ",
-		"powershell",
-		"chmod ",
-		"chown ",
-		"git clean",
-	}
-	return matchesAnyPattern(command, patterns)
-}
-
-func matchesAnyPattern(command string, patterns []string) bool {
-	for _, pattern := range patterns {
-		if strings.Contains(command, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func filesFromTarget(target string) []string {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return nil
+	}
+	return []string{trimmed}
 }
 
 func withinWorkspacePath(workspacePath, targetPath string) *bool {
