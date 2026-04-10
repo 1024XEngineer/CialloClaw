@@ -47,12 +47,14 @@ type TaskRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
+	TokenUsage        map[string]any
 	MemoryReadPlans   []map[string]any
 	MemoryWritePlans  []map[string]any
 	StorageWritePlan  map[string]any
@@ -1027,6 +1029,26 @@ func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
+func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, tokenUsage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	if len(auditRecords) > 0 {
+		record.AuditRecords = append(record.AuditRecords, cloneMapSlice(auditRecords)...)
+	}
+	if len(tokenUsage) > 0 {
+		record.TokenUsage = cloneMap(tokenUsage)
+	}
+	record.UpdatedAt = e.now()
+	e.persistTaskLocked(record)
+	return record.clone(), true
+}
+
 // buildEvent 处理当前模块的相关逻辑。
 
 // buildEvent 为当前任务生成一条兼容层 Event 记录。
@@ -1132,12 +1154,14 @@ func (r TaskRecord) clone() TaskRecord {
 	clone.BubbleMessage = cloneMap(r.BubbleMessage)
 	clone.DeliveryResult = cloneMap(r.DeliveryResult)
 	clone.Artifacts = cloneMapSlice(r.Artifacts)
+	clone.AuditRecords = cloneMapSlice(r.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(r.MirrorReferences)
 	clone.SecuritySummary = cloneMap(r.SecuritySummary)
 	clone.ApprovalRequest = cloneMap(r.ApprovalRequest)
 	clone.PendingExecution = cloneMap(r.PendingExecution)
 	clone.Authorization = cloneMap(r.Authorization)
 	clone.ImpactScope = cloneMap(r.ImpactScope)
+	clone.TokenUsage = cloneMap(r.TokenUsage)
 	clone.MemoryReadPlans = cloneMapSlice(r.MemoryReadPlans)
 	clone.MemoryWritePlans = cloneMapSlice(r.MemoryWritePlans)
 	clone.StorageWritePlan = cloneMap(r.StorageWritePlan)
@@ -1654,12 +1678,14 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
 		ApprovalRequest:   cloneMap(record.ApprovalRequest),
 		PendingExecution:  cloneMap(record.PendingExecution),
 		Authorization:     cloneMap(record.Authorization),
 		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
 		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
 		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
 		StorageWritePlan:  cloneMap(record.StorageWritePlan),
@@ -1691,12 +1717,14 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
 		ApprovalRequest:   cloneMap(record.ApprovalRequest),
 		PendingExecution:  cloneMap(record.PendingExecution),
 		Authorization:     cloneMap(record.Authorization),
 		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
 		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
 		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
 		StorageWritePlan:  cloneMap(record.StorageWritePlan),

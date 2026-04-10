@@ -89,12 +89,14 @@ type TaskRunRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
+	TokenUsage        map[string]any
 	MemoryReadPlans   []map[string]any
 	MemoryWritePlans  []map[string]any
 	StorageWritePlan  map[string]any
