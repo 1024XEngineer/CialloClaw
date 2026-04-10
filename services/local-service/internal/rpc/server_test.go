@@ -131,6 +131,120 @@ func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {
 }
 
 // newTestServer 处理当前模块的相关逻辑。
+func TestDispatchMapsTaskControlStatusErrors(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "still waiting for intent confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-invalid"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+			"action":  "pause",
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1001004 || errEnvelope.Error.Message != "TASK_STATUS_INVALID" {
+		t.Fatalf("expected TASK_STATUS_INVALID mapping, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchMapsTaskControlFinishedErrors(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "completed task for rpc error mapping",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-finished"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+			"action":  "cancel",
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1001005 || errEnvelope.Error.Message != "TASK_ALREADY_FINISHED" {
+		t.Fatalf("expected TASK_ALREADY_FINISHED mapping, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "task for invalid action",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-invalid-action"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+			"action":  "skip",
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS mapping for unsupported action, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
 func newTestServer() *Server {
 	orch := orchestrator.NewService(
 		contextsvc.NewService(),

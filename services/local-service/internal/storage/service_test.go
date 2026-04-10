@@ -65,7 +65,9 @@ func TestConfiguredReturnsFalseWhenPathEmpty(t *testing.T) {
 
 // TestConfiguredReturnsTrueWhenAdapterAndPathPresent 验证ConfiguredReturnsTrueWhenAdapterAndPathPresent。
 func TestConfiguredReturnsTrueWhenAdapterAndPathPresent(t *testing.T) {
-	service := NewService(stubAdapter{databasePath: "D:/CialloClaw/data.db"})
+	path := filepath.Join(t.TempDir(), "configured.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
 
 	if !service.Configured() {
 		t.Fatal("expected service to be configured")
@@ -94,7 +96,9 @@ func TestValidateReturnsErrorWhenPathMissing(t *testing.T) {
 
 // TestValidatePassesWhenAdapterConfigured 验证ValidatePassesWhenAdapterConfigured。
 func TestValidatePassesWhenAdapterConfigured(t *testing.T) {
-	service := NewService(stubAdapter{databasePath: "D:/CialloClaw/data.db"})
+	path := filepath.Join(t.TempDir(), "validate.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
 
 	if err := service.Validate(); err != nil {
 		t.Fatalf("expected valid storage service, got %v", err)
@@ -207,5 +211,34 @@ func TestCloseIsSafeWithoutConfiguredStore(t *testing.T) {
 	service := NewService(nil)
 	if err := service.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestTaskRunStoreReturnsWorkingImplementation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-runs.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	store := service.TaskRunStore()
+	taskID, err := store.AllocateIdentifier(context.Background(), "task")
+	if err != nil {
+		t.Fatalf("AllocateIdentifier returned error: %v", err)
+	}
+	if taskID != "task_001" {
+		t.Fatalf("expected sqlite-backed task identifier, got %q", taskID)
+	}
+
+	record := sampleTaskRunRecord()
+	record.TaskID = taskID
+	if err := store.SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("SaveTaskRun returned error: %v", err)
+	}
+
+	records, err := store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns returned error: %v", err)
+	}
+	if len(records) != 1 || records[0].TaskID != taskID {
+		t.Fatalf("unexpected persisted task runs: %+v", records)
 	}
 }

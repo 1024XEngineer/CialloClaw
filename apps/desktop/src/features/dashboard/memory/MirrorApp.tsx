@@ -14,7 +14,7 @@ import {
   loadMirrorOverviewData,
   type MirrorOverviewData,
   type MirrorOverviewSource,
-} from "@/services/mirrorService";
+} from "./mirrorService";
 
 const MODULE_KEYS = [
   "history",

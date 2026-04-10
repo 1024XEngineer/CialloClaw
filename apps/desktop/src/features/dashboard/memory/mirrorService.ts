@@ -4,7 +4,7 @@ import type {
   MirrorReference,
   RequestMeta,
 } from "@cialloclaw/protocol";
-import mirrorOverviewMock from "@/mocks/mirrorOverview.json";
+import mirrorOverviewMock from "./mirrorOverview.json";
 import { getMirrorOverview as requestMirrorOverview } from "@/rpc/methods";
 
 type MirrorOverviewMock = typeof mirrorOverviewMock;

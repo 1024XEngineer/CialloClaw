@@ -32,13 +32,6 @@
         "width": 1080,
         "height": 760,
         "url": "control-panel.html"
-      },
-      {
-        "label": "mirror",
-        "title": "CialloClaw Mirror",
-        "width": 1180,
-        "height": 820,
-        "url": "mirror.html"
       }
     ]
   }

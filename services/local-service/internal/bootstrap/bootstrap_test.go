@@ -35,6 +35,9 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.storage.MemoryStore() == nil {
 		t.Fatal("expected storage memory store to be available")
 	}
+	if app.storage.TaskRunStore() == nil {
+		t.Fatal("expected storage task/run store to be available")
+	}
 	capabilities := app.storage.Capabilities()
 	if !capabilities.SupportsMemoryStore {
 		t.Fatalf("expected storage capabilities to expose memory store: %+v", app.storage.Capabilities())
@@ -44,5 +47,23 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	}
 	if capabilities.MemoryRetrievalBackend != "sqlite_fts5+sqlite_vec" {
 		t.Fatalf("expected retrieval backend to be aligned, got %+v", capabilities)
+	}
+	if app.toolRegistry == nil || app.toolExecutor == nil {
+		t.Fatal("expected tool registry and executor to be wired")
+	}
+	if app.toolRegistry.Count() != 4 {
+		t.Fatalf("expected 4 builtin tools to be registered, got %d", app.toolRegistry.Count())
+	}
+	if _, err := app.toolRegistry.Get("read_file"); err != nil {
+		t.Fatalf("expected read_file to be registered, got %v", err)
+	}
+	if _, err := app.toolRegistry.Get("write_file"); err != nil {
+		t.Fatalf("expected write_file to be registered, got %v", err)
+	}
+	if _, err := app.toolRegistry.Get("list_dir"); err != nil {
+		t.Fatalf("expected list_dir to be registered, got %v", err)
+	}
+	if _, err := app.toolRegistry.Get("exec_command"); err != nil {
+		t.Fatalf("expected exec_command to be registered, got %v", err)
 	}
 }

@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -10,6 +11,7 @@ import (
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -22,7 +24,11 @@ import (
 // ErrTaskNotFound 定义当前模块的基础变量。
 
 // ErrTaskNotFound 表示调用方给出的 task_id 在当前运行态中不存在。
-var ErrTaskNotFound = errors.New("task not found")
+var (
+	ErrTaskNotFound        = errors.New("task not found")
+	ErrTaskStatusInvalid   = errors.New("task status invalid")
+	ErrTaskAlreadyFinished = errors.New("task already finished")
+)
 
 // Service 提供当前模块的服务能力。
 
@@ -38,6 +44,7 @@ type Service struct {
 	model     *model.Service
 	tools     *tools.Registry
 	plugin    *plugin.Service
+	executor  *execution.Service
 }
 
 // NewService 创建并返回Service。
@@ -65,6 +72,12 @@ func NewService(
 		tools:     tools,
 		plugin:    plugin,
 	}
+}
+
+// WithExecutor 把真实执行服务挂入 orchestrator。
+func (s *Service) WithExecutor(executorService *execution.Service) *Service {
+	s.executor = executorService
+	return s
 }
 
 // Snapshot 处理当前模块的相关逻辑。
@@ -139,7 +152,6 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
 	deliveryResult := map[string]any(nil)
-	artifacts := []map[string]any(nil)
 	if !suggestion.RequiresConfirm {
 		if requiresAuthorization(suggestion.Intent) {
 			pendingExecution := s.buildPendingExecution(task, suggestion.Intent)
@@ -153,13 +165,11 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 				"bubble_message": bubble,
 			}, nil
 		}
-		deliveryType := resolveTaskDeliveryType(task, suggestion.Intent)
-		deliveryResult = s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, suggestion.ResultTitle, previewTextForDeliveryType(deliveryType))
-		artifacts = s.delivery.BuildArtifact(task.TaskID, suggestion.ResultTitle, deliveryResult)
-		if _, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts); ok {
-			task, _ = s.runEngine.GetTask(task.TaskID)
+		var err error
+		task, bubble, deliveryResult, _, err = s.executeTask(task, snapshot, suggestion.Intent)
+		if err != nil {
+			return nil, err
 		}
-		s.attachPostDeliveryHandoffs(task.TaskID, task.RunID, snapshot, suggestion.Intent, deliveryResult, artifacts)
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			task, _ = s.runEngine.GetTask(task.TaskID)
@@ -228,14 +238,13 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		return response, nil
 	}
 
-	deliveryType := resolveTaskDeliveryType(task, suggestion.Intent)
-	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, suggestion.ResultTitle, previewTextForDeliveryType(deliveryType))
-	artifacts := s.delivery.BuildArtifact(task.TaskID, suggestion.ResultTitle, deliveryResult)
-	if _, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts); ok {
-		task, _ = s.runEngine.GetTask(task.TaskID)
-		response["task"] = taskMap(task)
+	var err error
+	task, bubble, deliveryResult, _, err := s.executeTask(task, snapshot, suggestion.Intent)
+	if err != nil {
+		return nil, err
 	}
-	s.attachPostDeliveryHandoffs(task.TaskID, task.RunID, snapshot, suggestion.Intent, deliveryResult, artifacts)
+	response["task"] = taskMap(task)
+	response["bubble_message"] = bubble
 	response["delivery_result"] = deliveryResult
 	return response, nil
 }
@@ -285,17 +294,10 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	snapshot := snapshotFromTask(updatedTask)
 	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
-	resultTitle, resultPreview, resultBubbleText := resultSpecFromIntent(intentValue)
-	deliveryType := resolveTaskDeliveryType(updatedTask, intentValue)
-	resultPreview = previewTextForDeliveryType(deliveryType)
-	deliveryResult := s.delivery.BuildDeliveryResult(updatedTask.TaskID, deliveryType, resultTitle, resultPreview)
-	artifacts := s.delivery.BuildArtifact(updatedTask.TaskID, resultTitle, deliveryResult)
-	resultBubble := s.delivery.BuildBubbleMessage(updatedTask.TaskID, "result", resultBubbleText, updatedTask.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok = s.runEngine.CompleteTask(updatedTask.TaskID, deliveryResult, resultBubble, artifacts)
-	if !ok {
-		return nil, ErrTaskNotFound
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
+	if err != nil {
+		return nil, err
 	}
-	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue, deliveryResult, artifacts)
 
 	return map[string]any{
 		"task":            taskMap(updatedTask),
@@ -381,10 +383,22 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	action := stringValue(params, "action", "pause")
+	if !isSupportedTaskControlAction(action) {
+		return nil, fmt.Errorf("unsupported task control action: %s", action)
+	}
 	bubble := s.delivery.BuildBubbleMessage(taskID, "status", controlBubbleText(action), currentTimeFromTask(s.runEngine, taskID))
-	updatedTask, ok := s.runEngine.ControlTask(taskID, action, bubble)
-	if !ok {
-		return nil, ErrTaskNotFound
+	updatedTask, err := s.runEngine.ControlTask(taskID, action, bubble)
+	if err != nil {
+		switch {
+		case errors.Is(err, runengine.ErrTaskNotFound):
+			return nil, ErrTaskNotFound
+		case errors.Is(err, runengine.ErrTaskStatusInvalid):
+			return nil, ErrTaskStatusInvalid
+		case errors.Is(err, runengine.ErrTaskAlreadyFinished):
+			return nil, ErrTaskAlreadyFinished
+		default:
+			return nil, err
+		}
 	}
 
 	return map[string]any{
@@ -468,32 +482,36 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 // DashboardOverviewGet 处理 agent.dashboard.overview.get。
 func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
-	tasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 1, 0)
-	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	pendingApprovals, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+
+	focusTask, hasFocusTask := focusTaskForOverview(unfinishedTasks, finishedTasks)
 	var focusSummary map[string]any
-	if len(tasks) > 0 {
+	if hasFocusTask {
 		focusSummary = map[string]any{
-			"task_id":      tasks[0].TaskID,
-			"title":        tasks[0].Title,
-			"status":       tasks[0].Status,
-			"current_step": tasks[0].CurrentStep,
-			"next_action":  "等待用户查看结果",
-			"updated_at":   tasks[0].UpdatedAt.Format(dateTimeLayout),
+			"task_id":      focusTask.TaskID,
+			"title":        focusTask.Title,
+			"status":       focusTask.Status,
+			"current_step": focusTask.CurrentStep,
+			"next_action":  nextActionForTask(focusTask),
+			"updated_at":   focusTask.UpdatedAt.Format(dateTimeLayout),
 		}
 	}
 
+	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
 	return map[string]any{
 		"overview": map[string]any{
 			"focus_summary": focusSummary,
 			"trust_summary": map[string]any{
-				"risk_level":             s.risk.DefaultLevel(),
+				"risk_level":             aggregateRiskLevel(allTasks, pendingApprovals, s.risk.DefaultLevel()),
 				"pending_authorizations": pendingTotal,
-				"has_restore_point":      len(tasks) > 0 && tasks[0].SecuritySummary["latest_restore_point"] != nil,
+				"has_restore_point":      latestRestorePointFromTasks(allTasks) != nil,
 				"workspace_path":         workspacePathFromSettings(s.runEngine.Settings()),
 			},
-			"quick_actions":     []string{"打开任务详情", "查看最近结果"},
+			"quick_actions":     buildDashboardQuickActions(hasFocusTask, pendingTotal, len(finishedTasks)),
 			"global_state":      s.Snapshot(),
-			"high_value_signal": []string{"主链路 task/run 映射已进入内存态运行。"},
+			"high_value_signal": buildDashboardSignals(unfinishedTasks, finishedTasks, pendingApprovals),
 		},
 	}, nil
 }
@@ -504,17 +522,19 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, error) {
 	module := stringValue(params, "module", "mirror")
 	tab := stringValue(params, "tab", "daily_summary")
-	tasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 20, 0)
+	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
 	return map[string]any{
 		"module": module,
 		"tab":    tab,
 		"summary": map[string]any{
-			"completed_tasks":     len(tasks),
-			"generated_outputs":   len(tasks),
-			"authorizations_used": 0,
-			"exceptions":          0,
+			"completed_tasks":     len(finishedTasks),
+			"generated_outputs":   countGeneratedOutputs(finishedTasks),
+			"authorizations_used": countAuthorizedTasks(unfinishedTasks, finishedTasks),
+			"exceptions":          countExceptionTasks(unfinishedTasks, finishedTasks),
 		},
-		"highlights": []string{"主链路核心接口已通过同一 orchestrator 收口。"},
+		"highlights": buildDashboardModuleHighlights(unfinishedTasks, finishedTasks, pendingTotal),
 	}, nil
 }
 
@@ -523,24 +543,17 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 // MirrorOverviewGet 处理 agent.mirror.overview.get。
 func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
-	tasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 20, 0)
-	completedCount := len(tasks)
-	if completedCount == 0 {
-		completedCount = 1
-	}
+	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	memoryReferences := collectMirrorReferences(finishedTasks)
 	return map[string]any{
-		"history_summary": []string{"最近任务以文档总结与解释类需求为主。", "系统已经开始围绕 task 主对象组织返回。"},
+		"history_summary": buildMirrorHistorySummary(finishedTasks, memoryReferences),
 		"daily_summary": map[string]any{
 			"date":              time.Now().Format("2006-01-02"),
-			"completed_tasks":   completedCount,
-			"generated_outputs": completedCount,
+			"completed_tasks":   len(finishedTasks),
+			"generated_outputs": countGeneratedOutputs(finishedTasks),
 		},
-		"profile": map[string]any{
-			"work_style":       "偏好结构化输出",
-			"preferred_output": "3点摘要",
-			"active_hours":     "10-12h",
-		},
-		"memory_references": []map[string]any{defaultMirrorReference()},
+		"profile":           buildMirrorProfile(finishedTasks),
+		"memory_references": memoryReferences,
 	}, nil
 }
 
@@ -548,24 +561,24 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 
 // SecuritySummaryGet 处理 agent.security.summary.get。
 func (s *Service) SecuritySummaryGet() (map[string]any, error) {
-	pendingApprovals, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
-	securityStatus := "normal"
-	if pendingTotal > 0 {
-		securityStatus = "pending_confirmation"
-	}
+	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
+	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
 	return map[string]any{
 		"summary": map[string]any{
-			"security_status":        securityStatus,
+			"security_status":        aggregateSecurityStatus(allTasks, pendingTotal),
 			"pending_authorizations": pendingTotal,
-			"latest_restore_point":   latestRestorePointFromApprovals(pendingApprovals),
+			"latest_restore_point":   latestRestorePointFromTasks(allTasks),
 			"token_cost_summary": map[string]any{
-				"current_task_tokens":   2847,
-				"current_task_cost":     0.12,
-				"today_tokens":          9321,
-				"today_cost":            0.46,
-				"single_task_limit":     10.0,
-				"daily_limit":           50.0,
-				"budget_auto_downgrade": true,
+				"current_task_tokens":   0,
+				"current_task_cost":     0.0,
+				"today_tokens":          0,
+				"today_cost":            0.0,
+				"single_task_limit":     0.0,
+				"daily_limit":           0.0,
+				"budget_auto_downgrade": boolValue(dataLogSettings, "budget_auto_downgrade", true),
 			},
 		},
 	}, nil
@@ -648,7 +661,12 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		"operator":                "user",
 		"created_at":              time.Now().Format(dateTimeLayout),
 	}
-	impactScope := buildImpactScope()
+	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
+	if !ok {
+		pendingExecution = s.buildPendingExecution(task, task.Intent)
+	}
+	pendingExecution = s.applyResolvedDeliveryToPlan(task, pendingExecution, task.Intent)
+	impactScope := s.buildImpactScope(task, pendingExecution)
 	if decision == "deny_once" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已拒绝本次操作，任务已取消。", task.UpdatedAt.Format(dateTimeLayout))
 		updatedTask, ok := s.runEngine.DenyAfterApproval(task.TaskID, authorizationRecord, impactScope, bubble)
@@ -669,32 +687,24 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		return nil, ErrTaskNotFound
 	}
 
-	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
-	if !ok {
-		pendingExecution = s.buildPendingExecution(task, task.Intent)
-	}
-	pendingExecution = s.applyResolvedDeliveryToPlan(task, pendingExecution, task.Intent)
-
 	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
 	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
 	resultBubbleText := stringValue(pendingExecution, "result_bubble_text", "结果已经生成，可直接查看。")
 	deliveryType := stringValue(pendingExecution, "delivery_type", deliveryTypeFromIntent(task.Intent))
 	deliveryType = resolveTaskDeliveryType(task, task.Intent)
 	resultPreview = previewTextForDeliveryType(deliveryType)
-	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, resultTitle, resultPreview)
-	artifacts := s.delivery.BuildArtifact(task.TaskID, resultTitle, deliveryResult)
-	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, resultBubble, artifacts)
-	if !ok {
-		return nil, ErrTaskNotFound
+	_, _, _, _ = resultTitle, resultPreview, resultBubbleText, deliveryType
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(processingTask, snapshotFromTask(processingTask), processingTask.Intent)
+	if err != nil {
+		return nil, err
 	}
 	updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
-	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), updatedTask.Intent, deliveryResult, artifacts)
 
 	return map[string]any{
 		"authorization_record": authorizationRecord,
 		"task":                 taskMap(updatedTask),
 		"bubble_message":       resultBubble,
+		"delivery_result":      deliveryResult,
 		"impact_scope":         impactScope,
 	}, nil
 }
@@ -796,7 +806,7 @@ func currentStepForSuggestion(requiresConfirm bool) string {
 	if requiresConfirm {
 		return "intent_confirmation"
 	}
-	return "return_result"
+	return "generate_output"
 }
 
 // bubbleTypeForSuggestion 处理当前模块的相关逻辑。
@@ -868,6 +878,15 @@ func controlBubbleText(action string) string {
 	}
 }
 
+func isSupportedTaskControlAction(action string) bool {
+	switch action {
+	case "pause", "resume", "cancel", "restart":
+		return true
+	default:
+		return false
+	}
+}
+
 // currentTimeFromTask 处理当前模块的相关逻辑。
 func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
 	task, ok := engine.GetTask(taskID)
@@ -918,6 +937,371 @@ func defaultMirrorReference() map[string]any {
 	}
 }
 
+func focusTaskForOverview(unfinishedTasks, finishedTasks []runengine.TaskRecord) (runengine.TaskRecord, bool) {
+	if len(unfinishedTasks) > 0 {
+		return unfinishedTasks[0], true
+	}
+	if len(finishedTasks) > 0 {
+		return finishedTasks[0], true
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func nextActionForTask(task runengine.TaskRecord) string {
+	switch task.Status {
+	case "confirming_intent":
+		return "确认当前意图"
+	case "waiting_auth":
+		return "处理待授权操作"
+	case "waiting_input":
+		return "补充输入内容"
+	case "processing":
+		return "等待处理完成"
+	case "completed":
+		return "查看交付结果"
+	default:
+		return "打开任务详情"
+	}
+}
+
+func buildDashboardQuickActions(hasFocusTask bool, pendingTotal, finishedCount int) []string {
+	actions := make([]string, 0, 3)
+	if pendingTotal > 0 {
+		actions = append(actions, "处理待授权操作")
+	}
+	if hasFocusTask {
+		actions = append(actions, "打开任务详情")
+	}
+	if finishedCount > 0 {
+		actions = append(actions, "查看最近结果")
+	}
+	if len(actions) == 0 {
+		actions = append(actions, "等待新任务")
+	}
+	return actions
+}
+
+func buildDashboardSignals(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingApprovals []map[string]any) []string {
+	signals := make([]string, 0, 3)
+	if len(unfinishedTasks) > 0 {
+		signals = append(signals, fmt.Sprintf("当前有 %d 个未完成任务处于 runtime 管控中。", len(unfinishedTasks)))
+	}
+	if len(pendingApprovals) > 0 {
+		signals = append(signals, fmt.Sprintf("当前有 %d 个待授权操作等待用户确认。", len(pendingApprovals)))
+	}
+	if latestRestorePointFromTasks(finishedTasks) != nil {
+		signals = append(signals, "最近一次正式交付已经生成可回放的恢复点。")
+	}
+	if len(signals) == 0 {
+		signals = append(signals, "主链路当前暂无活跃任务。")
+	}
+	return signals
+}
+
+func buildDashboardModuleHighlights(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingTotal int) []string {
+	highlights := make([]string, 0, 4)
+	if latestOutputPath := latestOutputPathFromTasks(finishedTasks); latestOutputPath != "" {
+		highlights = append(highlights, fmt.Sprintf("最近正式交付已落到 %s。", latestOutputPath))
+	}
+	if pendingTotal > 0 {
+		highlights = append(highlights, fmt.Sprintf("当前仍有 %d 个待授权任务等待处理。", pendingTotal))
+	}
+	if restorePoint := latestRestorePointFromTasks(finishedTasks); restorePoint != nil {
+		highlights = append(highlights, fmt.Sprintf("最近恢复点 %s 已可用于安全回显。", stringValue(restorePoint, "recovery_point_id", "latest")))
+	}
+	if len(unfinishedTasks) > 0 {
+		highlights = append(highlights, fmt.Sprintf("最近活跃任务状态为 %s。", unfinishedTasks[0].Status))
+	}
+	if len(highlights) == 0 {
+		highlights = append(highlights, "当前模块视图已切换为 runtime 聚合结果。")
+	}
+	return highlights
+}
+
+func countGeneratedOutputs(tasks []runengine.TaskRecord) int {
+	total := 0
+	for _, task := range tasks {
+		if len(task.DeliveryResult) > 0 || len(task.Artifacts) > 0 {
+			total++
+		}
+	}
+	return total
+}
+
+func countAuthorizedTasks(taskGroups ...[]runengine.TaskRecord) int {
+	total := 0
+	for _, tasks := range taskGroups {
+		for _, task := range tasks {
+			if len(task.Authorization) > 0 {
+				total++
+			}
+		}
+	}
+	return total
+}
+
+func countExceptionTasks(taskGroups ...[]runengine.TaskRecord) int {
+	total := 0
+	for _, tasks := range taskGroups {
+		for _, task := range tasks {
+			switch task.Status {
+			case "failed", "cancelled", "blocked", "ended_unfinished":
+				total++
+			}
+		}
+	}
+	return total
+}
+
+func collectMirrorReferences(tasks []runengine.TaskRecord) []map[string]any {
+	references := make([]map[string]any, 0)
+	seen := map[string]struct{}{}
+	for _, task := range tasks {
+		for _, reference := range task.MirrorReferences {
+			memoryID := stringValue(reference, "memory_id", "")
+			if memoryID == "" {
+				continue
+			}
+			if _, ok := seen[memoryID]; ok {
+				continue
+			}
+			seen[memoryID] = struct{}{}
+			references = append(references, cloneMap(reference))
+		}
+	}
+	return references
+}
+
+func buildMirrorHistorySummary(tasks []runengine.TaskRecord, memoryReferences []map[string]any) []string {
+	if len(tasks) == 0 {
+		return []string{"当前还没有完成任务，镜像概览会在首个正式交付后生成。"}
+	}
+
+	summaries := []string{
+		fmt.Sprintf("最近已完成 %d 个任务，其中 %d 个产出了正式交付。", len(tasks), countGeneratedOutputs(tasks)),
+	}
+	if len(memoryReferences) > 0 {
+		summaries = append(summaries, fmt.Sprintf("当前累计挂接了 %d 条记忆引用，可供 task detail 与 mirror 回显复用。", len(memoryReferences)))
+	}
+	if latestOutputPath := latestOutputPathFromTasks(tasks); latestOutputPath != "" {
+		summaries = append(summaries, fmt.Sprintf("最近一次落盘结果位于 %s。", latestOutputPath))
+	}
+	return summaries
+}
+
+func buildMirrorProfile(tasks []runengine.TaskRecord) map[string]any {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	documentCount := 0
+	bubbleCount := 0
+	earliestHour := 24
+	latestHour := -1
+	for _, task := range tasks {
+		switch stringValue(task.DeliveryResult, "type", "") {
+		case "workspace_document":
+			documentCount++
+		case "bubble":
+			bubbleCount++
+		}
+		hour := task.StartedAt.Hour()
+		if hour < earliestHour {
+			earliestHour = hour
+		}
+		if hour > latestHour {
+			latestHour = hour
+		}
+	}
+
+	workStyle := "偏好即时结果回显"
+	preferredOutput := "bubble"
+	if documentCount >= bubbleCount {
+		workStyle = "偏好结构化落盘输出"
+		preferredOutput = "workspace_document"
+	}
+	if earliestHour == 24 || latestHour == -1 {
+		earliestHour = 0
+		latestHour = 0
+	}
+
+	return map[string]any{
+		"work_style":       workStyle,
+		"preferred_output": preferredOutput,
+		"active_hours":     fmt.Sprintf("%02d-%02dh", earliestHour, latestHour+1),
+	}
+}
+
+func aggregateRiskLevel(tasks []runengine.TaskRecord, pendingApprovals []map[string]any, fallback string) string {
+	if len(pendingApprovals) > 0 {
+		return "red"
+	}
+	result := fallback
+	for _, task := range tasks {
+		switch task.RiskLevel {
+		case "red":
+			return "red"
+		case "yellow":
+			result = "yellow"
+		case "green":
+			if result == "" {
+				result = "green"
+			}
+		}
+	}
+	if result == "" {
+		return "green"
+	}
+	return result
+}
+
+func aggregateSecurityStatus(tasks []runengine.TaskRecord, pendingTotal int) string {
+	if pendingTotal > 0 {
+		return "pending_confirmation"
+	}
+	for _, task := range tasks {
+		status := stringValue(task.SecuritySummary, "security_status", "")
+		if status != "" && status != "normal" {
+			return status
+		}
+	}
+	return "normal"
+}
+
+func latestRestorePointFromTasks(tasks []runengine.TaskRecord) map[string]any {
+	for _, task := range tasks {
+		restorePoint, ok := task.SecuritySummary["latest_restore_point"].(map[string]any)
+		if ok && len(restorePoint) > 0 {
+			return cloneMap(restorePoint)
+		}
+	}
+	return nil
+}
+
+func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
+	for _, task := range tasks {
+		if outputPath := pathFromDeliveryResult(task.DeliveryResult); outputPath != "" {
+			return outputPath
+		}
+		if outputPath := stringValue(task.StorageWritePlan, "target_path", ""); outputPath != "" {
+			return outputPath
+		}
+	}
+	return ""
+}
+
+func (s *Service) refreshMirrorReferences(taskID string) {
+	task, ok := s.runEngine.GetTask(taskID)
+	if !ok {
+		return
+	}
+	_, _ = s.runEngine.SetMirrorReferences(taskID, buildTaskMirrorReferences(task))
+}
+
+func buildTaskMirrorReferences(task runengine.TaskRecord) []map[string]any {
+	references := make([]map[string]any, 0, len(task.MemoryReadPlans)+len(task.MemoryWritePlans))
+	for index, plan := range task.MemoryReadPlans {
+		query := firstNonEmptyString(
+			stringValue(plan, "query", ""),
+			stringValue(plan, "selection_text", ""),
+		)
+		query = firstNonEmptyString(query, stringValue(plan, "input_text", ""))
+		query = firstNonEmptyString(query, task.Title)
+		references = append(references, map[string]any{
+			"memory_id": fmt.Sprintf("mem_read_%s_%d", task.TaskID, index+1),
+			"reason":    firstNonEmptyString(stringValue(plan, "reason", ""), "任务开始前准备记忆召回"),
+			"summary":   fmt.Sprintf("召回查询：%s", truncateText(query, 48)),
+		})
+	}
+	for index, plan := range task.MemoryWritePlans {
+		summary := firstNonEmptyString(stringValue(plan, "summary", ""), task.Title)
+		references = append(references, map[string]any{
+			"memory_id": fmt.Sprintf("mem_write_%s_%d", task.TaskID, index+1),
+			"reason":    firstNonEmptyString(stringValue(plan, "reason", ""), "任务完成后准备写入记忆摘要"),
+			"summary":   truncateText(summary, 64),
+		})
+	}
+	return references
+}
+
+func deriveImpactScopeFiles(task runengine.TaskRecord, pendingExecution map[string]any, deliveryService *delivery.Service) []string {
+	files := make([]string, 0, 4)
+	files = appendImpactScopePath(files, stringValue(task.StorageWritePlan, "target_path", ""))
+	for _, artifactPlan := range task.ArtifactPlans {
+		files = appendImpactScopePath(files, stringValue(artifactPlan, "path", ""))
+	}
+	files = appendImpactScopePath(files, pathFromDeliveryResult(task.DeliveryResult))
+	files = appendImpactScopePath(files, pathFromPendingExecution(task.TaskID, pendingExecution, deliveryService))
+	files = appendImpactScopePath(files, targetPathFromIntent(task.Intent))
+	return files
+}
+
+func appendImpactScopePath(files []string, candidate string) []string {
+	candidate = strings.TrimSpace(strings.ReplaceAll(candidate, "\\", "/"))
+	if candidate == "" {
+		return files
+	}
+	candidate = path.Clean(candidate)
+	if candidate == "." {
+		return files
+	}
+	for _, existing := range files {
+		if existing == candidate {
+			return files
+		}
+	}
+	return append(files, candidate)
+}
+
+func pathFromPendingExecution(taskID string, pendingExecution map[string]any, deliveryService *delivery.Service) string {
+	if len(pendingExecution) == 0 {
+		return ""
+	}
+	deliveryType := stringValue(pendingExecution, "delivery_type", "")
+	if deliveryType != "workspace_document" {
+		return ""
+	}
+	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
+	previewText := stringValue(pendingExecution, "preview_text", "")
+	deliveryResult := deliveryService.BuildDeliveryResult(taskID, deliveryType, resultTitle, previewText)
+	return pathFromDeliveryResult(deliveryResult)
+}
+
+func pathFromDeliveryResult(deliveryResult map[string]any) string {
+	payload, ok := deliveryResult["payload"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringValue(payload, "path", "")
+}
+
+func targetPathFromIntent(taskIntent map[string]any) string {
+	targetPath := stringValue(mapValue(taskIntent, "arguments"), "target_path", "")
+	switch targetPath {
+	case "", "workspace_document", "bubble", "result_page", "task_detail", "open_file", "reveal_in_folder":
+		return ""
+	default:
+		return targetPath
+	}
+}
+
+func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
+	normalizedRoot := strings.Trim(strings.ReplaceAll(workspaceRoot, "\\", "/"), "/")
+	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
+	if normalizedRoot == "" {
+		normalizedRoot = "workspace"
+	}
+	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
+}
+
+func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
+	if stringValue(taskIntent, "name", "") == "write_file" {
+		return true
+	}
+	arguments := mapValue(taskIntent, "arguments")
+	return boolValue(arguments, "overwrite", false) || boolValue(arguments, "delete", false)
+}
+
 // attachMemoryReadPlans 处理当前模块的相关逻辑。
 
 // attachMemoryReadPlans 在任务启动或确认后挂接 memory 读取计划。
@@ -938,6 +1322,7 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsv
 	}
 
 	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
+	s.refreshMirrorReferences(taskID)
 }
 
 // attachPostDeliveryHandoffs 处理当前模块的相关逻辑。
@@ -956,6 +1341,7 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 		},
 	}
 	_, _ = s.runEngine.SetMemoryPlans(taskID, nil, writePlans)
+	s.refreshMirrorReferences(taskID)
 
 	storageWritePlan := s.delivery.BuildStorageWritePlan(taskID, deliveryResult)
 	artifactPlans := s.delivery.BuildArtifactPersistPlans(taskID, artifacts)
@@ -1003,13 +1389,23 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, riskLevel st
 // buildImpactScope 处理当前模块的相关逻辑。
 
 // buildImpactScope 构造最小影响范围摘要，用于授权结果回传和安全面板展示。
-func buildImpactScope() map[string]any {
+func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution map[string]any) map[string]any {
+	files := deriveImpactScopeFiles(task, pendingExecution, s.delivery)
+	workspacePath := workspacePathFromSettings(s.runEngine.Settings())
+	outOfWorkspace := false
+	for _, filePath := range files {
+		if !isWorkspaceRelativePath(filePath, workspacePath) {
+			outOfWorkspace = true
+			break
+		}
+	}
+
 	return map[string]any{
-		"files":                    []string{path.Join("workspace", "report.md")},
+		"files":                    files,
 		"webpages":                 []string{},
 		"apps":                     []string{},
-		"out_of_workspace":         false,
-		"overwrite_or_delete_risk": false,
+		"out_of_workspace":         outOfWorkspace,
+		"overwrite_or_delete_risk": hasOverwriteOrDeleteRisk(task.Intent),
 	}
 }
 
@@ -1287,4 +1683,70 @@ func truncateText(value string, maxLength int) string {
 }
 
 // dateTimeLayout 定义当前模块的基础变量。
+func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, "generate_output", "开始生成正式结果")
+	if !ok {
+		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+	}
+
+	resultTitle, _, resultBubbleText := resultSpecFromIntent(taskIntent)
+	deliveryType := resolveTaskDeliveryType(processingTask, taskIntent)
+
+	if s.executor == nil {
+		deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(
+			processingTask.TaskID,
+			deliveryType,
+			resultTitle,
+			previewTextForDeliveryType(deliveryType),
+			targetPathFromIntent(taskIntent),
+		)
+		artifacts := s.delivery.BuildArtifact(processingTask.TaskID, resultTitle, deliveryResult)
+		resultBubble := s.delivery.BuildBubbleMessage(processingTask.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
+		updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, deliveryResult, resultBubble, artifacts)
+		if !ok {
+			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+		}
+		s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, deliveryResult, artifacts)
+		return updatedTask, resultBubble, deliveryResult, artifacts, nil
+	}
+
+	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
+		TaskID:       processingTask.TaskID,
+		RunID:        processingTask.RunID,
+		Title:        processingTask.Title,
+		Intent:       taskIntent,
+		Snapshot:     snapshot,
+		DeliveryType: deliveryType,
+		ResultTitle:  resultTitle,
+	})
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, nil, fmt.Errorf("execute task %s: %w", processingTask.TaskID, err)
+	}
+
+	if executionResult.ToolName != "" {
+		if recordedTask, ok := s.runEngine.RecordToolCall(
+			processingTask.TaskID,
+			executionResult.ToolName,
+			executionResult.ToolInput,
+			executionResult.ToolOutput,
+			executionResult.DurationMS,
+		); ok {
+			processingTask = recordedTask
+		}
+	}
+
+	resultBubble := s.delivery.BuildBubbleMessage(
+		processingTask.TaskID,
+		"result",
+		firstNonEmptyString(executionResult.BubbleText, resultBubbleText),
+		processingTask.UpdatedAt.Format(dateTimeLayout),
+	)
+	updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, executionResult.DeliveryResult, resultBubble, executionResult.Artifacts)
+	if !ok {
+		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+	}
+	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionResult.Artifacts)
+	return updatedTask, resultBubble, executionResult.DeliveryResult, executionResult.Artifacts, nil
+}
+
 const dateTimeLayout = time.RFC3339

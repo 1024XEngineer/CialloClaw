@@ -1,4 +1,10 @@
 import type {
+  AgentSecurityPendingListParams,
+  AgentSecurityPendingListResult,
+  AgentSecurityRespondParams,
+  AgentSecurityRespondResult,
+  AgentSecuritySummaryGetParams,
+  AgentSecuritySummaryGetResult,
   AgentMirrorOverviewGetParams,
   AgentMirrorOverviewGetResult,
   AgentTaskConfirmParams,
@@ -35,4 +41,16 @@ export function getTaskDetail(params: AgentTaskDetailGetParams) {
 
 export function getMirrorOverview(params: AgentMirrorOverviewGetParams) {
   return rpcClient.request<AgentMirrorOverviewGetResult>(RPC_METHODS.AGENT_MIRROR_OVERVIEW_GET, params);
+}
+
+export function getSecuritySummary(params: AgentSecuritySummaryGetParams) {
+  return rpcClient.request<AgentSecuritySummaryGetResult>(RPC_METHODS.AGENT_SECURITY_SUMMARY_GET, params);
+}
+
+export function listSecurityPending(params: AgentSecurityPendingListParams) {
+  return rpcClient.request<AgentSecurityPendingListResult>(RPC_METHODS.AGENT_SECURITY_PENDING_LIST, params);
+}
+
+export function respondSecurity(params: AgentSecurityRespondParams) {
+  return rpcClient.request<AgentSecurityRespondResult>(RPC_METHODS.AGENT_SECURITY_RESPOND, params);
 }
