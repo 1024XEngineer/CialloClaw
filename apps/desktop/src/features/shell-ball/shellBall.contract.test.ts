@@ -30,6 +30,7 @@ import { ShellBallApp } from "./ShellBallApp";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallSurface } from "./ShellBallSurface";
 import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
+import { shellBallWindowLabels, shellBallWindowPermissions } from "../../platform/shellBallWindowController";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
@@ -159,6 +160,28 @@ test("shell-ball desktop host declares bubble and input helper windows", () => {
   assert.match(tauriConfig, /"label": "shell-ball-input"/);
   assert.match(tauriConfig, /"url": "shell-ball-bubble\.html"/);
   assert.match(tauriConfig, /"url": "shell-ball-input\.html"/);
+});
+
+test("shell-ball desktop window controller and capabilities stay aligned", () => {
+  assert.deepEqual(shellBallWindowLabels, {
+    ball: "shell-ball",
+    bubble: "shell-ball-bubble",
+    input: "shell-ball-input",
+  });
+
+  assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-position"), true);
+  assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-size"), true);
+  assert.equal(shellBallWindowPermissions.includes("core:window:allow-start-dragging"), true);
+
+  const capabilityConfig = readFileSync(
+    resolve(desktopRoot, "src-tauri/capabilities/default.json"),
+    "utf8",
+  );
+
+  assert.match(capabilityConfig, /"windows": \["shell-ball", "shell-ball-bubble", "shell-ball-input"\]/);
+  assert.match(capabilityConfig, /"core:window:allow-set-position"/);
+  assert.match(capabilityConfig, /"core:window:allow-set-size"/);
+  assert.match(capabilityConfig, /"core:window:allow-start-dragging"/);
 });
 
 test("shell-ball interaction contract auto-advances text submission into processing", () => {
