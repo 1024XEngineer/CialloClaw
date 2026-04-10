@@ -213,16 +213,21 @@ test("shell-ball entries opt into transparent window mode", () => {
   assert.match(globalStyles, /overflow: hidden/);
 });
 
-test("shell-ball bubble focus behavior is applied at runtime instead of static config", () => {
+test("shell-ball helper windows avoid auto-focus behavior", () => {
   const tauriConfig = readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8");
   const metricsSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
     "utf8",
   );
+  const inputBarSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"),
+    "utf8",
+  );
 
   assert.doesNotMatch(tauriConfig, /"focusable": false/);
   assert.match(metricsSource, /setFocusable\(false\)/);
-  assert.match(metricsSource, /setFocus\(\)/);
+  assert.doesNotMatch(metricsSource, /setFocus\(\)/);
+  assert.doesNotMatch(inputBarSource, /focus\(\{ preventScroll: true \}\)/);
 });
 
 test("shell-ball input bar keeps hook order stable across hidden and visible states", () => {
@@ -1083,7 +1088,7 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
 });
 
 test("shell-ball interaction timing constants stay frozen", () => {
-  assert.equal(SHELL_BALL_HOVER_INTENT_MS, 240);
+  assert.equal(SHELL_BALL_HOVER_INTENT_MS, 360);
   assert.equal(SHELL_BALL_LEAVE_GRACE_MS, 180);
   assert.equal(SHELL_BALL_LONG_PRESS_MS, 420);
   assert.equal(SHELL_BALL_LOCK_DELTA_PX, 48);

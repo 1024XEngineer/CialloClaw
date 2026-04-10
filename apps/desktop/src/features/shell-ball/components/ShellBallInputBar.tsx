@@ -39,9 +39,6 @@ export function ShellBallInputBar({
     }
 
     if (isInteractive) {
-      if (inputRef.current !== document.activeElement) {
-        inputRef.current.focus({ preventScroll: true });
-      }
       return;
     }
 

@@ -278,11 +278,6 @@ export function useShellBallWindowMetrics({ role, visible = true }: UseShellBall
 
       if (visible) {
         await showShellBallWindow(role);
-
-        if (role === "input") {
-          await currentWindow.setFocus();
-        }
-
         return;
       }
 
@@ -353,10 +348,6 @@ export function useShellBallWindowMetrics({ role, visible = true }: UseShellBall
     void (async () => {
       await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
       await showShellBallWindow(role);
-
-      if (role === "input") {
-        await getCurrentWindow().setFocus();
-      }
     })();
   }, [role, visible, windowFrame]);
 
