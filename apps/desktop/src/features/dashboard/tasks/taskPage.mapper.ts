@@ -178,3 +178,40 @@ export function describeTaskPreview(task: Task, currentStep: string) {
 
   return `${formatStatusLabel(task.status)} · 当前执行到 ${currentStep}`;
 }
+
+export function isTaskEnded(task: Task) {
+  return task.status === "completed" || task.status === "cancelled" || task.status === "ended_unfinished";
+}
+
+export function getTaskPreviewStatusLabel(status: Task["status"]) {
+  const labels: Record<Task["status"], string> = {
+    confirming_intent: "等待意图",
+    processing: "正在进行",
+    waiting_auth: "等待授权",
+    waiting_input: "等待补充",
+    paused: "已暂停",
+    blocked: "已阻塞",
+    failed: "失败",
+    completed: "已完成",
+    cancelled: "已取消",
+    ended_unfinished: "已结束",
+  };
+
+  return labels[status];
+}
+
+export function describeCurrentStep(task: Task, experience: TaskExperience) {
+  if (isTaskEnded(task)) {
+    return experience.endedSummary ?? "本次任务已经结束。";
+  }
+
+  if (task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused") {
+    return experience.waitingReason ?? experience.phase;
+  }
+
+  if (task.status === "failed" || task.status === "blocked") {
+    return experience.blockedReason ?? experience.phase;
+  }
+
+  return `执行到：${experience.phase}`;
+}
