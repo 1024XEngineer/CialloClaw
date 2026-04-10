@@ -159,7 +159,7 @@ export function getTaskPrimaryActions(task: Task): TaskPrimaryAction[] {
 
   if (task.status === "blocked") {
     return [
-      { action: "restart", label: "重新启动", tooltip: "从当前任务生成一条新的执行路径。" },
+      { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
       { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
       { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
     ];

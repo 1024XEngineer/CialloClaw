@@ -15,22 +15,31 @@ import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import "./taskPage.css";
 
 export function TaskPage() {
+  const INITIAL_UNFINISHED_LIMIT = 12;
+  const INITIAL_FINISHED_LIMIT = 24;
+  const LOAD_MORE_UNFINISHED_STEP = 12;
+  const LOAD_MORE_FINISHED_STEP = 24;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showMoreFinished, setShowMoreFinished] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
+  const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
   const feedbackTimeoutRef = useRef<number | null>(null);
 
   const taskBucketsQuery = useQuery({
-    queryKey: ["dashboard", "tasks", "buckets"],
-    queryFn: loadTaskBuckets,
+    queryKey: ["dashboard", "tasks", "buckets", unfinishedLimit, finishedLimit],
+    queryFn: () => loadTaskBuckets({ finishedLimit, unfinishedLimit }),
+    placeholderData: (previousData) => previousData,
   });
 
-  const unfinishedTasks = sortTasksByLatest(taskBucketsQuery.data?.unfinished ?? []);
-  const finishedTasks = sortTasksByLatest(taskBucketsQuery.data?.finished ?? []);
+  const unfinishedTasks = sortTasksByLatest(taskBucketsQuery.data?.unfinished.items ?? []);
+  const finishedTasks = sortTasksByLatest(taskBucketsQuery.data?.finished.items ?? []);
   const finishedGroups = useMemo(() => getFinishedTaskGroups(finishedTasks, showMoreFinished), [finishedTasks, showMoreFinished]);
+  const unfinishedPage = taskBucketsQuery.data?.unfinished.page;
+  const finishedPage = taskBucketsQuery.data?.finished.page;
   const pageStyle = {
     "--task-accent": "#9FB7D8",
     "--task-accent-glow": "rgba(159, 183, 216, 0.18)",
@@ -129,6 +138,20 @@ export function TaskPage() {
     }
 
     taskControlMutation.mutate({ action, taskId: taskDetailQuery.data.task.task_id });
+  }
+
+  function handleLoadMore(group: "unfinished" | "finished") {
+    const page = group === "unfinished" ? unfinishedPage : finishedPage;
+    if (!page?.has_more) {
+      return;
+    }
+
+    if (group === "unfinished") {
+      setUnfinishedLimit((current) => current + LOAD_MORE_UNFINISHED_STEP);
+      return;
+    }
+
+    setFinishedLimit((current) => current + LOAD_MORE_FINISHED_STEP);
   }
 
   if (taskBucketsQuery.isLoading && !taskBucketsQuery.data) {
@@ -241,6 +264,13 @@ export function TaskPage() {
               />
             ))}
           </div>
+          {unfinishedPage?.has_more ? (
+            <div className="task-preview-card-shell__footer">
+              <button className="task-preview-card-shell__toggle" disabled={taskBucketsQuery.isFetching} onClick={() => handleLoadMore("unfinished")} type="button">
+                {taskBucketsQuery.isFetching ? "加载中..." : "加载更多"}
+              </button>
+            </div>
+          ) : null}
         </article>
 
         <article className="dashboard-card task-preview-card-shell">
@@ -278,6 +308,13 @@ export function TaskPage() {
               </section>
             ))}
           </div>
+          {finishedPage?.has_more ? (
+            <div className="task-preview-card-shell__footer">
+              <button className="task-preview-card-shell__toggle" disabled={taskBucketsQuery.isFetching} onClick={() => handleLoadMore("finished")} type="button">
+                {taskBucketsQuery.isFetching ? "加载中..." : "加载更多历史"}
+              </button>
+            </div>
+          ) : null}
         </article>
 
         <article className="dashboard-card task-preview-card-shell task-preview-card-shell--hint">
@@ -308,7 +345,7 @@ export function TaskPage() {
               initial={{ opacity: 0, scale: 0.98, y: 16 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
-              {taskDetailQuery.isLoading || taskDetailQuery.isFetching ? (
+              {taskDetailQuery.isLoading || (taskDetailQuery.isFetching && !taskDetailQuery.data) ? (
                 <section className="task-detail-shell">
                   <div className="task-detail-shell__header">
                     <div>

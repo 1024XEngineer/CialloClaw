@@ -645,11 +645,29 @@ export function getMockTaskBuckets() {
     task,
     experience: taskExperiences[task.task_id],
   }));
+  const unfinished = items.filter((item) => !item.task.finished_at);
+  const finished = items.filter((item) => item.task.finished_at);
 
   return {
-    finished: items.filter((item) => item.task.finished_at),
+    finished: {
+      items: finished,
+      page: {
+        has_more: false,
+        limit: finished.length,
+        offset: 0,
+        total: finished.length,
+      },
+    },
     source: "mock" as const,
-    unfinished: items.filter((item) => !item.task.finished_at),
+    unfinished: {
+      items: unfinished,
+      page: {
+        has_more: false,
+        limit: unfinished.length,
+        offset: 0,
+        total: unfinished.length,
+      },
+    },
   };
 }
 

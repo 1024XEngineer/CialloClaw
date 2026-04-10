@@ -7,9 +7,12 @@ import type {
 } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
-import type { TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
+import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
 
-const TASK_LIST_PAGE_SIZE = 100;
+const INITIAL_TASK_PAGE_LIMIT: Record<TaskListGroup, number> = {
+  finished: 24,
+  unfinished: 12,
+};
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -63,40 +66,39 @@ function mapTasks(items: Task[]): TaskListItem[] {
   }));
 }
 
-async function listTasksByGroup(group: TaskListGroup) {
-  const items: Task[] = [];
-  let offset = 0;
-  let hasMore = true;
-
-  while (hasMore) {
-    const result = await listTasks({
-      group,
-      limit: TASK_LIST_PAGE_SIZE,
-      offset,
-      request_meta: createRequestMeta(`task_list_${group}_${offset}`),
-      sort_by: group === "finished" ? "finished_at" : "updated_at",
-      sort_order: "desc",
-    });
-
-    items.push(...result.items);
-    hasMore = result.page.has_more;
-    offset += result.page.limit;
-  }
-
-  return items;
+function getTaskListSortBy(group: TaskListGroup) {
+  return group === "finished" ? "finished_at" : "updated_at";
 }
 
-export async function loadTaskBuckets(): Promise<TaskBucketsData> {
+export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number }): Promise<TaskBucketPageData> {
+  const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
+  const offset = options?.offset ?? 0;
+  const result = await listTasks({
+    group,
+    limit,
+    offset,
+    request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
+    sort_by: getTaskListSortBy(group),
+    sort_order: "desc",
+  });
+
+  return {
+    items: mapTasks(result.items),
+    page: result.page,
+  };
+}
+
+export async function loadTaskBuckets(options?: { unfinishedLimit?: number; finishedLimit?: number }): Promise<TaskBucketsData> {
   try {
     const [unfinishedResult, finishedResult] = await Promise.all([
-      listTasksByGroup("unfinished"),
-      listTasksByGroup("finished"),
+      loadTaskBucketPage("unfinished", { limit: options?.unfinishedLimit }),
+      loadTaskBucketPage("finished", { limit: options?.finishedLimit }),
     ]);
 
     return {
-      finished: mapTasks(finishedResult),
+      finished: finishedResult,
       source: "rpc",
-      unfinished: mapTasks(unfinishedResult),
+      unfinished: unfinishedResult,
     };
   } catch (error) {
     if (!allowMockFallback()) {

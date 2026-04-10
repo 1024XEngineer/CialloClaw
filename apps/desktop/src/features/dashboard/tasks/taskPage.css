@@ -320,6 +320,12 @@
   gap: 0.75rem;
 }
 
+.task-preview-card-shell__footer {
+  display: flex;
+  justify-content: center;
+  padding-top: 0.85rem;
+}
+
 .task-preview-card-shell__list::-webkit-scrollbar,
 .task-preview-finished-groups::-webkit-scrollbar,
 .task-preview-card-shell--hint .dashboard-card__list::-webkit-scrollbar,
