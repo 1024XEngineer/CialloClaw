@@ -108,6 +108,7 @@
 - 定义 checkpoint 模块最小输入输出结构
 - 定义最小 service 入口
 - 补 table-driven tests
+- 对齐 tools 输出的 `checkpoint_candidate` 到 `CreateInput`
 
 ### P1
 

@@ -124,6 +124,7 @@
 - 定义 audit 模块最小输入输出结构
 - 定义最小 writer 接口或 service 入口
 - 补 table-driven tests
+- 对齐 tools 输出的 `audit_candidate` 到 `RecordInput`
 
 ### P1
 
