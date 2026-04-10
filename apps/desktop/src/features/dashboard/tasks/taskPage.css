@@ -90,6 +90,15 @@
   background: color-mix(in srgb, var(--task-paper-strong, rgba(255, 247, 238, 0.9)) 82%, var(--task-accent, #9fb7d8) 18%);
 }
 
+.task-preview-page__hero-notice {
+  background: color-mix(in srgb, rgba(255, 243, 221, 0.92) 78%, var(--task-accent, #9fb7d8) 22%);
+  border: 1px solid color-mix(in srgb, rgba(196, 146, 76, 0.28) 64%, var(--task-accent, #9fb7d8) 36%);
+  border-radius: 1rem;
+  color: #7a5b2f;
+  margin: 0 0 0.85rem;
+  padding: 0.72rem 0.9rem;
+}
+
 .task-preview-page__header {
   align-items: center;
   border-radius: 2rem;

@@ -66,6 +66,14 @@ export function TaskPage() {
     queryFn: () => loadTaskDetailData(selectedTaskId!),
   });
 
+  const pageNotice =
+    feedback ??
+    (taskBucketsQuery.isError
+      ? "任务列表加载失败，请确认本地服务可用后重试。"
+      : taskDetailQuery.isError
+        ? "任务详情加载失败，当前没有使用 mock 回退。"
+        : null);
+
   useEffect(() => {
     if (!selectedTaskId) {
       return;
@@ -137,6 +145,23 @@ export function TaskPage() {
     );
   }
 
+  if (taskBucketsQuery.isError && !taskBucketsQuery.data) {
+    return (
+      <main className="dashboard-page task-preview-page" style={pageStyle}>
+        <div className="task-preview-page__frame">
+          <article className="dashboard-card task-preview-card-shell task-preview-card-shell--hint">
+            <p className="dashboard-card__kicker">任务列表</p>
+            <h1>暂时无法加载任务</h1>
+            <p className="task-preview-card-shell__description">当前任务页不会再自动伪造 mock 数据。请确认 RPC 服务可用后重试。</p>
+            <button className="task-preview-card-shell__toggle" onClick={() => void taskBucketsQuery.refetch()} type="button">
+              重新加载
+            </button>
+          </article>
+        </div>
+      </main>
+    );
+  }
+
   if (!taskBucketsQuery.data || (!selectedTaskId && unfinishedTasks.length === 0 && finishedTasks.length === 0)) {
     return (
       <main className="app-shell task-preview-page">
@@ -176,6 +201,7 @@ export function TaskPage() {
 
         <div className="dashboard-card dashboard-card--status task-preview-page__hero-status">
           <p className="dashboard-card__kicker">当前聚焦</p>
+          {pageNotice ? <p className="task-preview-page__hero-notice">{pageNotice}</p> : null}
           {taskDetailQuery.data ? (
             <>
               <p className="task-preview-page__hero-title">{taskDetailQuery.data.task.title}</p>
@@ -265,7 +291,7 @@ export function TaskPage() {
       </section>
 
       <AnimatePresence>
-        {detailOpen && taskDetailQuery.data ? (
+        {detailOpen ? (
           <>
             <motion.button
               animate={{ opacity: 1 }}
@@ -282,7 +308,32 @@ export function TaskPage() {
               initial={{ opacity: 0, scale: 0.98, y: 16 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
-              <TaskDetailPanel detailData={taskDetailQuery.data} feedback={feedback} onAction={handlePrimaryAction} onClose={() => setDetailOpen(false)} />
+              {taskDetailQuery.isLoading || taskDetailQuery.isFetching ? (
+                <section className="task-detail-shell">
+                  <div className="task-detail-shell__header">
+                    <div>
+                      <p className="task-detail-shell__eyebrow">任务详情</p>
+                      <h2 className="task-detail-shell__title">正在加载</h2>
+                      <p className="task-detail-shell__subtitle">任务详情正在从本地服务拉取。</p>
+                    </div>
+                  </div>
+                </section>
+              ) : taskDetailQuery.isError ? (
+                <section className="task-detail-shell">
+                  <div className="task-detail-shell__header">
+                    <div>
+                      <p className="task-detail-shell__eyebrow">任务详情</p>
+                      <h2 className="task-detail-shell__title">加载失败</h2>
+                      <p className="task-detail-shell__subtitle">详情请求没有成功返回，当前环境也没有启用 mock 回退。</p>
+                    </div>
+                    <button className="task-preview-card-shell__toggle" onClick={() => void taskDetailQuery.refetch()} type="button">
+                      重试
+                    </button>
+                  </div>
+                </section>
+              ) : taskDetailQuery.data ? (
+                <TaskDetailPanel detailData={taskDetailQuery.data} feedback={feedback} onAction={handlePrimaryAction} onClose={() => setDetailOpen(false)} />
+              ) : null}
             </motion.div>
           </>
         ) : null}
