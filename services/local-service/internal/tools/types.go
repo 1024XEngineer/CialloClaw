@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io/fs"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 )
 
 // ---------------------------------------------------------------------------
@@ -246,6 +248,16 @@ type CheckpointService interface {
 	CreateRecoveryPoint(taskID, summary string, objects []string) error
 }
 
+// ModelCapability 是 tools 模块所需的统一模型能力接口。
+//
+// 工具层只能通过这层接口访问模型接入，不得直接在工具实现里散落 SDK 调用。
+// 具体实现由 internal/model.Service 提供，并由 bootstrap 注入到执行上下文。
+type ModelCapability interface {
+	GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error)
+	Provider() string
+	ModelID() string
+}
+
 // ToolExecuteContext 携带单次工具执行所需的全部运行时上下文。
 //
 // task_id / run_id / step_id 与协议层的 Task / Run / Step 对齐，
@@ -274,6 +286,7 @@ type ToolExecuteContext struct {
 	Risk       RiskEvaluator
 	Audit      AuditWriter
 	Checkpoint CheckpointService
+	Model      ModelCapability
 }
 
 // ---------------------------------------------------------------------------

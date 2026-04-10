@@ -45,6 +45,7 @@ func New(cfg config.Config) (*App, error) {
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	_ = platform.LocalExecutionBackend{}
+
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		return nil, err
@@ -61,7 +62,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, modelService, auditService, deliveryService, toolRegistry, pluginService)
+	executionService := execution.NewService(fileSystem, modelService, auditService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
@@ -79,9 +80,14 @@ func New(cfg config.Config) (*App, error) {
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithExecutor(executionService).WithTaskInspector(inspectorService)
+	).WithAudit(auditService).WithExecutor(executionService).WithTaskInspector(inspectorService)
 
-	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService, toolRegistry: toolRegistry, toolExecutor: toolExecutor}, nil
+	return &App{
+		server:       rpc.NewServer(cfg.RPC, orchestratorService),
+		storage:      storageService,
+		toolRegistry: toolRegistry,
+		toolExecutor: toolExecutor,
+	}, nil
 }
 
 // Start 启动当前能力。

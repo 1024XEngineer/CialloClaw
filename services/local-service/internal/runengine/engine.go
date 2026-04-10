@@ -47,12 +47,14 @@ type TaskRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
 	Authorization     map[string]any
 	ImpactScope       map[string]any
+	TokenUsage        map[string]any
 	MemoryReadPlans   []map[string]any
 	MemoryWritePlans  []map[string]any
 	StorageWritePlan  map[string]any
@@ -165,18 +167,8 @@ func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 			RemindBeforeDeadline: true,
 			RemindWhenStale:      false,
 		},
-		settings: buildDefaultSettings(),
-		notepadItems: []map[string]any{
-			{
-				"item_id":          "todo_001",
-				"title":            "整理 Q3 复盘要点",
-				"bucket":           "upcoming",
-				"status":           "due_today",
-				"type":             "one_time",
-				"due_at":           "2026-04-07T18:00:00+08:00",
-				"agent_suggestion": "先生成一个 3 点摘要",
-			},
-		},
+		settings:     buildDefaultSettings(),
+		notepadItems: buildDefaultNotepadItems(time.Now()),
 	}
 
 	if err := engine.loadPersistedTaskRuns(context.Background()); err != nil {
@@ -978,13 +970,15 @@ func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any
 
 	filtered := make([]map[string]any, 0, len(e.notepadItems))
 	for _, item := range e.notepadItems {
+		normalized := normalizeNotepadItem(item, e.now())
 		if group != "" {
-			if bucket, ok := item["bucket"].(string); !ok || bucket != group {
+			if bucket, ok := normalized["bucket"].(string); !ok || bucket != group {
 				continue
 			}
 		}
-		filtered = append(filtered, cloneMap(item))
+		filtered = append(filtered, normalized)
 	}
+	sortNotepadItems(filtered)
 
 	total := len(filtered)
 	if offset >= total {
@@ -997,6 +991,62 @@ func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any
 	}
 
 	return filtered[offset:end], total
+}
+
+func (e *Engine) NotepadItem(itemID string) (map[string]any, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	item, _, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, false
+	}
+
+	return normalizeNotepadItem(item, e.now()), true
+}
+
+func (e *Engine) ReplaceNotepadItems(items []map[string]any) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.notepadItems = cloneMapSlice(items)
+}
+
+func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	item, index, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, false
+	}
+
+	updated := cloneMap(item)
+	updated["bucket"] = "closed"
+	updated["status"] = "completed"
+	updated["due_at"] = nil
+	e.notepadItems[index] = updated
+	return normalizeNotepadItem(updated, e.now()), true
+}
+
+func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, tokenUsage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	if len(auditRecords) > 0 {
+		record.AuditRecords = append(record.AuditRecords, cloneMapSlice(auditRecords)...)
+	}
+	if len(tokenUsage) > 0 {
+		record.TokenUsage = cloneMap(tokenUsage)
+	}
+	record.UpdatedAt = e.now()
+	e.persistTaskLocked(record)
+	return record.clone(), true
 }
 
 // buildEvent 处理当前模块的相关逻辑。
@@ -1104,12 +1154,14 @@ func (r TaskRecord) clone() TaskRecord {
 	clone.BubbleMessage = cloneMap(r.BubbleMessage)
 	clone.DeliveryResult = cloneMap(r.DeliveryResult)
 	clone.Artifacts = cloneMapSlice(r.Artifacts)
+	clone.AuditRecords = cloneMapSlice(r.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(r.MirrorReferences)
 	clone.SecuritySummary = cloneMap(r.SecuritySummary)
 	clone.ApprovalRequest = cloneMap(r.ApprovalRequest)
 	clone.PendingExecution = cloneMap(r.PendingExecution)
 	clone.Authorization = cloneMap(r.Authorization)
 	clone.ImpactScope = cloneMap(r.ImpactScope)
+	clone.TokenUsage = cloneMap(r.TokenUsage)
 	clone.MemoryReadPlans = cloneMapSlice(r.MemoryReadPlans)
 	clone.MemoryWritePlans = cloneMapSlice(r.MemoryWritePlans)
 	clone.StorageWritePlan = cloneMap(r.StorageWritePlan)
@@ -1409,6 +1461,160 @@ func mergeMaps(target map[string]any, patch map[string]any) {
 	}
 }
 
+func buildDefaultNotepadItems(now time.Time) []map[string]any {
+	base := now.In(time.FixedZone("CST", 8*60*60))
+	dueToday := time.Date(base.Year(), base.Month(), base.Day(), 18, 0, 0, 0, base.Location())
+	if dueToday.Before(base) {
+		dueToday = base.Add(2 * time.Hour)
+	}
+	later := dueToday.Add(48 * time.Hour)
+	recurring := dueToday.Add(7 * 24 * time.Hour)
+	completedAt := dueToday.Add(-24 * time.Hour)
+
+	return []map[string]any{
+		{
+			"item_id":          "todo_001",
+			"title":            "整理本周会议纪要",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "one_time",
+			"due_at":           dueToday.Format(time.RFC3339),
+			"agent_suggestion": "先生成一个结构化摘要",
+		},
+		{
+			"item_id":          "todo_002",
+			"title":            "补齐下周评审材料",
+			"bucket":           "later",
+			"status":           "normal",
+			"type":             "one_time",
+			"due_at":           later.Format(time.RFC3339),
+			"agent_suggestion": "可以先整理提纲再扩写成文档",
+		},
+		{
+			"item_id":          "todo_003",
+			"title":            "每周项目复盘",
+			"bucket":           "recurring_rule",
+			"status":           "normal",
+			"type":             "recurring",
+			"due_at":           recurring.Format(time.RFC3339),
+			"agent_suggestion": "建议生成固定模板后重复复用",
+		},
+		{
+			"item_id":          "todo_004",
+			"title":            "已归档的日报整理",
+			"bucket":           "closed",
+			"status":           "completed",
+			"type":             "one_time",
+			"due_at":           completedAt.Format(time.RFC3339),
+			"agent_suggestion": nil,
+		},
+	}
+}
+
+func (e *Engine) findNotepadItem(itemID string) (map[string]any, int, bool) {
+	for index, item := range e.notepadItems {
+		if stringValue(item, "item_id", "") == itemID {
+			return item, index, true
+		}
+	}
+	return nil, -1, false
+}
+
+func normalizeNotepadItem(item map[string]any, now time.Time) map[string]any {
+	normalized := cloneMap(item)
+	normalized["status"] = deriveNotepadStatus(item, now)
+	return normalized
+}
+
+func deriveNotepadStatus(item map[string]any, now time.Time) string {
+	status := stringValue(item, "status", "normal")
+	if status == "completed" || status == "cancelled" {
+		return status
+	}
+	if stringValue(item, "bucket", "") == "closed" {
+		return "completed"
+	}
+
+	dueAt, ok := parseNotepadDueTime(item)
+	if !ok {
+		return "normal"
+	}
+	nowAtDueZone := now.In(dueAt.Location())
+	if dueAt.Before(nowAtDueZone) {
+		return "overdue"
+	}
+	if sameDay(dueAt, nowAtDueZone) {
+		return "due_today"
+	}
+	return "normal"
+}
+
+func parseNotepadDueTime(item map[string]any) (time.Time, bool) {
+	dueAt := stringValue(item, "due_at", "")
+	if dueAt == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, dueAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func sameDay(left, right time.Time) bool {
+	return left.Year() == right.Year() && left.YearDay() == right.YearDay()
+}
+
+func sortNotepadItems(items []map[string]any) {
+	sort.Slice(items, func(i, j int) bool {
+		leftBucket := stringValue(items[i], "bucket", "")
+		rightBucket := stringValue(items[j], "bucket", "")
+		if leftBucket != rightBucket {
+			return todoBucketRank(leftBucket) < todoBucketRank(rightBucket)
+		}
+
+		leftDue, leftOK := parseNotepadDueTime(items[i])
+		rightDue, rightOK := parseNotepadDueTime(items[j])
+		switch {
+		case leftOK && rightOK && !leftDue.Equal(rightDue):
+			return leftDue.Before(rightDue)
+		case leftOK != rightOK:
+			return leftOK
+		}
+
+		return stringValue(items[i], "title", "") < stringValue(items[j], "title", "")
+	})
+}
+
+func todoBucketRank(bucket string) int {
+	switch bucket {
+	case "upcoming":
+		return 0
+	case "later":
+		return 1
+	case "recurring_rule":
+		return 2
+	case "closed":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func stringValue(values map[string]any, key, fallback string) string {
+	rawValue, ok := values[key]
+	if !ok {
+		return fallback
+	}
+
+	value, ok := rawValue.(string)
+	if !ok || value == "" {
+		return fallback
+	}
+
+	return value
+}
+
 // buildDefaultSettings 处理当前模块的相关逻辑。
 
 // buildDefaultSettings 构造主链路和工作台使用的默认设置快照。
@@ -1472,12 +1678,14 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
 		ApprovalRequest:   cloneMap(record.ApprovalRequest),
 		PendingExecution:  cloneMap(record.PendingExecution),
 		Authorization:     cloneMap(record.Authorization),
 		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
 		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
 		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
 		StorageWritePlan:  cloneMap(record.StorageWritePlan),
@@ -1509,12 +1717,14 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
 		ApprovalRequest:   cloneMap(record.ApprovalRequest),
 		PendingExecution:  cloneMap(record.PendingExecution),
 		Authorization:     cloneMap(record.Authorization),
 		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
 		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
 		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
 		StorageWritePlan:  cloneMap(record.StorageWritePlan),

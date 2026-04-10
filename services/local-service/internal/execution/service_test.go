@@ -16,6 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 type stubModelClient struct {
@@ -52,9 +53,20 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
 		audit.NewService(),
 		delivery.NewService(),
-		tools.NewRegistry(),
+		registerBuiltinTools(t),
+		nil,
 		plugin.NewService(),
 	), workspaceRoot
+}
+
+func registerBuiltinTools(t *testing.T) *tools.Registry {
+	t.Helper()
+
+	registry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(registry); err != nil {
+		t.Fatalf("RegisterBuiltinTools returned error: %v", err)
+	}
+	return registry
 }
 
 func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
@@ -87,6 +99,12 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	}
 	if result.ToolOutput["audit_record"] == nil {
 		t.Fatalf("expected tool output to include audit record, got %+v", result.ToolOutput)
+	}
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("expected generate_text + write_file tool chain, got %d calls", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].ToolName != "generate_text" || result.ToolCalls[1].ToolName != "write_file" {
+		t.Fatalf("unexpected tool chain order: %+v", result.ToolCalls)
 	}
 	if len(result.Artifacts) != 1 {
 		t.Fatalf("expected one artifact, got %d", len(result.Artifacts))
@@ -159,7 +177,8 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{err: errors.New("provider unavailable")}),
 		audit.NewService(),
 		delivery.NewService(),
-		tools.NewRegistry(),
+		registerBuiltinTools(t),
+		nil,
 		plugin.NewService(),
 	)
 
@@ -183,5 +202,11 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	}
 	if !strings.Contains(result.BubbleText, "需要解释的文本") {
 		t.Fatalf("expected fallback bubble to include normalized input, got %s", result.BubbleText)
+	}
+}
+
+func TestWorkspaceFSPathPreservesAbsoluteUnixPath(t *testing.T) {
+	if got := workspaceFSPath("/tmp/out.md"); got != "/tmp/out.md" {
+		t.Fatalf("expected absolute path to stay absolute, got %q", got)
 	}
 }

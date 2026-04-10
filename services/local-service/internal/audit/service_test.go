@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 type stubWriter struct {
@@ -51,7 +53,7 @@ func TestServiceBuildRecord(t *testing.T) {
 				t.Fatalf("expected generated audit id and created_at, got %+v", record)
 			}
 			if _, err := time.Parse(time.RFC3339, record.CreatedAt); err != nil {
-				t.Fatalf("expected RFC3339 created_at, got %q", record.CreatedAt)
+				t.Fatalf("expected RFC3339-compatible created_at, got %q", record.CreatedAt)
 			}
 		})
 	}
@@ -126,5 +128,87 @@ func TestBuildRecordInputFromCandidate(t *testing.T) {
 				t.Fatalf("unexpected converted input: %+v", input)
 			}
 		})
+	}
+}
+
+func TestServiceBuildToolAuditExtractsTokenUsage(t *testing.T) {
+	service := NewService()
+	service.now = func() time.Time {
+		return time.Date(2026, 4, 10, 10, 0, 0, 123, time.UTC)
+	}
+
+	record, tokenUsage, ok := service.BuildToolAudit("task_001", "run_001", tools.ToolCallRecord{
+		ToolCallID: "tool_001",
+		ToolName:   "generate_text",
+		DurationMS: 42,
+		Output: map[string]any{
+			"provider":   "openai_responses",
+			"model_id":   "gpt-5.4",
+			"request_id": "req_test",
+			"latency_ms": int64(42),
+			"token_usage": map[string]any{
+				"input_tokens":  12,
+				"output_tokens": 24,
+				"total_tokens":  36,
+			},
+			"audit_candidate": map[string]any{
+				"type":    "model",
+				"action":  "generate_text",
+				"summary": "generate text output",
+				"target":  "summarize",
+				"result":  "success",
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("expected audit candidate to build a tool audit record")
+	}
+	if record["type"] != "model" {
+		t.Fatalf("expected model audit type, got %v", record["type"])
+	}
+	if record["action"] != "generate_text" {
+		t.Fatalf("expected generate_text action, got %v", record["action"])
+	}
+	if tokenUsage["total_tokens"] != 36 {
+		t.Fatalf("expected total_tokens to be preserved, got %+v", tokenUsage)
+	}
+	if tokenUsage["request_id"] != "req_test" {
+		t.Fatalf("expected request_id in token usage, got %+v", tokenUsage)
+	}
+	if tokenUsage["latency_ms"] != int64(42) {
+		t.Fatalf("expected latency_ms in token usage, got %+v", tokenUsage)
+	}
+}
+
+func TestServiceBuildToolAuditFallsBackWhenAuditCandidateMissing(t *testing.T) {
+	service := NewService()
+
+	record, tokenUsage, ok := service.BuildToolAudit("task_001", "run_001", tools.ToolCallRecord{
+		ToolCallID: "tool_002",
+		ToolName:   "generate_text",
+		DurationMS: 40,
+		Output: map[string]any{
+			"provider":   "openai_responses",
+			"model_id":   "gpt-5.4",
+			"request_id": "req_fallback",
+			"latency_ms": int64(40),
+			"token_usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 20,
+				"total_tokens":  30,
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("expected fallback audit generation when token usage exists")
+	}
+	if record["type"] != "model" {
+		t.Fatalf("expected fallback model audit type, got %+v", record)
+	}
+	if record["action"] != "generate_text" {
+		t.Fatalf("expected fallback action to use tool name, got %+v", record)
+	}
+	if tokenUsage["total_tokens"] != 30 {
+		t.Fatalf("expected fallback token usage to remain available, got %+v", tokenUsage)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,7 +25,9 @@ type Service struct {
 	audit      *audit.Service
 	delivery   *delivery.Service
 	tools      *tools.Registry
+	executor   *tools.ToolExecutor
 	plugin     *plugin.Service
+	workspace  string
 }
 
 // Request 描述一次任务执行所需的最小输入。
@@ -46,10 +49,19 @@ type Result struct {
 	BubbleText      string
 	ModelInvocation map[string]any
 	AuditRecord     map[string]any
+	ToolCalls       []tools.ToolCallRecord
 	ToolName        string
 	ToolInput       map[string]any
 	ToolOutput      map[string]any
 	DurationMS      int64
+}
+
+type generationTrace struct {
+	OutputText       string
+	ToolCalls        []tools.ToolCallRecord
+	ModelInvocation  map[string]any
+	AuditRecord      map[string]any
+	GenerationOutput map[string]any
 }
 
 // NewService 创建执行服务。
@@ -59,15 +71,22 @@ func NewService(
 	auditService *audit.Service,
 	deliveryService *delivery.Service,
 	toolRegistry *tools.Registry,
+	toolExecutor *tools.ToolExecutor,
 	pluginService *plugin.Service,
 ) *Service {
+	if toolExecutor == nil {
+		toolExecutor = tools.NewToolExecutor(toolRegistry)
+	}
+
 	return &Service{
 		fileSystem: fileSystem,
 		model:      modelService,
 		audit:      auditService,
 		delivery:   deliveryService,
 		tools:      toolRegistry,
+		executor:   toolExecutor,
 		plugin:     pluginService,
+		workspace:  resolveWorkspaceRoot(fileSystem),
 	}
 }
 
@@ -75,73 +94,79 @@ func NewService(
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
 	startedAt := time.Now()
 	inputText := s.buildExecutionInput(request.Snapshot)
-	outputText, invocationRecord, err := s.generateOutput(ctx, request, inputText)
-	if err != nil {
-		return Result{}, err
-	}
-	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
-	targetPath := targetPathFromIntent(request.Intent)
-	previewText := previewTextForOutput(outputText, deliveryType)
-	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, previewText, targetPath)
-	auditRecord, err := s.buildModelAuditRecord(ctx, request, invocationRecord)
+	trace, err := s.generateOutput(ctx, request, inputText)
 	if err != nil {
 		return Result{}, err
 	}
 
+	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
+	targetPath := targetPathFromIntent(request.Intent)
+	previewText := previewTextForOutput(trace.OutputText, deliveryType)
+	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, previewText, targetPath)
+
 	result := Result{
-		Content:         outputText,
+		Content:         trace.OutputText,
 		DeliveryResult:  deliveryResult,
 		DurationMS:      time.Since(startedAt).Milliseconds(),
-		ModelInvocation: invocationRecordMap(invocationRecord),
-		AuditRecord:     auditRecord,
-		ToolInput: map[string]any{
-			"intent_name":     stringValue(request.Intent, "name", "summarize"),
-			"delivery_type":   deliveryType,
-			"input_preview":   truncateText(inputText, 96),
-			"available_tools": s.availableToolNames(),
-			"workers":         s.availableWorkers(),
-		},
+		ModelInvocation: cloneMap(trace.ModelInvocation),
+		AuditRecord:     cloneMap(trace.AuditRecord),
+		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
 	}
 
 	if deliveryType == "workspace_document" {
-		documentContent := workspaceDocumentContent(request.ResultTitle, outputText)
+		documentContent := workspaceDocumentContent(request.ResultTitle, trace.OutputText)
 		targetPath = deliveryPayloadPath(deliveryResult)
 		if targetPath == "" {
 			return Result{}, fmt.Errorf("workspace delivery requires payload path")
 		}
-		writePath := workspaceFSPath(targetPath)
-		if writePath == "" {
+		if workspaceFSPath(targetPath) == "" {
 			return Result{}, fmt.Errorf("workspace delivery requires writable workspace path")
 		}
-		if s.fileSystem == nil {
-			return Result{}, fmt.Errorf("workspace delivery requires file system adapter")
-		}
-		if err := s.fileSystem.WriteFile(writePath, []byte(documentContent)); err != nil {
+
+		writeResult, err := s.executeTool(ctx, request, "write_file", map[string]any{
+			"path":    targetPath,
+			"content": documentContent,
+		})
+		if err != nil {
 			return Result{}, fmt.Errorf("write workspace output: %w", err)
 		}
 
+		result.ToolCalls = append(result.ToolCalls, writeResult.ToolCall)
 		result.Content = documentContent
 		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
 		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", targetPath)
-		result.ToolName = "write_file"
-		result.ToolOutput = map[string]any{
+		assignLatestToolTrace(&result, writeResult.ToolCall)
+		enrichToolTrace(&result, map[string]any{
 			"path":             targetPath,
 			"artifact_count":   len(result.Artifacts),
 			"content_bytes":    len(documentContent),
-			"model_invocation": result.ModelInvocation,
-			"audit_record":     result.AuditRecord,
-		}
+			"model_invocation": cloneMap(result.ModelInvocation),
+			"audit_record":     cloneMap(result.AuditRecord),
+		})
+		enrichLatestToolCall(&result, map[string]any{
+			"path":             targetPath,
+			"artifact_count":   len(result.Artifacts),
+			"content_bytes":    len(documentContent),
+			"model_invocation": cloneMap(result.ModelInvocation),
+			"audit_record":     cloneMap(result.AuditRecord),
+		})
 		return result, nil
 	}
 
-	result.BubbleText = truncateBubbleText(outputText)
-	result.ToolName = "generate_text"
-	result.ToolOutput = map[string]any{
+	result.BubbleText = truncateBubbleText(trace.OutputText)
+	assignLatestToolTrace(&result, latestToolCall(result.ToolCalls))
+	enrichToolTrace(&result, map[string]any{
 		"preview_text":     previewText,
-		"content_size":     len(outputText),
-		"model_invocation": result.ModelInvocation,
-		"audit_record":     result.AuditRecord,
-	}
+		"content_size":     len(trace.OutputText),
+		"model_invocation": cloneMap(result.ModelInvocation),
+		"audit_record":     cloneMap(result.AuditRecord),
+	})
+	enrichLatestToolCall(&result, map[string]any{
+		"preview_text":     previewText,
+		"content_size":     len(trace.OutputText),
+		"model_invocation": cloneMap(result.ModelInvocation),
+		"audit_record":     cloneMap(result.AuditRecord),
+	})
 	return result, nil
 }
 
@@ -197,25 +222,35 @@ func (s *Service) fileSection(filePath string) string {
 	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(string(content), 1600))
 }
 
-func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (string, *model.InvocationRecord, error) {
+func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	prompt := buildPrompt(request, inputText)
-	if s.model != nil {
-		response, err := s.model.GenerateText(ctx, model.GenerateTextRequest{
-			TaskID: request.TaskID,
-			RunID:  request.RunID,
-			Input:  prompt,
-		})
-		if err == nil {
-			if outputText := strings.TrimSpace(response.OutputText); outputText != "" {
-				record := response.InvocationRecord()
-				return outputText, &record, nil
-			}
-			return fallbackOutput(request, inputText), nil, nil
-		}
-		return fallbackOutput(request, inputText), nil, nil
+	toolResult, err := s.executeTool(ctx, request, "generate_text", map[string]any{
+		"prompt":        prompt,
+		"fallback_text": fallbackOutput(request, inputText),
+		"intent_name":   stringValue(request.Intent, "name", "summarize"),
+	})
+	if err != nil {
+		return generationTrace{}, fmt.Errorf("generate text: %w", err)
 	}
 
-	return fallbackOutput(request, inputText), nil, nil
+	outputText, ok := toolResult.RawOutput["content"].(string)
+	if !ok || strings.TrimSpace(outputText) == "" {
+		return generationTrace{}, fmt.Errorf("%w: generate_text content is missing", tools.ErrToolOutputInvalid)
+	}
+
+	invocation := invocationRecordFromToolResult(request, toolResult)
+	auditRecord, err := s.buildModelAuditRecord(ctx, request, invocation)
+	if err != nil {
+		return generationTrace{}, err
+	}
+
+	return generationTrace{
+		OutputText:       strings.TrimSpace(outputText),
+		ToolCalls:        []tools.ToolCallRecord{toolResult.ToolCall},
+		ModelInvocation:  invocationRecordMap(invocation),
+		AuditRecord:      auditRecord,
+		GenerationOutput: cloneMap(toolResult.RawOutput),
+	}, nil
 }
 
 func (s *Service) buildModelAuditRecord(ctx context.Context, request Request, invocation *model.InvocationRecord) (map[string]any, error) {
@@ -223,18 +258,53 @@ func (s *Service) buildModelAuditRecord(ctx context.Context, request Request, in
 		return nil, nil
 	}
 
+	target := strings.TrimSpace(invocation.Provider + ":" + invocation.ModelID)
+	if target == ":" {
+		target = stringValue(request.Intent, "name", "main_flow")
+	}
+
 	record, err := s.audit.Write(ctx, audit.RecordInput{
 		TaskID:  request.TaskID,
 		Type:    "model",
 		Action:  "generate_text",
 		Summary: "model invocation completed",
-		Target:  invocation.Provider + ":" + invocation.ModelID,
+		Target:  target,
 		Result:  "success",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("write model audit record: %w", err)
 	}
 	return record.Map(), nil
+}
+
+func invocationRecordFromToolResult(request Request, toolResult *tools.ToolExecutionResult) *model.InvocationRecord {
+	if toolResult == nil || len(toolResult.RawOutput) == 0 {
+		return nil
+	}
+
+	if boolValue(toolResult.RawOutput, "fallback") {
+		return nil
+	}
+
+	provider := stringValue(toolResult.RawOutput, "provider", "")
+	modelID := stringValue(toolResult.RawOutput, "model_id", "")
+	if provider == "" || provider == "local_fallback" || modelID == "" {
+		return nil
+	}
+
+	return &model.InvocationRecord{
+		TaskID:    request.TaskID,
+		RunID:     request.RunID,
+		RequestID: stringValue(toolResult.RawOutput, "request_id", ""),
+		Provider:  provider,
+		ModelID:   modelID,
+		Usage: model.TokenUsage{
+			InputTokens:  intValue(mapValue(toolResult.RawOutput, "token_usage"), "input_tokens"),
+			OutputTokens: intValue(mapValue(toolResult.RawOutput, "token_usage"), "output_tokens"),
+			TotalTokens:  intValue(mapValue(toolResult.RawOutput, "token_usage"), "total_tokens"),
+		},
+		LatencyMS: int64Value(toolResult.RawOutput, "latency_ms"),
+	}
 }
 
 func invocationRecordMap(record *model.InvocationRecord) map[string]any {
@@ -351,8 +421,10 @@ func workspaceFSPath(filePath string) string {
 	if normalized == "" {
 		return ""
 	}
+	if filepath.IsAbs(normalized) || isWindowsAbsolutePath(normalized) {
+		return path.Clean(normalized)
+	}
 	normalized = strings.TrimPrefix(normalized, "./")
-	normalized = strings.TrimPrefix(normalized, "/")
 	if normalized == "workspace" {
 		return "."
 	}
@@ -367,6 +439,10 @@ func workspaceFSPath(filePath string) string {
 		return ""
 	}
 	return cleaned
+}
+
+func isWindowsAbsolutePath(pathValue string) bool {
+	return len(pathValue) >= 3 && pathValue[1] == ':' && (pathValue[2] == '/' || pathValue[2] == '\\')
 }
 
 func extractHighlights(inputText string, limit int) []string {
@@ -436,6 +512,57 @@ func stringValue(values map[string]any, key, fallback string) string {
 	return value
 }
 
+func boolValue(values map[string]any, key string) bool {
+	rawValue, ok := values[key]
+	if !ok {
+		return false
+	}
+	value, ok := rawValue.(bool)
+	return ok && value
+}
+
+func intValue(values map[string]any, key string) int {
+	rawValue, ok := values[key]
+	if !ok {
+		return 0
+	}
+	switch value := rawValue.(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float32:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func int64Value(values map[string]any, key string) int64 {
+	rawValue, ok := values[key]
+	if !ok {
+		return 0
+	}
+	switch value := rawValue.(type) {
+	case int:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case int64:
+		return value
+	case float32:
+		return int64(value)
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
+}
+
 func firstNonEmpty(primary, fallback string) string {
 	if strings.TrimSpace(primary) != "" {
 		return primary
@@ -455,4 +582,104 @@ func (s *Service) availableWorkers() []string {
 		return nil
 	}
 	return s.plugin.Workers()
+}
+
+func (s *Service) executeTool(ctx context.Context, request Request, toolName string, input map[string]any) (*tools.ToolExecutionResult, error) {
+	if s.executor == nil {
+		return nil, fmt.Errorf("tool executor is required")
+	}
+
+	return s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
+		TaskID:        request.TaskID,
+		RunID:         request.RunID,
+		WorkspacePath: s.workspace,
+		Platform:      s.fileSystem,
+		Model:         s.model,
+	}, toolName, input)
+}
+
+func resolveWorkspaceRoot(fileSystem platform.FileSystemAdapter) string {
+	if fileSystem == nil {
+		return ""
+	}
+
+	workspaceRoot, err := fileSystem.EnsureWithinWorkspace(".")
+	if err != nil {
+		return ""
+	}
+	return workspaceRoot
+}
+
+func latestToolCall(toolCalls []tools.ToolCallRecord) tools.ToolCallRecord {
+	if len(toolCalls) == 0 {
+		return tools.ToolCallRecord{}
+	}
+	return toolCalls[len(toolCalls)-1]
+}
+
+func assignLatestToolTrace(result *Result, toolCall tools.ToolCallRecord) {
+	if result == nil || toolCall.ToolName == "" {
+		return
+	}
+	result.ToolName = toolCall.ToolName
+	result.ToolInput = cloneMap(toolCall.Input)
+	result.ToolOutput = cloneMap(toolCall.Output)
+}
+
+func enrichToolTrace(result *Result, extras map[string]any) {
+	if result == nil || len(extras) == 0 {
+		return
+	}
+	if result.ToolOutput == nil {
+		result.ToolOutput = map[string]any{}
+	}
+	for key, value := range extras {
+		result.ToolOutput[key] = value
+	}
+}
+
+func enrichLatestToolCall(result *Result, extras map[string]any) {
+	if result == nil || len(result.ToolCalls) == 0 || len(extras) == 0 {
+		return
+	}
+
+	lastIndex := len(result.ToolCalls) - 1
+	if result.ToolCalls[lastIndex].Output == nil {
+		result.ToolCalls[lastIndex].Output = map[string]any{}
+	}
+	for key, value := range extras {
+		result.ToolCalls[lastIndex].Output[key] = value
+	}
+}
+
+func cloneMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		switch typed := value.(type) {
+		case map[string]any:
+			cloned[key] = cloneMap(typed)
+		case []map[string]any:
+			cloned[key] = cloneMapSlice(typed)
+		case []string:
+			cloned[key] = append([]string(nil), typed...)
+		default:
+			cloned[key] = value
+		}
+	}
+	return cloned
+}
+
+func cloneMapSlice(values []map[string]any) []map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		cloned = append(cloned, cloneMap(value))
+	}
+	return cloned
 }

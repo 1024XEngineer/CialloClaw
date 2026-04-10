@@ -95,9 +95,52 @@ func summarizeMap(input map[string]any) map[string]any {
 	}
 	summary := make(map[string]any, len(input))
 	for key, value := range input {
+		if structured, ok := preserveStructuredSummary(key, value); ok {
+			summary[key] = structured
+			continue
+		}
 		summary[key] = summarizeValue(value)
 	}
 	return summary
+}
+
+func preserveStructuredSummary(key string, value any) (any, bool) {
+	switch key {
+	case "token_usage", "audit_candidate":
+		typed, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		return cloneSummaryMap(typed), true
+	default:
+		return nil, false
+	}
+}
+
+func cloneSummaryMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+
+	clone := make(map[string]any, len(input))
+	for key, value := range input {
+		switch typed := value.(type) {
+		case map[string]any:
+			clone[key] = cloneSummaryMap(typed)
+		case []string:
+			clone[key] = append([]string(nil), typed...)
+		case []map[string]any:
+			items := make([]map[string]any, 0, len(typed))
+			for _, item := range typed {
+				items = append(items, cloneSummaryMap(item))
+			}
+			clone[key] = items
+		default:
+			clone[key] = summarizeValue(value)
+		}
+	}
+
+	return clone
 }
 
 func summarizeValue(value any) any {
