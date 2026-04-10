@@ -23,6 +23,7 @@ import {
 } from "./shellBall.interaction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { ShellBallApp } from "./ShellBallApp";
+import { ShellBallSurface } from "./ShellBallSurface";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
@@ -601,6 +602,44 @@ test("shell-ball app drops page-shell copy while preserving the floating shell s
   assert.match(markup, /shell-ball-bubble-zone/);
   assert.match(markup, /shell-ball-mascot/);
   assert.match(markup, /Shell-ball demo switcher/);
+});
+
+test("shell-ball surface renders the floating structure without the demo switcher", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallSurface, {
+      visualState: "hover_input",
+      voicePreview: null,
+      inputBarMode: "interactive",
+      inputValue: "draft",
+      motionConfig: getShellBallMotionConfig("hover_input"),
+      onPrimaryClick: () => {},
+      onRegionEnter: () => {},
+      onRegionLeave: () => {},
+      onInputValueChange: () => {},
+      onAttachFile: () => {},
+      onSubmitText: () => {},
+      onPressStart: () => {},
+      onPressMove: () => {},
+      onPressEnd: () => {},
+      onInputFocusChange: () => {},
+    }),
+  );
+
+  assert.match(markup, /shell-ball-surface/);
+  assert.match(markup, /shell-ball-bubble-zone/);
+  assert.match(markup, /shell-ball-mascot/);
+  assert.match(markup, /shell-ball-input-bar/);
+  assert.doesNotMatch(markup, /Shell-ball demo switcher/);
+  assert.doesNotMatch(markup, /shell-ball-surface__switcher-shell/);
+});
+
+test("shell-ball app composes the reusable surface with the demo switcher", () => {
+  const markup = renderToStaticMarkup(createElement(ShellBallApp));
+
+  assert.match(markup, /Shell-ball floating surface/);
+  assert.match(markup, /shell-ball-surface__body/);
+  assert.match(markup, /Shell-ball demo switcher/);
+  assert.match(markup, /shell-ball-surface__switcher-shell/);
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {
