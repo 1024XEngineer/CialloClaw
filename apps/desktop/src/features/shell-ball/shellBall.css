@@ -39,7 +39,7 @@
 
 .shell-ball-surface::before {
   content: "";
-  inset: 0;
+  inset: 14% 18% 12% 18%;
   pointer-events: none;
   position: absolute;
 }
@@ -86,7 +86,7 @@
   display: grid;
   gap: clamp(0.85rem, 1.8vw, 1.35rem);
   justify-items: center;
-  width: 100%;
+  width: fit-content;
 }
 
 .shell-ball-bubble-zone {
@@ -1194,8 +1194,8 @@
   }
 
   .shell-ball-surface__body {
-    min-height: 20.5rem;
-    width: 100%;
+    min-height: 0;
+    width: fit-content;
   }
 
   .shell-ball-mascot {

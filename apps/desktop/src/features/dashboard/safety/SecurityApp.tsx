@@ -20,12 +20,15 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type {
+  AgentSecurityRespondResult,
   ApprovalDecision,
   ApprovalPendingNotification,
   ApprovalRequest,
   RiskLevel,
   SecurityStatus,
+  Task,
 } from "@cialloclaw/protocol";
+import { JsonRpcClientError } from "@/rpc/client";
 import { subscribeApprovalPending } from "@/rpc/subscriptions";
 import {
   getInitialSecurityModuleData,
@@ -33,9 +36,10 @@ import {
   loadSecurityModuleRpcData,
   respondToApproval,
   type SecurityModuleData,
-  type SecurityModuleSource,
+  type SecurityRespondOutcome,
 } from "./securityService";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import "./SecurityPage.css";
 
 type SecurityCardKey = "status" | "restore" | "budget" | "governance" | `approval:${string}`;
 type CardPosition = { x: number; y: number };
@@ -64,6 +68,8 @@ type SecurityCardPreview = {
   emphasis?: "number";
   icon: LucideIcon;
 };
+
+type ImpactScopeDetails = NonNullable<AgentSecurityRespondResult["impact_scope"]>;
 
 const STATIC_CARD_KEYS: SecurityCardKey[] = ["status", "restore", "budget", "governance"];
 const DRAG_THRESHOLD = 8;
@@ -96,22 +102,66 @@ function getStatusColor(status: SecurityStatus) {
   }
 }
 
-function getSourceCopy(source: SecurityModuleSource) {
-  if (source === "rpc") {
+function getSourceCopy(moduleData: SecurityModuleData) {
+  const copySegments: string[] = [];
+
+  if (moduleData.source === "rpc") {
+    copySegments.push("来自后端返回，不是本地 mock。");
+
+    if (moduleData.rpcContext.serverTime) {
+      copySegments.push(`服务端时间 ${formatDateTime(moduleData.rpcContext.serverTime)}`);
+    }
+
+    if (moduleData.rpcContext.warnings.length) {
+      copySegments.push(`warnings：${moduleData.rpcContext.warnings.join("；")}`);
+    }
+
     return {
       badge: "LIVE",
       title: "当前显示的是 JSON-RPC 实时数据",
-      description: "来自后端返回，不是本地 mock。",
+      description: copySegments.join(" · "),
       className: "security-page__source-status--rpc",
     };
   }
 
+  copySegments.push("仅用于前端联调，不是真实后端返回。");
+
   return {
     badge: "MOCK",
     title: "当前显示的是本地 mock 数据",
-    description: "仅用于前端联调，不是真实后端返回。",
+    description: copySegments.join(" · "),
     className: "security-page__source-status--mock",
   };
+}
+
+function formatRpcError(error: unknown) {
+  if (error instanceof JsonRpcClientError) {
+    const details = [error.message];
+
+    if (error.code !== null) {
+      details.push(`code ${error.code}`);
+    }
+
+    if (error.traceId) {
+      details.push(`trace ${error.traceId}`);
+    }
+
+    return details.join(" · ");
+  }
+
+  return error instanceof Error ? error.message : "安全审批提交失败";
+}
+
+function formatImpactScopeSummary(impactScope: AgentSecurityRespondResult["impact_scope"] | undefined) {
+  if (!impactScope) {
+    return "影响范围待确认";
+  }
+
+  return `${impactScope.files.length} 文件 / ${impactScope.webpages.length} 网页 / ${impactScope.apps.length} 应用`;
+}
+
+function formatBooleanLabel(value: boolean) {
+  return value ? "是" : "否";
 }
 
 function formatCurrency(value: number) {
@@ -131,18 +181,73 @@ function formatDateTime(value: string) {
   });
 }
 
+function formatOptionalDateTime(value: string | null | undefined) {
+  return value ? formatDateTime(value) : "—";
+}
+
+function formatTaskIntent(intent: Task["intent"]) {
+  if (!intent) {
+    return "当前没有挂载 intent。";
+  }
+
+  const argumentKeys = Object.keys(intent.arguments);
+
+  return [
+    `name: ${intent.name}`,
+    argumentKeys.length ? `argument_keys: ${argumentKeys.join(", ")}` : "argument_keys: none",
+    `argument_count: ${argumentKeys.length}`,
+  ].join("\n");
+}
+
+function getPendingSecurityStatus(pendingCount: number, fallbackStatus: SecurityStatus) {
+  if (pendingCount > 0) {
+    return "pending_confirmation";
+  }
+
+  return fallbackStatus === "pending_confirmation" ? "normal" : fallbackStatus;
+}
+
+function getVisiblePendingItems(items: ApprovalRequest[], limit: number) {
+  return items.slice(0, Math.max(0, limit));
+}
+
+function renderDetailEntryList(items: string[], emptyCopy: string, keyPrefix: string) {
+  if (!items.length) {
+    return <p className="security-page__detail-copy">{emptyCopy}</p>;
+  }
+
+  return (
+    <ul className="security-page__detail-group-list">
+      {items.map((item, index) => (
+        <li key={`${keyPrefix}-${index}-${item}`} className="security-page__detail-group-item">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function mergePendingApproval(current: SecurityModuleData, payload: ApprovalPendingNotification): SecurityModuleData {
   const exists = current.pending.some((item) => item.approval_id === payload.approval_request.approval_id);
-  const pending = exists ? current.pending : [payload.approval_request, ...current.pending];
+  const nextPendingItems = exists
+    ? current.pending.map((item) => (item.approval_id === payload.approval_request.approval_id ? payload.approval_request : item))
+    : [payload.approval_request, ...current.pending];
+  const nextTotal = exists ? current.pendingPage.total : current.pendingPage.total + 1;
+  const pending = getVisiblePendingItems(nextPendingItems, current.pendingPage.limit);
 
   return {
     ...current,
     summary: {
       ...current.summary,
-      security_status: "pending_confirmation",
+      security_status: getPendingSecurityStatus(exists ? current.summary.pending_authorizations : current.summary.pending_authorizations + 1, current.summary.security_status),
       pending_authorizations: exists ? current.summary.pending_authorizations : current.summary.pending_authorizations + 1,
     },
     pending,
+    pendingPage: {
+      ...current.pendingPage,
+      total: nextTotal,
+      has_more: current.pendingPage.offset + pending.length < nextTotal,
+    },
   };
 }
 
@@ -307,6 +412,7 @@ function getCardPreview(
   approvalLookup: Map<string, ApprovalRequest>,
   sourceCopy: ReturnType<typeof getSourceCopy>,
   feedback: string | null,
+  lastResolvedApproval: SecurityRespondOutcome | null,
 ): SecurityCardPreview {
   if (key === "status") {
     return {
@@ -316,7 +422,9 @@ function getCardPreview(
       badgeColor: getStatusColor(moduleData.summary.security_status),
       headline: `${moduleData.summary.pending_authorizations} 条待确认`,
       supporting: "approval.pending 的实时推送和序列保护仍保持启用。",
-      meta: moduleData.source === "rpc" ? "LIVE refresh queue" : "等待 RPC 首次刷新",
+      meta: moduleData.source === "rpc"
+        ? `已加载 ${moduleData.pending.length} / ${moduleData.pendingPage.total} 条 pending`
+        : "等待 RPC 首次刷新",
       emphasis: "number",
       icon: ShieldCheck,
     };
@@ -359,8 +467,12 @@ function getCardPreview(
       badgeLabel: sourceCopy.badge,
       badgeColor: moduleData.source === "rpc" ? "green" : "amber",
       headline: moduleData.source === "rpc" ? "实时治理链路在线" : "前端联调视图运行中",
-      supporting: "工作区边界、恢复点和预算治理说明仍聚合在本模块。",
-      meta: feedback ?? `${moduleData.pending.length} 条 pending approvals`,
+      supporting: lastResolvedApproval
+        ? `最近一次审批 ${lastResolvedApproval.response.authorization_record.decision}，任务状态 ${lastResolvedApproval.response.task.status}。`
+        : "工作区边界、恢复点和预算治理说明仍聚合在本模块。",
+      meta: lastResolvedApproval
+        ? formatImpactScopeSummary(lastResolvedApproval.response.impact_scope)
+        : feedback ?? `${moduleData.pending.length} 条 pending approvals`,
       icon: Siren,
     };
   }
@@ -397,6 +509,8 @@ export function SecurityApp() {
   const [moduleData, setModuleData] = useState(() => getInitialSecurityModuleData());
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [lastResolvedApproval, setLastResolvedApproval] = useState<SecurityRespondOutcome | null>(null);
+  const [rememberRuleByApprovalId, setRememberRuleByApprovalId] = useState<Record<string, boolean>>({});
   const [titleMotionTick, setTitleMotionTick] = useState(0);
   const [cardPositions, setCardPositions] = useState<Record<string, CardPosition>>({});
   const [cardStack, setCardStack] = useState<SecurityCardKey[]>([]);
@@ -404,7 +518,7 @@ export function SecurityApp() {
   const [draggingKey, setDraggingKey] = useState<SecurityCardKey | null>(null);
   const [activeDetailKey, setActiveDetailKey] = useState<SecurityCardKey | null>(null);
   const [boardReady, setBoardReady] = useState(false);
-  const sourceCopy = useMemo(() => getSourceCopy(moduleData.source), [moduleData.source]);
+  const sourceCopy = useMemo(() => getSourceCopy(moduleData), [moduleData]);
   const approvalLookup = useMemo(
     () => new Map(moduleData.pending.map((approval) => [`approval:${approval.approval_id}`, approval] as const)),
     [moduleData.pending],
@@ -439,11 +553,8 @@ export function SecurityApp() {
     });
 
     const unsubscribe = subscribeApprovalPending((payload) => {
-      setModuleData((current) => ({
-        ...mergePendingApproval(current, payload),
-        source: "rpc",
-      }));
-      setFeedback(`收到新的待确认授权：${payload.approval_request.operation_name}`);
+      setModuleData((current) => mergePendingApproval(current, payload));
+      setFeedback(`收到新的待确认授权：${payload.approval_request.operation_name} · task ${payload.task_id}`);
       queueRpcRefresh();
     });
 
@@ -459,6 +570,15 @@ export function SecurityApp() {
       return [...preserved, ...additions];
     });
   }, [cardKeys]);
+
+  useEffect(() => {
+    setRememberRuleByApprovalId((current) =>
+      moduleData.pending.reduce<Record<string, boolean>>((nextState, approval) => {
+        nextState[approval.approval_id] = current[approval.approval_id] ?? false;
+        return nextState;
+      }, {}),
+    );
+  }, [moduleData.pending]);
 
   useEffect(() => {
     if (activeDetailKey && !cardKeys.includes(activeDetailKey)) {
@@ -553,22 +673,51 @@ export function SecurityApp() {
     };
   }, [activeDetailKey]);
 
-  const handleRespond = async (approval: ApprovalRequest, decision: ApprovalDecision) => {
+  const handleRespond = async (approval: ApprovalRequest, decision: ApprovalDecision, rememberRule: boolean) => {
     setActiveApprovalId(approval.approval_id);
 
     try {
-      const result = await respondToApproval(approval, decision, moduleData.source);
-      setModuleData((current) => ({
-        ...current,
-        summary: {
-          ...current.summary,
-          pending_authorizations: Math.max(0, current.summary.pending_authorizations - 1),
-        },
-        pending: current.pending.filter((item) => item.approval_id !== approval.approval_id),
-      }));
-      setFeedback(result.bubble_message?.text ?? "已更新安全审批状态。");
+      const result = await respondToApproval(approval, decision, rememberRule, moduleData.source);
+
+      setModuleData((current) => {
+        const pending = current.pending.filter((item) => item.approval_id !== approval.approval_id);
+        const nextTotal = Math.max(0, current.pendingPage.total - 1);
+        const nextPendingCount = Math.max(0, current.summary.pending_authorizations - 1);
+
+        return {
+          ...current,
+          summary: {
+            ...current.summary,
+            pending_authorizations: nextPendingCount,
+            security_status: getPendingSecurityStatus(nextPendingCount, current.summary.security_status),
+          },
+          pending: getVisiblePendingItems(pending, current.pendingPage.limit),
+          pendingPage: {
+            ...current.pendingPage,
+            total: nextTotal,
+            has_more: current.pendingPage.offset + pending.length < nextTotal,
+          },
+          rpcContext: {
+            serverTime: result.rpcContext.serverTime ?? current.rpcContext.serverTime,
+            warnings: Array.from(new Set([...current.rpcContext.warnings, ...result.rpcContext.warnings])),
+          },
+        };
+      });
+      setRememberRuleByApprovalId((current) => {
+        const nextState = { ...current };
+        delete nextState[approval.approval_id];
+        return nextState;
+      });
+      setLastResolvedApproval(result);
+      setFeedback(
+        `${result.response.bubble_message?.text ?? "已更新安全审批状态。"} · ${result.response.authorization_record.decision} · remember_rule ${result.response.authorization_record.remember_rule ? "on" : "off"} · task ${result.response.task.task_id} / ${result.response.task.status} · ${formatImpactScopeSummary(result.response.impact_scope)}`,
+      );
+
+      if (moduleData.source === "rpc") {
+        queueRpcRefresh();
+      }
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "安全审批提交失败");
+      setFeedback(formatRpcError(error));
     } finally {
       setActiveApprovalId(null);
     }
@@ -686,12 +835,23 @@ export function SecurityApp() {
         <article className="security-page__detail-card">
           <p className="security-page__detail-label">数据来源</p>
           <p className="security-page__detail-value">{sourceCopy.badge}</p>
-          <p className="security-page__detail-copy">{sourceCopy.title}</p>
+          <p className="security-page__detail-copy">{sourceCopy.description}</p>
+        </article>
+        <article className="security-page__detail-card">
+          <p className="security-page__detail-label">分页状态</p>
+          <p className="security-page__detail-value">{moduleData.pendingPage.has_more ? "还有更多" : "当前页完整"}</p>
+          <p className="security-page__detail-copy">
+            已加载 {moduleData.pending.length} 条 · total {moduleData.pendingPage.total} · has_more {String(moduleData.pendingPage.has_more)}
+          </p>
         </article>
       </div>
 
       <div className="security-page__detail-note">
         approval.pending 推送仍先合并到前端状态，再走顺序保护的 RPC 刷新，避免旧响应覆盖较新的安全视图。
+      </div>
+
+      <div className="security-page__detail-note">
+        当前分页：limit {moduleData.pendingPage.limit} · offset {moduleData.pendingPage.offset} · total {moduleData.pendingPage.total} · has_more {String(moduleData.pendingPage.has_more)}
       </div>
     </div>
   );
@@ -761,31 +921,151 @@ export function SecurityApp() {
     );
   };
 
-  const renderGovernanceDetail = () => (
-    <div className="security-page__detail-stack">
-      <div className="security-page__detail-note">
-        工作区边界、影响范围展示、恢复点与预算治理会继续统一承接在这个模块里，但前端当前只稳定使用 summary / pending / respond 三条 RPC 通道。
+  const renderGovernanceDetail = () => {
+    const response = lastResolvedApproval?.response;
+    const authorizationRecord = response?.authorization_record;
+    const task = response?.task;
+    const bubbleMessage = response?.bubble_message;
+    const impactScope = response?.impact_scope as ImpactScopeDetails | undefined;
+
+    return (
+      <div className="security-page__detail-stack">
+        <div className="security-page__detail-note">
+          工作区边界、影响范围展示、恢复点与预算治理会继续统一承接在这个模块里，但前端当前只稳定使用 summary / pending / respond 三条 RPC 通道。
+        </div>
+
+        <div className="security-page__detail-note">
+          approval.pending 的实时行为没有移除：新授权会先进入画布，再以顺序保护的方式拉取最新 summary 与 pending，避免界面回退到旧状态。
+        </div>
+
+        {response && authorizationRecord && task ? (
+          <>
+            <div className="security-page__detail-grid">
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">最近授权记录</p>
+                <p className="security-page__detail-value">{authorizationRecord.decision}</p>
+                <p className="security-page__detail-copy">
+                  remember_rule：{formatBooleanLabel(authorizationRecord.remember_rule)} · operator：{authorizationRecord.operator}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">授权记录标识</p>
+                <p className="security-page__detail-value security-page__detail-value--mono">
+                  {authorizationRecord.authorization_record_id}
+                </p>
+                <p className="security-page__detail-copy">
+                  approval_id：{authorizationRecord.approval_id} · task_id：{authorizationRecord.task_id} · created_at：
+                  {formatDateTime(authorizationRecord.created_at)}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">最近任务状态</p>
+                <p className="security-page__detail-value">{task.status}</p>
+                <p className="security-page__detail-copy">
+                  {task.title} · current_step：{task.current_step}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">任务来源与风险</p>
+                <p className="security-page__detail-value">{task.source_type}</p>
+                <p className="security-page__detail-copy">
+                  risk_level：{task.risk_level} · updated_at：{formatDateTime(task.updated_at)}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">Bubble message</p>
+                <p className="security-page__detail-value">{bubbleMessage?.type ?? "未返回"}</p>
+                <p className="security-page__detail-copy">
+                  pinned：{formatBooleanLabel(bubbleMessage?.pinned ?? false)} · hidden：
+                  {formatBooleanLabel(bubbleMessage?.hidden ?? false)}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">影响范围</p>
+                <p className="security-page__detail-value">{formatImpactScopeSummary(impactScope)}</p>
+                <p className="security-page__detail-copy">
+                  工作区外：{formatBooleanLabel(impactScope?.out_of_workspace ?? false)} · 覆盖/删除风险：
+                  {formatBooleanLabel(impactScope?.overwrite_or_delete_risk ?? false)}
+                </p>
+              </article>
+            </div>
+
+            <div className="security-page__detail-list">
+              <article className="security-page__detail-list-item">
+                <p className="security-page__detail-label">任务元数据</p>
+                {renderDetailEntryList(
+                  [
+                    `task_id：${task.task_id}`,
+                    `started_at：${formatOptionalDateTime(task.started_at)}`,
+                    `updated_at：${formatDateTime(task.updated_at)}`,
+                    `finished_at：${formatOptionalDateTime(task.finished_at)}`,
+                  ],
+                  "当前没有任务元数据。",
+                  "task-meta",
+                )}
+              </article>
+
+              <article className="security-page__detail-list-item">
+                <p className="security-page__detail-label">Bubble 元数据</p>
+                {renderDetailEntryList(
+                  bubbleMessage
+                    ? [
+                        `bubble_id：${bubbleMessage.bubble_id}`,
+                        `task_id：${bubbleMessage.task_id}`,
+                        `created_at：${formatDateTime(bubbleMessage.created_at)}`,
+                        `text：${bubbleMessage.text}`,
+                      ]
+                    : [],
+                  "最近一次响应没有返回 bubble_message。",
+                  "bubble-meta",
+                )}
+              </article>
+
+              <article className="security-page__detail-list-item">
+                <p className="security-page__detail-label">影响文件</p>
+                {renderDetailEntryList(impactScope?.files ?? [], "当前没有文件影响。", "impact-files")}
+              </article>
+
+              <article className="security-page__detail-list-item">
+                <p className="security-page__detail-label">影响网页</p>
+                {renderDetailEntryList(impactScope?.webpages ?? [], "当前没有网页影响。", "impact-webpages")}
+              </article>
+
+              <article className="security-page__detail-list-item">
+                <p className="security-page__detail-label">影响应用</p>
+                {renderDetailEntryList(impactScope?.apps ?? [], "当前没有应用影响。", "impact-apps")}
+              </article>
+            </div>
+
+            <div className="security-page__detail-callout">
+              <p className="security-page__detail-label">task intent</p>
+              <pre className="security-page__detail-code">{formatTaskIntent(task.intent)}</pre>
+            </div>
+          </>
+        ) : null}
+
+        {moduleData.rpcContext.warnings.length ? (
+          <div className="security-page__detail-callout">warnings：{moduleData.rpcContext.warnings.join("；")}</div>
+        ) : null}
+
+        {feedback ? <div className="security-page__detail-callout">{feedback}</div> : null}
+
+        <Flex align="center" gap="3" wrap="wrap">
+          <Button variant="soft" color="gray" onClick={() => navigate(resolveDashboardRoutePath("home"))}>
+            返回 Dashboard
+            <ArrowUpRight className="h-4 w-4" />
+          </Button>
+        </Flex>
       </div>
-
-      <div className="security-page__detail-note">
-        approval.pending 的实时行为没有移除：新授权会先进入画布，再以顺序保护的方式拉取最新 summary 与 pending，避免界面回退到旧状态。
-      </div>
-
-      {feedback ? <div className="security-page__detail-callout">{feedback}</div> : null}
-
-      <Flex align="center" gap="3" wrap="wrap">
-        <Button variant="soft" color="gray" onClick={() => navigate(resolveDashboardRoutePath("home"))}>
-          返回 Dashboard
-          <ArrowUpRight className="h-4 w-4" />
-        </Button>
-      </Flex>
-    </div>
-  );
-
+    );
+  };
+  
   const renderApprovalDetail = (approval: ApprovalRequest | undefined) => {
     if (!approval) {
       return <p className="security-page__empty-state">该待确认授权已经从当前列表中移除。</p>;
     }
+
+    const rememberRule = rememberRuleByApprovalId[approval.approval_id] ?? false;
 
     return (
       <div className="security-page__detail-stack">
@@ -793,12 +1073,17 @@ export function SecurityApp() {
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">操作名称</p>
             <p className="security-page__detail-value">{approval.operation_name}</p>
-            <p className="security-page__detail-copy">风险等级：{approval.risk_level}</p>
+            <p className="security-page__detail-copy">风险等级：{approval.risk_level} · 状态：{approval.status}</p>
           </article>
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">创建时间</p>
             <p className="security-page__detail-value">{formatDateTime(approval.created_at)}</p>
             <p className="security-page__detail-copy">task_id：{approval.task_id}</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">审批标识</p>
+            <p className="security-page__detail-value security-page__detail-value--mono">{approval.approval_id}</p>
+            <p className="security-page__detail-copy">approval.pending 顶层 task_id：{approval.task_id}</p>
           </article>
         </div>
 
@@ -812,12 +1097,34 @@ export function SecurityApp() {
           <p className="security-page__detail-copy">{approval.reason}</p>
         </article>
 
+        <div className="security-page__detail-callout">
+          <label className="security-page__approval-remember">
+            <input
+              className="security-page__approval-remember-checkbox"
+              type="checkbox"
+              checked={rememberRule}
+              disabled={activeApprovalId === approval.approval_id}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setRememberRuleByApprovalId((current) => ({
+                  ...current,
+                  [approval.approval_id]: checked,
+                }));
+              }}
+            />
+            <span className="security-page__approval-remember-copy">
+              <span className="security-page__detail-label">remember_rule</span>
+              <span className="security-page__detail-copy">记住这次授权规则；提交到 `agent.security.respond` 时将发送 {String(rememberRule)}。</span>
+            </span>
+          </label>
+        </div>
+
         <div className="security-page__approval-actions">
           <Button
             color="gray"
             variant="soft"
             disabled={activeApprovalId === approval.approval_id}
-            onClick={() => void handleRespond(approval, "deny_once")}
+            onClick={() => void handleRespond(approval, "deny_once", rememberRule)}
           >
             拒绝
           </Button>
@@ -825,7 +1132,7 @@ export function SecurityApp() {
             color="amber"
             variant="solid"
             disabled={activeApprovalId === approval.approval_id}
-            onClick={() => void handleRespond(approval, "allow_once")}
+            onClick={() => void handleRespond(approval, "allow_once", rememberRule)}
           >
             允许一次
           </Button>
@@ -859,7 +1166,7 @@ export function SecurityApp() {
       return null;
     }
 
-    const preview = getCardPreview(activeDetailKey, moduleData, approvalLookup, sourceCopy, feedback);
+    const preview = getCardPreview(activeDetailKey, moduleData, approvalLookup, sourceCopy, feedback, lastResolvedApproval);
 
     return (
       <div className="security-page__detail-layer" onClick={closeDetail}>
@@ -899,7 +1206,7 @@ export function SecurityApp() {
   };
 
   const renderDraggableCard = (key: SecurityCardKey, index: number) => {
-    const preview = getCardPreview(key, moduleData, approvalLookup, sourceCopy, feedback);
+    const preview = getCardPreview(key, moduleData, approvalLookup, sourceCopy, feedback, lastResolvedApproval);
     const Icon = preview.icon;
     const isDragging = draggingKey === key;
     const isExpanded = activeDetailKey === key;

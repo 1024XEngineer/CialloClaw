@@ -25,6 +25,16 @@ type JsonRpcEnvelope<T> = {
   };
 };
 
+export type JsonRpcResultMeta = {
+  server_time: string;
+};
+
+export type JsonRpcResponsePayload<T> = {
+  data: T;
+  meta: JsonRpcResultMeta | null;
+  warnings: string[];
+};
+
 type JsonRpcNotification = {
   jsonrpc?: "2.0";
   id?: string | number | null;
@@ -89,6 +99,26 @@ class DebugHttpJsonRpcTransport implements JsonRpcTransport {
   }
 }
 
+export class JsonRpcClientError extends Error {
+  readonly code: number | null;
+
+  readonly traceId: string | null;
+
+  readonly detail: string | null;
+
+  readonly rpcMessage: string;
+
+  constructor(error: JsonRpcEnvelope<never>["error"]) {
+    const message = error?.data?.detail ?? error?.message ?? "Unknown JSON-RPC error";
+    super(message);
+    this.name = "JsonRpcClientError";
+    this.code = error?.code ?? null;
+    this.traceId = error?.data?.trace_id ?? null;
+    this.detail = error?.data?.detail ?? null;
+    this.rpcMessage = error?.message ?? message;
+  }
+}
+
 // createTransport 处理当前模块的相关逻辑。
 function createTransport(): JsonRpcTransport {
   const transportMode = import.meta.env.VITE_CIALLOCLAW_RPC_TRANSPORT ?? "named_pipe";
@@ -112,7 +142,7 @@ function createRequestId() {
 export class JsonRpcClient {
   constructor(private readonly transport: JsonRpcTransport = createTransport()) {}
 
-  async request<T>(method: string, params?: object): Promise<T> {
+  async requestDetailed<T>(method: string, params?: object): Promise<JsonRpcResponsePayload<T>> {
     const payload: JsonRpcRequest = {
       jsonrpc: "2.0",
       id: createRequestId(),
@@ -123,10 +153,25 @@ export class JsonRpcClient {
     const body = await this.transport.send<T>(payload);
 
     if (body.error) {
-      throw new Error(body.error.data?.detail ?? body.error.message);
+      throw new JsonRpcClientError(body.error);
     }
 
-    return body.result?.data as T;
+    if (!body.result) {
+      throw new JsonRpcClientError({
+        message: `JSON-RPC method ${method} returned no result payload.`,
+      });
+    }
+
+    return {
+      data: body.result.data,
+      meta: body.result.meta ?? null,
+      warnings: body.result.warnings ?? [],
+    };
+  }
+
+  async request<T>(method: string, params?: object): Promise<T> {
+    const response = await this.requestDetailed<T>(method, params);
+    return response.data;
   }
 }
 
