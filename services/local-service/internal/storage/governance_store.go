@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -38,6 +40,9 @@ func (s *inMemoryAuditStore) ListAuditRecords(_ context.Context, taskID string, 
 			items = append(items, record)
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
+	})
 	return pageAuditRecords(items, limit, offset), len(items), nil
 }
 
@@ -66,6 +71,9 @@ func (s *inMemoryRecoveryPointStore) ListRecoveryPoints(_ context.Context, taskI
 			items = append(items, point)
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
+	})
 	return pageRecoveryPoints(items, limit, offset), len(items), nil
 }
 
@@ -335,4 +343,14 @@ func firstArg(taskID string) []any {
 		return nil
 	}
 	return []any{taskID}
+}
+
+func parseGovernanceTime(value string) time.Time {
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed
+	}
+	return time.Time{}
 }

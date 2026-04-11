@@ -218,7 +218,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 	toolResult, err := s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
 		TaskID:        request.TaskID,
 		RunID:         request.RunID,
-		WorkspacePath: "workspace",
+		WorkspacePath: ".",
 		Platform:      s.fileSystem,
 		Execution:     s.execution,
 	}, intentName, args)

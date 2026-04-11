@@ -410,6 +410,9 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	}
 
 	securitySummary := cloneMap(task.SecuritySummary)
+	if securitySummary == nil {
+		securitySummary = map[string]any{}
+	}
 	if latestRestorePointFromSummary(securitySummary) == nil {
 		if restorePoint := s.latestRestorePointFromStorage(task.TaskID); restorePoint != nil {
 			securitySummary["latest_restore_point"] = restorePoint
