@@ -2,16 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CircleDashed, LayoutList } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CircleDashed, LayoutList, RefreshCcw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { subscribeTask } from "@/rpc/subscriptions";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
-import { getFinishedTaskGroups, isTaskEnded, sortTasksByLatest } from "./taskPage.mapper";
-import { controlTaskByAction, loadTaskBuckets, loadTaskDetailData } from "./taskPage.service";
+import { describeCurrentStep, getFinishedTaskGroups, isTaskEnded, sortTasksByLatest } from "./taskPage.mapper";
+import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData } from "./taskPage.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
-import { TaskEmptyState } from "./components/TaskEmptyState";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import "./taskPage.css";
 
@@ -31,17 +30,33 @@ export function TaskPage() {
   const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
   const feedbackTimeoutRef = useRef<number | null>(null);
 
-  const taskBucketsQuery = useQuery({
-    queryKey: ["dashboard", "tasks", "buckets", unfinishedLimit, finishedLimit],
-    queryFn: () => loadTaskBuckets({ finishedLimit, unfinishedLimit }),
+  const unfinishedQuery = useQuery({
+    queryKey: ["dashboard", "tasks", "bucket", "unfinished", unfinishedLimit],
+    queryFn: () => loadTaskBucketPage("unfinished", { limit: unfinishedLimit }),
     placeholderData: (previousData) => previousData,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
 
-  const unfinishedTasks = sortTasksByLatest(taskBucketsQuery.data?.unfinished.items ?? []);
-  const finishedTasks = sortTasksByLatest(taskBucketsQuery.data?.finished.items ?? []);
+  const finishedQuery = useQuery({
+    queryKey: ["dashboard", "tasks", "bucket", "finished", finishedLimit],
+    queryFn: () => loadTaskBucketPage("finished", { limit: finishedLimit }),
+    placeholderData: (previousData) => previousData,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  const unfinishedTasks = sortTasksByLatest(unfinishedQuery.data?.items ?? []);
+  const finishedTasks = sortTasksByLatest(finishedQuery.data?.items ?? []);
   const finishedGroups = useMemo(() => getFinishedTaskGroups(finishedTasks, showMoreFinished), [finishedTasks, showMoreFinished]);
-  const unfinishedPage = taskBucketsQuery.data?.unfinished.page;
-  const finishedPage = taskBucketsQuery.data?.finished.page;
+  const unfinishedPage = unfinishedQuery.data?.page;
+  const finishedPage = finishedQuery.data?.page;
+  const allTasks = useMemo(() => [...unfinishedTasks, ...finishedTasks], [finishedTasks, unfinishedTasks]);
+  const selectedTaskItem = useMemo(() => allTasks.find((item) => item.task.task_id === selectedTaskId) ?? null, [allTasks, selectedTaskId]);
   const pageStyle = {
     "--task-accent": "#9FB7D8",
     "--task-accent-glow": "rgba(159, 183, 216, 0.18)",
@@ -57,7 +72,6 @@ export function TaskPage() {
   } as CSSProperties;
 
   useEffect(() => {
-    const allTasks = [...unfinishedTasks, ...finishedTasks];
     if (allTasks.length === 0) {
       return;
     }
@@ -78,22 +92,35 @@ export function TaskPage() {
     }
 
     const nextTask = unfinishedTasks.find((item) => item.task.status === "processing") ?? unfinishedTasks[0] ?? finishedTasks[0];
-    setSelectedTaskId(nextTask.task.task_id);
-  }, [finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
+    if (nextTask) {
+      setSelectedTaskId(nextTask.task.task_id);
+    }
+  }, [allTasks, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
-    enabled: Boolean(selectedTaskId),
+    enabled: Boolean(selectedTaskId && detailOpen && selectedTaskItem),
     queryKey: ["dashboard", "tasks", "detail", selectedTaskId],
     queryFn: () => loadTaskDetailData(selectedTaskId!),
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
+
+  const detailData = taskDetailQuery.data ?? (selectedTaskItem ? buildFallbackTaskDetailData(selectedTaskItem) : null);
+  const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "任务详情请求失败") : null;
+  const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
+  const bucketErrors = [
+    { error: unfinishedQuery.error, label: "未完成任务" },
+    { error: finishedQuery.error, label: "已结束任务" },
+  ].filter((item) => item.error);
+  const heroTask = detailData?.task ?? selectedTaskItem?.task ?? null;
 
   const pageNotice =
     feedback ??
-    (taskBucketsQuery.isError
-      ? "任务列表加载失败，请确认本地服务可用后重试。"
-      : taskDetailQuery.isError
-        ? "任务详情加载失败，当前没有使用 mock 回退。"
-        : null);
+    (selectedTaskItem
+      ? describeCurrentStep(selectedTaskItem.task, selectedTaskItem.experience)
+      : "先浏览任务，再点开查看完整进展与上下文。");
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -101,7 +128,7 @@ export function TaskPage() {
     }
 
     return subscribeTask(selectedTaskId, () => {
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "buckets"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", selectedTaskId] });
     });
   }, [queryClient, selectedTaskId]);
@@ -126,7 +153,7 @@ export function TaskPage() {
     mutationFn: ({ action, taskId }: { action: "pause" | "resume" | "cancel" | "restart"; taskId: string }) => controlTaskByAction(taskId, action),
     onSuccess: (outcome) => {
       showFeedback(outcome.result.bubble_message?.text ?? "任务操作已执行。");
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "buckets"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", selectedTaskId] });
     },
     onError: () => {
@@ -135,7 +162,7 @@ export function TaskPage() {
   });
 
   function handlePrimaryAction(action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") {
-    if (!taskDetailQuery.data) {
+    if (!detailData) {
       return;
     }
 
@@ -149,7 +176,7 @@ export function TaskPage() {
       return;
     }
 
-    taskControlMutation.mutate({ action, taskId: taskDetailQuery.data.task.task_id });
+    taskControlMutation.mutate({ action, taskId: detailData.task.task_id });
   }
 
   function handleLoadMore(group: "unfinished" | "finished") {
@@ -164,47 +191,6 @@ export function TaskPage() {
     }
 
     setFinishedLimit((current) => current + LOAD_MORE_FINISHED_STEP);
-  }
-
-  if (taskBucketsQuery.isLoading && !taskBucketsQuery.data) {
-    return (
-      <main className="app-shell task-preview-page">
-        <div className="task-preview-page__frame">
-          <div className="task-preview-page__header task-preview-page__header--loading" />
-          <div className="task-preview-page__layout">
-            <div className="task-preview-page__column task-preview-page__column--loading" />
-            <div className="task-preview-page__detail task-preview-page__detail--loading" />
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (taskBucketsQuery.isError && !taskBucketsQuery.data) {
-    return (
-      <main className="dashboard-page task-preview-page" style={pageStyle}>
-        <div className="task-preview-page__frame">
-          <article className="dashboard-card task-preview-card-shell task-preview-card-shell--hint">
-            <p className="dashboard-card__kicker">任务列表</p>
-            <h1>暂时无法加载任务</h1>
-            <p className="task-preview-card-shell__description">当前任务页不会再自动伪造 mock 数据。请确认 RPC 服务可用后重试。</p>
-            <button className="task-preview-card-shell__toggle" onClick={() => void taskBucketsQuery.refetch()} type="button">
-              重新加载
-            </button>
-          </article>
-        </div>
-      </main>
-    );
-  }
-
-  if (!taskBucketsQuery.data || (!selectedTaskId && unfinishedTasks.length === 0 && finishedTasks.length === 0)) {
-    return (
-      <main className="app-shell task-preview-page">
-        <div className="task-preview-page__frame">
-          <TaskEmptyState />
-        </div>
-      </main>
-    );
   }
 
   return (
@@ -234,24 +220,24 @@ export function TaskPage() {
           <p className="dashboard-page__description">先浏览任务，再点开看详细信息。未完成任务强调状态和当前执行步骤，已结束任务只保留最终状态。</p>
         </div>
 
-        <div className="dashboard-card dashboard-card--status task-preview-page__hero-status">
-          <p className="dashboard-card__kicker">当前聚焦</p>
-          {pageNotice ? <p className="task-preview-page__hero-notice">{pageNotice}</p> : null}
-          {taskDetailQuery.data ? (
-            <>
-              <p className="task-preview-page__hero-title">{taskDetailQuery.data.task.title}</p>
+          <div className="dashboard-card dashboard-card--status task-preview-page__hero-status">
+            <p className="dashboard-card__kicker">当前聚焦</p>
+            {pageNotice ? <p className="task-preview-page__hero-notice">{pageNotice}</p> : null}
+            {heroTask ? (
+              <>
+                <p className="task-preview-page__hero-title">{heroTask.title}</p>
+                <div className="dashboard-card__status-row">
+                  <CircleDashed className="h-4 w-4" />
+                  <span>{isTaskEnded(heroTask) ? "这条任务已经结束，可点开回看结果。" : "当前正在推进，点开可查看完整进展与上下文。"}</span>
+                </div>
+              </>
+            ) : (
               <div className="dashboard-card__status-row">
                 <CircleDashed className="h-4 w-4" />
-                <span>{isTaskEnded(taskDetailQuery.data.task) ? "这条任务已经结束，可点开回看结果。" : "当前正在推进，点开可查看完整进展与上下文。"}</span>
+                <span>当前还没有可展示的任务，列表成功返回后会显示在左侧。</span>
               </div>
-            </>
-          ) : (
-            <div className="dashboard-card__status-row">
-              <CircleDashed className="h-4 w-4" />
-              <span>从左侧任务卡开始浏览，点击后会打开详情弹窗。</span>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
       </section>
 
       <section className="dashboard-page__grid task-preview-page__grid">
@@ -261,25 +247,33 @@ export function TaskPage() {
               <p className="dashboard-card__kicker">未完成任务</p>
               <p className="task-preview-card-shell__description">任务名称、任务状态，以及当前执行到哪一步。</p>
             </div>
-            <span className="task-preview-card-shell__count">{unfinishedTasks.length}</span>
+            <span className="task-preview-card-shell__count">{unfinishedQuery.isPending && !unfinishedQuery.data ? "..." : unfinishedTasks.length}</span>
           </div>
           <div className="task-preview-card-shell__list">
-            {unfinishedTasks.map((item) => (
-              <TaskPreviewCard
-                key={item.task.task_id}
-                isActive={item.task.task_id === selectedTaskId}
-                item={item}
-                onSelect={(taskId) => {
-                  setSelectedTaskId(taskId);
-                  setDetailOpen(true);
-                }}
-              />
-            ))}
+            {unfinishedQuery.isError && unfinishedTasks.length === 0 ? (
+              <div className="task-preview-card-shell__empty task-preview-card-shell__empty--error">
+                {unfinishedQuery.error instanceof Error ? unfinishedQuery.error.message : "请求失败"}
+              </div>
+            ) : unfinishedTasks.length > 0 ? (
+              unfinishedTasks.map((item) => (
+                <TaskPreviewCard
+                  key={item.task.task_id}
+                  isActive={item.task.task_id === selectedTaskId}
+                  item={item}
+                  onSelect={(taskId) => {
+                    setSelectedTaskId(taskId);
+                    setDetailOpen(true);
+                  }}
+                />
+              ))
+            ) : (
+              <div className="task-preview-card-shell__empty">{unfinishedQuery.isPending && !unfinishedQuery.data ? "加载中" : "无"}</div>
+            )}
           </div>
           {unfinishedPage?.has_more ? (
             <div className="task-preview-card-shell__footer">
-              <button className="task-preview-card-shell__toggle" disabled={taskBucketsQuery.isFetching} onClick={() => handleLoadMore("unfinished")} type="button">
-                {taskBucketsQuery.isFetching ? "加载中..." : "加载更多"}
+              <button className="task-preview-card-shell__toggle" disabled={unfinishedQuery.isFetching} onClick={() => handleLoadMore("unfinished")} type="button">
+                {unfinishedQuery.isFetching ? "加载中..." : "加载更多"}
               </button>
             </div>
           ) : null}
@@ -291,39 +285,47 @@ export function TaskPage() {
               <p className="dashboard-card__kicker">已结束任务</p>
               <p className="task-preview-card-shell__description">默认展示近 3 天，可展开到近 7 天和更早。</p>
             </div>
-            <button className="task-preview-card-shell__toggle" onClick={() => setShowMoreFinished((current) => !current)} type="button">
-              {showMoreFinished ? "收起" : "更多"}
-            </button>
-          </div>
+                <button className="task-preview-card-shell__toggle" onClick={() => setShowMoreFinished((current) => !current)} type="button">
+                  {showMoreFinished ? "收起" : "更多"}
+                </button>
+              </div>
 
           <div className="task-preview-finished-groups">
-            {finishedGroups.map((group) => (
-              <section key={group.key} className="task-preview-finished-group">
-                <div>
-                  <p className="task-preview-finished-group__title">{group.title}</p>
-                  <p className="task-preview-finished-group__description">{group.description}</p>
-                </div>
+            {finishedQuery.isError && finishedTasks.length === 0 ? (
+              <div className="task-preview-card-shell__empty task-preview-card-shell__empty--error">
+                {finishedQuery.error instanceof Error ? finishedQuery.error.message : "请求失败"}
+              </div>
+            ) : finishedGroups.length > 0 ? (
+              finishedGroups.map((group) => (
+                <section key={group.key} className="task-preview-finished-group">
+                  <div>
+                    <p className="task-preview-finished-group__title">{group.title}</p>
+                    <p className="task-preview-finished-group__description">{group.description}</p>
+                  </div>
 
-                <div className="task-preview-card-shell__list">
-                  {group.items.map((item) => (
-                    <TaskPreviewCard
-                      key={item.task.task_id}
-                      isActive={item.task.task_id === selectedTaskId}
-                      item={item}
-                      onSelect={(taskId) => {
-                        setSelectedTaskId(taskId);
-                        setDetailOpen(true);
-                      }}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
+                  <div className="task-preview-card-shell__list">
+                    {group.items.map((item) => (
+                      <TaskPreviewCard
+                        key={item.task.task_id}
+                        isActive={item.task.task_id === selectedTaskId}
+                        item={item}
+                        onSelect={(taskId) => {
+                          setSelectedTaskId(taskId);
+                          setDetailOpen(true);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))
+            ) : (
+              <div className="task-preview-card-shell__empty">{finishedQuery.isPending && !finishedQuery.data ? "加载中" : "无"}</div>
+            )}
           </div>
           {finishedPage?.has_more ? (
             <div className="task-preview-card-shell__footer">
-              <button className="task-preview-card-shell__toggle" disabled={taskBucketsQuery.isFetching} onClick={() => handleLoadMore("finished")} type="button">
-                {taskBucketsQuery.isFetching ? "加载中..." : "加载更多历史"}
+              <button className="task-preview-card-shell__toggle" disabled={finishedQuery.isFetching} onClick={() => handleLoadMore("finished")} type="button">
+                {finishedQuery.isFetching ? "加载中..." : "加载更多历史"}
               </button>
             </div>
           ) : null}
@@ -340,7 +342,7 @@ export function TaskPage() {
       </section>
 
       <AnimatePresence>
-        {detailOpen ? (
+        {detailOpen && detailData ? (
           <>
             <motion.button
               animate={{ opacity: 1 }}
@@ -357,34 +359,57 @@ export function TaskPage() {
               initial={{ opacity: 0, scale: 0.98, y: 16 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
-              {taskDetailQuery.isLoading || (taskDetailQuery.isFetching && !taskDetailQuery.data) ? (
-                <section className="task-detail-shell">
-                  <div className="task-detail-shell__header">
-                    <div>
-                      <p className="task-detail-shell__eyebrow">任务详情</p>
-                      <h2 className="task-detail-shell__title">正在加载</h2>
-                      <p className="task-detail-shell__subtitle">任务详情正在从本地服务拉取。</p>
-                    </div>
-                  </div>
-                </section>
-              ) : taskDetailQuery.isError ? (
-                <section className="task-detail-shell">
-                  <div className="task-detail-shell__header">
-                    <div>
-                      <p className="task-detail-shell__eyebrow">任务详情</p>
-                      <h2 className="task-detail-shell__title">加载失败</h2>
-                      <p className="task-detail-shell__subtitle">详情请求没有成功返回，当前环境也没有启用 mock 回退。</p>
-                    </div>
-                    <button className="task-preview-card-shell__toggle" onClick={() => void taskDetailQuery.refetch()} type="button">
-                      重试
-                    </button>
-                  </div>
-                </section>
-              ) : taskDetailQuery.data ? (
-                <TaskDetailPanel detailData={taskDetailQuery.data} feedback={feedback} onAction={handlePrimaryAction} onClose={() => setDetailOpen(false)} />
-              ) : null}
+              <TaskDetailPanel
+                detailData={detailData}
+                detailErrorMessage={detailErrorMessage}
+                detailState={detailState}
+                feedback={feedback}
+                onAction={handlePrimaryAction}
+                onClose={() => setDetailOpen(false)}
+                onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
+              />
             </motion.div>
           </>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {feedback || bucketErrors.length > 0 ? (
+          <motion.aside
+            animate={{ opacity: 1, y: 0 }}
+            className="task-preview-page__floating-card"
+            exit={{ opacity: 0, y: 12 }}
+            initial={{ opacity: 0, y: 16 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="task-preview-page__floating-card-icon">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            <div className="task-preview-page__floating-card-copy">
+              <p className="task-preview-page__floating-card-title">{feedback ? "操作提示" : "任务同步失败"}</p>
+              <p className="task-preview-page__floating-card-text">
+                {feedback ??
+                  (bucketErrors.length === 1
+                    ? `${bucketErrors[0].label}：${bucketErrors[0].error instanceof Error ? bucketErrors[0].error.message : "请求失败"}`
+                    : `${bucketErrors.length} 个分区加载失败：${bucketErrors
+                        .map((item) => `${item.label}${item.error instanceof Error ? `(${item.error.message})` : ""}`)
+                        .join("、")}`)}
+              </p>
+            </div>
+            {!feedback ? (
+              <button
+                className="task-preview-page__floating-card-action"
+                onClick={() => {
+                  void unfinishedQuery.refetch();
+                  void finishedQuery.refetch();
+                }}
+                type="button"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                重试
+              </button>
+            ) : null}
+          </motion.aside>
         ) : null}
       </AnimatePresence>
     </main>

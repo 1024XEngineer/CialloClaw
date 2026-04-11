@@ -8,6 +8,14 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    proxy: {
+      "/rpc": {
+        changeOrigin: true,
+        target: "http://127.0.0.1:4317",
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": resolve(currentDirectory, "src"),

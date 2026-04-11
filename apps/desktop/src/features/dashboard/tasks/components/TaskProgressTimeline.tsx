@@ -7,6 +7,10 @@ type TaskProgressTimelineProps = {
 };
 
 export function TaskProgressTimeline({ timeline }: TaskProgressTimelineProps) {
+  if (timeline.length === 0) {
+    return <div className="task-detail-card__empty">无</div>;
+  }
+
   return (
     <div className="task-detail-timeline">
       {timeline.map((step, index) => (

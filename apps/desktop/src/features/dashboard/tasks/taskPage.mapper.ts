@@ -51,6 +51,16 @@ export function getPriorityBadgeClass(priority: TaskPriority) {
 }
 
 export function getTaskProgress(timeline: TaskStep[]): TaskProgressState {
+  if (timeline.length === 0) {
+    return {
+      completedCount: 0,
+      currentLabel: "暂无步骤信息",
+      percent: 0,
+      remainingCount: 0,
+      total: 0,
+    };
+  }
+
   const total = timeline.length || 1;
   const completedCount = timeline.filter((step) => step.status === "completed").length;
   const current = timeline.find((step) => step.status === "running") ?? timeline.find((step) => step.status === "pending") ?? null;
@@ -67,6 +77,13 @@ export function getTaskProgress(timeline: TaskStep[]): TaskProgressState {
 
 export function getTaskStateVoice(task: Task, experience: TaskExperience, timeline: TaskStep[]): TaskStateVoice {
   const progress = getTaskProgress(timeline);
+
+  if (timeline.length === 0 && task.status === "processing") {
+    return {
+      title: "正在推进",
+      body: "当前还没有返回更细的步骤信息，先看任务头部与基础状态。",
+    };
+  }
 
   if (task.status === "processing") {
     return {

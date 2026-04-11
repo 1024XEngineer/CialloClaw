@@ -1,4 +1,5 @@
 import type {
+  AgentTaskDetailGetResult,
   AgentTaskControlParams,
   RequestMeta,
   Task,
@@ -13,6 +14,7 @@ const INITIAL_TASK_PAGE_LIMIT: Record<TaskListGroup, number> = {
   finished: 24,
   unfinished: 12,
 };
+const TASK_RPC_TIMEOUT_MS = 2_500;
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -22,7 +24,16 @@ function createRequestMeta(scope: string): RequestMeta {
 }
 
 function allowMockFallback() {
-  return import.meta.env.DEV || import.meta.env.VITE_CIALLOCLAW_TASKS_USE_MOCK === "true";
+  return import.meta.env.VITE_CIALLOCLAW_TASKS_USE_MOCK === "true";
+}
+
+async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(`${label} request timed out`)), TASK_RPC_TIMEOUT_MS);
+    }),
+  ]);
 }
 
 function createFallbackExperience(task: Task): TaskExperience {
@@ -70,17 +81,44 @@ function getTaskListSortBy(group: TaskListGroup) {
   return group === "finished" ? "finished_at" : "updated_at";
 }
 
+function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
+  return {
+    artifacts: [],
+    mirror_references: [],
+    security_summary: {
+      latest_restore_point: null,
+      pending_authorizations: task.status === "waiting_auth" ? 1 : 0,
+      risk_level: task.risk_level,
+      security_status: task.status === "waiting_auth" ? "pending_confirmation" : "normal",
+    },
+    task,
+    timeline: [],
+  };
+}
+
+export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
+  return {
+    detail: createFallbackTaskDetail(item.task),
+    experience: item.experience,
+    source: "fallback",
+    task: item.task,
+  };
+}
+
 export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number }): Promise<TaskBucketPageData> {
   const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
   const offset = options?.offset ?? 0;
-  const result = await listTasks({
-    group,
-    limit,
-    offset,
-    request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
-    sort_by: getTaskListSortBy(group),
-    sort_order: "desc",
-  });
+  const result = await withTimeout(
+    listTasks({
+      group,
+      limit,
+      offset,
+      request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
+      sort_by: getTaskListSortBy(group),
+      sort_order: "desc",
+    }),
+    `task bucket ${group}`,
+  );
 
   return {
     items: mapTasks(result.items),
@@ -112,10 +150,13 @@ export async function loadTaskBuckets(options?: { unfinishedLimit?: number; fini
 
 export async function loadTaskDetailData(taskId: string): Promise<TaskDetailData> {
   try {
-    const detail = await getTaskDetail({
-      request_meta: createRequestMeta(`task_detail_${taskId}`),
-      task_id: taskId,
-    });
+    const detail = await withTimeout(
+      getTaskDetail({
+        request_meta: createRequestMeta(`task_detail_${taskId}`),
+        task_id: taskId,
+      }),
+      `task detail ${taskId}`,
+    );
 
     return {
       detail,
@@ -142,7 +183,7 @@ export async function controlTaskByAction(taskId: string, action: TaskControlAct
 
   try {
     return {
-      result: await controlTask(params),
+      result: await withTimeout(controlTask(params), `task control ${action}`),
       source: "rpc",
     };
   } catch (error) {
