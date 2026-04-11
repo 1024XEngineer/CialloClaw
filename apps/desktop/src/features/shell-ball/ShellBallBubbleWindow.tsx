@@ -1,6 +1,6 @@
 import type { ShellBallVisualState } from "./shellBall.types";
 import { getShellBallVisibleBubbleItems } from "./shellBall.windowSync";
-import { emitShellBallBubbleAction, useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
+import { emitShellBallBubbleAction, emitShellBallBubbleInteraction, useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 
@@ -25,6 +25,9 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
         bubbleItems={visibleBubbleItems}
         onDeleteBubble={(bubbleId) => {
           void emitShellBallBubbleAction("delete", bubbleId);
+        }}
+        onInteractionActiveChange={(active) => {
+          void emitShellBallBubbleInteraction(active);
         }}
         onPinBubble={(bubbleId) => {
           void emitShellBallBubbleAction("pin", bubbleId);

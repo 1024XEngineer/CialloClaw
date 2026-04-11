@@ -15,6 +15,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
   bubbleAction: "desktop-shell-ball:bubble-action",
+  bubbleInteraction: "desktop-shell-ball:bubble-interaction",
 });
 
 export type ShellBallHelperWindowRole = "bubble" | "input" | "pinned";
@@ -96,6 +97,10 @@ export type ShellBallBubbleActionPayload = {
   source: ShellBallBubbleActionSource;
   action: ShellBallBubbleAction;
   bubbleId: string;
+};
+
+export type ShellBallBubbleInteractionPayload = {
+  active: boolean;
 };
 
 export function getShellBallHelperWindowVisibility(

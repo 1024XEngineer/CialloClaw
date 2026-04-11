@@ -14,7 +14,12 @@ export function ShellBallBubbleMessage({ item, onDelete, onPin }: ShellBallBubbl
       className={`shell-ball-bubble-zone__message-row shell-ball-bubble-zone__message-row--${item.role}`}
       data-role={item.role}
     >
-      <div className={`shell-ball-bubble-message shell-ball-bubble-message--${item.role}`} data-message-id={bubbleId}>
+      <div
+        className={`shell-ball-bubble-message shell-ball-bubble-message--${item.role}`}
+        data-lifecycle={item.desktop.lifecycleState}
+        data-message-id={bubbleId}
+        data-pinned={item.bubble.pinned ? "true" : "false"}
+      >
         <button
           type="button"
           className="shell-ball-bubble-message__control shell-ball-bubble-message__pin-control"

@@ -18,6 +18,7 @@ import {
   createShellBallWindowSnapshot,
   type ShellBallBubbleAction,
   type ShellBallBubbleActionPayload,
+  type ShellBallBubbleInteractionPayload,
   shellBallWindowSyncEvents,
   type ShellBallHelperReadyPayload,
   type ShellBallHelperWindowRole,
@@ -51,6 +52,7 @@ type ShellBallHelperSnapshotInput = {
 
 const SHELL_BALL_LOCAL_MOCK_BUBBLE_BASE_TIME_MS = Date.parse("2026-04-12T09:00:00.000Z");
 const SHELL_BALL_LOCAL_MOCK_REPLY_DELAY_MS = 320;
+const SHELL_BALL_LOCAL_BUBBLE_DISSIPATION_DELAY_MS = 4800;
 
 const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [
   {
@@ -155,6 +157,33 @@ function createShellBallLocalMockReplyText(submittedText: string) {
   return `Mock reply: I captured '${submittedText}'.`;
 }
 
+function shouldShellBallBubbleDissipate(item: ShellBallBubbleItem) {
+  return item.bubble.hidden === false && item.bubble.pinned === false && item.desktop.lifecycleState === "visible";
+}
+
+function applyShellBallBubbleLifecycle(
+  items: ShellBallBubbleItem[],
+  input: {
+    bubbleId: string;
+    lifecycleState: ShellBallBubbleItem["desktop"]["lifecycleState"];
+  },
+) {
+  return items.map((item) => {
+    if (item.bubble.bubble_id !== input.bubbleId) {
+      return item;
+    }
+
+    return {
+      ...item,
+      desktop: {
+        ...item.desktop,
+        freshnessHint: input.lifecycleState === "fading" ? "stale" : item.desktop.freshnessHint,
+        lifecycleState: input.lifecycleState,
+      },
+    };
+  });
+}
+
 export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const [bubbleItems, setBubbleItems] = useState(() => sortShellBallBubbleItemsByTimestamp(cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS)));
   const snapshot = useMemo(
@@ -171,6 +200,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleItemsRef = useRef(bubbleItems);
   const inputValueRef = useRef(input.inputValue);
   const localMockBubbleSequenceRef = useRef(0);
+  const bubbleDissipationTimeoutsRef = useRef(new Map<string, unknown>());
+  const bubbleInteractionActiveRef = useRef(false);
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const handlersRef = useRef({
     setInputValue: input.setInputValue,
@@ -195,10 +226,66 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onPrimaryClick: input.onPrimaryClick,
   };
 
+  function clearShellBallBubbleDissipationTimer(bubbleId: string) {
+    const timeoutHandle = bubbleDissipationTimeoutsRef.current.get(bubbleId);
+    if (timeoutHandle === undefined) {
+      return;
+    }
+
+    globalThis.clearTimeout(timeoutHandle as ReturnType<typeof globalThis.setTimeout>);
+    bubbleDissipationTimeoutsRef.current.delete(bubbleId);
+  }
+
+  function clearShellBallBubbleDissipationTimers() {
+    for (const bubbleId of bubbleDissipationTimeoutsRef.current.keys()) {
+      clearShellBallBubbleDissipationTimer(bubbleId);
+    }
+  }
+
+  function syncShellBallBubbleDissipation(items: ShellBallBubbleItem[]) {
+    for (const item of items) {
+      if (!shouldShellBallBubbleDissipate(item) || bubbleInteractionActiveRef.current) {
+        clearShellBallBubbleDissipationTimer(item.bubble.bubble_id);
+      }
+    }
+
+    if (bubbleInteractionActiveRef.current) {
+      return;
+    }
+
+    for (const item of items) {
+      if (!shouldShellBallBubbleDissipate(item) || bubbleDissipationTimeoutsRef.current.has(item.bubble.bubble_id)) {
+        continue;
+      }
+
+      const bubbleId = item.bubble.bubble_id;
+      const timeoutHandle = globalThis.setTimeout(() => {
+        bubbleDissipationTimeoutsRef.current.delete(bubbleId);
+        updateShellBallBubbleItems((currentItems) => applyShellBallBubbleLifecycle(currentItems, { bubbleId, lifecycleState: "fading" }));
+      }, SHELL_BALL_LOCAL_BUBBLE_DISSIPATION_DELAY_MS);
+
+      bubbleDissipationTimeoutsRef.current.set(bubbleId, timeoutHandle);
+    }
+  }
+
+  function updateShellBallBubbleItems(updater: (currentItems: ShellBallBubbleItem[]) => ShellBallBubbleItem[]) {
+    let nextItems = bubbleItemsRef.current;
+
+    setBubbleItems((currentItems) => {
+      nextItems = updater(currentItems);
+      return nextItems;
+    });
+
+    bubbleItemsRef.current = nextItems;
+    syncShellBallBubbleDissipation(nextItems);
+
+    return nextItems;
+  }
+
   function appendShellBallLocalMockBubble(item: Omit<Parameters<typeof createShellBallLocalMockBubbleItem>[0], "sequence">) {
     localMockBubbleSequenceRef.current += 1;
 
-    setBubbleItems((currentItems) =>
+    updateShellBallBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
         createShellBallLocalMockBubbleItem({
@@ -325,7 +412,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
 
     function handleBubbleAction(payload: ShellBallBubbleActionPayload) {
-      setBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
+      updateShellBallBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
 
       if (payload.action === "pin") {
         detachedPinnedBubbleIdsRef.current.delete(payload.bubbleId);
@@ -380,6 +467,16 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       currentWindow.listen<ShellBallBubbleActionPayload>(shellBallWindowSyncEvents.bubbleAction, ({ payload }) => {
         handleBubbleAction(payload);
       }),
+      currentWindow.listen<ShellBallBubbleInteractionPayload>(shellBallWindowSyncEvents.bubbleInteraction, ({ payload }) => {
+        bubbleInteractionActiveRef.current = payload.active;
+
+        if (payload.active) {
+          clearShellBallBubbleDissipationTimers();
+          return;
+        }
+
+        syncShellBallBubbleDissipation(bubbleItemsRef.current);
+      }),
       currentWindow.onMoved(() => {
         void syncAnchoredPinnedBubbleWindows();
       }),
@@ -402,6 +499,16 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       for (const cleanup of cleanupFns) {
         cleanup();
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    syncShellBallBubbleDissipation(bubbleItems);
+  }, [bubbleItems]);
+
+  useEffect(() => {
+    return () => {
+      clearShellBallBubbleDissipationTimers();
     };
   }, []);
 
@@ -494,6 +601,12 @@ export async function emitShellBallBubbleAction(
     action,
     bubbleId,
     source,
+  });
+}
+
+export async function emitShellBallBubbleInteraction(active: boolean) {
+  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.bubbleInteraction, {
+    active,
   });
 }
 
