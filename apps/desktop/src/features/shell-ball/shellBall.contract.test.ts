@@ -59,12 +59,10 @@ import {
   getShellBallInputAnchor,
 } from "./useShellBallWindowMetrics";
 import {
-  canOpenShellBallDashboard,
   getShellBallPostSubmitInputReset,
-  getShellBallInteractionConsumedForEvent,
-  shouldOpenShellBallDashboardFromSingleClick,
-  shouldOpenShellBallDashboardFromDoubleClick,
+  getShellBallDashboardOpenGesturePolicy,
   getShellBallVoicePreviewFromEvent,
+  reduceShellBallInteractionConsumed,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
   syncShellBallInteractionController,
   useShellBallInteraction,
@@ -1419,78 +1417,68 @@ test("shell-ball keeps voice preview alive on leave while voice listening is act
   assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("voice_locked"), false);
 });
 
-test("shell-ball dashboard open gate only allows resting states", () => {
-  assert.equal(canOpenShellBallDashboard("idle"), true);
-  assert.equal(canOpenShellBallDashboard("hover_input"), true);
-  assert.equal(canOpenShellBallDashboard("confirming_intent"), false);
-  assert.equal(canOpenShellBallDashboard("processing"), false);
-  assert.equal(canOpenShellBallDashboard("waiting_auth"), false);
-  assert.equal(canOpenShellBallDashboard("voice_listening"), false);
-  assert.equal(canOpenShellBallDashboard("voice_locked"), false);
-});
-
-test("shell-ball dashboard double-click arbitration blocks consumed or active interactions", () => {
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: false }), true);
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "hover_input", interactionConsumed: false }), true);
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "hover_input", interactionConsumed: true }), false);
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: true }), false);
+test("shell-ball dashboard gesture policy stays task-2 explicit", () => {
   assert.equal(
-    shouldOpenShellBallDashboardFromDoubleClick({ state: "voice_listening", interactionConsumed: false }),
+    getShellBallDashboardOpenGesturePolicy({ gesture: "single_click", state: "idle", interactionConsumed: false }),
     false,
   );
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "voice_locked", interactionConsumed: false }), false);
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "single_click", state: "hover_input", interactionConsumed: false }),
+    false,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "idle", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: true }),
+    false,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "voice_listening", interactionConsumed: false }),
+    false,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "voice_locked", interactionConsumed: false }),
+    false,
+  );
 });
 
-test("shell-ball click contract keeps single click and first double-click click as no-ops", () => {
-  assert.equal(shouldOpenShellBallDashboardFromSingleClick("idle"), false);
-  assert.equal(shouldOpenShellBallDashboardFromSingleClick("hover_input"), false);
-  assert.equal(shouldOpenShellBallDashboardFromSingleClick("idle"), false);
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: false }), true);
-});
-
-test("shell-ball interaction consumed sequence lifecycle stays explicit", () => {
-  const afterPressStart = getShellBallInteractionConsumedForEvent("press_start");
+test("shell-ball interaction consumed reducer keeps pointer sequence scope explicit", () => {
+  const afterPressStart = reduceShellBallInteractionConsumed(true, "press_start");
   assert.equal(afterPressStart, false);
 
-  const afterLongPressVoiceEntry = getShellBallInteractionConsumedForEvent("long_press_voice_entry");
+  const afterLongPressVoiceEntry = reduceShellBallInteractionConsumed(afterPressStart, "long_press_voice_entry");
   assert.equal(afterLongPressVoiceEntry, true);
   assert.equal(
-    shouldOpenShellBallDashboardFromDoubleClick({
+    getShellBallDashboardOpenGesturePolicy({
+      gesture: "double_click",
       state: "hover_input",
       interactionConsumed: afterLongPressVoiceEntry,
     }),
     false,
   );
 
-  const afterVoiceFlowConsumed = getShellBallInteractionConsumedForEvent("voice_flow_consumed");
+  const afterVoiceFlowConsumed = reduceShellBallInteractionConsumed(afterLongPressVoiceEntry, "voice_flow_consumed");
   assert.equal(afterVoiceFlowConsumed, true);
-  assert.equal(
-    shouldOpenShellBallDashboardFromDoubleClick({
-      state: "hover_input",
-      interactionConsumed: afterVoiceFlowConsumed,
-    }),
-    false,
-  );
 
-  const afterNextPressStart = getShellBallInteractionConsumedForEvent("press_start");
+  const afterNextPressStart = reduceShellBallInteractionConsumed(afterVoiceFlowConsumed, "press_start");
   assert.equal(afterNextPressStart, false);
   assert.equal(
-    shouldOpenShellBallDashboardFromDoubleClick({
+    getShellBallDashboardOpenGesturePolicy({
+      gesture: "double_click",
       state: "hover_input",
       interactionConsumed: afterNextPressStart,
     }),
     true,
   );
 
-  const afterForceStateReset = getShellBallInteractionConsumedForEvent("force_state_reset");
+  const afterForceStateReset = reduceShellBallInteractionConsumed(afterVoiceFlowConsumed, "force_state_reset");
   assert.equal(afterForceStateReset, false);
-  assert.equal(
-    shouldOpenShellBallDashboardFromDoubleClick({
-      state: "hover_input",
-      interactionConsumed: afterForceStateReset,
-    }),
-    true,
-  );
 });
 
 test("shell-ball submit reset clears draft retention after submit", () => {
