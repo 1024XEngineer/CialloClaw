@@ -17,6 +17,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         "shell-ball": resolve(currentDirectory, "shell-ball.html"),
+        "shell-ball-bubble": resolve(currentDirectory, "shell-ball-bubble.html"),
+        "shell-ball-input": resolve(currentDirectory, "shell-ball-input.html"),
         dashboard: resolve(currentDirectory, "dashboard.html"),
         "control-panel": resolve(currentDirectory, "control-panel.html"),
       },

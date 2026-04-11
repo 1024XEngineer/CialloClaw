@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -47,8 +46,8 @@ func (t *ListDirTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCon
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
 	}
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(pathStr)
@@ -89,8 +88,8 @@ func (t *ListDirTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCont
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
 	}
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	safePath, err := execCtx.Platform.EnsureWithinWorkspace(normalizeWorkspaceToolPath(pathStr))
@@ -113,25 +112,14 @@ func (t *ListDirTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCont
 }
 
 func parseListDirInput(input map[string]any) (string, int, error) {
-	pathValue, ok := input["path"].(string)
-	if !ok || strings.TrimSpace(pathValue) == "" {
-		return "", 0, fmt.Errorf("input field 'path' must be a non-empty string")
+	pathValue, err := requireStringField(input, "path")
+	if err != nil {
+		return "", 0, err
 	}
 
-	limit := defaultListDirMaxEntries
-	if rawLimit, ok := input["limit"]; ok {
-		switch v := rawLimit.(type) {
-		case int:
-			if v > 0 && v < limit {
-				limit = v
-			}
-		case float64:
-			if int(v) > 0 && int(v) < limit {
-				limit = int(v)
-			}
-		default:
-			return "", 0, fmt.Errorf("input field 'limit' must be a number when provided")
-		}
+	limit, err := optionalPositiveLimitField(input, "limit", defaultListDirMaxEntries)
+	if err != nil {
+		return "", 0, err
 	}
 
 	return pathValue, limit, nil

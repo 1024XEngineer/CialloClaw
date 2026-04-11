@@ -147,6 +147,35 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	}
 }
 
+func TestExecuteWriteFileBubbleConsumesArtifactCandidate(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "第一点\n第二点")
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_001b",
+		RunID:        "run_001b",
+		Title:        "生成文档",
+		Intent:       map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "notes/output.md"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请整理成文档"},
+		DeliveryType: "bubble",
+		ResultTitle:  "文件写入结果",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if len(result.Artifacts) != 1 {
+		t.Fatalf("expected artifact candidate to be consumed when delivery yields none, got %d artifacts", len(result.Artifacts))
+	}
+	if result.Artifacts[0]["artifact_type"] != "generated_file" {
+		t.Fatalf("expected generated_file artifact from candidate, got %+v", result.Artifacts[0])
+	}
+	if result.ToolOutput["audit_record"] == nil {
+		t.Fatalf("expected audit candidate to be consumed, got %+v", result.ToolOutput)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "notes", "output.md")); err != nil {
+		t.Fatalf("expected write_file bubble path to still write file, got %v", err)
+	}
+}
+
 func TestExecuteBubbleReturnsGeneratedText(t *testing.T) {
 	service, _ := newTestExecutionService(t, "这段内容主要在解释当前问题的原因和处理方向。")
 

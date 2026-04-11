@@ -8,13 +8,16 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 const readFilePreviewLimit = 200
-const readFileTextType = "text/plain"
+const readFileMaxBytes int64 = 1 << 20
+const readFileDefaultTextType = "text/plain"
 
 // ---------------------------------------------------------------------------
 // ReadFileTool：读取工作区内文件的内置工具
@@ -59,15 +62,8 @@ func (t *ReadFileTool) Metadata() tools.ToolMetadata {
 //
 // 必须包含 "path" 字段且不为空。
 func (t *ReadFileTool) Validate(input map[string]any) error {
-	pathVal, ok := input["path"]
-	if !ok {
-		return fmt.Errorf("input field 'path' is required")
-	}
-	pathStr, ok := pathVal.(string)
-	if !ok || strings.TrimSpace(pathStr) == "" {
-		return fmt.Errorf("input field 'path' must be a non-empty string")
-	}
-	return nil
+	_, err := requireStringField(input, "path")
+	return err
 }
 
 // Execute 执行文件读取。
@@ -78,9 +74,12 @@ func (t *ReadFileTool) Validate(input map[string]any) error {
 func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
 	_ = ctx
 
-	pathStr := input["path"].(string)
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	pathStr, err := requireStringField(input, "path")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
+	}
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(pathStr)
@@ -89,6 +88,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
 	readPath := readFileToolPath(pathStr, normalizedPath, safePath)
+	if info, err := execCtx.Platform.Stat(readPath); err == nil {
+		if info.Size() > readFileMaxBytes {
+			return nil, fmt.Errorf("%w: file exceeds %d bytes", tools.ErrToolExecutionFailed, readFileMaxBytes)
+		}
+	}
 
 	content, err := execCtx.Platform.ReadFile(readPath)
 	if err != nil {
@@ -100,11 +104,12 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 		}, fmt.Errorf("%w: %v", tools.ErrToolExecutionFailed, err)
 	}
 
+	mimeType, textType := detectReadFileTypes(readPath, content)
 	rawOutput := map[string]any{
 		"path":      safePath,
 		"content":   string(content),
-		"mime_type": readFileTextType,
-		"text_type": readFileTextType,
+		"mime_type": mimeType,
+		"text_type": textType,
 	}
 
 	return &tools.ToolResult{
@@ -118,9 +123,12 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
 	_ = ctx
 
-	pathStr := input["path"].(string)
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	pathStr, err := requireStringField(input, "path")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
+	}
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(pathStr)
@@ -135,14 +143,14 @@ func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCon
 			"dry_run":   true,
 			"path":      safePath,
 			"valid":     true,
-			"mime_type": readFileTextType,
-			"text_type": readFileTextType,
+			"mime_type": inferReadFileMimeType(pathStr, nil),
+			"text_type": inferReadFileTextType(inferReadFileMimeType(pathStr, nil)),
 		},
 		SummaryOutput: map[string]any{
 			"dry_run":   true,
 			"path":      safePath,
 			"valid":     true,
-			"mime_type": readFileTextType,
+			"mime_type": inferReadFileMimeType(pathStr, nil),
 		},
 	}, nil
 }
@@ -168,9 +176,48 @@ func buildReadFileSummary(raw map[string]any) map[string]any {
 }
 
 func previewReadFileText(input string, limit int) string {
-	trimmed := strings.TrimSpace(input)
-	if len(trimmed) <= limit {
-		return trimmed
+	return previewString(input, limit)
+}
+
+func detectReadFileTypes(path string, content []byte) (string, string) {
+	mimeType := inferReadFileMimeType(path, content)
+	return mimeType, inferReadFileTextType(mimeType)
+}
+
+func inferReadFileMimeType(path string, content []byte) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".txt":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".yaml", ".yml":
+		return "application/yaml"
+	case ".csv":
+		return "text/csv"
 	}
-	return trimmed[:limit]
+
+	if len(content) > 0 {
+		sample := content
+		if len(sample) > 512 {
+			sample = sample[:512]
+		}
+		return http.DetectContentType(sample)
+	}
+
+	return readFileDefaultTextType
+}
+
+func inferReadFileTextType(mimeType string) string {
+	switch {
+	case strings.HasPrefix(mimeType, "text/"):
+		return mimeType
+	case mimeType == "application/json":
+		return "structured_text"
+	case mimeType == "application/yaml":
+		return "structured_text"
+	default:
+		return readFileDefaultTextType
+	}
 }

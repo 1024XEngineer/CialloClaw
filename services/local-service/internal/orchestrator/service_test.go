@@ -23,6 +23,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
@@ -70,6 +71,8 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, modelService, auditService, checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -81,7 +84,7 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithAudit(auditService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
+	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
 
 	return service, workspaceRoot
 }
@@ -1403,6 +1406,34 @@ func TestServiceSecuritySummaryIncludesRuntimeTokenUsage(t *testing.T) {
 	}
 	if tokenCostSummary["budget_auto_downgrade"] != true {
 		t.Fatalf("expected budget_auto_downgrade to remain true, got %+v", tokenCostSummary)
+	}
+}
+
+func TestServiceSecuritySummaryFallsBackToStoredRecoveryPoint(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err := service.storage.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_001",
+		TaskID:          "task_external",
+		Summary:         "stored recovery point",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	summary := result["summary"].(map[string]any)
+	latestRestorePoint := summary["latest_restore_point"].(map[string]any)
+	if latestRestorePoint["recovery_point_id"] != "rp_001" {
+		t.Fatalf("expected storage-backed recovery point, got %+v", latestRestorePoint)
 	}
 }
 

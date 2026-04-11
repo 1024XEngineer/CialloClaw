@@ -4,7 +4,7 @@
 
 `/services/local-service/internal/audit` 是 CialloClaw 后端治理与安全层中的**审计记录模块**。
 
-本模块的职责是把已经发生、已经判定完成、已经执行完成的操作，整理成统一、稳定、可追踪的审计记录输入，供上层或存储层落盘。
+本模块的职责是把已经发生、已经判定完成、已经执行完成的操作，整理成统一、稳定、可追踪的审计记录输入，并通过注入的 writer 输出给持久化层。
 
 在 `task-centric` 架构中：
 
@@ -38,7 +38,7 @@
 - artifact 正式生成
 - task / run / step 状态机推进
 - 前端安全页展示
-- 直接持久化数据库写入（当前阶段）
+- storage 实现细节本身
 
 一句话说：
 
@@ -74,7 +74,7 @@
 
 说明：
 
-- 当前模块内可以先保留最小骨架；
+- 当前模块已经具备最小 writer + service 能力；
 - 不能在这里自行发明协议层不存在的正式字段。
 
 ---
@@ -121,10 +121,9 @@
 
 ### P0
 
-- 定义 audit 模块最小输入输出结构
-- 定义最小 writer 接口或 service 入口
-- 补 table-driven tests
-- 对齐 tools 输出的 `audit_candidate` 到 `RecordInput`
+- 补更清晰的 `BuildRecordInputFromCandidate(...)` 示例样例
+- 明确 writer 错误在上层执行链中的统一处理方式
+- 明确 storage 读侧结果在 orchestrator / security 视图中的消费规则
 
 ### P1
 
@@ -141,8 +140,8 @@
 
 ### P0
 
-- `tools` / `execution` / `orchestrator` 产出可消费的 audit candidate
-- `storage` 接入 audit 真实持久化
+- `tools` / `execution` / `orchestrator` 已能产出并消费最小 audit candidate
+- `storage` 已具备 audit 的写侧和读侧能力
 - `rpc` / dashboard 安全页读取 audit 数据
 
 ### P1

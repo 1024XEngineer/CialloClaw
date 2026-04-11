@@ -5,7 +5,7 @@ import type {
   ShellBallVisualState,
 } from "./shellBall.types";
 
-export const SHELL_BALL_HOVER_INTENT_MS = 240;
+export const SHELL_BALL_HOVER_INTENT_MS = 360;
 export const SHELL_BALL_LEAVE_GRACE_MS = 180;
 export const SHELL_BALL_LONG_PRESS_MS = 420;
 export const SHELL_BALL_LOCK_DELTA_PX = 48;

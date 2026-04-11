@@ -9,6 +9,7 @@ import (
 )
 
 const commandOutputPreviewLimit = 200
+const commandOutputRawLimit = 4096
 
 type ExecCommandTool struct {
 	meta tools.ToolMetadata
@@ -44,8 +45,13 @@ func (t *ExecCommandTool) Execute(ctx context.Context, execCtx *tools.ToolExecut
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
 	}
-	if execCtx == nil || execCtx.Execution == nil {
-		return nil, fmt.Errorf("%w: execution adapter is required", tools.ErrCapabilityDenied)
+	if err := ensureExecution(execCtx); err != nil {
+		return nil, err
+	}
+
+	workingDir, err = resolveExecCommandWorkingDir(execCtx, workingDir)
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := execCtx.Execution.RunCommand(ctx, command, args, workingDir)
@@ -53,13 +59,20 @@ func (t *ExecCommandTool) Execute(ctx context.Context, execCtx *tools.ToolExecut
 		return nil, fmt.Errorf("%w: command execution failed: %v", tools.ErrToolExecutionFailed, err)
 	}
 
+	rawStdout, stdoutTruncated, stdoutBytes := truncateCommandOutput(result.Stdout)
+	rawStderr, stderrTruncated, stderrBytes := truncateCommandOutput(result.Stderr)
+
 	rawOutput := map[string]any{
-		"command":     command,
-		"args":        args,
-		"working_dir": workingDir,
-		"stdout":      result.Stdout,
-		"stderr":      result.Stderr,
-		"exit_code":   result.ExitCode,
+		"command":          command,
+		"args":             args,
+		"working_dir":      workingDir,
+		"stdout":           rawStdout,
+		"stderr":           rawStderr,
+		"stdout_bytes":     stdoutBytes,
+		"stderr_bytes":     stderrBytes,
+		"stdout_truncated": stdoutTruncated,
+		"stderr_truncated": stderrTruncated,
+		"exit_code":        result.ExitCode,
 	}
 
 	return &tools.ToolResult{
@@ -76,8 +89,13 @@ func (t *ExecCommandTool) DryRun(ctx context.Context, execCtx *tools.ToolExecute
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
 	}
-	if execCtx == nil || execCtx.Execution == nil {
-		return nil, fmt.Errorf("%w: execution adapter is required", tools.ErrCapabilityDenied)
+	if err := ensureExecution(execCtx); err != nil {
+		return nil, err
+	}
+
+	workingDir, err = resolveExecCommandWorkingDir(execCtx, workingDir)
+	if err != nil {
+		return nil, err
 	}
 
 	rawOutput := map[string]any{
@@ -90,44 +108,27 @@ func (t *ExecCommandTool) DryRun(ctx context.Context, execCtx *tools.ToolExecute
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"command": command, "arg_count": len(args), "dry_run": true},
+		SummaryOutput: map[string]any{"command": command, "arg_count": len(args), "dry_run": true, "working_dir": workingDir},
 	}, nil
 }
 
 func parseExecCommandInput(input map[string]any) (string, []string, string, error) {
-	command, ok := input["command"].(string)
-	if !ok || strings.TrimSpace(command) == "" {
-		return "", nil, "", fmt.Errorf("input field 'command' must be a non-empty string")
+	command, err := requireStringField(input, "command")
+	if err != nil {
+		return "", nil, "", err
 	}
 
-	args := make([]string, 0)
-	if rawArgs, ok := input["args"]; ok {
-		switch typed := rawArgs.(type) {
-		case []string:
-			args = append(args, typed...)
-		case []any:
-			for _, item := range typed {
-				arg, ok := item.(string)
-				if !ok {
-					return "", nil, "", fmt.Errorf("input field 'args' must contain only strings")
-				}
-				args = append(args, arg)
-			}
-		default:
-			return "", nil, "", fmt.Errorf("input field 'args' must be a string array when provided")
-		}
+	args, err := optionalStringSliceField(input, "args")
+	if err != nil {
+		return "", nil, "", err
 	}
 
-	workingDir := ""
-	if rawWorkingDir, ok := input["working_dir"]; ok {
-		value, ok := rawWorkingDir.(string)
-		if !ok {
-			return "", nil, "", fmt.Errorf("input field 'working_dir' must be a string when provided")
-		}
-		workingDir = strings.TrimSpace(value)
+	workingDir, err := optionalStringField(input, "working_dir")
+	if err != nil {
+		return "", nil, "", err
 	}
 
-	return strings.TrimSpace(command), args, workingDir, nil
+	return command, args, workingDir, nil
 }
 
 func buildExecCommandSummary(command string, args []string, workingDir string, result tools.CommandExecutionResult) map[string]any {
@@ -139,6 +140,30 @@ func buildExecCommandSummary(command string, args []string, workingDir string, r
 		"stdout_preview": previewText(result.Stdout, commandOutputPreviewLimit),
 		"stderr_preview": previewText(result.Stderr, commandOutputPreviewLimit),
 	}
+}
+
+func resolveExecCommandWorkingDir(execCtx *tools.ToolExecuteContext, workingDir string) (string, error) {
+	resolved := strings.TrimSpace(workingDir)
+	if resolved == "" {
+		resolved = strings.TrimSpace(execCtx.WorkspacePath)
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("%w: workspace path is required", tools.ErrCapabilityDenied)
+	}
+	resolved = normalizeWorkspaceToolPath(resolved)
+	safePath, err := execCtx.Platform.EnsureWithinWorkspace(resolved)
+	if err != nil {
+		return "", tools.ErrWorkspaceBoundaryDenied
+	}
+	return safePath, nil
+}
+
+func truncateCommandOutput(input string) (string, bool, int) {
+	byteCount := len(input)
+	if byteCount <= commandOutputRawLimit {
+		return input, false, byteCount
+	}
+	return input[:commandOutputRawLimit], true, byteCount
 }
 
 func previewText(input string, limit int) string {

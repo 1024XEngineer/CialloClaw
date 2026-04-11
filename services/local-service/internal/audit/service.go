@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -29,9 +29,7 @@ func (noopWriter) WriteAuditRecord(_ context.Context, _ Record) error {
 // Service 提供当前模块的服务能力。
 type Service struct {
 	writer Writer
-	mu     sync.Mutex
 	now    func() time.Time
-	nextID uint64
 }
 
 // NewService 创建并返回 Service。
@@ -262,11 +260,11 @@ func (s *Service) buildRuntimeRecord(taskID, runID, auditType, action, summary, 
 }
 
 func (s *Service) nextAuditID() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.nextID++
-	return fmt.Sprintf("audit_%03d", s.nextID)
+	seq := atomic.AddUint64(&auditCounter, 1)
+	return fmt.Sprintf("audit_%d_%d", s.now().UTC().UnixNano(), seq)
 }
+
+var auditCounter uint64
 
 func buildTokenUsage(raw map[string]any) map[string]any {
 	tokenUsage, ok := raw["token_usage"].(map[string]any)

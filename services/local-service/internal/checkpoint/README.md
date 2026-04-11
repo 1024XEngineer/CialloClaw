@@ -4,7 +4,7 @@
 
 `/services/local-service/internal/checkpoint` 是 CialloClaw 后端治理与安全层中的**恢复点模块**。
 
-本模块负责在高风险动作执行前，为上层提供“是否需要创建恢复点、恢复点描述如何组织、恢复点对象如何表达”的统一能力入口。
+本模块负责在高风险动作执行前，为上层提供“是否需要创建恢复点、恢复点描述如何组织、恢复点对象如何表达”的统一能力入口，并通过注入的 writer 输出给持久化层。
 
 本模块当前不是回滚编排器，也不是文件恢复执行器，而是恢复点能力的最小收口层。
 
@@ -27,7 +27,7 @@
 
 - 风险判断
 - 审批流程
-- 正式文件回滚执行（当前阶段）
+- storage 实现细节本身
 - task / run 状态流转
 - artifact 正式交付
 - 前端恢复点页面展示
@@ -60,7 +60,7 @@
 
 说明：
 
-- 本模块内部可以先保留最小骨架；
+- 本模块已经具备最小 writer + service 能力；
 - 不要在这里自行发明协议真源之外的正式字段。
 
 ---
@@ -105,10 +105,9 @@
 
 ### P0
 
-- 定义 checkpoint 模块最小输入输出结构
-- 定义最小 service 入口
-- 补 table-driven tests
-- 对齐 tools 输出的 `checkpoint_candidate` 到 `CreateInput`
+- 补更清晰的 `BuildCreateInputFromCandidate(...)` 示例样例
+- 明确 `required=false` 时在上层执行链中的消费策略
+- 明确 storage 读侧结果在 orchestrator / security 视图中的消费规则
 
 ### P1
 
@@ -125,8 +124,8 @@
 
 ### P0
 
-- `tools` / `orchestrator` / `risk` 产出 checkpoint candidate
-- `storage` 接入 recovery point 的真实持久化
+- `tools` / `execution` 已能产出并消费最小 checkpoint candidate
+- `storage` 已具备 recovery point 的写侧和读侧能力
 - dashboard / security 页读取 recovery point 列表
 
 ### P1

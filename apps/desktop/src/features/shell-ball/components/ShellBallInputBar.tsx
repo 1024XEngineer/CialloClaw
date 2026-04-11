@@ -25,11 +25,6 @@ export function ShellBallInputBar({
   onFocusChange,
 }: ShellBallInputBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-
-  if (mode === "hidden") {
-    return null;
-  }
-
   const trimmedValue = value.trim();
   const isInteractive = mode === "interactive";
   const isReadonly = mode === "readonly";
@@ -39,11 +34,11 @@ export function ShellBallInputBar({
   const previewLabel = voicePreview === null ? null : `Release to ${voicePreview}`;
 
   useEffect(() => {
-    if (isInteractive) {
+    if (inputRef.current === null) {
       return;
     }
 
-    if (inputRef.current === null) {
+    if (isInteractive) {
       return;
     }
 
@@ -52,6 +47,10 @@ export function ShellBallInputBar({
       onFocusChange(false);
     }
   }, [isInteractive, onFocusChange]);
+
+  if (mode === "hidden") {
+    return null;
+  }
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
     if (!isInteractive) {

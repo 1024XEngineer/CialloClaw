@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -65,8 +64,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteC
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
 	}
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(parsed.Path)
@@ -101,8 +100,8 @@ func (t *WriteFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCo
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
 	}
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(parsed.Path)
@@ -128,16 +127,20 @@ func (t *WriteFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCo
 }
 
 func parseWriteFileInput(input map[string]any) (WriteFileInput, error) {
-	pathValue, ok := input["path"].(string)
-	if !ok || strings.TrimSpace(pathValue) == "" {
-		return WriteFileInput{}, errors.New("input field 'path' must be a non-empty string")
+	pathValue, err := requireStringField(input, "path")
+	if err != nil {
+		return WriteFileInput{}, err
 	}
-	contentValue, ok := input["content"].(string)
+	contentValue, ok := input["content"]
+	if !ok {
+		return WriteFileInput{}, errors.New("input field 'content' must be a string")
+	}
+	contentString, ok := contentValue.(string)
 	if !ok {
 		return WriteFileInput{}, errors.New("input field 'content' must be a string")
 	}
 
-	return WriteFileInput{Path: pathValue, Content: contentValue}, nil
+	return WriteFileInput{Path: pathValue, Content: contentString}, nil
 }
 
 func detectWriteMode(platform tools.PlatformCapability, safePath string) (created bool, overwritten bool, err error) {

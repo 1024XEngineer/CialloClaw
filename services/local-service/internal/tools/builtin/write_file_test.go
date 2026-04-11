@@ -139,6 +139,59 @@ func TestWriteFileToolWorkspaceOverwrite(t *testing.T) {
 	if checkpoint["required"] != true {
 		t.Fatalf("expected checkpoint required for overwrite, got %+v", checkpoint)
 	}
+	auditCandidate := result.RawOutput["audit_candidate"].(map[string]any)
+	if auditCandidate["summary"] != "overwrite file" {
+		t.Fatalf("expected overwrite audit summary, got %+v", auditCandidate)
+	}
+}
+
+func TestWriteFileToolDryRunCreate(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubWriteFilePlatform(workspace)
+	tool := NewWriteFileTool()
+
+	result, err := tool.DryRun(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform}, map[string]any{
+		"path":    "notes/demo.txt",
+		"content": "hello world",
+	})
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	if result.RawOutput["dry_run"] != true {
+		t.Fatalf("expected dry_run flag, got %+v", result.RawOutput)
+	}
+	if result.RawOutput["created"] != true || result.RawOutput["overwritten"] != false {
+		t.Fatalf("unexpected create flags for dry run: %+v", result.RawOutput)
+	}
+	if _, exists := platform.files[filepath.Join(workspace, "notes", "demo.txt")]; exists {
+		t.Fatal("expected dry run not to write any file")
+	}
+}
+
+func TestWriteFileToolDryRunOverwrite(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubWriteFilePlatform(workspace)
+	target := filepath.Join(workspace, "notes", "demo.txt")
+	platform.files[target] = []byte("old")
+	tool := NewWriteFileTool()
+
+	result, err := tool.DryRun(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform}, map[string]any{
+		"path":    target,
+		"content": "new-content",
+	})
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	if result.RawOutput["created"] != false || result.RawOutput["overwritten"] != true {
+		t.Fatalf("unexpected overwrite flags for dry run: %+v", result.RawOutput)
+	}
+	checkpoint := result.RawOutput["checkpoint_candidate"].(map[string]any)
+	if checkpoint["required"] != true {
+		t.Fatalf("expected checkpoint required for overwrite dry run, got %+v", checkpoint)
+	}
+	if content := string(platform.files[target]); content != "old" {
+		t.Fatalf("expected dry run not to modify existing file, got %q", content)
+	}
 }
 
 func TestWriteFileToolRejectsOutsideWorkspace(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -121,4 +123,16 @@ type TaskRunStore interface {
 // ToolCallStore 定义 tool_call 持久化契约。
 type ToolCallStore interface {
 	SaveToolCall(ctx context.Context, record tools.ToolCallRecord) error
+}
+
+// AuditStore 定义 audit 记录持久化契约。
+type AuditStore interface {
+	WriteAuditRecord(ctx context.Context, record audit.Record) error
+	ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error)
+}
+
+// RecoveryPointStore 定义恢复点持久化契约。
+type RecoveryPointStore interface {
+	WriteRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) error
+	ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error)
 }

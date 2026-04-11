@@ -7,24 +7,24 @@ import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.t
 
 type ShellBallMascotProps = {
   visualState: ShellBallVisualState;
-  voicePreview: ShellBallVoicePreview;
+  voicePreview?: ShellBallVoicePreview;
   motionConfig: ShellBallMotionConfig;
-  onPrimaryClick: () => void;
-  onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
-  onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
-  onPressEnd: (event: PointerEvent<HTMLButtonElement>) => boolean;
+  onPrimaryClick?: () => void;
+  onPressStart?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onPressMove?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onPressEnd?: (event: PointerEvent<HTMLButtonElement>) => boolean;
 };
 
 type MotionStyle = CSSProperties & Record<string, string>;
 
 export function ShellBallMascot({
   visualState,
-  voicePreview,
+  voicePreview = null,
   motionConfig,
-  onPrimaryClick,
-  onPressStart,
-  onPressMove,
-  onPressEnd,
+  onPrimaryClick = () => {},
+  onPressStart = () => {},
+  onPressMove = () => {},
+  onPressEnd = () => false,
 }: ShellBallMascotProps) {
   const suppressClickRef = useRef(false);
 

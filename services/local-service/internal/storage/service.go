@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -41,16 +43,18 @@ type Descriptor struct {
 
 // Service 提供当前模块的服务能力。
 type Service struct {
-	adapter           platform.StorageAdapter
-	memoryStore       MemoryStore
-	taskRunStore      TaskRunStore
-	toolCallStore     ToolCallStore
-	memoryStoreName   string
-	taskRunStoreName  string
-	toolCallStoreName string
-	retrievalBackend  string
-	storeInitErr      error
-	fallbackActive    bool
+	adapter            platform.StorageAdapter
+	memoryStore        MemoryStore
+	taskRunStore       TaskRunStore
+	toolCallStore      ToolCallStore
+	auditStore         AuditStore
+	recoveryPointStore RecoveryPointStore
+	memoryStoreName    string
+	taskRunStoreName   string
+	toolCallStoreName  string
+	retrievalBackend   string
+	storeInitErr       error
+	fallbackActive     bool
 }
 
 // NewService 创建并返回Service。
@@ -58,6 +62,8 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
 	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
+	auditStore := AuditStore(newInMemoryAuditStore())
+	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
 	memoryStoreName := memoryStoreBackendInMemory
 	taskRunStoreName := memoryStoreBackendInMemory
 	toolCallStoreName := memoryStoreBackendInMemory
@@ -97,22 +103,42 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite tool_call store: %w", err))
 				fallbackActive = true
 			}
+
+			sqliteAuditStore, err := NewSQLiteAuditStore(databasePath)
+			if err == nil {
+				auditStore = sqliteAuditStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite audit store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteRecoveryPointStore, err := NewSQLiteRecoveryPointStore(databasePath)
+			if err == nil {
+				recoveryPointStore = sqliteRecoveryPointStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite recovery point store: %w", err))
+				fallbackActive = true
+			}
 		}
 	}
 
 	storeInitErr := errors.Join(storeInitErrors...)
 
 	return &Service{
-		adapter:           adapter,
-		memoryStore:       memoryStore,
-		taskRunStore:      taskRunStore,
-		toolCallStore:     toolCallStore,
-		memoryStoreName:   memoryStoreName,
-		taskRunStoreName:  taskRunStoreName,
-		toolCallStoreName: toolCallStoreName,
-		retrievalBackend:  retrievalBackend,
-		storeInitErr:      storeInitErr,
-		fallbackActive:    fallbackActive,
+		adapter:            adapter,
+		memoryStore:        memoryStore,
+		taskRunStore:       taskRunStore,
+		toolCallStore:      toolCallStore,
+		auditStore:         auditStore,
+		recoveryPointStore: recoveryPointStore,
+		memoryStoreName:    memoryStoreName,
+		taskRunStoreName:   taskRunStoreName,
+		toolCallStoreName:  toolCallStoreName,
+		retrievalBackend:   retrievalBackend,
+		storeInitErr:       storeInitErr,
+		fallbackActive:     fallbackActive,
 	}
 }
 
@@ -198,6 +224,22 @@ func (s *Service) ToolCallSink() tools.ToolCallSink {
 	return s.toolCallStore
 }
 
+func (s *Service) AuditWriter() audit.Writer {
+	return s.auditStore
+}
+
+func (s *Service) AuditStore() AuditStore {
+	return s.auditStore
+}
+
+func (s *Service) RecoveryPointWriter() checkpoint.Writer {
+	return s.recoveryPointStore
+}
+
+func (s *Service) RecoveryPointStore() RecoveryPointStore {
+	return s.recoveryPointStore
+}
+
 // Close 处理当前模块的相关逻辑。
 func (s *Service) Close() error {
 	errs := make([]error, 0, 2)
@@ -208,6 +250,12 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.toolCallStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.auditStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.recoveryPointStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 

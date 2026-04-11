@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -54,7 +55,25 @@ func (s *stubReadFilePlatform) ReadFile(path string) ([]byte, error) {
 	return append([]byte(nil), content...), nil
 }
 func (s *stubReadFilePlatform) WriteFile(path string, content []byte) error { return nil }
-func (s *stubReadFilePlatform) Stat(path string) (fs.FileInfo, error)       { return nil, fs.ErrNotExist }
+func (s *stubReadFilePlatform) Stat(path string) (fs.FileInfo, error) {
+	content, ok := s.files[filepath.Clean(path)]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return stubReadFileInfo{name: filepath.Base(path), size: int64(len(content))}, nil
+}
+
+type stubReadFileInfo struct {
+	name string
+	size int64
+}
+
+func (s stubReadFileInfo) Name() string       { return s.name }
+func (s stubReadFileInfo) Size() int64        { return s.size }
+func (s stubReadFileInfo) Mode() fs.FileMode  { return 0o644 }
+func (s stubReadFileInfo) ModTime() time.Time { return time.Time{} }
+func (s stubReadFileInfo) IsDir() bool        { return false }
+func (s stubReadFileInfo) Sys() any           { return nil }
 
 func TestReadFileToolExecuteSuccess(t *testing.T) {
 	workspace := filepath.Clean("D:/workspace")
@@ -67,11 +86,27 @@ func TestReadFileToolExecuteSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if result.RawOutput["path"] != target || result.RawOutput["mime_type"] != readFileTextType {
+	if result.RawOutput["path"] != target || result.RawOutput["mime_type"] != "text/plain" {
 		t.Fatalf("unexpected raw output: %+v", result.RawOutput)
 	}
 	if result.SummaryOutput["content_preview"] != "hello world" {
 		t.Fatalf("unexpected summary output: %+v", result.SummaryOutput)
+	}
+}
+
+func TestReadFileToolDetectsMarkdownMimeType(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubReadFilePlatform(workspace)
+	target := filepath.Join(workspace, "notes", "demo.md")
+	platform.files[target] = []byte("# title\nhello")
+	tool := NewReadFileTool()
+
+	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform}, map[string]any{"path": target})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.RawOutput["mime_type"] != "text/markdown" {
+		t.Fatalf("expected markdown mime type, got %+v", result.RawOutput)
 	}
 }
 
@@ -106,5 +141,18 @@ func TestReadFileToolRequiresPlatform(t *testing.T) {
 	_, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{}, map[string]any{"path": "notes/demo.txt"})
 	if !errors.Is(err, tools.ErrCapabilityDenied) {
 		t.Fatalf("expected ErrCapabilityDenied, got %v", err)
+	}
+}
+
+func TestReadFileToolRejectsOversizedFile(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubReadFilePlatform(workspace)
+	target := filepath.Join(workspace, "notes", "large.txt")
+	platform.files[target] = make([]byte, readFileMaxBytes+1)
+	tool := NewReadFileTool()
+
+	_, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform}, map[string]any{"path": target})
+	if !errors.Is(err, tools.ErrToolExecutionFailed) {
+		t.Fatalf("expected ErrToolExecutionFailed for oversized file, got %v", err)
 	}
 }

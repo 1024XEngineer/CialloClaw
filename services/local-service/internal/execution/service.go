@@ -218,7 +218,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 	toolResult, err := s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
 		TaskID:        request.TaskID,
 		RunID:         request.RunID,
-		WorkspacePath: "workspace",
+		WorkspacePath: ".",
 		Platform:      s.fileSystem,
 		Execution:     s.execution,
 	}, intentName, args)
@@ -284,7 +284,9 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 			result.ToolOutput = normalizeFilesystemToolOutput(toolName, mergeToolOutputs(consumedOutput, toolResult.SummaryOutput), toolInput)
 		}
 		if consumedArtifact != nil {
-			result.Artifacts = append(result.Artifacts, consumedArtifact)
+			if len(result.Artifacts) == 0 {
+				result.Artifacts = append(result.Artifacts, consumedArtifact)
+			}
 		}
 	} else {
 		bubbleText := toolBubbleText(toolName, toolResult)
@@ -437,6 +439,7 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 	}
 
 	merged := cloneOutput(rawOutput)
+	var artifact map[string]any
 	if auditCandidate, ok := rawOutput["audit_candidate"].(map[string]any); ok && s.audit != nil {
 		recordInput, err := audit.BuildRecordInputFromCandidate(taskID, auditCandidate)
 		if err != nil {
@@ -469,7 +472,18 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 		}
 	}
 
-	return merged, nil, nil
+	if artifactCandidate, ok := rawOutput["artifact_candidate"].(map[string]any); ok {
+		artifact = map[string]any{
+			"artifact_id":   "",
+			"task_id":       taskID,
+			"artifact_type": artifactCandidate["artifact_type"],
+			"title":         artifactCandidate["title"],
+			"path":          artifactCandidate["path"],
+			"mime_type":     artifactCandidate["mime_type"],
+		}
+	}
+
+	return merged, artifact, nil
 }
 
 func cloneOutput(input map[string]any) map[string]any {
