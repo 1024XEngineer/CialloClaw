@@ -538,7 +538,6 @@ export function MirrorApp() {
   const fetchInFlightRef = useRef(false);
   const pendingRefreshRef = useRef(false);
   const lastSavedFloatingPositionsRef = useRef<string | null>(null);
-  const latestMirrorRevisionRef = useRef<number | null>(null);
 
   const refreshMirrorData = useCallback(() => {
     if (fetchInFlightRef.current) {
@@ -573,13 +572,6 @@ export function MirrorApp() {
   useEffect(() => {
     isMountedRef.current = true;
     const unsubscribe = subscribeMirrorOverviewUpdated((notification) => {
-      const lastRevision = latestMirrorRevisionRef.current;
-
-      if (lastRevision !== null && notification.revision <= lastRevision) {
-        return;
-      }
-
-      latestMirrorRevisionRef.current = notification.revision;
       setLastMirrorUpdate(notification);
       refreshMirrorData();
     });

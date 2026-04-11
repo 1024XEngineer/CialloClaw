@@ -38,6 +38,7 @@ import {
   type SecurityRespondOutcome,
 } from "./securityService";
 import { openWindow } from "@/platform/windowController";
+import "./securityPage.css";
 
 type SecurityCardKey = "status" | "restore" | "budget" | "governance" | `approval:${string}`;
 type CardPosition = { x: number; y: number };
@@ -184,7 +185,29 @@ function formatOptionalDateTime(value: string | null | undefined) {
 }
 
 function formatTaskIntent(intent: Task["intent"]) {
-  return intent ? JSON.stringify(intent, null, 2) : "当前没有挂载 intent。";
+  if (!intent) {
+    return "当前没有挂载 intent。";
+  }
+
+  const argumentKeys = Object.keys(intent.arguments);
+
+  return [
+    `name: ${intent.name}`,
+    argumentKeys.length ? `argument_keys: ${argumentKeys.join(", ")}` : "argument_keys: none",
+    `argument_count: ${argumentKeys.length}`,
+  ].join("\n");
+}
+
+function getPendingSecurityStatus(pendingCount: number, fallbackStatus: SecurityStatus) {
+  if (pendingCount > 0) {
+    return "pending_confirmation";
+  }
+
+  return fallbackStatus === "pending_confirmation" ? "normal" : fallbackStatus;
+}
+
+function getVisiblePendingItems(items: ApprovalRequest[], limit: number) {
+  return items.slice(0, Math.max(0, limit));
 }
 
 function renderDetailEntryList(items: string[], emptyCopy: string, keyPrefix: string) {
@@ -205,14 +228,17 @@ function renderDetailEntryList(items: string[], emptyCopy: string, keyPrefix: st
 
 function mergePendingApproval(current: SecurityModuleData, payload: ApprovalPendingNotification): SecurityModuleData {
   const exists = current.pending.some((item) => item.approval_id === payload.approval_request.approval_id);
-  const pending = exists ? current.pending : [payload.approval_request, ...current.pending];
+  const nextPendingItems = exists
+    ? current.pending.map((item) => (item.approval_id === payload.approval_request.approval_id ? payload.approval_request : item))
+    : [payload.approval_request, ...current.pending];
   const nextTotal = exists ? current.pendingPage.total : current.pendingPage.total + 1;
+  const pending = getVisiblePendingItems(nextPendingItems, current.pendingPage.limit);
 
   return {
     ...current,
     summary: {
       ...current.summary,
-      security_status: "pending_confirmation",
+      security_status: getPendingSecurityStatus(exists ? current.summary.pending_authorizations : current.summary.pending_authorizations + 1, current.summary.security_status),
       pending_authorizations: exists ? current.summary.pending_authorizations : current.summary.pending_authorizations + 1,
     },
     pending,
@@ -525,10 +551,7 @@ export function SecurityApp() {
     });
 
     const unsubscribe = subscribeApprovalPending((payload) => {
-      setModuleData((current) => ({
-        ...mergePendingApproval(current, payload),
-        source: "rpc",
-      }));
+      setModuleData((current) => mergePendingApproval(current, payload));
       setFeedback(`收到新的待确认授权：${payload.approval_request.operation_name} · task ${payload.task_id}`);
       queueRpcRefresh();
     });
@@ -657,14 +680,16 @@ export function SecurityApp() {
       setModuleData((current) => {
         const pending = current.pending.filter((item) => item.approval_id !== approval.approval_id);
         const nextTotal = Math.max(0, current.pendingPage.total - 1);
+        const nextPendingCount = Math.max(0, current.summary.pending_authorizations - 1);
 
         return {
           ...current,
           summary: {
             ...current.summary,
-            pending_authorizations: Math.max(0, current.summary.pending_authorizations - 1),
+            pending_authorizations: nextPendingCount,
+            security_status: getPendingSecurityStatus(nextPendingCount, current.summary.security_status),
           },
-          pending,
+          pending: getVisiblePendingItems(pending, current.pendingPage.limit),
           pendingPage: {
             ...current.pendingPage,
             total: nextTotal,
