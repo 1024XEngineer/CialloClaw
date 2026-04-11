@@ -2984,7 +2984,11 @@ test("shell-ball bubble window keeps pinned items in the main history list", () 
   renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
 
   assert.notEqual(capturedProps, null);
-  assert.deepEqual((capturedProps as { bubbleItems: ShellBallBubbleItem[] }).bubbleItems.map((item) => item.bubble.bubble_id), [
+  if (capturedProps === null) {
+    throw new Error("Expected bubble window props to be captured.");
+  }
+
+  assert.deepEqual((capturedProps as unknown as { bubbleItems: ShellBallBubbleItem[] }).bubbleItems.map((item) => item.bubble.bubble_id), [
     "msg-helper-pinned-1",
     "msg-helper-visible-1",
   ]);
@@ -3061,7 +3065,11 @@ test("shell-ball bubble window emits state-aware pin actions for history bubbles
   renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
 
   assert.notEqual(capturedProps, null);
-  const onPinBubble = (capturedProps as { onPinBubble: (bubbleId: string, action: "pin" | "unpin") => void }).onPinBubble;
+  if (capturedProps === null) {
+    throw new Error("Expected bubble window pin callback to be captured.");
+  }
+
+  const onPinBubble = (capturedProps as unknown as { onPinBubble: (bubbleId: string, action: "pin" | "unpin") => void }).onPinBubble;
 
   onPinBubble("msg-helper-pinned-action-1", "unpin");
   onPinBubble("msg-helper-visible-action-1", "pin");
