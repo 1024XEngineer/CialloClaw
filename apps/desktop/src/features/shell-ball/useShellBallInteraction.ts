@@ -27,6 +27,10 @@ export function shouldOpenShellBallDashboardFromDoubleClick(input: {
   return !input.interactionConsumed && canOpenShellBallDashboard(input.state);
 }
 
+export function shouldOpenShellBallDashboardFromSingleClick(_state: ShellBallVisualState) {
+  return false;
+}
+
 type ShellBallInteractionConsumedEvent =
   | "press_start"
   | "long_press_voice_entry"

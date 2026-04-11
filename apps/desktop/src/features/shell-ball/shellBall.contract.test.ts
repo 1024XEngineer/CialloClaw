@@ -62,6 +62,7 @@ import {
   canOpenShellBallDashboard,
   getShellBallPostSubmitInputReset,
   getShellBallInteractionConsumedForEvent,
+  shouldOpenShellBallDashboardFromSingleClick,
   shouldOpenShellBallDashboardFromDoubleClick,
   getShellBallVoicePreviewFromEvent,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -1438,6 +1439,13 @@ test("shell-ball dashboard double-click arbitration blocks consumed or active in
     false,
   );
   assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "voice_locked", interactionConsumed: false }), false);
+});
+
+test("shell-ball click contract keeps single click and first double-click click as no-ops", () => {
+  assert.equal(shouldOpenShellBallDashboardFromSingleClick("idle"), false);
+  assert.equal(shouldOpenShellBallDashboardFromSingleClick("hover_input"), false);
+  assert.equal(shouldOpenShellBallDashboardFromSingleClick("idle"), false);
+  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: false }), true);
 });
 
 test("shell-ball interaction consumed sequence lifecycle stays explicit", () => {
