@@ -8,7 +8,7 @@ type ShellBallDevLayerProps = {
 
 export function ShellBallDevLayer({ value, onChange }: ShellBallDevLayerProps) {
   return (
-    <aside className="shell-ball-surface__switcher-shell" aria-label="Shell-ball demo controls">
+    <aside aria-label="Shell-ball demo controls">
       <ShellBallDemoSwitcher value={value} onChange={onChange} />
     </aside>
   );

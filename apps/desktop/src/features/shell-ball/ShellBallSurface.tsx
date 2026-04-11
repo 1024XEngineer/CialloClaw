@@ -8,12 +8,15 @@ type ShellBallSurfaceProps = {
   containerRef?: RefObject<HTMLDivElement>;
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
+  voiceHoldProgress?: number;
+  inputFocused?: boolean;
   motionConfig: ShellBallMotionConfig;
   onDragStart: () => void;
   onPrimaryClick: () => void;
   onDoubleClick: () => void;
   onRegionEnter: () => void;
   onRegionLeave: () => void;
+  onInputProxyClick: () => void;
   onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressEnd: (event: PointerEvent<HTMLButtonElement>) => boolean;
@@ -25,19 +28,22 @@ export function ShellBallSurface({
   containerRef,
   visualState,
   voicePreview,
+  voiceHoldProgress = 0,
+  inputFocused = false,
   motionConfig,
   onDragStart,
   onPrimaryClick,
   onDoubleClick,
   onRegionEnter,
   onRegionLeave,
+  onInputProxyClick,
   onPressStart,
   onPressMove,
   onPressEnd,
   onPressCancel,
 }: ShellBallSurfaceProps) {
   return (
-    <div ref={containerRef} className="shell-ball-surface" aria-label="Shell-ball floating surface">
+    <div ref={containerRef} className="shell-ball-surface">
       <div className="shell-ball-surface__core">
         <div className="shell-ball-surface__interaction-shell">
           <div
@@ -46,22 +52,26 @@ export function ShellBallSurface({
             onPointerEnter={onRegionEnter}
             onPointerLeave={onRegionLeave}
           >
-            <div className="shell-ball-surface__body">
-              <div className="shell-ball-surface__mascot-shell">
-                <ShellBallMascot
-                  visualState={visualState}
-                  voicePreview={voicePreview}
-                  motionConfig={motionConfig}
-                  onPrimaryClick={onPrimaryClick}
-                  onDoubleClick={onDoubleClick}
-                  onHotspotDragStart={onDragStart}
-                  onPressStart={onPressStart}
-                  onPressMove={onPressMove}
-                  onPressEnd={onPressEnd}
-                  onPressCancel={onPressCancel}
-                />
+              <div className="shell-ball-surface__body">
+                <div className="shell-ball-surface__mascot-shell">
+                  <ShellBallMascot
+                    visualState={visualState}
+                    voicePreview={voicePreview}
+                    voiceHoldProgress={voiceHoldProgress}
+                    motionConfig={motionConfig}
+                    onPrimaryClick={onPrimaryClick}
+                    onDoubleClick={onDoubleClick}
+                    onHotspotDragStart={onDragStart}
+                    onPressStart={onPressStart}
+                    onPressMove={onPressMove}
+                    onPressEnd={onPressEnd}
+                    onPressCancel={onPressCancel}
+                  />
+                </div>
+                {visualState === "hover_input" && !inputFocused ? (
+                  <button className="shell-ball-surface__input-line-proxy" onClick={onInputProxyClick} type="button" />
+                ) : null}
               </div>
-            </div>
           </div>
         </div>
       </div>

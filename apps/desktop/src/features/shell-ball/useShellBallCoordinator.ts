@@ -24,6 +24,7 @@ import {
   type ShellBallInputDraftPayload,
   type ShellBallInputFocusPayload,
   type ShellBallInputHoverPayload,
+  type ShellBallInputRequestFocusPayload,
   type ShellBallPinnedWindowDetachedPayload,
   type ShellBallPinnedWindowReadyPayload,
   type ShellBallPrimaryAction,
@@ -403,6 +404,10 @@ export async function emitShellBallInputFocus(focused: boolean) {
 
 export async function emitShellBallInputDraft(value: string) {
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputDraft, { value });
+}
+
+export async function emitShellBallInputRequestFocus(token: number) {
+  await getCurrentWindow().emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.inputRequestFocus, { token });
 }
 
 export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction, source: ShellBallHelperWindowRole) {

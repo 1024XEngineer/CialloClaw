@@ -12,6 +12,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
   inputHover: "desktop-shell-ball:input-hover",
   inputFocus: "desktop-shell-ball:input-focus",
+  inputRequestFocus: "desktop-shell-ball:input-request-focus",
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
   bubbleAction: "desktop-shell-ball:bubble-action",
@@ -85,6 +86,10 @@ export type ShellBallInputFocusPayload = {
 
 export type ShellBallInputDraftPayload = {
   value: string;
+};
+
+export type ShellBallInputRequestFocusPayload = {
+  token: number;
 };
 
 export type ShellBallPrimaryActionPayload = {

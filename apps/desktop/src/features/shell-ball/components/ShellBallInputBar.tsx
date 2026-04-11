@@ -9,6 +9,7 @@ type ShellBallInputBarProps = {
   mode: ShellBallInputBarMode;
   voicePreview: ShellBallVoicePreview;
   value: string;
+  focusToken?: number;
   onValueChange: (value: string) => void;
   onAttachFile: () => void;
   onSubmit: () => void;
@@ -19,6 +20,7 @@ export function ShellBallInputBar({
   mode,
   voicePreview,
   value,
+  focusToken = 0,
   onValueChange,
   onAttachFile,
   onSubmit,
@@ -29,9 +31,8 @@ export function ShellBallInputBar({
   const isInteractive = mode === "interactive";
   const isReadonly = mode === "readonly";
   const isVoice = mode === "voice";
-  const buttonsDisabled = !isInteractive;
+  const buttonsDisabled = isReadonly || isVoice;
   const submitDisabled = !isInteractive || trimmedValue === "";
-  const previewLabel = voicePreview === null ? null : `Release to ${voicePreview}`;
 
   useEffect(() => {
     if (inputRef.current === null) {
@@ -48,9 +49,14 @@ export function ShellBallInputBar({
     }
   }, [isInteractive, onFocusChange]);
 
-  if (mode === "hidden") {
-    return null;
-  }
+  useEffect(() => {
+    if (!isInteractive || focusToken === 0 || inputRef.current === null) {
+      return;
+    }
+
+    inputRef.current.focus();
+    inputRef.current.select();
+  }, [focusToken, isInteractive]);
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
     if (!isInteractive) {
@@ -67,6 +73,10 @@ export function ShellBallInputBar({
 
     event.preventDefault();
     onSubmit();
+  }
+
+  if (mode === "hidden") {
+    return null;
   }
 
   return (
@@ -88,16 +98,11 @@ export function ShellBallInputBar({
         onKeyDown={handleKeyDown}
         onFocus={() => onFocusChange(true)}
         onBlur={() => onFocusChange(false)}
-        readOnly={!isInteractive}
-        tabIndex={isInteractive ? 0 : -1}
+        readOnly={isReadonly || isVoice}
+        tabIndex={isVoice ? -1 : 0}
         aria-label="Shell-ball input"
-        placeholder={isVoice ? "Voice capture is active" : "Type a request for shell-ball"}
+        placeholder={isVoice ? "Voice capture is active" : ""}
       />
-      {previewLabel === null ? null : (
-        <span className="shell-ball-input-bar__preview" aria-live="polite">
-          {previewLabel}
-        </span>
-      )}
       <button
         type="button"
         className="shell-ball-input-bar__action"

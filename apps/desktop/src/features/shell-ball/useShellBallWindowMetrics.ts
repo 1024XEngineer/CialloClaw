@@ -17,7 +17,7 @@ type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pin
 
 export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 9;
 export const SHELL_BALL_BUBBLE_GAP_PX = 5;
-export const SHELL_BALL_INPUT_GAP_PX = 9;
+export const SHELL_BALL_INPUT_GAP_PX = -4;
 
 type ShellBallContentSize = {
   width: number;
@@ -128,6 +128,13 @@ export function getShellBallHelperWindowInteractionMode(input: {
   if (input.role === "bubble") {
     return {
       focusable: false,
+      ignoreCursorEvents: input.clickThrough || input.visible === false,
+    };
+  }
+
+  if (input.role === "input") {
+    return {
+      focusable: !input.clickThrough,
       ignoreCursorEvents: input.clickThrough || input.visible === false,
     };
   }
