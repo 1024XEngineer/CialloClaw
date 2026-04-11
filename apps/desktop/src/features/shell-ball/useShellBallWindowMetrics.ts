@@ -127,7 +127,7 @@ export function getShellBallHelperWindowInteractionMode(input: {
 }): ShellBallHelperWindowInteractionMode {
   if (input.role === "bubble") {
     return {
-      focusable: false,
+      focusable: input.visible && !input.clickThrough,
       ignoreCursorEvents: input.clickThrough || input.visible === false,
     };
   }

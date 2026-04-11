@@ -3776,7 +3776,7 @@ test("shell-ball detached pinned window contract stays anchored before drag and 
   assert.match(coordinatorSource, /shellBallWindowSyncEvents\.pinnedWindowReady/);
 });
 
-test("shell-ball bubble interaction mode stays clickable while visible unpinned bubbles remain", () => {
+test("shell-ball bubble interaction mode stays scrollable while visible bubbles remain", () => {
   assert.deepEqual(
     getShellBallHelperWindowInteractionMode({
       role: "bubble",
@@ -3784,7 +3784,7 @@ test("shell-ball bubble interaction mode stays clickable while visible unpinned 
       clickThrough: false,
     }),
     {
-      focusable: false,
+      focusable: true,
       ignoreCursorEvents: false,
     },
   );
