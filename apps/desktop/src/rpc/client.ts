@@ -125,7 +125,7 @@ function createTransport(): JsonRpcTransport {
   const transportMode = import.meta.env.VITE_CIALLOCLAW_RPC_TRANSPORT ?? defaultTransport;
 
   if (transportMode === "http") {
-    return new DebugHttpJsonRpcTransport(import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT ?? "http://127.0.0.1:4317/rpc");
+    return new DebugHttpJsonRpcTransport(import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT ?? "/rpc");
   }
 
   return new NamedPipeJsonRpcTransport();
