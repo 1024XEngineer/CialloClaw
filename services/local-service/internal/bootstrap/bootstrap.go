@@ -23,6 +23,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 )
 
 // App 定义当前模块的数据结构。
@@ -47,6 +48,9 @@ func New(cfg config.Config) (*App, error) {
 	executionBackend := platform.LocalExecutionBackend{}
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
 		return nil, err
 	}
 	toolExecutor := tools.NewToolExecutor(

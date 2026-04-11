@@ -241,6 +241,31 @@ type CommandExecutionResult struct {
 	ExitCode int
 }
 
+// BrowserPageReadResult 描述浏览器页面读取的最小结果。
+type BrowserPageReadResult struct {
+	URL         string
+	Title       string
+	TextContent string
+	MIMEType    string
+	TextType    string
+	Source      string
+}
+
+// BrowserPageSearchResult 描述页面内基础搜索的最小结果。
+type BrowserPageSearchResult struct {
+	URL        string
+	Query      string
+	MatchCount int
+	Matches    []string
+	Source     string
+}
+
+// PlaywrightSidecarClient 是 Playwright sidecar 的最小客户端边界。
+type PlaywrightSidecarClient interface {
+	ReadPage(ctx context.Context, url string) (BrowserPageReadResult, error)
+	SearchPage(ctx context.Context, url, query string, limit int) (BrowserPageSearchResult, error)
+}
+
 // CheckpointService 是 tools 模块所需的恢复点最小接口。
 //
 // 不直接引用 checkpoint 包内部类型，由 bootstrap 注入。
@@ -283,6 +308,7 @@ type ToolExecuteContext struct {
 	Storage    StorageCapability
 	Platform   PlatformCapability
 	Execution  ExecutionCapability
+	Playwright PlaywrightSidecarClient
 	Risk       RiskEvaluator
 	Audit      AuditWriter
 	Checkpoint CheckpointService
