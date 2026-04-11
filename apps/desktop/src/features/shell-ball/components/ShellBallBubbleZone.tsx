@@ -65,7 +65,6 @@ export function ShellBallBubbleZone({
 
           const distanceFromBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop;
           shouldStickToBottomRef.current = distanceFromBottom <= SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX;
-          onInteractionActiveChange?.(true);
         }}
       >
         {bubbleItems.map((item) => (

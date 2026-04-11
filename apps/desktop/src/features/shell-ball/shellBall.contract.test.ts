@@ -2682,6 +2682,51 @@ test("shell-ball bubble zone keeps the latest message visible on feed updates", 
   assert.equal(scrollElement.scrollTop, scrollElement.scrollHeight);
 });
 
+test("shell-ball bubble zone only reports interaction changes from pointer entry and exit", () => {
+  const interactionStates: boolean[] = [];
+  const refs = [
+    { current: { clientHeight: 80, scrollHeight: 120, scrollTop: 0 } },
+    { current: 0 },
+    { current: true },
+  ];
+  let refIndex = 0;
+
+  const { ShellBallBubbleZone: RuntimeShellBallBubbleZone } = withShellBallModuleRuntime("components/ShellBallBubbleZone.tsx", {
+    react: {
+      ...require("react"),
+      useEffect() {},
+      useRef<T>() {
+        return refs[refIndex++] as { current: T };
+      },
+    },
+    "./ShellBallBubbleMessage": {
+      ShellBallBubbleMessage() {
+        return null;
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleZone: typeof import("./components/ShellBallBubbleZone").ShellBallBubbleZone });
+
+  const tree = RuntimeShellBallBubbleZone({
+    visualState: "processing",
+    bubbleItems: [],
+    onInteractionActiveChange(active: boolean) {
+      interactionStates.push(active);
+    },
+  } as never) as {
+    props: {
+      children: { props: { onScroll?: () => void } };
+      onPointerEnter?: () => void;
+      onPointerLeave?: () => void;
+    };
+  };
+
+  tree.props.onPointerEnter?.();
+  tree.props.children.props.onScroll?.();
+  tree.props.onPointerLeave?.();
+
+  assert.deepEqual(interactionStates, [true, false]);
+});
+
 test("shell-ball bubble zone does not snap back when the viewer scrolls away from the bottom", () => {
   const effects: Array<() => void> = [];
   const scrollElement = {
@@ -3626,6 +3671,14 @@ test("shell-ball bubble actions stay coordinator-owned and detached-position fre
   assert.match(syncSource, /export type ShellBallBubbleActionSource = "bubble" \| "pinned_window";/);
   assert.match(coordinatorSource, /currentWindow\.listen<ShellBallBubbleActionPayload>\(shellBallWindowSyncEvents\.bubbleAction/);
   assert.match(coordinatorSource, /updateShellBallBubbleItems\(\(currentItems\) => applyShellBallBubbleAction\(currentItems, payload\)\)/);
+});
+
+test("shell-ball pin actions sync detached windows from computed next items", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /function syncPinnedBubbleWindowAnchor\(bubbleId: string, items = bubbleItemsRef\.current\)/);
+  assert.match(coordinatorSource, /const nextItems = updateShellBallBubbleItems\(\(currentItems\) => applyShellBallBubbleAction\(currentItems, payload\)\);/);
+  assert.match(coordinatorSource, /void syncPinnedBubbleWindowAnchor\(payload\.bubbleId, nextItems\);/);
 });
 
 test("shell-ball pinned bubble windows render one coordinator-owned pinned item and emit detached actions", () => {

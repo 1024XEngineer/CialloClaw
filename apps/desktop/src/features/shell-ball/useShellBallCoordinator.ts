@@ -243,9 +243,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }
 
   function syncShellBallBubbleDissipation(items: ShellBallBubbleItem[]) {
-    for (const item of items) {
-      if (!shouldShellBallBubbleDissipate(item) || bubbleInteractionActiveRef.current) {
-        clearShellBallBubbleDissipationTimer(item.bubble.bubble_id);
+    const currentBubbleIds = new Set(items.map((item) => item.bubble.bubble_id));
+
+    for (const bubbleId of bubbleDissipationTimeoutsRef.current.keys()) {
+      const matchingItem = items.find((item) => item.bubble.bubble_id === bubbleId);
+
+      if (matchingItem === undefined || !currentBubbleIds.has(bubbleId) || bubbleInteractionActiveRef.current || !shouldShellBallBubbleDissipate(matchingItem)) {
+        clearShellBallBubbleDissipationTimer(bubbleId);
       }
     }
 
@@ -356,12 +360,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       await emitToShellBallWindowLabel(shellBallWindowLabels[role], shellBallWindowSyncEvents.snapshot, snapshotRef.current);
     }
 
-    async function syncPinnedBubbleWindowAnchor(bubbleId: string) {
+    async function syncPinnedBubbleWindowAnchor(bubbleId: string, items = bubbleItemsRef.current) {
       if (detachedPinnedBubbleIdsRef.current.has(bubbleId)) {
         return;
       }
 
-      const bubbleItem = bubbleItemsRef.current.find((item) => item.bubble.bubble_id === bubbleId && item.bubble.pinned);
+      const bubbleItem = items.find((item) => item.bubble.bubble_id === bubbleId && item.bubble.pinned);
 
       if (bubbleItem === undefined) {
         return;
@@ -412,11 +416,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
 
     function handleBubbleAction(payload: ShellBallBubbleActionPayload) {
-      updateShellBallBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
+      const nextItems = updateShellBallBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
 
       if (payload.action === "pin") {
         detachedPinnedBubbleIdsRef.current.delete(payload.bubbleId);
-        void syncPinnedBubbleWindowAnchor(payload.bubbleId);
+        void syncPinnedBubbleWindowAnchor(payload.bubbleId, nextItems);
         return;
       }
 
