@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
+import type { MirrorOverviewUpdatedNotification } from "@cialloclaw/protocol";
 import { BookMarked, BrainCircuit, CalendarDays, Clock3, X } from "lucide-react";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
@@ -102,6 +103,15 @@ function formatShortMirrorDate(value: string) {
   return new Date(value).toLocaleDateString("zh-CN", {
     month: "short",
     day: "numeric",
+  });
+}
+
+function formatMirrorDateTime(value: string) {
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -519,6 +529,7 @@ export function MirrorApp() {
   const [draggingKey, setDraggingKey] = useState<FloatingMirrorDirectionKey | null>(null);
   const [activeDetailKey, setActiveDetailKey] = useState<MirrorDirectionKey | null>(null);
   const [boardReady, setBoardReady] = useState(false);
+  const [lastMirrorUpdate, setLastMirrorUpdate] = useState<MirrorOverviewUpdatedNotification | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const modulePositionsRef = useRef<ModulePositions>(DEFAULT_MODULE_POSITIONS);
@@ -527,6 +538,7 @@ export function MirrorApp() {
   const fetchInFlightRef = useRef(false);
   const pendingRefreshRef = useRef(false);
   const lastSavedFloatingPositionsRef = useRef<string | null>(null);
+  const latestMirrorRevisionRef = useRef<number | null>(null);
 
   const refreshMirrorData = useCallback(() => {
     if (fetchInFlightRef.current) {
@@ -560,7 +572,15 @@ export function MirrorApp() {
 
   useEffect(() => {
     isMountedRef.current = true;
-    const unsubscribe = subscribeMirrorOverviewUpdated(() => {
+    const unsubscribe = subscribeMirrorOverviewUpdated((notification) => {
+      const lastRevision = latestMirrorRevisionRef.current;
+
+      if (lastRevision !== null && notification.revision <= lastRevision) {
+        return;
+      }
+
+      latestMirrorRevisionRef.current = notification.revision;
+      setLastMirrorUpdate(notification);
       refreshMirrorData();
     });
 
@@ -715,10 +735,32 @@ export function MirrorApp() {
   }
 
   const { overview, insight } = mirrorData;
+  const dataSourceDetails = [
+    mirrorData.source === "rpc"
+      ? "当前展示来自本地 JSON-RPC 服务。"
+      : "JSON-RPC 不可用，当前展示本地回退数据。",
+  ];
+
+  if (mirrorData.rpcContext.serverTime) {
+    dataSourceDetails.push(`服务端时间 ${formatMirrorDateTime(mirrorData.rpcContext.serverTime)}`);
+  }
+
+  if (lastMirrorUpdate) {
+    dataSourceDetails.push(
+      lastMirrorUpdate.source
+        ? `最近通知 revision #${lastMirrorUpdate.revision} · ${lastMirrorUpdate.source}`
+        : `最近通知 revision #${lastMirrorUpdate.revision}`,
+    );
+  }
+
+  if (mirrorData.rpcContext.warnings.length) {
+    dataSourceDetails.push(`warnings：${mirrorData.rpcContext.warnings.join("；")}`);
+  }
+
   const dataSourceBadge =
     mirrorData.source === "rpc"
-      ? { label: "LIVE", tone: "green" as const, copy: "当前展示来自本地 JSON-RPC 服务。" }
-      : { label: "MOCK", tone: "processing" as const, copy: "JSON-RPC 不可用，当前展示本地回退数据。" };
+      ? { label: "LIVE", tone: "green" as const, copy: dataSourceDetails.join(" · ") }
+      : { label: "MOCK", tone: "processing" as const, copy: dataSourceDetails.join(" · ") };
   const dailySummary = overview.daily_summary;
   const profile = overview.profile;
   const latestMemoryReference = overview.memory_references[0] ?? null;

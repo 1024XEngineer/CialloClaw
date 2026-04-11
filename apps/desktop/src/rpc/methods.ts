@@ -33,7 +33,7 @@ import type {
   AgentTaskStartResult,
 } from "@cialloclaw/protocol";
 import { RPC_METHODS } from "@cialloclaw/protocol";
-import { rpcClient } from "./client";
+import { rpcClient, type JsonRpcResponsePayload } from "./client";
 
 // startTask 处理当前模块的相关逻辑。
 export function startTask(params: AgentTaskStartParams) {
@@ -71,16 +71,32 @@ export function getMirrorOverview(params: AgentMirrorOverviewGetParams) {
   return rpcClient.request<AgentMirrorOverviewGetResult>(RPC_METHODS.AGENT_MIRROR_OVERVIEW_GET, params);
 }
 
+export function getMirrorOverviewDetailed(params: AgentMirrorOverviewGetParams): Promise<JsonRpcResponsePayload<AgentMirrorOverviewGetResult>> {
+  return rpcClient.requestDetailed<AgentMirrorOverviewGetResult>(RPC_METHODS.AGENT_MIRROR_OVERVIEW_GET, params);
+}
+
 export function getSecuritySummary(params: AgentSecuritySummaryGetParams) {
   return rpcClient.request<AgentSecuritySummaryGetResult>(RPC_METHODS.AGENT_SECURITY_SUMMARY_GET, params);
+}
+
+export function getSecuritySummaryDetailed(params: AgentSecuritySummaryGetParams): Promise<JsonRpcResponsePayload<AgentSecuritySummaryGetResult>> {
+  return rpcClient.requestDetailed<AgentSecuritySummaryGetResult>(RPC_METHODS.AGENT_SECURITY_SUMMARY_GET, params);
 }
 
 export function listSecurityPending(params: AgentSecurityPendingListParams) {
   return rpcClient.request<AgentSecurityPendingListResult>(RPC_METHODS.AGENT_SECURITY_PENDING_LIST, params);
 }
 
+export function listSecurityPendingDetailed(params: AgentSecurityPendingListParams): Promise<JsonRpcResponsePayload<AgentSecurityPendingListResult>> {
+  return rpcClient.requestDetailed<AgentSecurityPendingListResult>(RPC_METHODS.AGENT_SECURITY_PENDING_LIST, params);
+}
+
 export function respondSecurity(params: AgentSecurityRespondParams) {
   return rpcClient.request<AgentSecurityRespondResult>(RPC_METHODS.AGENT_SECURITY_RESPOND, params);
+}
+
+export function respondSecurityDetailed(params: AgentSecurityRespondParams): Promise<JsonRpcResponsePayload<AgentSecurityRespondResult>> {
+  return rpcClient.requestDetailed<AgentSecurityRespondResult>(RPC_METHODS.AGENT_SECURITY_RESPOND, params);
 }
 
 export function getSettings(params: AgentSettingsGetParams) {

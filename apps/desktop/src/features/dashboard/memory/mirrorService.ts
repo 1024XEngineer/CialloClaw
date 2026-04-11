@@ -5,7 +5,7 @@ import type {
   RequestMeta,
 } from "@cialloclaw/protocol";
 import mirrorOverviewMock from "./mirrorOverview.json";
-import { getMirrorOverview as requestMirrorOverview } from "@/rpc/methods";
+import { getMirrorOverviewDetailed as requestMirrorOverview } from "@/rpc/methods";
 
 type MirrorOverviewMock = typeof mirrorOverviewMock;
 export type MirrorOverviewSource = "rpc" | "mock";
@@ -20,6 +20,10 @@ export type MirrorInsightPreview = {
 export type MirrorOverviewData = {
   overview: AgentMirrorOverviewGetResult;
   insight: MirrorInsightPreview;
+  rpcContext: {
+    serverTime: string | null;
+    warnings: string[];
+  };
   source: MirrorOverviewSource;
 };
 
@@ -81,6 +85,10 @@ export function getInitialMirrorOverviewData(): MirrorOverviewData {
   return {
     overview,
     insight: buildMirrorInsightPreview(overview),
+    rpcContext: {
+      serverTime: null,
+      warnings: [],
+    },
     source: "mock",
   };
 }
@@ -92,11 +100,16 @@ export async function loadMirrorOverviewData(): Promise<MirrorOverviewData> {
   };
 
   try {
-    const overview = await requestMirrorOverview(params);
+    const response = await requestMirrorOverview(params);
+    const overview = response.data;
 
     return {
       overview,
       insight: buildMirrorInsightPreview(overview),
+      rpcContext: {
+        serverTime: response.meta?.server_time ?? null,
+        warnings: response.warnings,
+      },
       source: "rpc",
     };
   } catch (error) {
