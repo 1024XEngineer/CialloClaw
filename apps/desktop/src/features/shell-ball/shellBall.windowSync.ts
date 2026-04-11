@@ -113,7 +113,7 @@ export function getShellBallHelperWindowVisibility(
 }
 
 export function getShellBallVisibleBubbleItems(items: ShellBallBubbleItem[]): ShellBallBubbleItem[] {
-  return items.filter((item) => item.bubble.hidden === false && item.bubble.pinned === false);
+  return items.filter((item) => item.bubble.hidden === false);
 }
 
 export function getShellBallBubbleRegionState(items: ShellBallBubbleItem[]): ShellBallBubbleRegionState {

@@ -10,7 +10,7 @@ type ShellBallBubbleZoneProps = {
   bubbleItems?: ShellBallBubbleItem[];
   onDeleteBubble?: (bubbleId: string) => void;
   onInteractionActiveChange?: (active: boolean) => void;
-  onPinBubble?: (bubbleId: string) => void;
+  onPinBubble?: (bubbleId: string, action: "pin" | "unpin") => void;
 };
 
 export function ShellBallBubbleZone({

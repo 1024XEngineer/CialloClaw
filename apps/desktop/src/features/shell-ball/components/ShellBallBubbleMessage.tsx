@@ -3,11 +3,13 @@ import type { ShellBallBubbleItem } from "../shellBall.bubble";
 type ShellBallBubbleMessageProps = {
   item: ShellBallBubbleItem;
   onDelete?: (bubbleId: string) => void;
-  onPin?: (bubbleId: string) => void;
+  onPin?: (bubbleId: string, action: "pin" | "unpin") => void;
 };
 
 export function ShellBallBubbleMessage({ item, onDelete, onPin }: ShellBallBubbleMessageProps) {
   const bubbleId = item.bubble.bubble_id;
+  const pinAction = item.bubble.pinned ? "unpin" : "pin";
+  const pinLabel = pinAction === "pin" ? "Pin" : "Unpin";
 
   return (
     <div
@@ -23,14 +25,14 @@ export function ShellBallBubbleMessage({ item, onDelete, onPin }: ShellBallBubbl
         <button
           type="button"
           className="shell-ball-bubble-message__control shell-ball-bubble-message__pin-control"
-          data-bubble-action="pin"
+          data-bubble-action={pinAction}
           data-bubble-id={bubbleId}
-          aria-label="Pin bubble"
+          aria-label={`${pinLabel} bubble`}
           onClick={() => {
-            onPin?.(bubbleId);
+            onPin?.(bubbleId, pinAction);
           }}
         >
-          Pin
+          {pinLabel}
         </button>
         <button
           type="button"

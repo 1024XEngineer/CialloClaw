@@ -29,8 +29,8 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
         onInteractionActiveChange={(active) => {
           void emitShellBallBubbleInteraction(active);
         }}
-        onPinBubble={(bubbleId) => {
-          void emitShellBallBubbleAction("pin", bubbleId);
+        onPinBubble={(bubbleId, action) => {
+          void emitShellBallBubbleAction(action, bubbleId);
         }}
       />
     </div>

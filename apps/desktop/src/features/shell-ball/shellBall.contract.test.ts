@@ -1371,7 +1371,7 @@ test("shell-ball bubble region existence strategy is explicit and item-driven", 
     },
   ];
 
-  assert.deepEqual(getShellBallVisibleBubbleItems(bubbleItems).map((item) => item.bubble.bubble_id), ["bubble-visible"]);
+  assert.deepEqual(getShellBallVisibleBubbleItems(bubbleItems).map((item) => item.bubble.bubble_id), ["bubble-visible", "bubble-pinned"]);
   assert.deepEqual(getShellBallBubbleRegionState(bubbleItems), {
     strategy: "persistent",
     hasVisibleItems: true,
@@ -2920,6 +2920,158 @@ test("shell-ball bubble window resolves bubble items from the helper-window snap
   assert.equal(typeof resolvedProps.onPinBubble, "function");
 });
 
+test("shell-ball bubble window keeps pinned items in the main history list", () => {
+  const helperSnapshot = createShellBallWindowSnapshot({
+    visualState: "processing",
+    inputValue: "",
+    voicePreview: null,
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-helper-pinned-1",
+          task_id: "task-helper-pinned-1",
+          type: "status",
+          text: "Pinned bubble should stay visible.",
+          pinned: true,
+          hidden: false,
+          created_at: "2026-04-11T10:04:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+      {
+        bubble: {
+          bubble_id: "msg-helper-visible-1",
+          task_id: "task-helper-visible-1",
+          type: "result",
+          text: "Regular bubble.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:05:00.000Z",
+        },
+        role: "user",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  });
+  helperSnapshot.bubbleRegion = getShellBallBubbleRegionState(helperSnapshot.bubbleItems);
+  let capturedProps: Record<string, unknown> | null = null;
+
+  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
+    react: require("react"),
+    "./useShellBallCoordinator": {
+      useShellBallHelperWindowSnapshot() {
+        return helperSnapshot;
+      },
+    },
+    "./useShellBallWindowMetrics": {
+      useShellBallWindowMetrics() {
+        return { rootRef: null };
+      },
+    },
+    "./components/ShellBallBubbleZone": {
+      ShellBallBubbleZone(props: Record<string, unknown>) {
+        capturedProps = { ...(capturedProps ?? {}), ...props };
+        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
+
+  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
+
+  assert.notEqual(capturedProps, null);
+  assert.deepEqual((capturedProps as { bubbleItems: ShellBallBubbleItem[] }).bubbleItems.map((item) => item.bubble.bubble_id), [
+    "msg-helper-pinned-1",
+    "msg-helper-visible-1",
+  ]);
+});
+
+test("shell-ball bubble window emits state-aware pin actions for history bubbles", () => {
+  const helperSnapshot = createShellBallWindowSnapshot({
+    visualState: "processing",
+    inputValue: "",
+    voicePreview: null,
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-helper-pinned-action-1",
+          task_id: "task-helper-pinned-action-1",
+          type: "status",
+          text: "Pinned bubble.",
+          pinned: true,
+          hidden: false,
+          created_at: "2026-04-11T10:04:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+      {
+        bubble: {
+          bubble_id: "msg-helper-visible-action-1",
+          task_id: "task-helper-visible-action-1",
+          type: "result",
+          text: "Regular bubble.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:05:00.000Z",
+        },
+        role: "user",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  });
+  const emittedActions: Array<{ action: string; bubbleId: string }> = [];
+  let capturedProps: Record<string, unknown> | null = null;
+
+  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
+    react: require("react"),
+    "./useShellBallCoordinator": {
+      emitShellBallBubbleAction(action: string, bubbleId: string) {
+        emittedActions.push({ action, bubbleId });
+        return Promise.resolve();
+      },
+      emitShellBallBubbleInteraction() {
+        return Promise.resolve();
+      },
+      useShellBallHelperWindowSnapshot() {
+        return helperSnapshot;
+      },
+    },
+    "./useShellBallWindowMetrics": {
+      useShellBallWindowMetrics() {
+        return { rootRef: null };
+      },
+    },
+    "./components/ShellBallBubbleZone": {
+      ShellBallBubbleZone(props: Record<string, unknown>) {
+        capturedProps = { ...(capturedProps ?? {}), ...props };
+        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
+
+  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
+
+  assert.notEqual(capturedProps, null);
+  const onPinBubble = (capturedProps as { onPinBubble: (bubbleId: string, action: "pin" | "unpin") => void }).onPinBubble;
+
+  onPinBubble("msg-helper-pinned-action-1", "unpin");
+  onPinBubble("msg-helper-visible-action-1", "pin");
+
+  assert.deepEqual(emittedActions, [
+    { action: "unpin", bubbleId: "msg-helper-pinned-action-1" },
+    { action: "pin", bubbleId: "msg-helper-visible-action-1" },
+  ]);
+});
+
 test("shell-ball bubble window does not depend on only visualState to render its body", () => {
   const helperSnapshot = createShellBallWindowSnapshot({
     visualState: "idle",
@@ -3080,6 +3232,50 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
   assert.match(markup, /shell-ball-bubble-message__delete-control/g);
   assert.equal(markup.match(/data-bubble-action="pin"/g)?.length, 2);
   assert.equal(markup.match(/data-bubble-action="delete"/g)?.length, 2);
+});
+
+test("shell-ball bubble zone renders unpin controls for pinned history bubbles", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-pin-toggle-1",
+            task_id: "task-agent-pin-toggle-1",
+            type: "status",
+            text: "Keep this handy.",
+            pinned: true,
+            hidden: false,
+            created_at: "2026-04-11T10:09:00.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+        {
+          bubble: {
+            bubble_id: "msg-user-pin-toggle-1",
+            task_id: "task-user-pin-toggle-1",
+            type: "result",
+            text: "Pin this too.",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-11T10:09:05.000Z",
+          },
+          role: "user",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /data-bubble-action="unpin"/);
+  assert.match(markup, />Unpin</);
+  assert.match(markup, /data-bubble-action="pin"/);
 });
 
 test("shell-ball coordinator bubble actions pin and delete local items", () => {
