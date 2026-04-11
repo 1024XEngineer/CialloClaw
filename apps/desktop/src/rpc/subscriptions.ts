@@ -1,4 +1,4 @@
-import type { ApprovalPendingNotification } from "@cialloclaw/protocol";
+import type { ApprovalPendingNotification, MirrorOverviewUpdatedNotification } from "@cialloclaw/protocol";
 import { NOTIFICATION_METHODS } from "@cialloclaw/protocol";
 
 // subscribeTask 处理当前模块的相关逻辑。
@@ -38,7 +38,7 @@ export function subscribeTask(taskId: string, onMessage: (payload: unknown) => v
   };
 }
 
-export function subscribeMirrorOverviewUpdated(onMessage: (payload: unknown) => void) {
+export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOverviewUpdatedNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
   if (!bridge?.subscribe) {
@@ -51,7 +51,10 @@ export function subscribeMirrorOverviewUpdated(onMessage: (payload: unknown) => 
   void bridge
     .subscribe(NOTIFICATION_METHODS.MIRROR_OVERVIEW_UPDATED, (payload) => {
       if (!disposed) {
-        onMessage(payload);
+        const message = payload as { params?: MirrorOverviewUpdatedNotification };
+        if (message.params) {
+          onMessage(message.params);
+        }
       }
     })
     .then((subscription) => {

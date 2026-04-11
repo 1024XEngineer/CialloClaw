@@ -8,7 +8,7 @@ import type {
 export const securitySummaryMock: AgentSecuritySummaryGetResult = {
   summary: {
     security_status: "pending_confirmation",
-    pending_authorizations: 2,
+    pending_authorizations: 5,
     latest_restore_point: {
       recovery_point_id: "rp_mock_001",
       task_id: "task_security_mock_001",
@@ -52,10 +52,10 @@ export const securityPendingMock: AgentSecurityPendingListResult = {
     },
   ],
   page: {
-    limit: 20,
+    limit: 2,
     offset: 0,
-    total: 2,
-    has_more: false,
+    total: 5,
+    has_more: true,
   },
 };
 
@@ -63,6 +63,7 @@ export function buildMockRespondResult(
   approvalId: string,
   taskId: string,
   decision: ApprovalDecision,
+  rememberRule: boolean,
 ): AgentSecurityRespondResult {
   return {
     authorization_record: {
@@ -70,7 +71,7 @@ export function buildMockRespondResult(
       task_id: taskId,
       approval_id: approvalId,
       decision,
-      remember_rule: false,
+      remember_rule: rememberRule,
       operator: "frontend-mock",
       created_at: new Date().toISOString(),
     },
@@ -91,14 +92,17 @@ export function buildMockRespondResult(
       task_id: taskId,
       type: decision === "allow_once" ? "result" : "status",
       text: decision === "allow_once" ? "已在前端联调模式下放行该审批。" : "已在前端联调模式下拒绝该审批。",
-      pinned: false,
+      pinned: rememberRule,
       hidden: false,
       created_at: new Date().toISOString(),
     },
     impact_scope: {
-      files: ["D:/CialloClawWorkspace/project-alpha/src"],
-      webpages: ["local://security-review"],
-      apps: ["VS Code", "Docker Desktop"],
+      files: [
+        "D:/CialloClawWorkspace/project-alpha/src",
+        "D:/CialloClawWorkspace/project-alpha/package.json",
+      ],
+      webpages: ["local://security-review", "https://ci.example.dev/build/451"],
+      apps: ["VS Code", "Docker Desktop", "PowerShell"],
       out_of_workspace: true,
       overwrite_or_delete_risk: decision === "allow_once",
     },

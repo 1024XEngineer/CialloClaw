@@ -593,6 +593,56 @@ body[data-app-window="shell-ball-input"] {
   justify-content: flex-end;
 }
 
+.security-page__approval-remember,
+.security-page__approval-remember-copy,
+.security-page__detail-group-list {
+  display: grid;
+}
+
+.security-page__approval-remember {
+  align-items: start;
+  gap: var(--security-space-2);
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.security-page__approval-remember-copy,
+.security-page__detail-group-list {
+  gap: 0.55rem;
+}
+
+.security-page__approval-remember-checkbox {
+  accent-color: var(--security-accent);
+  height: 1rem;
+  margin-top: 0.2rem;
+  width: 1rem;
+}
+
+.security-page__detail-group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.security-page__detail-group-item,
+.security-page__detail-code {
+  overflow-wrap: anywhere;
+}
+
+.security-page__detail-group-item {
+  border-left: 1px solid var(--security-line);
+  color: var(--security-copy);
+  padding-left: 0.9rem;
+}
+
+.security-page__detail-code {
+  color: var(--security-copy);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.7;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .security-page__close-button {
   align-items: center;
   background: rgba(255, 255, 255, 0.72);
