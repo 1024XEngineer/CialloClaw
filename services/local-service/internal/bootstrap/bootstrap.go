@@ -32,6 +32,7 @@ type App struct {
 	storage      *storage.Service
 	toolRegistry *tools.Registry
 	toolExecutor *tools.ToolExecutor
+	playwright   *sidecarclient.PlaywrightSidecarRuntime
 }
 
 // New 创建并返回当前能力。
@@ -46,7 +47,17 @@ func New(cfg config.Config) (*App, error) {
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executionBackend := platform.LocalExecutionBackend{}
-	playwrightClient := sidecarclient.NewNoopPlaywrightSidecarClient()
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	if err := playwrightRuntime.Start(); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	playwrightClient := playwrightRuntime.Client()
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		return nil, err
@@ -94,6 +105,7 @@ func New(cfg config.Config) (*App, error) {
 		storage:      storageService,
 		toolRegistry: toolRegistry,
 		toolExecutor: toolExecutor,
+		playwright:   playwrightRuntime,
 	}, nil
 }
 
@@ -103,6 +115,9 @@ func (a *App) Start(ctx context.Context) error {
 }
 
 func (a *App) Close() error {
+	if a.playwright != nil {
+		_ = a.playwright.Stop()
+	}
 	if a.storage == nil {
 		return nil
 	}

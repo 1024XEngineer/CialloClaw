@@ -3,6 +3,12 @@ package plugin
 
 import "strings"
 
+type SidecarSpec struct {
+	Name      string
+	Transport string
+	PipeName  string
+}
+
 // Service 提供当前模块的服务能力。
 type Service struct {
 	workers  []string
@@ -47,4 +53,16 @@ func (s *Service) PrimarySidecar() string {
 		return ""
 	}
 	return s.sidecars[0]
+}
+
+// SidecarSpec 返回指定 sidecar 的最小运行时规格。
+func (s *Service) SidecarSpec(name string) (SidecarSpec, bool) {
+	if !s.HasSidecar(name) {
+		return SidecarSpec{}, false
+	}
+	return SidecarSpec{
+		Name:      name,
+		Transport: "named_pipe",
+		PipeName:  `\\.\pipe\cialloclaw-` + name,
+	}, true
 }

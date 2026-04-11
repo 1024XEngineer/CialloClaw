@@ -81,6 +81,9 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if _, err := app.toolRegistry.Get("page_search"); err != nil {
 		t.Fatalf("expected page_search to be registered, got %v", err)
 	}
+	if app.playwright == nil || !app.playwright.Ready() {
+		t.Fatal("expected playwright sidecar runtime to be ready")
+	}
 }
 
 func TestNewFailsFastWhenModelServiceCannotBeConfigured(t *testing.T) {
