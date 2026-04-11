@@ -39,6 +39,7 @@ import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
 import {
+  resolveDashboardModuleRoutePath,
   dashboardRoutePaths,
   resolveDashboardRouteHref,
   resolveDashboardRoutePath,
@@ -499,6 +500,11 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
 
 test("shell-ball desktop navigation keeps route changes separate from desktop window focus", () => {
   const controllerSource = readFileSync(resolve(desktopRoot, "src/platform/windowController.ts"), "utf8");
+  const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
+  const dashboardBackHomeLinkSource = readFileSync(
+    resolve(desktopRoot, "src/features/dashboard/shared/DashboardBackHomeLink.tsx"),
+    "utf8",
+  );
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const dashboardAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/DashboardApp.tsx"), "utf8");
   const trayControllerSource = readFileSync(resolve(desktopRoot, "src/platform/trayController.ts"), "utf8");
@@ -510,12 +516,27 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   assert.equal(resolveDashboardRoutePath("safety"), "/safety");
   assert.equal(resolveDashboardRouteHref("home"), "./dashboard.html");
   assert.equal(resolveDashboardRouteHref("safety"), "./dashboard.html#/safety");
+  assert.equal(resolveDashboardModuleRoutePath("tasks"), "/tasks");
+  assert.equal(resolveDashboardModuleRoutePath("notes"), "/notes");
+  assert.equal(resolveDashboardModuleRoutePath("memory"), "/memory");
+  assert.equal(resolveDashboardModuleRoutePath("safety"), "/safety");
   assert.equal(existsSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardRouteNavigation.ts")), false);
 
   assert.match(controllerSource, /export type DesktopWindowLabel = "dashboard" \| "control-panel"/);
   assert.doesNotMatch(controllerSource, /new Window\(/);
   assert.doesNotMatch(controllerSource, /resolveDashboardRouteHref/);
   assert.doesNotMatch(controllerSource, /openDashboardRoute/);
+  assert.match(dashboardBackHomeLinkSource, /resolveDashboardRoutePath\("home"\)/);
+  assert.doesNotMatch(dashboardBackHomeLinkSource, /to="\/"/);
+  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\(module\)/);
+  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("tasks"\)/);
+  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("notes"\)/);
+  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("memory"\)/);
+  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("safety"\)/);
+  assert.doesNotMatch(dashboardHomeSource, /"\/tasks"/);
+  assert.doesNotMatch(dashboardHomeSource, /"\/notes"/);
+  assert.doesNotMatch(dashboardHomeSource, /"\/memory"/);
+  assert.doesNotMatch(dashboardHomeSource, /"\/safety"/);
   assert.match(securityAppSource, /useNavigate\(/);
   assert.match(securityAppSource, /navigate\(resolveDashboardRoutePath\("home"\)\)/);
   assert.doesNotMatch(securityAppSource, /openDashboardRoute/);

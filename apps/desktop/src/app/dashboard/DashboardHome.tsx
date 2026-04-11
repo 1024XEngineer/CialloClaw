@@ -13,19 +13,13 @@ import { DashboardEventOrb } from "@/features/dashboard/home/components/Dashboar
 import { DashboardEventPanel } from "@/features/dashboard/home/components/DashboardEventPanel";
 import { DashboardOrbitRings } from "@/features/dashboard/home/components/DashboardOrbitRings";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
+import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { cn } from "@/utils/cn";
 import "@/features/shell-ball/shellBall.css";
 import "@/features/dashboard/home/dashboardHome.css";
 
 function getRouteForModule(module: DashboardHomeModuleKey) {
-  const routes = {
-    tasks: "/tasks",
-    notes: "/notes",
-    memory: "/memory",
-    safety: "/safety",
-  } as const;
-
-  return routes[module];
+  return resolveDashboardModuleRoutePath(module);
 }
 
 function getCenterState(activeStateKey: DashboardHomeEventStateKey | null) {
@@ -128,22 +122,22 @@ export function DashboardHome() {
 
       if (event.key === "1") {
         event.preventDefault();
-        navigate("/tasks");
+        navigate(resolveDashboardModuleRoutePath("tasks"));
       }
 
       if (event.key === "2") {
         event.preventDefault();
-        navigate("/notes");
+        navigate(resolveDashboardModuleRoutePath("notes"));
       }
 
       if (event.key === "3") {
         event.preventDefault();
-        navigate("/memory");
+        navigate(resolveDashboardModuleRoutePath("memory"));
       }
 
       if (event.key === "4") {
         event.preventDefault();
-        navigate("/safety");
+        navigate(resolveDashboardModuleRoutePath("safety"));
       }
 
       if (event.key === "5") {
