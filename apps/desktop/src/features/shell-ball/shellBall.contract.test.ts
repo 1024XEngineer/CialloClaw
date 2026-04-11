@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
 import ts from "typescript";
 import { getShellBallDemoViewModel } from "./shellBall.demo";
 import {
@@ -68,8 +67,9 @@ import { useShellBallStore } from "../../stores/shellBallStore";
 
 const desktopRoot = process.cwd();
 
-function withDashboardRouteRuntime<T>(callback: (components: { DashboardHome: unknown; SafetyPage: unknown }) => T) {
+function withDashboardRouteRuntime<T>(callback: (components: { DashboardRoot: unknown }) => T) {
   const NodeModule = require("node:module") as any;
+  const createRequire = NodeModule.createRequire as (filename: string) => NodeRequire;
   const originalResolveFilename = NodeModule._resolveFilename;
   const originalLoad = NodeModule._load as undefined | ((request: string, parent: unknown, isMain: boolean) => unknown);
   const originalCssLoader = require.extensions[".css"];
@@ -110,6 +110,10 @@ function withDashboardRouteRuntime<T>(callback: (components: { DashboardHome: un
   };
 
   NodeModule._load = function loadDashboardRuntime(request: string, parent: unknown, isMain: boolean) {
+    if (request === "./DashboardHome") {
+      return require(resolve(desktopRoot, ".cache/shell-ball-tests/app/dashboard/DashboardHome.js"));
+    }
+
     if (request === "./SecurityPageShell" || request.endsWith("/SecurityPageShell")) {
       return {
         SecurityPageShell() {
@@ -118,31 +122,48 @@ function withDashboardRouteRuntime<T>(callback: (components: { DashboardHome: un
       };
     }
 
+    if (
+      request === "@/features/dashboard/tasks/TasksPage" ||
+      request === "@/features/dashboard/notes/NotesPage" ||
+      request === "@/features/dashboard/memory/MemoryPage"
+    ) {
+      return {
+        TasksPage() {
+          return createElement("div", null, "tasks-page-stub");
+        },
+        NotesPage() {
+          return createElement("div", null, "notes-page-stub");
+        },
+        MemoryPage() {
+          return createElement("div", null, "memory-page-stub");
+        },
+      };
+    }
+
     return originalLoad?.(request, parent, isMain);
   } as typeof NodeModule._load;
 
   try {
-    const { DashboardHome } = require(resolve(desktopRoot, ".cache/shell-ball-tests/app/dashboard/DashboardHome.js"));
-    const safetyPagePath = resolve(desktopRoot, "src/features/dashboard/safety/SafetyPage.tsx");
-    const safetyPageModule = { exports: {} as Record<string, unknown> };
-    const transpiledSafetyPage = ts.transpileModule(readFileSync(safetyPagePath, "utf8"), {
+    const dashboardRootPath = resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx");
+    const dashboardRootModule = { exports: {} as Record<string, unknown> };
+    const transpiledDashboardRoot = ts.transpileModule(readFileSync(dashboardRootPath, "utf8"), {
       compilerOptions: {
         jsx: ts.JsxEmit.ReactJSX,
         module: ts.ModuleKind.CommonJS,
         target: ts.ScriptTarget.ES2020,
         esModuleInterop: true,
       },
-      fileName: safetyPagePath,
+      fileName: dashboardRootPath,
     });
-    const moduleFactory = new Function("require", "module", "exports", transpiledSafetyPage.outputText) as (
+    const moduleFactory = new Function("require", "module", "exports", transpiledDashboardRoot.outputText) as (
       require: NodeRequire,
       module: { exports: Record<string, unknown> },
       exports: Record<string, unknown>,
     ) => void;
-    moduleFactory(require, safetyPageModule, safetyPageModule.exports);
-    const { SafetyPage } = safetyPageModule.exports as { SafetyPage: unknown };
+    moduleFactory(createRequire(dashboardRootPath), dashboardRootModule, dashboardRootModule.exports);
+    const { DashboardRoot } = dashboardRootModule.exports as { DashboardRoot: unknown };
 
-    return callback({ DashboardHome, SafetyPage });
+    return callback({ DashboardRoot });
   } finally {
     NodeModule._resolveFilename = originalResolveFilename;
     if (originalLoad === undefined) {
@@ -203,27 +224,82 @@ function withWindowControllerRuntime<T>(getByLabel: (label: string) => Promise<u
   }
 }
 
-function renderDashboardRouteSurface(initialPath: string) {
-  return withDashboardRouteRuntime(({ DashboardHome, SafetyPage }) =>
-    renderToStaticMarkup(
-      createElement(
-        MemoryRouter,
-        { initialEntries: [initialPath] },
-        createElement(
-          Routes,
-          null,
-          createElement(Route, {
-            path: resolveDashboardRoutePath("home"),
-            element: createElement(DashboardHome as never),
-          }),
-          createElement(Route, {
-            path: `${resolveDashboardRoutePath("safety")}/*`,
-            element: createElement(SafetyPage as never),
-          }),
-        ),
-      ),
-    ),
-  );
+function renderDashboardRouteSurface(hash: string) {
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalSVGElement = globalThis.SVGElement;
+  const fakeDocument = {
+    location: null as unknown,
+    querySelector() {
+      return null;
+    },
+    defaultView: null as unknown,
+  };
+  const fakeWindow = {
+    location: {
+      hash,
+      href: `https://desktop.local/dashboard.html${hash}`,
+      origin: "https://desktop.local",
+      pathname: "/dashboard.html",
+      search: "",
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    history: {
+      state: null,
+      replaceState() {},
+      pushState() {},
+    },
+    document: fakeDocument,
+  };
+  fakeDocument.location = fakeWindow.location;
+  fakeDocument.defaultView = fakeWindow;
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: fakeWindow,
+  });
+
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: fakeDocument,
+  });
+
+  Object.defineProperty(globalThis, "SVGElement", {
+    configurable: true,
+    value: function SVGElement() {},
+  });
+
+  try {
+    return withDashboardRouteRuntime(({ DashboardRoot }) => renderToStaticMarkup(createElement(DashboardRoot as never)));
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: originalWindow,
+      });
+    }
+
+    if (originalDocument === undefined) {
+      Reflect.deleteProperty(globalThis, "document");
+    } else {
+      Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: originalDocument,
+      });
+    }
+
+    if (originalSVGElement === undefined) {
+      Reflect.deleteProperty(globalThis, "SVGElement");
+    } else {
+      Object.defineProperty(globalThis, "SVGElement", {
+        configurable: true,
+        value: originalSVGElement,
+      });
+    }
+  }
 }
 
 function createFakeScheduler() {
@@ -423,7 +499,6 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
 
 test("shell-ball desktop navigation keeps route changes separate from desktop window focus", () => {
   const controllerSource = readFileSync(resolve(desktopRoot, "src/platform/windowController.ts"), "utf8");
-  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const dashboardAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/DashboardApp.tsx"), "utf8");
   const trayControllerSource = readFileSync(resolve(desktopRoot, "src/platform/trayController.ts"), "utf8");
@@ -441,8 +516,6 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   assert.doesNotMatch(controllerSource, /new Window\(/);
   assert.doesNotMatch(controllerSource, /resolveDashboardRouteHref/);
   assert.doesNotMatch(controllerSource, /openDashboardRoute/);
-  assert.match(dashboardRootSource, /resolveDashboardRoutePath\("home"\)/);
-  assert.match(dashboardRootSource, /resolveDashboardRoutePath\("safety"\)/);
   assert.match(securityAppSource, /useNavigate\(/);
   assert.match(securityAppSource, /navigate\(resolveDashboardRoutePath\("home"\)\)/);
   assert.doesNotMatch(securityAppSource, /openDashboardRoute/);
@@ -482,8 +555,8 @@ test("window controller throws when a desktop window handle is missing", async (
 });
 
 test("dashboard route surface renders the live home and safety routes", () => {
-  const homeMarkup = renderDashboardRouteSurface(resolveDashboardRoutePath("home"));
-  const safetyMarkup = renderDashboardRouteSurface(resolveDashboardRoutePath("safety"));
+  const homeMarkup = renderDashboardRouteSurface("");
+  const safetyMarkup = renderDashboardRouteSurface("#/safety");
 
   assert.match(homeMarkup, /Dashboard Orbit/);
   assert.match(safetyMarkup, /返回首页/);
