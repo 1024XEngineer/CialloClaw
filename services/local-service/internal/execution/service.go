@@ -23,6 +23,7 @@ import (
 type Service struct {
 	fileSystem platform.FileSystemAdapter
 	execution  tools.ExecutionCapability
+	playwright tools.PlaywrightSidecarClient
 	model      *model.Service
 	audit      *audit.Service
 	checkpoint *checkpoint.Service
@@ -71,6 +72,7 @@ type generationTrace struct {
 func NewService(
 	fileSystem platform.FileSystemAdapter,
 	executionBackend tools.ExecutionCapability,
+	playwrightClient tools.PlaywrightSidecarClient,
 	modelService *model.Service,
 	auditService *audit.Service,
 	checkpointService *checkpoint.Service,
@@ -86,6 +88,7 @@ func NewService(
 	return &Service{
 		fileSystem: fileSystem,
 		execution:  executionBackend,
+		playwright: playwrightClient,
 		model:      modelService,
 		audit:      auditService,
 		checkpoint: checkpointService,
@@ -221,6 +224,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 		WorkspacePath: ".",
 		Platform:      s.fileSystem,
 		Execution:     s.execution,
+		Playwright:    s.playwright,
 	}, intentName, args)
 	if err != nil {
 		return Result{}, false, fmt.Errorf("execute builtin tool %s: %w", intentName, err)
@@ -256,6 +260,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		WorkspacePath: workspacePath,
 		Platform:      s.fileSystem,
 		Execution:     s.execution,
+		Playwright:    s.playwright,
 	}, toolName, toolInput)
 	if err != nil {
 		return Result{}, false, fmt.Errorf("execute tool %s: %w", toolName, err)
