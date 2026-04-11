@@ -3207,6 +3207,78 @@ test("shell-ball bubble window emits state-aware pin actions for history bubbles
   ]);
 });
 
+test("shell-ball bubble window focuses the native helper window when history interaction becomes active", async () => {
+  const helperSnapshot = createShellBallWindowSnapshot({
+    visualState: "processing",
+    inputValue: "",
+    voicePreview: null,
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-helper-focus-1",
+          task_id: "task-helper-focus-1",
+          type: "status",
+          text: "Focus this window on hover.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:04:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  });
+  const calls: string[] = [];
+  let capturedProps: Record<string, unknown> | null = null;
+
+  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
+    react: require("react"),
+    "./useShellBallCoordinator": {
+      emitShellBallBubbleAction() {
+        return Promise.resolve();
+      },
+      emitShellBallBubbleInteraction(active: boolean) {
+        calls.push(`interaction:${active}`);
+        return Promise.resolve();
+      },
+      useShellBallHelperWindowSnapshot() {
+        return helperSnapshot;
+      },
+    },
+    "../../platform/shellBallWindowController": {
+      focusShellBallCurrentWindow() {
+        calls.push("focus");
+        return Promise.resolve();
+      },
+    },
+    "./useShellBallWindowMetrics": {
+      useShellBallWindowMetrics() {
+        return { rootRef: null };
+      },
+    },
+    "./components/ShellBallBubbleZone": {
+      ShellBallBubbleZone(props: Record<string, unknown>) {
+        capturedProps = { ...(capturedProps ?? {}), ...props };
+        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
+
+  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
+
+  if (capturedProps === null) {
+    throw new Error("Expected bubble window interaction callback to be captured.");
+  }
+
+  const onInteractionActiveChange = (capturedProps as unknown as { onInteractionActiveChange: (active: boolean) => Promise<void> }).onInteractionActiveChange;
+
+  await onInteractionActiveChange(true);
+
+  assert.deepEqual(calls, ["focus", "interaction:true"]);
+});
+
 test("shell-ball bubble window does not depend on only visualState to render its body", () => {
   const helperSnapshot = createShellBallWindowSnapshot({
     visualState: "idle",

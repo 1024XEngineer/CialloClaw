@@ -63,6 +63,10 @@ export function getShellBallCurrentWindow() {
   return getCurrentWindow();
 }
 
+export async function focusShellBallCurrentWindow() {
+  await getCurrentWindow().setFocus();
+}
+
 async function getShellBallWindowByLabel(label: string) {
   const currentWindow = getCurrentWindow();
 
