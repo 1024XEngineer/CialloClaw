@@ -2343,6 +2343,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
+
 ## 9. Notification / Subscription 说明
 
 ### 9.1 事件语义

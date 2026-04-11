@@ -177,6 +177,21 @@ export async function closeShellBallPinnedBubbleWindow(bubbleId: string) {
   await windowHandle.destroy();
 }
 
+export async function setShellBallPinnedBubbleWindowVisible(bubbleId: string, visible: boolean) {
+  const windowHandle = await getShellBallWindowByLabel(getShellBallPinnedBubbleWindowLabel(bubbleId));
+
+  if (windowHandle === null) {
+    return;
+  }
+
+  if (visible) {
+    await windowHandle.show();
+    return;
+  }
+
+  await windowHandle.hide();
+}
+
 export async function emitToShellBallWindowLabel<T>(label: string, event: string, payload?: T) {
   const windowHandle = await getShellBallWindowByLabel(label);
 

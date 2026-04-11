@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
@@ -5,22 +6,66 @@ import { NotesPage } from "@/features/dashboard/notes/NotesPage";
 import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
+import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
 import "./dashboard.css";
 
+function useDashboardDomainExpansion() {
+  const [isOpening, setIsOpening] = useState(true);
+  const hiddenRef = useRef(false);
+
+  useEffect(() => {
+    let frame = 0;
+
+    const trigger = () => {
+      window.cancelAnimationFrame(frame);
+      setIsOpening(true);
+      frame = window.requestAnimationFrame(() => {
+        setIsOpening(false);
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenRef.current = true;
+        return;
+      }
+
+      if (!hiddenRef.current) {
+        return;
+      }
+
+      hiddenRef.current = false;
+      trigger();
+    };
+
+    trigger();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  return isOpening;
+}
+
 function DashboardRoutes() {
   const location = useLocation();
+  const isOpening = useDashboardDomainExpansion();
 
   return (
-    <div className="dashboard-app">
+    <div className={cn("dashboard-app", isOpening && "is-opening")}>
       <AnimatePresence mode="wait">
         <motion.div
           key={location.pathname}
-          animate={{ opacity: 1, y: 0 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
           className="dashboard-route-layer"
-          exit={{ opacity: 0, y: -12 }}
-          initial={{ opacity: 0, y: 18 }}
-          transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+          exit={{ opacity: 0, scale: 0.988, y: -16 }}
+          initial={{ opacity: 0, scale: 0.958, y: 30 }}
+          style={{ transformOrigin: "50% 53.2%" }}
+          transition={{ duration: 0.46, ease: [0.22, 1, 0.36, 1] }}
         >
           <Routes location={location}>
             <Route element={<DashboardHome />} path={resolveDashboardRoutePath("home")} />

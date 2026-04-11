@@ -1,4 +1,5 @@
 import { Window } from "@tauri-apps/api/window";
+import { requestShellBallDashboardOpenTransition } from "./dashboardWindowTransition";
 
 export type DesktopWindowLabel = "dashboard" | "control-panel";
 
@@ -7,6 +8,7 @@ const desktopWindowOptions = {
     title: "CialloClaw Dashboard",
     width: 1280,
     height: 860,
+    decorations: false,
     visible: false,
     url: "dashboard.html",
   },
@@ -14,6 +16,7 @@ const desktopWindowOptions = {
     title: "CialloClaw Control Panel",
     width: 1080,
     height: 760,
+    decorations: false,
     visible: false,
     url: "control-panel.html",
   },
@@ -21,6 +24,7 @@ const desktopWindowOptions = {
   title: string;
   width: number;
   height: number;
+  decorations: boolean;
   visible: boolean;
   url: string;
 }>;
@@ -39,7 +43,14 @@ async function getOrCreateDesktopWindow(label: DesktopWindowLabel) {
 export async function openOrFocusDesktopWindow(label: DesktopWindowLabel) {
   const windowHandle = await getOrCreateDesktopWindow(label);
 
-  await windowHandle.unminimize();
+  if (label === "dashboard") {
+    await windowHandle.unminimize();
+    await windowHandle.setFullscreen(true);
+    await requestShellBallDashboardOpenTransition();
+  } else {
+    await windowHandle.unminimize();
+  }
+
   await windowHandle.show();
   await windowHandle.setFocus();
 

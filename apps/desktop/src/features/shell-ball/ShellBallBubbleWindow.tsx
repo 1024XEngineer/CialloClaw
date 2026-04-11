@@ -15,7 +15,7 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const { rootRef } = useShellBallWindowMetrics({
     role: "bubble",
-    visible: true,
+    visible: snapshot.visibility.bubble,
     clickThrough: snapshot.bubbleRegion.clickThrough,
   });
 

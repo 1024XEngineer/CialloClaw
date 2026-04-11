@@ -14,8 +14,8 @@
       {
         "label": "shell-ball",
         "title": "CialloClaw Shell Ball",
-        "width": 240,
-        "height": 260,
+        "width": 120,
+        "height": 130,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -57,6 +57,7 @@
         "title": "CialloClaw Dashboard",
         "width": 1280,
         "height": 860,
+        "decorations": false,
         "visible": false,
         "url": "dashboard.html"
       },
@@ -65,6 +66,7 @@
         "title": "CialloClaw Control Panel",
         "width": 1080,
         "height": 760,
+        "decorations": false,
         "visible": false,
         "url": "control-panel.html"
       }

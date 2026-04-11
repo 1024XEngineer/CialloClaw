@@ -343,7 +343,6 @@ export function ShellBallMascot({
       </div>
 
       <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--front" />
-      <div className={cn("shell-ball-mascot__perch", motionConfig.ringMode !== "hidden" && "shell-ball-mascot__perch--active")} />
       <button
         type="button"
         className="shell-ball-mascot__hotspot"

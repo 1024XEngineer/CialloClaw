@@ -13,6 +13,9 @@
 }
 
 .shell-ball-surface {
+  --shell-ball-scale: 0.5;
+  --shell-ball-transition-scale: 1;
+  --shell-ball-transition-opacity: 1;
   --shell-ball-paper: rgba(255, 251, 244, 0.88);
   --shell-ball-paper-strong: rgba(255, 253, 249, 0.96);
   --shell-ball-paper-soft: rgba(251, 246, 238, 0.72);
@@ -32,9 +35,26 @@
   margin: 0;
   max-width: none;
   min-height: 0;
+  opacity: var(--shell-ball-transition-opacity);
   padding: 0.35rem;
   position: relative;
+  transform: scale(calc(var(--shell-ball-scale) * var(--shell-ball-transition-scale)));
+  transform-origin: top left;
+  transition:
+    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
   width: max-content;
+}
+
+.shell-ball-surface[data-dashboard-transition-phase="opening"],
+.shell-ball-surface[data-dashboard-transition-phase="hidden"] {
+  --shell-ball-transition-opacity: 0;
+  --shell-ball-transition-scale: 0.72;
+  pointer-events: none;
+}
+
+.shell-ball-surface[data-dashboard-transition-phase="closing"] {
+  pointer-events: none;
 }
 
 .shell-ball-surface::before {

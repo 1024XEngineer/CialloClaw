@@ -105,7 +105,15 @@ export type ShellBallBubbleInteractionPayload = {
 
 export function getShellBallHelperWindowVisibility(
   visualState: ShellBallVisualState,
+  helpersVisible = true,
 ): ShellBallHelperWindowVisibility {
+  if (!helpersVisible) {
+    return {
+      bubble: false,
+      input: false,
+    };
+  }
+
   return {
     bubble: true,
     input: getShellBallInputBarMode(visualState) !== "hidden",
@@ -131,6 +139,7 @@ export function createShellBallWindowSnapshot(input: {
   inputValue: string;
   voicePreview: ShellBallVoicePreview;
   bubbleItems?: ShellBallBubbleItem[];
+  helpersVisible?: boolean;
 }): ShellBallWindowSnapshot {
   const bubbleItems = cloneShellBallBubbleItems(input.bubbleItems ?? []);
 
@@ -141,7 +150,7 @@ export function createShellBallWindowSnapshot(input: {
     voicePreview: input.voicePreview,
     bubbleItems,
     bubbleRegion: getShellBallBubbleRegionState(bubbleItems),
-    visibility: getShellBallHelperWindowVisibility(input.visualState),
+    visibility: getShellBallHelperWindowVisibility(input.visualState, input.helpersVisible),
   };
 }
 
@@ -151,5 +160,6 @@ export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot 
     inputValue: "",
     voicePreview: null,
     bubbleItems: [],
+    helpersVisible: true,
   });
 }
