@@ -174,6 +174,18 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 
 func TestTaskInspectorRunAggregatesRuntimeState(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "inspector output")
+	now := time.Now().UTC()
+	service.runEngine.ReplaceNotepadItems([]map[string]any{
+		{
+			"item_id":          "todo_today",
+			"title":            "translate daily notes",
+			"bucket":           "upcoming",
+			"status":           "normal",
+			"type":             "todo_item",
+			"due_at":           now.Add(2 * time.Hour).Format(time.RFC3339),
+			"agent_suggestion": "translate",
+		},
+	})
 
 	todosDir := filepath.Join(workspaceRoot, "todos")
 	if err := os.MkdirAll(todosDir, 0o755); err != nil {
