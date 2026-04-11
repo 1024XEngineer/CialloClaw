@@ -34,6 +34,7 @@ const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
 const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const TRAY_ICON_ID: &str = "main-tray";
+const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
 
@@ -351,12 +352,32 @@ fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn show_shell_ball(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(SHELL_BALL_WINDOW_LABEL)
+        .ok_or_else(|| format!("webview window not found: {SHELL_BALL_WINDOW_LABEL}"))?;
+
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to unminimize {SHELL_BALL_WINDOW_LABEL}: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show {SHELL_BALL_WINDOW_LABEL}: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("failed to focus {SHELL_BALL_WINDOW_LABEL}: {error}"))?;
+
+    Ok(())
+}
+
 fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let hide_shell_ball = MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "最小化悬浮球")
+    let show_shell_ball_menu_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球")
+        .build(app)?;
+    let hide_shell_ball = MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "隐藏悬浮球")
         .build(app)?;
     let quit_app = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "关闭程序").build(app)?;
     let tray_menu = MenuBuilder::new(app)
-        .items(&[&hide_shell_ball, &quit_app])
+        .items(&[&show_shell_ball_menu_item, &hide_shell_ball, &quit_app])
         .build()?;
 
     let tray_builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
@@ -364,6 +385,11 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
+            TRAY_MENU_SHOW_SHELL_BALL_ID => {
+                if let Err(error) = show_shell_ball(app) {
+                    eprintln!("failed to show shell-ball from tray: {error}");
+                }
+            }
             TRAY_MENU_HIDE_SHELL_BALL_ID => {
                 if let Err(error) = hide_shell_ball_cluster(app) {
                     eprintln!("failed to hide shell-ball from tray: {error}");

@@ -18,6 +18,7 @@ type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pin
 export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 12;
 export const SHELL_BALL_BUBBLE_GAP_PX = 6;
 export const SHELL_BALL_INPUT_GAP_PX = 12;
+export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 6;
 
 type ShellBallContentSize = {
   width: number;
@@ -71,12 +72,12 @@ export function createShellBallWindowFrame(
   };
 }
 
-export function measureShellBallContentSize(element: ShellBallMeasurableElement): ShellBallContentSize {
+export function measureShellBallContentSize(element: ShellBallMeasurableElement, includeScrollBounds = true): ShellBallContentSize {
   const rect = element.getBoundingClientRect();
 
   return {
-    width: Math.max(rect.width, element.scrollWidth),
-    height: Math.max(rect.height, element.scrollHeight),
+    width: includeScrollBounds ? Math.max(rect.width, element.scrollWidth) : rect.width,
+    height: includeScrollBounds ? Math.max(rect.height, element.scrollHeight) : rect.height,
   };
 }
 
@@ -176,9 +177,13 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
         return;
       }
 
-      const contentSize = measureShellBallContentSize(nextElement);
+      const isBallWindow = role === "ball";
+      const contentSize = measureShellBallContentSize(nextElement, !isBallWindow);
       setWindowFrame(
-        createShellBallWindowFrame(contentSize),
+        createShellBallWindowFrame(
+          contentSize,
+          isBallWindow ? SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX : SHELL_BALL_WINDOW_SAFE_MARGIN_PX,
+        ),
       );
     }
 

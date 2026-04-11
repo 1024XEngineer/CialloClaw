@@ -13,6 +13,7 @@
 }
 
 .shell-ball-surface {
+  --shell-ball-scale: 0.5;
   --shell-ball-paper: rgba(255, 251, 244, 0.88);
   --shell-ball-paper-strong: rgba(255, 253, 249, 0.96);
   --shell-ball-paper-soft: rgba(251, 246, 238, 0.72);
@@ -34,6 +35,8 @@
   min-height: 0;
   padding: 0.35rem;
   position: relative;
+  transform: scale(var(--shell-ball-scale));
+  transform-origin: top left;
   width: max-content;
 }
 
