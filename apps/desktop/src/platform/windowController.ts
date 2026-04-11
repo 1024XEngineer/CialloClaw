@@ -10,6 +10,7 @@ export async function openOrFocusDesktopWindow(label: DesktopWindowLabel) {
     throw new Error(`Desktop window not found: ${label}`);
   }
 
+  await windowHandle.unminimize();
   await windowHandle.show();
   await windowHandle.setFocus();
 

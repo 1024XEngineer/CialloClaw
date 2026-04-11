@@ -693,6 +693,9 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
 test("window controller focuses an existing labeled desktop window", async () => {
   const calls: string[] = [];
   const handle = {
+    async unminimize() {
+      calls.push("unminimize");
+    },
     async show() {
       calls.push("show");
     },
@@ -708,7 +711,7 @@ test("window controller focuses an existing labeled desktop window", async () =>
     await openOrFocusDesktopWindow("dashboard");
   });
 
-  assert.deepEqual(calls, ["label:dashboard", "show", "setFocus"]);
+  assert.deepEqual(calls, ["label:dashboard", "unminimize", "show", "setFocus"]);
 });
 
 test("window controller throws when a desktop window handle is missing", async () => {
