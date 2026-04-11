@@ -13,6 +13,8 @@ import {
 } from "../../platform/shellBallWindowController";
 import { shellBallWindowSyncEvents, type ShellBallHelperWindowRole, type ShellBallWindowGeometry } from "./shellBall.windowSync";
 
+type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pinned">;
+
 export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 12;
 export const SHELL_BALL_WINDOW_GAP_PX = 12;
 
@@ -48,7 +50,7 @@ type ShellBallWindowBounds = {
 };
 
 type UseShellBallWindowMetricsInput = {
-  role: "ball" | ShellBallHelperWindowRole;
+  role: "ball" | AnchoredShellBallHelperWindowRole;
   visible?: boolean;
   clickThrough?: boolean;
 };
@@ -118,7 +120,7 @@ export function clampShellBallFrameToBounds(
 }
 
 export function getShellBallHelperWindowInteractionMode(input: {
-  role: ShellBallHelperWindowRole;
+  role: AnchoredShellBallHelperWindowRole;
   visible: boolean;
   clickThrough: boolean;
 }): ShellBallHelperWindowInteractionMode {

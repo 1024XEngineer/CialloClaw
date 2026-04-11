@@ -662,6 +662,20 @@ test("shell-ball desktop host declares bubble and input helper windows", () => {
   assert.match(tauriConfig, /"url": "shell-ball-input\.html"/);
 });
 
+test("shell-ball desktop host declares detached pinned bubble windows", () => {
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-bubble-pinned.html")), true);
+  assert.equal(existsSync(resolve(desktopRoot, "src/app/shell-ball-bubble-pinned/main.tsx")), true);
+
+  const pinnedHtml = readFileSync(resolve(desktopRoot, "shell-ball-bubble-pinned.html"), "utf8");
+  const pinnedEntry = readFileSync(resolve(desktopRoot, "src/app/shell-ball-bubble-pinned/main.tsx"), "utf8");
+  const viteConfig = readFileSync(resolve(desktopRoot, "vite.config.ts"), "utf8");
+
+  assert.match(pinnedHtml, /src="\/src\/app\/shell-ball-bubble-pinned\/main\.tsx"/);
+  assert.match(pinnedEntry, /ShellBallPinnedBubbleWindow/);
+  assert.match(pinnedEntry, /data-app-window/);
+  assert.match(viteConfig, /"shell-ball-bubble-pinned"/);
+});
+
 test("shell-ball desktop window controller and capabilities stay aligned", () => {
   assert.deepEqual(shellBallWindowLabels, {
     ball: "shell-ball",
@@ -687,6 +701,7 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
     "shell-ball",
     "shell-ball-bubble",
     "shell-ball-input",
+    "shell-ball-bubble-pinned-*",
     "dashboard",
     "control-panel",
   ]);
@@ -709,6 +724,34 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.deepEqual(generatedCapabilitySchema.default.permissions, parsedCapabilityConfig.permissions);
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-create"), true);
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-unminimize"), true);
+});
+
+test("shell-ball pinned window labels and capabilities stay deterministic", () => {
+  const controllerSource = readFileSync(
+    resolve(desktopRoot, "src/platform/shellBallWindowController.ts"),
+    "utf8",
+  );
+  const capabilityConfig = JSON.parse(
+    readFileSync(resolve(desktopRoot, "src-tauri/capabilities/default.json"), "utf8"),
+  ) as {
+    windows: string[];
+    permissions: string[];
+  };
+  const generatedCapabilitySchema = JSON.parse(
+    readFileSync(resolve(desktopRoot, "src-tauri/gen/schemas/capabilities.json"), "utf8"),
+  ) as {
+    default: {
+      windows: string[];
+      permissions: string[];
+    };
+  };
+
+  assert.match(controllerSource, /shellBallPinnedBubbleWindowLabelPrefix = "shell-ball-bubble-pinned-"/);
+  assert.match(controllerSource, /return `\$\{shellBallPinnedBubbleWindowLabelPrefix\}\$\{bubbleId\}`/);
+  assert.match(controllerSource, /shell-ball-bubble-pinned\.html/);
+  assert.equal(capabilityConfig.windows.includes("shell-ball-bubble-pinned-*"), true);
+  assert.deepEqual(generatedCapabilitySchema.default.windows, capabilityConfig.windows);
+  assert.equal(generatedCapabilitySchema.default.windows.includes("shell-ball-bubble-pinned-*"), true);
 });
 
 test("dashboard and control-panel stay hidden on cold launch until explicitly opened", () => {
@@ -1070,6 +1113,8 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
     snapshot: "desktop-shell-ball:snapshot",
     geometry: "desktop-shell-ball:geometry",
     helperReady: "desktop-shell-ball:helper-ready",
+    pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
+    pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
     inputHover: "desktop-shell-ball:input-hover",
     inputFocus: "desktop-shell-ball:input-focus",
     inputDraft: "desktop-shell-ball:input-draft",
@@ -2304,10 +2349,13 @@ test("shell-ball bubble window resolves bubble items from the helper-window snap
 
   renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
 
-  assert.deepEqual(capturedProps?.visualState, "processing");
-  assert.deepEqual(capturedProps?.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
-  assert.equal(typeof capturedProps?.onDeleteBubble, "function");
-  assert.equal(typeof capturedProps?.onPinBubble, "function");
+  assert.notEqual(capturedProps, null);
+  const resolvedProps = capturedProps as unknown as Record<string, unknown>;
+
+  assert.deepEqual(resolvedProps.visualState, "processing");
+  assert.deepEqual(resolvedProps.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
+  assert.equal(typeof resolvedProps.onDeleteBubble, "function");
+  assert.equal(typeof resolvedProps.onPinBubble, "function");
 });
 
 test("shell-ball bubble window does not depend on only visualState to render its body", () => {
@@ -2359,15 +2407,18 @@ test("shell-ball bubble window does not depend on only visualState to render its
 
   renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, { visualState: "voice_locked" }));
 
-  assert.deepEqual(capturedProps?.visualState, "voice_locked");
-  assert.deepEqual(capturedProps?.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
-  assert.deepEqual(capturedProps?.metricsInput, {
+  assert.notEqual(capturedProps, null);
+  const resolvedProps = capturedProps as unknown as Record<string, unknown>;
+
+  assert.deepEqual(resolvedProps.visualState, "voice_locked");
+  assert.deepEqual(resolvedProps.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
+  assert.deepEqual(resolvedProps.metricsInput, {
     role: "bubble",
     visible: true,
     clickThrough: helperSnapshot.bubbleRegion.clickThrough,
   });
-  assert.equal(typeof capturedProps?.onDeleteBubble, "function");
-  assert.equal(typeof capturedProps?.onPinBubble, "function");
+  assert.equal(typeof resolvedProps.onDeleteBubble, "function");
+  assert.equal(typeof resolvedProps.onPinBubble, "function");
 });
 
 test("shell-ball bubble zone renders a real message list without placeholder chrome", () => {
@@ -2548,6 +2599,101 @@ test("shell-ball bubble actions stay coordinator-owned and detached-position fre
   assert.match(syncSource, /export type ShellBallBubbleActionSource = "bubble" \| "pinned_window";/);
   assert.match(coordinatorSource, /currentWindow\.listen<ShellBallBubbleActionPayload>\(shellBallWindowSyncEvents\.bubbleAction/);
   assert.match(coordinatorSource, /setBubbleItems\(\(currentItems\) => applyShellBallBubbleAction\(currentItems, payload\)\)/);
+});
+
+test("shell-ball pinned bubble windows render one coordinator-owned pinned item and emit detached actions", () => {
+  const helperSnapshot = createShellBallWindowSnapshot({
+    visualState: "processing",
+    inputValue: "",
+    voicePreview: null,
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-pinned-1",
+          task_id: "task-pinned-1",
+          type: "status",
+          text: "Keep this pinned.",
+          pinned: true,
+          hidden: false,
+          created_at: "2026-04-11T10:12:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+      {
+        bubble: {
+          bubble_id: "msg-unpinned-1",
+          task_id: "task-unpinned-1",
+          type: "result",
+          text: "Leave this in the region.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:12:01.000Z",
+        },
+        role: "user",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  });
+  const actions: Array<{ action: string; bubbleId: string; source: string | undefined }> = [];
+
+  const { ShellBallPinnedBubbleWindow: RuntimeShellBallPinnedBubbleWindow } = withShellBallModuleRuntime(
+    "ShellBallPinnedBubbleWindow.tsx",
+    {
+      react: require("react"),
+      "./useShellBallCoordinator": {
+        useShellBallHelperWindowSnapshot() {
+          return helperSnapshot;
+        },
+        emitShellBallBubbleAction(action: string, bubbleId: string, source?: string) {
+          actions.push({ action, bubbleId, source });
+          return Promise.resolve();
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        getShellBallPinnedBubbleIdFromLabel() {
+          return "msg-pinned-1";
+        },
+        getShellBallCurrentWindow() {
+          return { label: "shell-ball-bubble-pinned-msg-pinned-1" };
+        },
+        startShellBallWindowDragging() {
+          actions.push({ action: "drag", bubbleId: "msg-pinned-1", source: "window" });
+          return Promise.resolve();
+        },
+      },
+    },
+    (moduleExports) => moduleExports as {
+      ShellBallPinnedBubbleWindow: (props: Record<string, unknown>) => ReturnType<typeof createElement>;
+    },
+  );
+
+  const markup = renderToStaticMarkup(createElement(RuntimeShellBallPinnedBubbleWindow, null));
+
+  assert.match(markup, /Keep this pinned\./);
+  assert.doesNotMatch(markup, /Leave this in the region\./);
+  assert.match(markup, /Unpin/);
+  assert.match(markup, /Delete/);
+});
+
+test("shell-ball detached pinned window contract stays anchored before drag and detached after drag", () => {
+  const pinnedWindowSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/ShellBallPinnedBubbleWindow.tsx"),
+    "utf8",
+  );
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const syncSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.windowSync.ts"), "utf8");
+
+  assert.match(pinnedWindowSource, /startShellBallWindowDragging/);
+  assert.match(pinnedWindowSource, /setFollowsShellBallGeometry\(false\)/);
+  assert.match(syncSource, /pinnedWindowReady/);
+  assert.match(coordinatorSource, /openShellBallPinnedBubbleWindow/);
+  assert.match(coordinatorSource, /closeShellBallPinnedBubbleWindow/);
+  assert.match(coordinatorSource, /shellBallWindowSyncEvents\.pinnedWindowReady/);
 });
 
 test("shell-ball bubble interaction mode stays clickable while visible unpinned bubbles remain", () => {

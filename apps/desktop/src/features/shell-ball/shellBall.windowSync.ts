@@ -8,6 +8,8 @@ export const shellBallWindowSyncEvents = Object.freeze({
   snapshot: "desktop-shell-ball:snapshot",
   geometry: "desktop-shell-ball:geometry",
   helperReady: "desktop-shell-ball:helper-ready",
+  pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
+  pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
   inputHover: "desktop-shell-ball:input-hover",
   inputFocus: "desktop-shell-ball:input-focus",
   inputDraft: "desktop-shell-ball:input-draft",
@@ -15,7 +17,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   bubbleAction: "desktop-shell-ball:bubble-action",
 });
 
-export type ShellBallHelperWindowRole = "bubble" | "input";
+export type ShellBallHelperWindowRole = "bubble" | "input" | "pinned";
 
 export type ShellBallPrimaryAction = "attach_file" | "submit" | "primary_click";
 
@@ -61,7 +63,16 @@ export type ShellBallWindowGeometry = {
 };
 
 export type ShellBallHelperReadyPayload = {
-  role: ShellBallHelperWindowRole;
+  role: Exclude<ShellBallHelperWindowRole, "pinned">;
+};
+
+export type ShellBallPinnedWindowReadyPayload = {
+  windowLabel: string;
+  bubbleId: string;
+};
+
+export type ShellBallPinnedWindowDetachedPayload = {
+  bubbleId: string;
 };
 
 export type ShellBallInputHoverPayload = {
