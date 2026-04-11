@@ -49,6 +49,9 @@ type ShellBallHelperSnapshotInput = {
   windowLabel?: string;
 };
 
+const SHELL_BALL_LOCAL_MOCK_BUBBLE_BASE_TIME_MS = Date.parse("2026-04-12T09:00:00.000Z");
+const SHELL_BALL_LOCAL_MOCK_REPLY_DELAY_MS = 320;
+
 const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [
   {
     bubble: {
@@ -123,6 +126,35 @@ export function applyShellBallBubbleAction(
   );
 }
 
+function createShellBallLocalMockBubbleItem(input: {
+  sequence: number;
+  role: ShellBallBubbleItem["role"];
+  text: string;
+  type: ShellBallBubbleItem["bubble"]["type"];
+}): ShellBallBubbleItem {
+  return {
+    bubble: {
+      bubble_id: `shell-ball-local-mock-${input.sequence}`,
+      task_id: "",
+      type: input.type,
+      text: input.text,
+      pinned: false,
+      hidden: false,
+      created_at: new Date(SHELL_BALL_LOCAL_MOCK_BUBBLE_BASE_TIME_MS + input.sequence * 1000).toISOString(),
+    },
+    role: input.role,
+    desktop: {
+      lifecycleState: "visible",
+      freshnessHint: "fresh",
+      motionHint: "settle",
+    },
+  };
+}
+
+function createShellBallLocalMockReplyText(submittedText: string) {
+  return `Mock reply: I captured '${submittedText}'.`;
+}
+
 export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const [bubbleItems, setBubbleItems] = useState(() => sortShellBallBubbleItemsByTimestamp(cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS)));
   const snapshot = useMemo(
@@ -137,6 +169,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   );
   const snapshotRef = useRef(snapshot);
   const bubbleItemsRef = useRef(bubbleItems);
+  const inputValueRef = useRef(input.inputValue);
+  const localMockBubbleSequenceRef = useRef(0);
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const handlersRef = useRef({
     setInputValue: input.setInputValue,
@@ -150,6 +184,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
   snapshotRef.current = snapshot;
   bubbleItemsRef.current = bubbleItems;
+  inputValueRef.current = input.inputValue;
   handlersRef.current = {
     setInputValue: input.setInputValue,
     onRegionEnter: input.onRegionEnter,
@@ -159,6 +194,44 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   };
+
+  function appendShellBallLocalMockBubble(item: Omit<Parameters<typeof createShellBallLocalMockBubbleItem>[0], "sequence">) {
+    localMockBubbleSequenceRef.current += 1;
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallLocalMockBubbleItem({
+          ...item,
+          sequence: localMockBubbleSequenceRef.current,
+        }),
+      ]),
+    );
+  }
+
+  function handleSubmitBubbleMock() {
+    const submittedText = inputValueRef.current.trim();
+
+    if (submittedText === "") {
+      return;
+    }
+
+    appendShellBallLocalMockBubble({
+      role: "user",
+      text: submittedText,
+      type: "result",
+    });
+    handlersRef.current.setInputValue("");
+    handlersRef.current.onSubmitText();
+
+    globalThis.setTimeout(() => {
+      appendShellBallLocalMockBubble({
+        role: "agent",
+        text: createShellBallLocalMockReplyText(submittedText),
+        type: "result",
+      });
+    }, SHELL_BALL_LOCAL_MOCK_REPLY_DELAY_MS);
+  }
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -243,7 +316,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           handlersRef.current.onAttachFile();
           break;
         case "submit":
-          handlersRef.current.onSubmitText();
+          handleSubmitBubbleMock();
           break;
         case "primary_click":
           handlersRef.current.onPrimaryClick();

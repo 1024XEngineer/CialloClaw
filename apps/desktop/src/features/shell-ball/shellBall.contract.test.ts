@@ -2252,6 +2252,144 @@ test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", 
   assert.equal(snapshot.bubbleItems.at(-1)?.desktop.motionHint, "settle");
 });
 
+test("shell-ball submit actions append mock conversation bubbles and clear the draft", () => {
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
+  const timeoutScheduler = createFakeScheduler();
+  const inputValueChanges: string[] = [];
+  let submitCalls = 0;
+  let bubbleItemsState: ShellBallBubbleItem[] = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+
+  globalThis.setTimeout = ((callback: () => void, ms?: number) => timeoutScheduler.schedule(callback, ms ?? 0)) as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = ((handle: unknown) => timeoutScheduler.cancel(handle)) as typeof globalThis.clearTimeout;
+
+  try {
+    const { useShellBallCoordinator } = withShellBallModuleRuntime("useShellBallCoordinator.ts", {
+      react: {
+        ...require("react"),
+        useEffect(callback: () => void) {
+          callback();
+        },
+        useMemo<T>(factory: () => T) {
+          return factory();
+        },
+        useRef<T>(value: T) {
+          return { current: value };
+        },
+        useState<T>(value: T) {
+          const resolvedValue = typeof value === "function" ? (value as () => T)() : value;
+
+          if (
+            Array.isArray(resolvedValue) &&
+            resolvedValue.every((item) => item && typeof item === "object" && "bubble" in item) &&
+            bubbleItemsState.length === 0
+          ) {
+            bubbleItemsState = resolvedValue as ShellBallBubbleItem[];
+          }
+
+          return [bubbleItemsState as unknown as T || resolvedValue, (nextValue: T | ((currentValue: T) => T)) => {
+            bubbleItemsState = typeof nextValue === "function"
+              ? (nextValue as (currentValue: T) => T)(bubbleItemsState as unknown as T) as unknown as ShellBallBubbleItem[]
+              : nextValue as unknown as ShellBallBubbleItem[];
+          }] as const;
+        },
+      },
+      "@tauri-apps/api/window": {
+        getCurrentWindow() {
+          return {
+            label: shellBallWindowLabels.ball,
+            listen(eventName: string, callback: (event: { payload: unknown }) => void) {
+              listeners.set(eventName, callback);
+              return Promise.resolve(() => {});
+            },
+            onMoved() {
+              return Promise.resolve(() => {});
+            },
+            onResized() {
+              return Promise.resolve(() => {});
+            },
+            outerPosition() {
+              return Promise.resolve({ toLogical: () => ({ x: 0, y: 0 }) });
+            },
+            outerSize() {
+              return Promise.resolve({ toLogical: () => ({ width: 124, height: 104 }) });
+            },
+            scaleFactor() {
+              return Promise.resolve(1);
+            },
+          };
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME: { width: 240, height: 140 },
+        closeShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        emitToShellBallWindowLabel() {
+          return Promise.resolve();
+        },
+        getShellBallPinnedBubbleIdFromLabel() {
+          return null;
+        },
+        getShellBallPinnedBubbleWindowAnchor() {
+          return { x: 0, y: 0 };
+        },
+        getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
+          return `shell-ball-bubble-pinned-${bubbleId}`;
+        },
+        openShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        shellBallWindowLabels,
+      },
+      "./shellBall.bubble": require(resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/shellBall.bubble.js")),
+      "./shellBall.windowSync": require(resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/shellBall.windowSync.js")),
+      "./useShellBallWindowMetrics": {
+        getShellBallBubbleAnchor() {
+          return { x: 0, y: 0 };
+        },
+      },
+    }, (moduleExports) => moduleExports as { useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator });
+
+    useShellBallCoordinator({
+      visualState: "hover_input",
+      inputValue: "Summarize the latest status",
+      voicePreview: null,
+      setInputValue: (value: string) => {
+        inputValueChanges.push(value);
+      },
+      onRegionEnter: () => {},
+      onRegionLeave: () => {},
+      onInputFocusChange: () => {},
+      onSubmitText: () => {
+        submitCalls += 1;
+      },
+      onAttachFile: () => {},
+      onPrimaryClick: () => {},
+    });
+
+    listeners.get(shellBallWindowSyncEvents.primaryAction)?.({
+      payload: { source: "input", action: "submit" },
+    });
+
+    assert.equal(submitCalls, 1);
+    assert.deepEqual(inputValueChanges, [""]);
+    assert.equal(bubbleItemsState.at(-1)?.role, "user");
+    assert.equal(bubbleItemsState.at(-1)?.bubble.text, "Summarize the latest status");
+    assert.equal(timeoutScheduler.size, 1);
+
+    timeoutScheduler.flush();
+
+    assert.equal(bubbleItemsState.at(-1)?.role, "agent");
+    assert.equal(bubbleItemsState.at(-1)?.bubble.text, "Mock reply: I captured 'Summarize the latest status'.");
+    assert.equal(timeoutScheduler.size, 0);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("shell-ball bubble zone keeps the latest message visible on feed updates", () => {
   const effects: Array<() => void> = [];
   const scrollElement = {
