@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -320,6 +321,67 @@ func (LocalExecutionBackend) RunCommand(ctx context.Context, command string, arg
 		return result, err
 	}
 	return result, nil
+}
+
+// LocalOSCapabilityAdapter 是当前阶段的最小本地 OS 能力骨架实现。
+//
+// 该实现当前不承担完整 sidecar 生命周期管理，只提供：
+// - 非空命名管道名校验
+// - 进程内最小状态记忆
+// - 本地 no-op/最小化的宿主行为占位
+type LocalOSCapabilityAdapter struct {
+	mu          sync.Mutex
+	openedPipes map[string]struct{}
+}
+
+// NewLocalOSCapabilityAdapter 创建并返回最小 OS capability adapter。
+func NewLocalOSCapabilityAdapter() *LocalOSCapabilityAdapter {
+	return &LocalOSCapabilityAdapter{openedPipes: make(map[string]struct{})}
+}
+
+// Notify 是当前阶段的最小 no-op 实现。
+func (a *LocalOSCapabilityAdapter) Notify(title, body string) error {
+	_ = title
+	_ = body
+	return nil
+}
+
+// OpenExternal 是当前阶段的最小 no-op 实现。
+func (a *LocalOSCapabilityAdapter) OpenExternal(target string) error {
+	if strings.TrimSpace(target) == "" {
+		return errors.New("target is required")
+	}
+	return nil
+}
+
+// EnsureNamedPipe 记录一个命名管道已被声明可用。
+func (a *LocalOSCapabilityAdapter) EnsureNamedPipe(pipeName string) error {
+	if strings.TrimSpace(pipeName) == "" {
+		return errors.New("pipe name is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.openedPipes[pipeName] = struct{}{}
+	return nil
+}
+
+// CloseNamedPipe 从当前最小状态里移除命名管道记录。
+func (a *LocalOSCapabilityAdapter) CloseNamedPipe(pipeName string) error {
+	if strings.TrimSpace(pipeName) == "" {
+		return errors.New("pipe name is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.openedPipes, pipeName)
+	return nil
+}
+
+// HasNamedPipe 用于测试或上层最小探测。
+func (a *LocalOSCapabilityAdapter) HasNamedPipe(pipeName string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.openedPipes[pipeName]
+	return ok
 }
 
 // LocalStorageAdapter 定义当前模块的数据结构。

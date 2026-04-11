@@ -23,6 +23,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 )
 
 // App 定义当前模块的数据结构。
@@ -31,6 +32,7 @@ type App struct {
 	storage      *storage.Service
 	toolRegistry *tools.Registry
 	toolExecutor *tools.ToolExecutor
+	playwright   *sidecarclient.PlaywrightSidecarRuntime
 }
 
 // New 创建并返回当前能力。
@@ -45,8 +47,22 @@ func New(cfg config.Config) (*App, error) {
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executionBackend := platform.LocalExecutionBackend{}
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	if err := playwrightRuntime.Start(); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	playwrightClient := playwrightRuntime.Client()
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
 		return nil, err
 	}
 	toolExecutor := tools.NewToolExecutor(
@@ -64,7 +80,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, executionBackend, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
@@ -89,6 +105,7 @@ func New(cfg config.Config) (*App, error) {
 		storage:      storageService,
 		toolRegistry: toolRegistry,
 		toolExecutor: toolExecutor,
+		playwright:   playwrightRuntime,
 	}, nil
 }
 
@@ -98,6 +115,9 @@ func (a *App) Start(ctx context.Context) error {
 }
 
 func (a *App) Close() error {
+	if a.playwright != nil {
+		_ = a.playwright.Stop()
+	}
 	if a.storage == nil {
 		return nil
 	}

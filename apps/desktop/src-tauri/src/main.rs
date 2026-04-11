@@ -399,7 +399,11 @@ unsafe extern "system" fn mousemove_forward(
 
 #[cfg(windows)]
 #[tauri::command]
-fn shell_ball_set_ignore_cursor_events(window: tauri::Window, ignore: bool, forward: bool) -> Result<(), String> {
+fn shell_ball_set_ignore_cursor_events(
+    window: tauri::Window,
+    ignore: bool,
+    forward: bool,
+) -> Result<(), String> {
     window
         .set_ignore_cursor_events(ignore)
         .map_err(|error| format!("failed to update shell-ball ignore cursor events: {error}"))?;
@@ -418,7 +422,11 @@ fn shell_ball_set_ignore_cursor_events(window: tauri::Window, ignore: bool, forw
 
 #[cfg(not(windows))]
 #[tauri::command]
-fn shell_ball_set_ignore_cursor_events(window: tauri::Window, ignore: bool, _forward: bool) -> Result<(), String> {
+fn shell_ball_set_ignore_cursor_events(
+    window: tauri::Window,
+    ignore: bool,
+    _forward: bool,
+) -> Result<(), String> {
     window
         .set_ignore_cursor_events(ignore)
         .map_err(|error| format!("failed to update shell-ball ignore cursor events: {error}"))

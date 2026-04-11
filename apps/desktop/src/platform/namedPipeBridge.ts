@@ -63,7 +63,11 @@ const NAMED_PIPE_BRIDGE = Object.freeze({
   },
 });
 
-if (typeof window !== "undefined" && !window.__CIALLOCLAW_NAMED_PIPE__) {
+function isTauriEnvironment() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+if (isTauriEnvironment() && !window.__CIALLOCLAW_NAMED_PIPE__) {
   window.__CIALLOCLAW_NAMED_PIPE__ = NAMED_PIPE_BRIDGE;
 }
 

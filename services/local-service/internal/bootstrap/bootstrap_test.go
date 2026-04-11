@@ -57,8 +57,8 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.toolRegistry == nil || app.toolExecutor == nil {
 		t.Fatal("expected tool registry and executor to be wired")
 	}
-	if app.toolRegistry.Count() != 5 {
-		t.Fatalf("expected 5 builtin tools to be registered, got %d", app.toolRegistry.Count())
+	if app.toolRegistry.Count() != 7 {
+		t.Fatalf("expected 7 tools to be registered, got %d", app.toolRegistry.Count())
 	}
 	if _, err := app.toolRegistry.Get("generate_text"); err != nil {
 		t.Fatalf("expected generate_text to be registered, got %v", err)
@@ -74,6 +74,15 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	}
 	if _, err := app.toolRegistry.Get("exec_command"); err != nil {
 		t.Fatalf("expected exec_command to be registered, got %v", err)
+	}
+	if _, err := app.toolRegistry.Get("page_read"); err != nil {
+		t.Fatalf("expected page_read to be registered, got %v", err)
+	}
+	if _, err := app.toolRegistry.Get("page_search"); err != nil {
+		t.Fatalf("expected page_search to be registered, got %v", err)
+	}
+	if app.playwright == nil || !app.playwright.Ready() {
+		t.Fatal("expected playwright sidecar runtime to be ready")
 	}
 }
 

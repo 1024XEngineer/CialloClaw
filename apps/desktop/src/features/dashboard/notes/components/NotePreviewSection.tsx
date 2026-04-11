@@ -6,6 +6,8 @@ import { NotePreviewCard } from "./NotePreviewCard";
 type NotePreviewSectionProps = {
   activeItemId: string | null;
   description: string;
+  emptyLabel?: string;
+  errorMessage?: string | null;
   items: NoteListItem[];
   onSelect: (itemId: string) => void;
   title: string;
@@ -13,7 +15,7 @@ type NotePreviewSectionProps = {
   variant?: "default" | "hint";
 };
 
-export function NotePreviewSection({ activeItemId, description, items, onSelect, title, trailing, variant = "default" }: NotePreviewSectionProps) {
+export function NotePreviewSection({ activeItemId, description, emptyLabel = "无", errorMessage, items, onSelect, title, trailing, variant = "default" }: NotePreviewSectionProps) {
   return (
     <article className={cn("dashboard-card note-preview-shell", variant === "hint" && "note-preview-shell--hint")}>
       <div className="note-preview-shell__header">
@@ -25,9 +27,15 @@ export function NotePreviewSection({ activeItemId, description, items, onSelect,
       </div>
 
       <div className="note-preview-shell__list">
-        {items.map((item) => (
-          <NotePreviewCard key={item.item.item_id} isActive={item.item.item_id === activeItemId} item={item} onSelect={onSelect} />
-        ))}
+        {errorMessage ? (
+          <div className="note-preview-shell__empty note-preview-shell__empty--error">{errorMessage}</div>
+        ) : items.length > 0 ? (
+          items.map((item) => (
+            <NotePreviewCard key={item.item.item_id} isActive={item.item.item_id === activeItemId} item={item} onSelect={onSelect} />
+          ))
+        ) : (
+          <div className="note-preview-shell__empty">{emptyLabel}</div>
+        )}
       </div>
     </article>
   );

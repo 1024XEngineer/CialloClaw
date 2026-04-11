@@ -35,7 +35,15 @@ export type AgentSecurityRespondParams = {
   approval_id: string;
   decision: ApprovalDecision;
   request_meta: RequestMeta;
+  remember_rule?: boolean;
   task_id?: string;
+};
+
+export type JsonRpcPage = {
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
 };
 
 export type AgentSecuritySummaryGetResult = {

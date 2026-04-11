@@ -11,6 +11,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@/rpc/methods": ["./src/features/shell-ball/test-stubs/rpcMethods.ts"],
+      "@/rpc/client": ["./src/features/shell-ball/test-stubs/rpcClient.ts"],
       "@/rpc/subscriptions": ["./src/features/shell-ball/test-stubs/rpcSubscriptions.ts"],
       "@/features/dashboard/tasks/TasksPage": ["./src/features/shell-ball/test-stubs/dashboardTasksPage.tsx"],
       "@/features/dashboard/notes/NotesPage": ["./src/features/shell-ball/test-stubs/dashboardNotesPage.tsx"],

@@ -6,29 +6,16 @@ import type {
   TodoItem,
 } from "@cialloclaw/protocol";
 import { convertNotepadToTask, listNotepad } from "@/rpc/methods";
-import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask } from "./notePage.mock";
-import type { NoteBucketsData, NoteConvertOutcome, NoteDetailExperience, NoteListItem } from "./notePage.types";
+import { getMockNoteExperience } from "./notePage.mock";
+import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem } from "./notePage.types";
+
+const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
     client_time: new Date().toISOString(),
     trace_id: `trace_${scope}_${Date.now()}`,
   };
-}
-
-function isTransportUnavailableError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-
-  return (
-    message.includes("named pipe transport is not wired") ||
-    message.includes("failed to fetch") ||
-    message.includes("networkerror") ||
-    message.includes("load failed")
-  );
 }
 
 function formatAbsoluteTime(value: string) {
@@ -220,7 +207,16 @@ function mapItems(items: Awaited<ReturnType<typeof listNotepad>>["items"]): Note
   }));
 }
 
-async function listNotepadByBucket(group: TodoBucket) {
+async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(`${label} request timed out`)), NOTEPAD_RPC_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+export async function loadNoteBucket(group: TodoBucket) {
   const params: AgentNotepadListParams = {
     group,
     limit: group === "closed" ? 24 : 12,
@@ -228,44 +224,10 @@ async function listNotepadByBucket(group: TodoBucket) {
     request_meta: createRequestMeta(`notepad_${group}`),
   };
 
-  return listNotepad(params);
-}
-
-export async function loadNoteBuckets(): Promise<NoteBucketsData> {
-  const buckets: TodoBucket[] = ["upcoming", "later", "recurring_rule", "closed"];
-  const results = await Promise.allSettled(buckets.map((bucket) => listNotepadByBucket(bucket)));
-  const fulfilledCount = results.filter((result) => result.status === "fulfilled").length;
-
-  if (results.every((result) => result.status === "rejected" && isTransportUnavailableError(result.reason))) {
-    console.warn("Notepad RPC transport unavailable, using local mock fallback.", results.map((result) => (result.status === "rejected" ? result.reason : null)));
-    return getMockNoteBuckets();
-  }
-
-  if (fulfilledCount === 0) {
-    const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    throw firstError?.reason ?? new Error("Failed to load notepad buckets.");
-  }
-
-  const bucketItems = {
-    closed: [] as NoteListItem[],
-    later: [] as NoteListItem[],
-    recurring_rule: [] as NoteListItem[],
-    upcoming: [] as NoteListItem[],
-  };
-
-  results.forEach((result, index) => {
-    const bucket = buckets[index];
-    if (result.status === "fulfilled") {
-      bucketItems[bucket] = mapItems(result.value.items);
-      return;
-    }
-
-    console.warn(`Failed to load notepad bucket: ${bucket}`, result.reason);
-  });
-
+  const result = await withTimeout(listNotepad(params), `notepad bucket ${group}`);
   return {
-    ...bucketItems,
-    source: "rpc",
+    items: mapItems(result.items),
+    page: result.page,
   };
 }
 
@@ -276,17 +238,9 @@ export async function convertNoteToTask(itemId: string): Promise<NoteConvertOutc
     request_meta: createRequestMeta(`notepad_convert_${itemId}`),
   };
 
-  try {
-    return {
-      result: await convertNotepadToTask(params),
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isTransportUnavailableError(error)) {
-      console.warn("Convert note to task RPC transport unavailable, using local mock fallback.", error);
-      return runMockConvertNoteToTask(itemId);
-    }
-
-    throw error;
-  }
+  const result = await withTimeout(convertNotepadToTask(params), `convert note ${itemId} to task`);
+  return {
+    result,
+    source: "rpc",
+  };
 }

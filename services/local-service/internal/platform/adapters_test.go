@@ -118,3 +118,19 @@ func TestLocalFileSystemAdapterRejectsInvalidFSPaths(t *testing.T) {
 		t.Fatal("expected write outside workspace to fail")
 	}
 }
+
+func TestLocalOSCapabilityAdapterNamedPipeState(t *testing.T) {
+	adapter := NewLocalOSCapabilityAdapter()
+	if err := adapter.EnsureNamedPipe("pipe_demo"); err != nil {
+		t.Fatalf("ensure named pipe: %v", err)
+	}
+	if !adapter.HasNamedPipe("pipe_demo") {
+		t.Fatal("expected pipe to be tracked")
+	}
+	if err := adapter.CloseNamedPipe("pipe_demo"); err != nil {
+		t.Fatalf("close named pipe: %v", err)
+	}
+	if adapter.HasNamedPipe("pipe_demo") {
+		t.Fatal("expected pipe to be removed")
+	}
+}

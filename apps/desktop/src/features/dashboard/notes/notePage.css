@@ -166,6 +166,22 @@
   scrollbar-width: thin;
 }
 
+.note-preview-shell__empty {
+  align-items: center;
+  color: var(--note-copy, rgba(95, 84, 75, 0.68));
+  display: flex;
+  font-size: 0.92rem;
+  justify-content: center;
+  min-height: 8rem;
+  text-align: center;
+}
+
+.note-preview-shell__empty--error {
+  color: #9b5a49;
+  line-height: 1.5;
+  padding-inline: 1rem;
+}
+
 .note-preview-shell__list,
 .note-preview-finished-groups,
 .note-detail-list,
@@ -292,6 +308,65 @@
   inset: clamp(1rem, 3vw, 2rem);
   position: fixed;
   z-index: 70;
+}
+
+.note-preview-page__floating-card {
+  align-items: center;
+  backdrop-filter: blur(14px);
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(247, 240, 231, 0.9));
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 68%, rgba(213, 124, 103, 0.42));
+  border-radius: 1.4rem;
+  box-shadow: 0 22px 48px -34px rgba(120, 108, 95, 0.18);
+  display: flex;
+  gap: 0.8rem;
+  left: 1.4rem;
+  max-width: 28rem;
+  padding: 0.85rem 0.95rem;
+  position: fixed;
+  bottom: 1.35rem;
+  z-index: 85;
+}
+
+.note-preview-page__floating-card-icon {
+  align-items: center;
+  background: rgba(252, 232, 223, 0.88);
+  border-radius: 999px;
+  color: #a45e4c;
+  display: flex;
+  flex-shrink: 0;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.note-preview-page__floating-card-copy {
+  min-width: 0;
+}
+
+.note-preview-page__floating-card-title {
+  color: var(--note-ink, #5f544b);
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.note-preview-page__floating-card-text {
+  color: var(--note-copy, rgba(95, 84, 75, 0.68));
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0.28rem 0 0;
+}
+
+.note-preview-page__floating-card-action {
+  align-items: center;
+  background: color-mix(in srgb, var(--note-paper, rgba(255, 251, 245, 0.8)) 82%, var(--note-accent, #f4b183) 18%);
+  border: 1px solid color-mix(in srgb, var(--note-line, rgba(156, 133, 113, 0.18)) 76%, var(--note-accent, #f4b183) 24%);
+  border-radius: 999px;
+  color: var(--note-ink, #5f544b);
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 0.45rem;
+  padding: 0.55rem 0.85rem;
 }
 
 .note-detail-shell {
@@ -481,5 +556,11 @@
 
   .note-detail-modal {
     inset: 0.75rem;
+  }
+
+  .note-preview-page__floating-card {
+    left: 0.9rem;
+    right: 0.9rem;
+    max-width: none;
   }
 }

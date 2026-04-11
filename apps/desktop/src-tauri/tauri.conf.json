@@ -5,6 +5,7 @@
   "identifier": "com.cialloclaw.desktop",
   "build": {
     "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
     "beforeDevCommand": "corepack pnpm dev",
     "beforeBuildCommand": "corepack pnpm build"
   },

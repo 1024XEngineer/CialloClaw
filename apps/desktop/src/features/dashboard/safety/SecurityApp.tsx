@@ -39,7 +39,7 @@ import {
   type SecurityRespondOutcome,
 } from "./securityService";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
-import "./SecurityPage.css";
+import "./securityPage.css";
 
 type SecurityCardKey = "status" | "restore" | "budget" | "governance" | `approval:${string}`;
 type CardPosition = { x: number; y: number };

@@ -41,6 +41,15 @@
    - 负责协议适配、请求发送、结果接收、错误映射；
    - 不负责 worker 生命周期的业务编排决策。
 
+当前分支已具备最小 Playwright sidecar 相关能力：
+
+- `page_read`
+- `page_search`
+- `PlaywrightSidecarClient` 接口
+- `PlaywrightSidecarRuntime` 最小运行时骨架
+- bootstrap 中的最小 sidecar 注入路径
+- execution / orchestrator 中的最小运行时执行链路
+
 ---
 
 ## 3. 本模块不负责什么
@@ -176,6 +185,7 @@
 
   /sidecarclient
     playwright_sidecar.go      # Playwright sidecar client
+    runtime.go                 # sidecar 运行时状态 / transport skeleton
 
   /builtin_test
     read_file_test.go
@@ -279,6 +289,15 @@
 - 不负责执行后的 task 状态推进。
 
 当前主分支本地执行线中，`execution / orchestrator` 已经开始真实调用 `ToolExecutor`，因此 tools 不再只是模块内骨架，而是已经进入后端运行时路径。
+
+当前在本分支中，`page_read / page_search` 也已经进入：
+
+- ToolRegistry 注册
+- bootstrap 装配
+- execution 运行时上下文注入
+- 最小 sidecar runtime 状态表达
+- plugin sidecar spec 声明
+- platform named pipe 最小状态骨架
 
 ---
 
