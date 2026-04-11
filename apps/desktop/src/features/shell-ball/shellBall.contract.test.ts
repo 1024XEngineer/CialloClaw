@@ -2393,11 +2393,14 @@ test("shell-ball submit actions append mock conversation bubbles and clear the d
 test("shell-ball bubble zone keeps the latest message visible on feed updates", () => {
   const effects: Array<() => void> = [];
   const scrollElement = {
+    clientHeight: 80,
     scrollHeight: 184,
     scrollTop: 0,
   };
   const refs = [
     { current: scrollElement },
+    { current: 0 },
+    { current: true },
   ];
 
   const { ShellBallBubbleZone: RuntimeShellBallBubbleZone } = withShellBallModuleRuntime("components/ShellBallBubbleZone.tsx", {
@@ -2441,6 +2444,187 @@ test("shell-ball bubble zone keeps the latest message visible on feed updates", 
   assert.equal(effects.length, 1);
   effects[0]?.();
   assert.equal(scrollElement.scrollTop, scrollElement.scrollHeight);
+});
+
+test("shell-ball bubble zone does not snap back when the viewer scrolls away from the bottom", () => {
+  const effects: Array<() => void> = [];
+  const scrollElement = {
+    clientHeight: 80,
+    scrollHeight: 184,
+    scrollTop: 0,
+  };
+  const refs = [
+    { current: scrollElement },
+    { current: 0 },
+    { current: true },
+  ];
+  let refIndex = 0;
+
+  const { ShellBallBubbleZone: RuntimeShellBallBubbleZone } = withShellBallModuleRuntime("components/ShellBallBubbleZone.tsx", {
+    react: {
+      ...require("react"),
+      useEffect(callback: () => void) {
+        effects.push(callback);
+      },
+      useRef<T>() {
+        return refs[refIndex++] as { current: T };
+      },
+    },
+    "./ShellBallBubbleMessage": {
+      ShellBallBubbleMessage() {
+        return null;
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleZone: typeof import("./components/ShellBallBubbleZone").ShellBallBubbleZone });
+
+  const firstTree = RuntimeShellBallBubbleZone({
+    visualState: "processing",
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-scroll-away-1",
+          task_id: "task-scroll-away-1",
+          type: "status",
+          text: "Old bubble.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:08:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  }) as { props: { children: { props: { onScroll?: () => void } } } };
+
+  effects[0]?.();
+  scrollElement.scrollHeight = 240;
+  scrollElement.scrollTop = 12;
+  firstTree.props.children.props.onScroll?.();
+
+  refIndex = 0;
+  RuntimeShellBallBubbleZone({
+    visualState: "processing",
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-scroll-away-1",
+          task_id: "task-scroll-away-1",
+          type: "status",
+          text: "Old bubble.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:08:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+      {
+        bubble: {
+          bubble_id: "msg-scroll-away-2",
+          task_id: "task-scroll-away-2",
+          type: "result",
+          text: "Newest bubble.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:09:00.000Z",
+        },
+        role: "user",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  });
+
+  effects[1]?.();
+  assert.equal(scrollElement.scrollTop, 12);
+});
+
+test("shell-ball bubble zone does not auto-scroll for same-length lifecycle updates", () => {
+  const effects: Array<() => void> = [];
+  const scrollElement = {
+    clientHeight: 80,
+    scrollHeight: 220,
+    scrollTop: 18,
+  };
+  const refs = [
+    { current: scrollElement },
+    { current: 0 },
+    { current: true },
+  ];
+  let refIndex = 0;
+
+  const { ShellBallBubbleZone: RuntimeShellBallBubbleZone } = withShellBallModuleRuntime("components/ShellBallBubbleZone.tsx", {
+    react: {
+      ...require("react"),
+      useEffect(callback: () => void) {
+        effects.push(callback);
+      },
+      useRef<T>() {
+        return refs[refIndex++] as { current: T };
+      },
+    },
+    "./ShellBallBubbleMessage": {
+      ShellBallBubbleMessage() {
+        return null;
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleZone: typeof import("./components/ShellBallBubbleZone").ShellBallBubbleZone });
+
+  const firstTree = RuntimeShellBallBubbleZone({
+    visualState: "processing",
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-scroll-lifecycle-1",
+          task_id: "task-scroll-lifecycle-1",
+          type: "status",
+          text: "Bubble still here.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:08:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+        },
+      },
+    ],
+  }) as { props: { children: { props: { onScroll?: () => void } } } };
+
+  effects[0]?.();
+  scrollElement.scrollTop = 18;
+  firstTree.props.children.props.onScroll?.();
+
+  refIndex = 0;
+  RuntimeShellBallBubbleZone({
+    visualState: "processing",
+    bubbleItems: [
+      {
+        bubble: {
+          bubble_id: "msg-scroll-lifecycle-1",
+          task_id: "task-scroll-lifecycle-1",
+          type: "status",
+          text: "Bubble still here.",
+          pinned: false,
+          hidden: false,
+          created_at: "2026-04-11T10:08:00.000Z",
+        },
+        role: "agent",
+        desktop: {
+          lifecycleState: "visible",
+          freshnessHint: "stale",
+        },
+      },
+    ],
+  });
+
+  effects[1]?.();
+  assert.equal(scrollElement.scrollTop, 18);
 });
 
 test("shell-ball bubble window resolves bubble items from the helper-window snapshot", () => {
