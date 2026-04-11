@@ -17,7 +17,7 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
 
   return (
     <div ref={rootRef} className="shell-ball-window shell-ball-window--bubble" aria-label="Shell-ball bubble window">
-      <ShellBallBubbleZone visualState={resolvedVisualState} />
+      <ShellBallBubbleZone visualState={resolvedVisualState} bubbleMessages={snapshot.bubbleMessages} />
     </div>
   );
 }

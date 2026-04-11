@@ -363,6 +363,47 @@ function withDesktopAliasRuntime<T>(callback: () => T) {
   }
 }
 
+function withShellBallModuleRuntime<T>(
+  moduleRelativePath: string,
+  mocks: Record<string, unknown>,
+  callback: (moduleExports: Record<string, unknown>) => T,
+) {
+  const NodeModule = require("node:module") as any;
+  const originalLoad = NodeModule._load;
+  const modulePath = resolve(desktopRoot, "src/features/shell-ball", moduleRelativePath);
+  const source = readFileSync(modulePath, "utf8");
+  const transpiledModule = { exports: {} as Record<string, unknown> };
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: modulePath,
+  });
+  const moduleFactory = new Function("require", "module", "exports", transpiled.outputText) as (
+    require: NodeRequire,
+    module: { exports: Record<string, unknown> },
+    exports: Record<string, unknown>,
+  ) => void;
+
+  NodeModule._load = function loadShellBallModule(request: string, parent: unknown, isMain: boolean) {
+    if (request in mocks) {
+      return mocks[request];
+    }
+
+    return originalLoad(request, parent, isMain);
+  };
+
+  try {
+    moduleFactory(require, transpiledModule, transpiledModule.exports);
+    return callback(transpiledModule.exports);
+  } finally {
+    NodeModule._load = originalLoad;
+  }
+}
+
 function withTrayControllerRuntime<T>(
   openOrFocusDesktopWindow: (label: "dashboard" | "control-panel") => Promise<string>,
   callback: (mod: { openControlPanelFromTray: () => Promise<string>; calls: Array<"dashboard" | "control-panel"> }) => Promise<T> | T,
@@ -1925,6 +1966,136 @@ test("shell-ball bubble window owns the bubble zone rendering", () => {
 
   assert.match(markup, /shell-ball-bubble-zone/);
   assert.doesNotMatch(markup, /shell-ball-input-bar/);
+});
+
+test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", () => {
+  const { useShellBallCoordinator } = withShellBallModuleRuntime("useShellBallCoordinator.ts", {
+    react: {
+      useEffect() {},
+      useMemo<T>(factory: () => T) {
+        return factory();
+      },
+      useRef<T>(value: T) {
+        return { current: value };
+      },
+      useState<T>(value: T) {
+        return [typeof value === "function" ? (value as () => T)() : value, () => {}] as const;
+      },
+    },
+    "@tauri-apps/api/window": {
+      getCurrentWindow() {
+        return { label: shellBallWindowLabels.bubble };
+      },
+    },
+    "../../platform/shellBallWindowController": {
+      shellBallWindowLabels,
+    },
+    "./shellBall.windowSync": require(resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/shellBall.windowSync.js")),
+  }, (moduleExports) => moduleExports as { useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator });
+
+  const { snapshot } = useShellBallCoordinator({
+    visualState: "hover_input",
+    inputValue: "draft",
+    voicePreview: null,
+    setInputValue: () => {},
+    onRegionEnter: () => {},
+    onRegionLeave: () => {},
+    onInputFocusChange: () => {},
+    onSubmitText: () => {},
+    onAttachFile: () => {},
+    onPrimaryClick: () => {},
+  });
+
+  assert.ok(Array.isArray(snapshot.bubbleMessages));
+  assert.ok(snapshot.bubbleMessages.length > 0);
+});
+
+test("shell-ball bubble window resolves bubble messages from the helper-window snapshot", () => {
+  const helperSnapshot = createShellBallWindowSnapshot({
+    visualState: "processing",
+    inputValue: "",
+    voicePreview: null,
+    bubbleMessages: [
+      {
+        id: "msg-helper-1",
+        role: "agent",
+        text: "Drafting your update.",
+        createdAt: "2026-04-11T10:04:00.000Z",
+      },
+    ],
+  });
+  let capturedProps: Record<string, unknown> | null = null;
+
+  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
+    react: require("react"),
+    "./useShellBallCoordinator": {
+      useShellBallHelperWindowSnapshot() {
+        return helperSnapshot;
+      },
+    },
+    "./useShellBallWindowMetrics": {
+      useShellBallWindowMetrics() {
+        return { rootRef: null };
+      },
+    },
+    "./components/ShellBallBubbleZone": {
+      ShellBallBubbleZone(props: Record<string, unknown>) {
+        capturedProps = props;
+        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
+
+  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
+
+  assert.deepEqual(capturedProps, {
+    visualState: "processing",
+    bubbleMessages: helperSnapshot.bubbleMessages,
+  });
+});
+
+test("shell-ball bubble window does not depend on only visualState to render its body", () => {
+  const helperSnapshot = createShellBallWindowSnapshot({
+    visualState: "idle",
+    inputValue: "",
+    voicePreview: null,
+    bubbleMessages: [
+      {
+        id: "msg-helper-2",
+        role: "user",
+        text: "Open the dashboard.",
+        createdAt: "2026-04-11T10:05:00.000Z",
+      },
+    ],
+  });
+  let capturedProps: Record<string, unknown> | null = null;
+
+  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
+    react: require("react"),
+    "./useShellBallCoordinator": {
+      useShellBallHelperWindowSnapshot() {
+        return helperSnapshot;
+      },
+    },
+    "./useShellBallWindowMetrics": {
+      useShellBallWindowMetrics() {
+        return { rootRef: null };
+      },
+    },
+    "./components/ShellBallBubbleZone": {
+      ShellBallBubbleZone(props: Record<string, unknown>) {
+        capturedProps = props;
+        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
+
+  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, { visualState: "voice_locked" }));
+
+  assert.deepEqual(capturedProps, {
+    visualState: "voice_locked",
+    bubbleMessages: helperSnapshot.bubbleMessages,
+  });
 });
 
 test("shell-ball input window owns the input rendering", () => {

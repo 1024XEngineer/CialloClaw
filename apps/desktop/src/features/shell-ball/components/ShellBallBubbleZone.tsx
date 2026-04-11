@@ -1,7 +1,9 @@
+import type { ShellBallBubbleMessage } from "../shellBall.bubble";
 import type { ShellBallVisualState } from "../shellBall.types";
 
 type ShellBallBubbleZoneProps = {
   visualState: ShellBallVisualState;
+  bubbleMessages?: ShellBallBubbleMessage[];
 };
 
 export function ShellBallBubbleZone({ visualState }: ShellBallBubbleZoneProps) {

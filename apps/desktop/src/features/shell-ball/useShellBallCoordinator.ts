@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { shellBallWindowLabels } from "../../platform/shellBallWindowController";
+import type { ShellBallBubbleMessage } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import {
@@ -33,6 +34,21 @@ type ShellBallHelperSnapshotInput = {
   role: ShellBallHelperWindowRole;
 };
 
+const SHELL_BALL_LOCAL_BUBBLE_MESSAGES: ShellBallBubbleMessage[] = [
+  {
+    id: "shell-ball-local-agent-1",
+    role: "agent",
+    text: "Drafting your update.",
+    createdAt: "2026-04-11T10:04:00.000Z",
+  },
+  {
+    id: "shell-ball-local-user-1",
+    role: "user",
+    text: "Open the dashboard.",
+    createdAt: "2026-04-11T10:05:00.000Z",
+  },
+];
+
 export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const snapshot = useMemo(
     () =>
@@ -40,6 +56,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         visualState: input.visualState,
         inputValue: input.inputValue,
         voicePreview: input.voicePreview,
+        bubbleMessages: SHELL_BALL_LOCAL_BUBBLE_MESSAGES,
       }),
     [input.inputValue, input.visualState, input.voicePreview],
   );
