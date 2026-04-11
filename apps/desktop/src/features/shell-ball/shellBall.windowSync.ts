@@ -1,5 +1,9 @@
-import { cloneShellBallBubbleMessages } from "./shellBall.bubble";
-import type { ShellBallBubbleMessage } from "./shellBall.bubble";
+import {
+  cloneShellBallBubbleItems,
+  createLegacyShellBallBubbleMessages,
+  createShellBallBubbleItemsFromLegacyMessages,
+} from "./shellBall.bubble";
+import type { ShellBallBubbleItem, ShellBallBubbleMessage } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import { getShellBallInputBarMode } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
@@ -28,7 +32,8 @@ export type ShellBallWindowSnapshot = {
   inputBarMode: ShellBallInputBarMode;
   inputValue: string;
   voicePreview: ShellBallVoicePreview;
-  bubbleMessages: ShellBallBubbleMessage[];
+  bubbleItems: ShellBallBubbleItem[];
+  bubbleMessages?: ShellBallBubbleMessage[];
   visibility: ShellBallHelperWindowVisibility;
 };
 
@@ -82,16 +87,30 @@ export function createShellBallWindowSnapshot(input: {
   visualState: ShellBallVisualState;
   inputValue: string;
   voicePreview: ShellBallVoicePreview;
+  bubbleItems?: ShellBallBubbleItem[];
   bubbleMessages?: ShellBallBubbleMessage[];
 }): ShellBallWindowSnapshot {
-  return {
+  const bubbleItems = cloneShellBallBubbleItems(
+    input.bubbleItems ?? createShellBallBubbleItemsFromLegacyMessages(input.bubbleMessages ?? []),
+  );
+  const snapshot: ShellBallWindowSnapshot = {
     visualState: input.visualState,
     inputBarMode: getShellBallInputBarMode(input.visualState),
     inputValue: input.inputValue,
     voicePreview: input.voicePreview,
-    bubbleMessages: cloneShellBallBubbleMessages(input.bubbleMessages ?? []),
+    bubbleItems,
     visibility: getShellBallHelperWindowVisibility(input.visualState),
   };
+
+  Object.defineProperty(snapshot, "bubbleMessages", {
+    enumerable: false,
+    configurable: true,
+    get() {
+      return createLegacyShellBallBubbleMessages(bubbleItems);
+    },
+  });
+
+  return snapshot;
 }
 
 export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot {
@@ -99,6 +118,6 @@ export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot 
     visualState: "idle",
     inputValue: "",
     voicePreview: null,
-    bubbleMessages: [],
+    bubbleItems: [],
   });
 }

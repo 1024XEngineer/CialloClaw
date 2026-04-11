@@ -73,3 +73,15 @@ export type AgentSecurityRespondResult = {
 };
 
 export type Task = any;
+
+export type BubbleMessageType = "status" | "intent_confirm" | "result";
+
+export type BubbleMessage = {
+  bubble_id: string;
+  task_id: string;
+  type: BubbleMessageType;
+  text: string;
+  pinned: boolean;
+  hidden: boolean;
+  created_at: string;
+};

@@ -54,8 +54,8 @@ import {
   getShellBallHelperWindowVisibility,
   shellBallWindowSyncEvents,
 } from "./shellBall.windowSync";
-import type { ShellBallBubbleMessage } from "./shellBall.bubble";
-import { cloneShellBallBubbleMessages } from "./shellBall.bubble";
+import type { ShellBallBubbleItem, ShellBallBubbleMessage } from "./shellBall.bubble";
+import { cloneShellBallBubbleItems } from "./shellBall.bubble";
 import {
   SHELL_BALL_WINDOW_GAP_PX,
   SHELL_BALL_WINDOW_SAFE_MARGIN_PX,
@@ -1086,14 +1086,23 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
       visualState: "voice_locked",
       inputValue: "draft",
       voicePreview: "lock",
-      bubbleMessages: [
+      bubbleItems: [
         {
-          id: "msg-1",
+          bubble: {
+            bubble_id: "bubble-1",
+            task_id: "task-1",
+            type: "status",
+            text: "Still listening.",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-11T10:00:00.000Z",
+          },
           role: "agent",
-          text: "Still listening.",
-          createdAt: "2026-04-11T10:00:00.000Z",
-          freshnessHint: "fresh",
-          motionHint: "settle",
+          desktop: {
+            lifecycleState: "visible",
+            freshnessHint: "fresh",
+            motionHint: "settle",
+          },
         },
       ],
     }),
@@ -1102,14 +1111,23 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
       inputBarMode: "voice",
       inputValue: "draft",
       voicePreview: "lock",
-      bubbleMessages: [
+      bubbleItems: [
         {
-          id: "msg-1",
+          bubble: {
+            bubble_id: "bubble-1",
+            task_id: "task-1",
+            type: "status",
+            text: "Still listening.",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-11T10:00:00.000Z",
+          },
           role: "agent",
-          text: "Still listening.",
-          createdAt: "2026-04-11T10:00:00.000Z",
-          freshnessHint: "fresh",
-          motionHint: "settle",
+          desktop: {
+            lifecycleState: "visible",
+            freshnessHint: "fresh",
+            motionHint: "settle",
+          },
         },
       ],
       visibility: {
@@ -1120,61 +1138,108 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
   );
 });
 
-test("shell-ball bubble message contract supports local bubble feed hints", () => {
+test("shell-ball bubble item contract wraps protocol payload and keeps desktop-only state local", () => {
   const bubbleContractSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.bubble.ts"), "utf8");
-  const bubbleMessage: ShellBallBubbleMessage = {
-    id: "msg-local-1",
+  const bubbleItem: ShellBallBubbleItem = {
+    bubble: {
+      bubble_id: "bubble-local-1",
+      task_id: "task-local-1",
+      type: "result",
+      text: "Open the dashboard.",
+      pinned: false,
+      hidden: false,
+      created_at: "2026-04-11T10:00:00.000Z",
+    },
     role: "user",
-    text: "Open the dashboard.",
-    createdAt: "2026-04-11T10:00:00.000Z",
-    freshnessHint: "stale",
-    motionHint: "settle",
+    desktop: {
+      lifecycleState: "hidden",
+      freshnessHint: "stale",
+      motionHint: "settle",
+    },
   };
 
-  assert.deepEqual(bubbleMessage, {
-    id: "msg-local-1",
+  assert.deepEqual(bubbleItem, {
+    bubble: {
+      bubble_id: "bubble-local-1",
+      task_id: "task-local-1",
+      type: "result",
+      text: "Open the dashboard.",
+      pinned: false,
+      hidden: false,
+      created_at: "2026-04-11T10:00:00.000Z",
+    },
     role: "user",
-    text: "Open the dashboard.",
-    createdAt: "2026-04-11T10:00:00.000Z",
-    freshnessHint: "stale",
-    motionHint: "settle",
+    desktop: {
+      lifecycleState: "hidden",
+      freshnessHint: "stale",
+      motionHint: "settle",
+    },
   });
+  assert.equal("role" in bubbleItem.bubble, false);
+  assert.equal("desktop" in bubbleItem.bubble, false);
   assert.doesNotMatch(bubbleContractSource, /"pulse"/);
 
   assert.deepEqual(createShellBallWindowSnapshot({
     visualState: "idle",
     inputValue: "",
     voicePreview: null,
-    bubbleMessages: [],
-  }).bubbleMessages, []);
+    bubbleItems: [],
+  }).bubbleItems, []);
 
-  const minimalBubbleMessage: ShellBallBubbleMessage = {
-    id: "msg-local-2",
+  const minimalBubbleItem: ShellBallBubbleItem = {
+    bubble: {
+      bubble_id: "bubble-local-2",
+      task_id: "task-local-2",
+      type: "status",
+      text: "On it.",
+      pinned: false,
+      hidden: false,
+      created_at: "2026-04-11T10:01:00.000Z",
+    },
     role: "agent",
-    text: "On it.",
-    createdAt: "2026-04-11T10:01:00.000Z",
+    desktop: {
+      lifecycleState: "visible",
+    },
   };
 
-  assert.deepEqual(minimalBubbleMessage, {
-    id: "msg-local-2",
+  assert.deepEqual(minimalBubbleItem, {
+    bubble: {
+      bubble_id: "bubble-local-2",
+      task_id: "task-local-2",
+      type: "status",
+      text: "On it.",
+      pinned: false,
+      hidden: false,
+      created_at: "2026-04-11T10:01:00.000Z",
+    },
     role: "agent",
-    text: "On it.",
-    createdAt: "2026-04-11T10:01:00.000Z",
+    desktop: {
+      lifecycleState: "visible",
+    },
   });
 
   assert.deepEqual(
-    cloneShellBallBubbleMessages([minimalBubbleMessage]),
-    [minimalBubbleMessage],
+    cloneShellBallBubbleItems([minimalBubbleItem]),
+    [minimalBubbleItem],
   );
 });
 
-test("shell-ball window snapshot copies bubble message arrays defensively", () => {
-  const sourceMessages: ShellBallBubbleMessage[] = [
+test("shell-ball window snapshot copies bubble item arrays defensively", () => {
+  const sourceItems: ShellBallBubbleItem[] = [
     {
-      id: "msg-copy-1",
+      bubble: {
+        bubble_id: "bubble-copy-1",
+        task_id: "task-copy-1",
+        type: "status",
+        text: "Drafting update.",
+        pinned: false,
+        hidden: false,
+        created_at: "2026-04-11T10:02:00.000Z",
+      },
       role: "agent",
-      text: "Drafting update.",
-      createdAt: "2026-04-11T10:02:00.000Z",
+      desktop: {
+        lifecycleState: "visible",
+      },
     },
   ];
 
@@ -1182,37 +1247,64 @@ test("shell-ball window snapshot copies bubble message arrays defensively", () =
     visualState: "hover_input",
     inputValue: "draft",
     voicePreview: null,
-    bubbleMessages: sourceMessages,
+    bubbleItems: sourceItems,
   });
 
-  assert.notEqual(snapshot.bubbleMessages, sourceMessages);
-  assert.notEqual(snapshot.bubbleMessages[0], sourceMessages[0]);
-  assert.deepEqual(snapshot.bubbleMessages, sourceMessages);
+  assert.notEqual(snapshot.bubbleItems, sourceItems);
+  assert.notEqual(snapshot.bubbleItems[0], sourceItems[0]);
+  assert.deepEqual(snapshot.bubbleItems, sourceItems);
 
-  sourceMessages[0].text = "Changed after snapshot.";
+  sourceItems[0].bubble.text = "Changed after snapshot.";
 
-  assert.deepEqual(snapshot.bubbleMessages, [
+  assert.deepEqual(snapshot.bubbleItems, [
     {
-      id: "msg-copy-1",
+      bubble: {
+        bubble_id: "bubble-copy-1",
+        task_id: "task-copy-1",
+        type: "status",
+        text: "Drafting update.",
+        pinned: false,
+        hidden: false,
+        created_at: "2026-04-11T10:02:00.000Z",
+      },
       role: "agent",
-      text: "Drafting update.",
-      createdAt: "2026-04-11T10:02:00.000Z",
+      desktop: {
+        lifecycleState: "visible",
+      },
     },
   ]);
 
-  sourceMessages.push({
-    id: "msg-copy-2",
+  sourceItems.push({
+    bubble: {
+      bubble_id: "bubble-copy-2",
+      task_id: "task-copy-2",
+      type: "result",
+      text: "Keep going.",
+      pinned: false,
+      hidden: false,
+      created_at: "2026-04-11T10:03:00.000Z",
+    },
     role: "user",
-    text: "Keep going.",
-    createdAt: "2026-04-11T10:03:00.000Z",
+    desktop: {
+      lifecycleState: "visible",
+    },
   });
 
-  assert.deepEqual(snapshot.bubbleMessages, [
+  assert.deepEqual(snapshot.bubbleItems, [
     {
-      id: "msg-copy-1",
+      bubble: {
+        bubble_id: "bubble-copy-1",
+        task_id: "task-copy-1",
+        type: "status",
+        text: "Drafting update.",
+        pinned: false,
+        hidden: false,
+        created_at: "2026-04-11T10:02:00.000Z",
+      },
       role: "agent",
-      text: "Drafting update.",
-      createdAt: "2026-04-11T10:02:00.000Z",
+      desktop: {
+        lifecycleState: "visible",
+      },
     },
   ]);
 });
@@ -2027,10 +2119,11 @@ test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", 
     onPrimaryClick: () => {},
   });
 
-  assert.ok(Array.isArray(snapshot.bubbleMessages));
-  assert.ok(snapshot.bubbleMessages.length > 0);
-  assert.equal(snapshot.bubbleMessages.at(-1)?.freshnessHint, "fresh");
-  assert.equal(snapshot.bubbleMessages.at(-1)?.motionHint, "settle");
+  assert.ok(Array.isArray(snapshot.bubbleItems));
+  assert.ok(snapshot.bubbleItems.length > 0);
+  assert.equal(snapshot.bubbleItems.at(-1)?.bubble.created_at, "2026-04-11T10:05:00.000Z");
+  assert.equal(snapshot.bubbleItems.at(-1)?.desktop.freshnessHint, "fresh");
+  assert.equal(snapshot.bubbleItems.at(-1)?.desktop.motionHint, "settle");
 });
 
 test("shell-ball bubble zone keeps the latest message visible on feed updates", () => {

@@ -1,18 +1,20 @@
-export type ShellBallBubbleMessageRole = "user" | "agent";
+export type {
+  ShellBallBubbleDesktopFreshnessHint,
+  ShellBallBubbleDesktopMotionHint,
+  ShellBallBubbleDesktopLifecycleState,
+  ShellBallBubbleDesktopState,
+  ShellBallBubbleItem,
+  ShellBallBubbleRole,
+  ShellBallLegacyBubbleMessage as ShellBallBubbleMessage,
+} from "./shellBallBubbleDesktop";
 
-export type ShellBallBubbleMessageFreshnessHint = "fresh" | "stale";
-
-export type ShellBallBubbleMessageMotionHint = "settle";
-
-export type ShellBallBubbleMessage = {
-  id: string;
-  role: ShellBallBubbleMessageRole;
-  text: string;
-  createdAt: string;
-  freshnessHint?: ShellBallBubbleMessageFreshnessHint;
-  motionHint?: ShellBallBubbleMessageMotionHint;
-};
-
-export function cloneShellBallBubbleMessages(messages: ShellBallBubbleMessage[]): ShellBallBubbleMessage[] {
-  return messages.map((message) => ({ ...message }));
-}
+export {
+  cloneShellBallBubbleDesktopState,
+  cloneShellBallBubbleItem,
+  cloneShellBallBubbleItems,
+  cloneShellBallBubbleMessages,
+  createLegacyShellBallBubbleMessage,
+  createLegacyShellBallBubbleMessages,
+  createShellBallBubbleItemFromLegacyMessage,
+  createShellBallBubbleItemsFromLegacyMessages,
+} from "./shellBallBubbleDesktop";
