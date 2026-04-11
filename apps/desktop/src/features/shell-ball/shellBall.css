@@ -131,10 +131,13 @@
   display: grid;
   gap: 0.5rem;
   max-height: clamp(6.5rem, 28vh, 14rem);
-  overflow: hidden auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0.85rem 0.2rem;
   scrollbar-width: none;
+  touch-action: pan-y;
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
   mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
   width: 100%;

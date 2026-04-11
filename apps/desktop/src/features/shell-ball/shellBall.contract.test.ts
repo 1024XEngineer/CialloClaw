@@ -3275,7 +3275,7 @@ test("shell-ball bubble window emits state-aware pin actions for history bubbles
   ]);
 });
 
-test("shell-ball bubble window focuses the native helper window when history interaction becomes active", async () => {
+test("shell-ball bubble window only emits interaction updates when history interaction becomes active", async () => {
   const helperSnapshot = createShellBallWindowSnapshot({
     visualState: "processing",
     inputValue: "",
@@ -3315,12 +3315,6 @@ test("shell-ball bubble window focuses the native helper window when history int
         return helperSnapshot;
       },
     },
-    "../../platform/shellBallWindowController": {
-      focusShellBallCurrentWindow() {
-        calls.push("focus");
-        return Promise.resolve();
-      },
-    },
     "./useShellBallWindowMetrics": {
       useShellBallWindowMetrics() {
         return { rootRef: null };
@@ -3344,7 +3338,7 @@ test("shell-ball bubble window focuses the native helper window when history int
 
   await onInteractionActiveChange(true);
 
-  assert.deepEqual(calls, ["focus", "interaction:true"]);
+  assert.deepEqual(calls, ["interaction:true"]);
 });
 
 test("shell-ball bubble window does not depend on only visualState to render its body", () => {
@@ -3902,6 +3896,8 @@ test("shell-ball pin actions sync detached windows from computed next items", ()
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
   assert.match(coordinatorSource, /function syncPinnedBubbleWindowAnchor\(bubbleId: string, items = bubbleItemsRef\.current\)/);
+  assert.match(coordinatorSource, /const nextItems = updater\(bubbleItemsRef\.current\);/);
+  assert.match(coordinatorSource, /setBubbleItems\(nextItems\);/);
   assert.match(coordinatorSource, /const nextItems = updateShellBallBubbleItems\(\(currentItems\) => applyShellBallBubbleAction\(currentItems, payload\)\);/);
   assert.match(coordinatorSource, /void syncPinnedBubbleWindowAnchor\(payload\.bubbleId, nextItems\);/);
 });
@@ -4070,6 +4066,10 @@ test("shell-ball bubble window styles stay transparent, faded, and motion-ready"
   assert.doesNotMatch(mobileBubbleZoneBlock, /width:/);
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*scrollbar-width:\s*none;/);
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*align-content:\s*end;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*min-height:\s*0;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*overflow-y:\s*auto;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*overflow-x:\s*hidden;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*touch-action:\s*pan-y;/);
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll::-webkit-scrollbar\s*\{[\s\S]*display:\s*none;/);
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone__scroll\s*\{[\s\S]*mask-image:\s*linear-gradient\(/);
   assert.match(shellBallStyles, /@keyframes shell-ball-bubble-message-enter/);

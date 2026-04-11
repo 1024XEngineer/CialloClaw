@@ -276,14 +276,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }
 
   function updateShellBallBubbleItems(updater: (currentItems: ShellBallBubbleItem[]) => ShellBallBubbleItem[]) {
-    let nextItems = bubbleItemsRef.current;
-
-    setBubbleItems((currentItems) => {
-      nextItems = updater(currentItems);
-      return nextItems;
-    });
+    const nextItems = updater(bubbleItemsRef.current);
 
     bubbleItemsRef.current = nextItems;
+    setBubbleItems(nextItems);
     syncShellBallBubbleDissipation(nextItems);
 
     return nextItems;

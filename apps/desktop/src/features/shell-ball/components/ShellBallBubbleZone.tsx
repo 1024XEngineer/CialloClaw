@@ -5,6 +5,14 @@ import { ShellBallBubbleMessage as ShellBallBubbleMessageView } from "./ShellBal
 
 const SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX = 24;
 
+function updateShellBallBubbleZoneStickiness(
+  scrollElement: Pick<HTMLDivElement, "clientHeight" | "scrollHeight" | "scrollTop">,
+  shouldStickToBottomRef: { current: boolean },
+) {
+  const distanceFromBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop;
+  shouldStickToBottomRef.current = distanceFromBottom <= SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX;
+}
+
 type ShellBallBubbleZoneProps = {
   visualState: ShellBallVisualState;
   bubbleItems?: ShellBallBubbleItem[];
@@ -23,6 +31,16 @@ export function ShellBallBubbleZone({
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousBubbleCountRef = useRef(0);
   const shouldStickToBottomRef = useRef(true);
+  const interactionActiveRef = useRef(false);
+
+  function setShellBallBubbleZoneInteractionActive(active: boolean) {
+    if (interactionActiveRef.current === active) {
+      return;
+    }
+
+    interactionActiveRef.current = active;
+    onInteractionActiveChange?.(active);
+  }
 
   useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -48,24 +66,26 @@ export function ShellBallBubbleZone({
       className="shell-ball-bubble-zone"
       data-state={visualState}
       onPointerEnter={() => {
-        onInteractionActiveChange?.(true);
+        setShellBallBubbleZoneInteractionActive(true);
       }}
       onPointerLeave={() => {
-        onInteractionActiveChange?.(false);
+        setShellBallBubbleZoneInteractionActive(false);
       }}
     >
       <div
         ref={scrollRef}
         className="shell-ball-bubble-zone__scroll"
         tabIndex={0}
+        onPointerDown={() => {
+          setShellBallBubbleZoneInteractionActive(true);
+        }}
         onScroll={() => {
           const scrollElement = scrollRef.current;
           if (scrollElement === null) {
             return;
           }
 
-          const distanceFromBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop;
-          shouldStickToBottomRef.current = distanceFromBottom <= SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX;
+          updateShellBallBubbleZoneStickiness(scrollElement, shouldStickToBottomRef);
         }}
         onWheel={(event) => {
           const scrollElement = scrollRef.current;
@@ -73,9 +93,9 @@ export function ShellBallBubbleZone({
             return;
           }
 
+          setShellBallBubbleZoneInteractionActive(true);
           scrollElement.scrollTop += event.deltaY;
-          const distanceFromBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop;
-          shouldStickToBottomRef.current = distanceFromBottom <= SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX;
+          updateShellBallBubbleZoneStickiness(scrollElement, shouldStickToBottomRef);
           event.preventDefault();
         }}
       >
