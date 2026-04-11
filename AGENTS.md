@@ -1,120 +1,200 @@
 # AGENTS.md
 
-本文件定义 CialloClaw 仓库内 Coding Agent 的统一执行规则。Agent 在修改代码、文档、协议、配置、目录结构前，必须先遵守本文件。若与局部实现、临时约定、个人习惯冲突，以本文件为准。规则来源于《CialloClaw 开发统一规范（修订版 v10）》的可执行整理版。
+本文件用于约束所有在本仓库内工作的 Agent / AI Coding Assistant / 自动化脚本代理。
 
----
+目标不是让 Agent 自由发挥，而是让 Agent **先理解项目、再遵守边界、再按主链路工作**。
 
-## 1. 身份与目标
+------
 
-你是 CialloClaw 仓库中的 Coding Agent。
+## 1. 你正在参与什么项目
 
-你的目标不是“尽快写代码”，而是：
+本项目是 **CialloClaw**，一个以桌面现场协作为核心的本地 Agent 系统。
 
-- 在统一架构边界内交付可合并代码；
-- 维持统一协议、统一命名、统一模型、统一目录；
-- 避免前端、后端、worker、共享层之间职责污染；
-- 保证主链路始终可运行、可演示、可扩展；
-- 保证 AI 生成结果可审查、可维护、可回滚。
+它不是一个“默认打开聊天窗口”的普通聊天产品，而是一个围绕以下场景构建的桌面助手：
 
----
+- 悬浮球近场入口
+- 文本选中、文件拖拽、错误信息承接
+- 意图确认后再执行
+- 统一走 `task` 主对象推进
+- 正式结果通过 `delivery_result / artifact` 交付
+- 高风险动作必须进入授权、审计、恢复链路
+- 支持任务巡检、镜子记忆、安全卫士、插件与多模型扩展
 
-## 2. 最高优先级规则
+在项目语义上，必须始终牢记：
 
-发生冲突时，按以下顺序决策：
+- **对外主对象是 `task`**
+- **后端执行兼容对象是 `run / step / event / tool_call`**
+- **正式调用边界是 JSON-RPC 2.0，方法名统一为 `agent.xxx.xxx`**
+- **正式交付出口是 `delivery_result / artifact / citation`**
+- **风险动作必须经过授权 / 审计 / 恢复点保护**
 
-1. 最新架构设计文档中的架构边界与技术路线
-2. 本文件
-3. `/packages/protocol`
-4. 模块局部 README、注释、实现细节
-5. 开发者或 Agent 的临时判断
+------
 
-禁止为了“先跑通”绕过高优先级规则。
+## 2. 开始工作前必须先读的文档
 
----
+在你第一次参与任何实现、改动、重构、补丁、联调、测试、文档回写之前，**必须先读取 `docs/` 下列文档**。
 
-## 3. 开发铁律
+### 必读顺序
 
-1. 不允许直接拿 PRD 开写，必须先对齐统一项。
-2. 进入大面积编码前，必须先冻结以下 7 项：
-   - 统一目录结构
-   - 统一命名规范
-   - 统一主数据模型
-   - 统一 JSON-RPC 协议
-   - 统一错误码
-   - 统一 Demo 主链路
-   - 统一跨平台抽象接口
-3. 任何新增字段、事件、接口、错误码，必须先更新协议或规范，再写实现。
-4. 任何平台相关代码不得直接写入业务层，必须经过抽象层。
-5. 任何模型接入不得散落在业务逻辑中，必须通过统一模型接入层进入。
-6. 任何记忆检索不得直接侵入运行态状态机，必须经 Memory 内核统一接入。
-7. AI 生成代码必须人工整理后才能合入。
-8. 前端、后端、worker 不得分别维护同一领域对象的多套定义。
+1. `docs/CialloClaw_开发统一规范_v18.md`
+2. `docs/CialloClaw_协议设计文档_v4.md`
+3. `docs/CialloClaw_数据设计文档_v6.md`
+4. `docs/CialloClaw_模块详细设计文档_v5.md`
+5. `docs/CialloClaw_分工安排和优先级划分_v12.md`
+6. `docs/原子功能.md`
 
----
+如果仓库中的文件名带有版本后缀、空格、括号、修订版等，以 **`docs/` 目录中的最新版本** 为准。
 
-## 4. 仓库边界与依赖方向
+### 阅读目标
 
-### 4.1 顶层目录职责
+你不是“打开过文档”就算完成，而是必须至少理解以下内容：
 
-- `/apps/desktop`：Tauri + React 桌面前端
-- `/services/local-service`：Go 本地服务 / JSON-RPC server / 编排内核
-- `/workers/*`：外部能力进程，例如 playwright、ocr、media
-- `/packages/protocol`：全仓唯一协议真源之一
-- `/packages/ui`：共享 UI 组件
-- `/packages/config`：共享配置
-- `/docs`：架构、协议、Demo、里程碑文档
-- `/scripts`：开发、构建、CI 脚本
+- 项目的唯一主链路是什么
+- 前后端的正式边界是什么
+- 哪些对象是正式对象，哪些只是局部 UI 状态
+- 协议、状态枚举、错误码、表结构分别以什么为真源
+- 哪些功能是 P0，哪些不应该阻塞主链路
+- 当前改动属于哪个模块、哪个功能域、影响哪些对象
 
-### 4.2 正确依赖方向
+### 禁止行为
 
-- `/packages/*` 是底层共享定义层，可被所有模块依赖。
-- `/services/local-service` 与 `/workers/*` 可依赖 `/packages/*`。
-- `/apps/desktop` 可依赖 `/packages/*`，并通过 JSON-RPC 调用 `/services/local-service`。
-- `/services/local-service` 可以编排 `/workers/*`。
-- `/apps/desktop` 不能直接依赖 Go 服务内部实现。
-- `/apps/desktop` 不能直接调用 worker。
-- `/workers/*` 不能依赖前端页面逻辑，也不能依赖 Go 主链路内部状态机细节。
+未读完上述文档前，禁止：
 
-### 4.3 明确禁止
+- 擅自新增正式对象名
+- 擅自新增 JSON-RPC 方法
+- 擅自新增状态枚举 / 错误码 / 表字段
+- 直接开始大段编码
+- 为了 demo 绕开主链路
 
-- 不允许新增与 `/apps`、`/services`、`/workers` 平级的临时业务目录。
-- 不允许前后端各自复制一份协议类型。
-- 不允许 worker 内嵌业务主链路状态模型。
-- 不允许使用 `misc`、`common`、`temp`、`new` 等模糊正式目录承载业务代码。
+------
 
----
+## 3. 文档优先级与冲突处理
 
-## 5. 唯一真源
+若多个信息源冲突，按以下优先级处理：
 
-以下内容只能在指定目录定义：
+1. 仓库中最新的协议真源与 schema 真源
+2. `docs/CialloClaw_开发统一规范_v18.md`
+3. `docs/CialloClaw_协议设计文档_v4.md`
+4. `docs/CialloClaw_数据设计文档_v6.md`
+5. `docs/CialloClaw_模块详细设计文档_v5.md`
+6. `docs/CialloClaw_分工安排和优先级划分_v12.md`
+7. 模块内 README / 注释 / 局部实现
+8. 你自己的推测
 
-- 主数据模型：`/packages/protocol/types` 与 `/packages/protocol/schemas`
-- JSON-RPC 方法：`/packages/protocol/rpc`
-- 错误码：`/packages/protocol/errors`
-- 协议示例：`/packages/protocol/examples`
+当发现冲突时：
+
+- 优先停下，不要继续扩散实现
+- 明确写出冲突点
+- 选择高优先级真源对齐
+- 必要时在提交说明中注明“按上位文档对齐”
+
+------
+
+## 4. 你必须遵守的核心工程铁律
+
+### 4.1 主链路优先，禁止平行造链
+
+所有实现必须优先服务以下主链路：
+
+```
+输入承接 -> 意图确认 -> task 创建/更新 -> Go service 编排 -> 风险评估/授权 -> 正式交付 -> 仪表盘展示 -> 记忆命中或摘要回写
+```
 
 禁止：
 
-- 前端私自定义 task/run/step/event/tool_call 主模型
-- Go 服务绕过共享协议返回临时结构
-- worker 返回结构绕过统一事件与交付体系
+- 先做 UI 假链路，再说后面接后端
+- 先让 worker 直接产出前端结果，再补协议
+- 先做页面结构，再倒逼对象模型
+- 先发明一套“临时对象/临时状态”用于演示
 
----
+### 4.2 对外 task-centric，对内 run-centric
 
-## 6. 核心对象命名与语义
+必须坚持：
 
-以下词为保留核心词，不允许重命名、替换或发明同义词：
+- 前端、仪表盘、结果页、任务详情都围绕 `task`
+- 后端编排保留 `run / step / event / tool_call`
+- `task_id` 与 `run_id` 必须稳定映射
+- 不允许让 `run` 替代 `task` 成为对外主对象
 
+### 4.3 正式边界只有 JSON-RPC
+
+前端与后端唯一稳定边界是 JSON-RPC 2.0。
+
+禁止：
+
+- 前端直接调用数据库、worker、LSP、模型 SDK、Playwright、OCR
+- 后端绕过协议层与前端搞“隐式字段约定”
+- 一个能力同时保留两套方法名
+
+### 4.4 正式结果统一出口
+
+所有正式结果必须通过：
+
+- `delivery_result`
+- `artifact`
+- `citation`
+
+禁止：
+
+- 工具调用结果直接冒充正式交付
+- worker 直接给前端回临时 JSON 当正式结果
+- 在 UI 里自己拼“伪交付对象”长期使用
+
+### 4.5 风险治理不是可选项
+
+涉及下列动作时，必须默认进入风险与治理链路：
+
+- 改文件
+- 发消息
+- 执行命令
+- 安装依赖
+- 工作区外写入
+- 访问敏感路径
+- 任何可能影响系统或数据的外部动作
+
+必须考虑：
+
+- 风险分级
+- 授权确认
+- 审计记录
+- 恢复点
+- 可中断 / 可恢复
+
+### 4.6 记忆、运行态、Trace 严格分层
+
+禁止混写：
+
+- 不要把长期记忆直接塞进 `tasks`
+- 不要把 Trace/Eval 当正式业务真源
+- 不要用 `todo_items` 代替 `tasks`
+- 不要把前端局部状态误当正式状态
+
+------
+
+## 5. 命名、对象、状态的硬约束
+
+### 5.1 命名规则
+
+- 类型名：`PascalCase`
+- 数据库 / 协议字段：`snake_case`
+- JSON-RPC 方法：`agent.domain.action`
+- 事件名：`dot.case`
+- 工具名：`snake_case`
+
+### 5.2 保留核心对象
+
+以下词是系统保留词，不得擅自换名或造近义词：
+
+- `session`
 - `task`
 - `task_step`
-- `session`
 - `run`
 - `step`
 - `event`
 - `tool_call`
-- `citation`
-- `artifact`
 - `delivery_result`
+- `artifact`
+- `citation`
 - `approval_request`
 - `authorization_record`
 - `audit_record`
@@ -122,635 +202,292 @@
 - `memory_summary`
 - `memory_candidate`
 - `retrieval_hit`
+- `trace_record`
+- `eval_snapshot`
+- `skill_manifest`
+- `blueprint_definition`
+- `prompt_template_version`
 
-额外要求：
+### 5.3 状态约束
 
-- `task` 是前端与正式交付视角的主对象。
-- `run` 是后端执行内核对象。
-- `task_id` 与 `run_id` 必须可追踪映射，不能各自漂移。
-- 同一概念全仓只能有一个名字。
-- 禁止无语义差异的同义词混用，例如：
-  - `item` / `artifact`
-  - `action` / `tool_call`
-  - `memory_hit` / `retrieval_hit`
-  - `rpc_method` / `api_name`
+- 对外状态以协议文档登记的正式枚举为准
+- `task.status` 不能直接等于 `run.status`
+- `todo_item.status` 不能直接映射为 `task.status`
+- 悬浮球状态、气泡生命周期、输入框草稿态都只是前端局部状态
 
----
+### 5.4 错误码约束
 
-## 7. 命名规则
+- 统一使用正式错误码体系
+- 不允许仅返回字符串错误
+- 前端按错误码处理，不猜文案
+- Worker / plugin / sidecar 错误必须包装进统一错误结构
 
-### 7.1 前端
-
-- React 组件：`PascalCase`
-- Hook：`useXxx`
-- Store 文件：`xxxStore.ts`
-- feature 目录：`kebab-case`
-- TypeScript 类型：`PascalCase`
-- 变量 / 函数：`camelCase`
-- 常量：`SCREAMING_SNAKE_CASE`
-
-### 7.2 Go
-
-- 导出类型：`PascalCase`
-- 包名：短小、全小写
-- JSON 字段：`snake_case`
-- 数据表 / 字段：`snake_case`
-- 事件类型：`dot.case`
-- JSON-RPC 方法组：`dot.case`
-- tool 名称：`snake_case`
-
-### 7.3 Worker
-
-- worker 名称：`snake_case`
-- tool 名称：`snake_case`
-- artifact 类型：`snake_case`
-- provider 名称：`snake_case`
-
----
-
-## 8. 统一状态约束
-
-对外产品态以 `task_status` 为主；`run_status` 仅保留后端最小兼容状态，不得替代 `task_status` 对外暴露。
-
-文档中未登记的状态值不得进入实现。允许状态如下：
-
-### 8.1 task_status
-
-- `confirming_intent`
-- `processing`
-- `waiting_auth`
-- `waiting_input`
-- `paused`
-- `blocked`
-- `failed`
-- `completed`
-- `cancelled`
-- `ended_unfinished`
-
-### 8.2 task_list_group
-
-- `unfinished`
-- `finished`
-
-### 8.3 todo_bucket
-
-- `upcoming`
-- `later`
-- `recurring_rule`
-- `closed`
-
-### 8.4 risk_level
-
-- `green`
-- `yellow`
-- `red`
-
-### 8.5 security_status
-
-- `normal`
-- `pending_confirmation`
-- `intercepted`
-- `execution_error`
-- `recoverable`
-- `recovered`
-
-### 8.6 delivery_type
-
-- `bubble`
-- `workspace_document`
-- `result_page`
-- `open_file`
-- `reveal_in_folder`
-- `task_detail`
-
-### 8.7 其他已冻结枚举
-
-以下枚举仅允许使用既有值：
-
-- `voice_session_state`: `listening`, `locked`, `processing`, `cancelled`, `finished`
-- `request_source`: `floating_ball`, `dashboard`, `tray_panel`
-- `request_trigger`: `voice_commit`, `hover_text_input`, `text_selected_click`, `file_drop`, `error_detected`, `recommendation_click`
-- `input_type`: `text`, `text_selection`, `file`, `error`
-- `input_mode`: `voice`, `text`
-- `task_source_type`: `voice`, `hover_input`, `selected_text`, `dragged_file`, `todo`, `error_signal`
-- `bubble_message_type`: `status`, `intent_confirm`, `result`
-- `approval_decision`: `allow_once`, `deny_once`
-- `approval_status`: `pending`, `approved`, `denied`
-- `settings_scope`: `all`, `general`, `floating_ball`, `memory`, `task_automation`, `data_log`
-- `apply_mode`: `immediate`, `restart_required`, `next_task_effective`
-- `theme_mode`: `follow_system`, `light`, `dark`
-- `position_mode`: `fixed`, `draggable`
-- `task_step_status`: `pending`, `running`, `completed`, `failed`, `skipped`, `cancelled`
-- `step_status`: `pending`, `running`, `completed`, `failed`, `skipped`, `cancelled`
-- `todo_status`: `normal`, `due_today`, `overdue`, `completed`, `cancelled`
-- `recommendation_scene`: `hover`, `selected_text`, `idle`, `error`
-- `recommendation_feedback`: `positive`, `negative`, `ignore`
-- `task_control_action`: `pause`, `resume`, `cancel`, `restart`
-- `time_unit`: `minute`, `hour`, `day`, `week`
-- `run_status`: `processing`, `completed`
-
----
-
-## 9. 主数据模型要求
-
-核心实体固定如下：
-
-- `Task`
-- `TaskStep`
-- `BubbleMessage`
-- `DeliveryResult`
-- `Artifact`
-- `TodoItem`
-- `RecurringRule`
-- `ApprovalRequest`
-- `AuthorizationRecord`
-- `AuditRecord`
-- `ImpactScope`
-- `RecoveryPoint`
-- `TokenCostSummary`
-- `MirrorReference`
-- `SettingsSnapshot`
-- `SettingItem`
-- `AsyncJob`
-- `Session`
-- `Run`
-- `Step`
-- `Event`
-- `ToolCall`
-- `Citation`
-- `MemorySummary`
-- `MemoryCandidate`
-- `RetrievalHit`
-
-建模要求：
-
-- `Task` 是前端暴露主对象。
-- `Run`、`Step`、`Event`、`ToolCall` 是后端执行兼容层对象。
-- `Task` 与 `Run` 必须双向可映射。
-- 对外任务界面、仪表盘、气泡、正式交付、审计摘要统一围绕 `task_id` 组织。
-- `TodoItem` 与 `Task` 必须分层：前者表示未来安排，后者表示已进入执行。
-- `RecurringRule` 只描述重复规则，不等同任务实例。
-- 记忆检索结果只能通过引用关联，不得混入运行态原始状态表。
-
-### 9.1 模型变更规则
-
-新增字段、状态、实体前，必须先完成以下动作：
-
-1. 更新 `/packages/protocol`
-2. 明确用途
-3. 明确关系
-4. 给出最小字段
-5. 标明是否进入 SQLite
-6. 标明是否进入 RAG
-
-禁止：
-
-- 未冻结字段进入数据库和协议
-- 前端为了展示方便私加源模型字段
-- `Task` 与 `Run` 映射只存在于实现细节而不进入协议层
-
----
-
-## 10. JSON-RPC 统一规则
-
-### 10.1 协议标准
-
-前后端统一通信协议为 JSON-RPC 2.0。
-
-承载范围：
-
-- request / response
-- notification
-- subscription
-
-传输层 P0 仅允许本地受控通信，例如：
-
-- Named Pipe（Windows）
-- 本地 IPC
-- Unix Domain Socket（macOS / Linux）
-- WebSocket（仅限本地受控连接）
-
-`localhost HTTP` 仅可作为调试态或兼容态，不是 P0 主承诺方式。
-
-### 10.2 方法命名规则
-
-- 所有 Agent 层 JSON-RPC 方法名必须使用 `dot.case`
-- 所有 Notification 名称必须使用 `dot.case`
-- 前端不得手写方法字符串，必须通过统一 RPC client 封装调用
-
-### 10.3 stable 方法集合
-
-当前正式联调范围仅包括：
-
-- `agent.input.submit`
-- `agent.task.start`
-- `agent.task.confirm`
-- `agent.recommendation.get`
-- `agent.recommendation.feedback.submit`
-- `agent.task.list`
-- `agent.task.detail.get`
-- `agent.task.control`
-- `agent.task_inspector.config.get`
-- `agent.task_inspector.config.update`
-- `agent.task_inspector.run`
-- `agent.notepad.list`
-- `agent.notepad.convert_to_task`
-- `agent.dashboard.overview.get`
-- `agent.dashboard.module.get`
-- `agent.mirror.overview.get`
-- `agent.security.summary.get`
-- `agent.security.pending.list`
-- `agent.security.respond`
-- `agent.settings.get`
-- `agent.settings.update`
-
-planned 但当前不承诺联调的方法：
-
-- `agent.security.audit.list`
-- `agent.security.restore_points.list`
-- `agent.security.restore.apply`
-- `agent.mirror.memory.manage`
-- `agent.task.artifact.list`
-- `agent.task.artifact.open`
-- `agent.delivery.open`
-
-### 10.4 返回结构规则
-
-- 任务类接口统一返回：`task`、`delivery_result`，必要时附带 `bubble_message`
-- 列表类接口统一返回：`items`、`page`
-- 安全类接口统一返回：`approval_request` / `authorization_record` / `audit_record` / `recovery_point`，必要时附带 `impact_scope`
-- 设置类接口统一返回：`effective_settings` 或 `setting_item`、`apply_mode`、`need_restart`
-
-### 10.5 严格禁止
-
-- 不允许继续扩 REST 风格主协议
-- 不允许前端直接消费临时 JSON
-- 不允许通过字符串判断业务成功失败
-- 不允许未登记方法直接进入实现
-
----
-
-## 11. 错误码规则
-
-### 11.1 分段
-
-- `0`：成功
-- `1001xxx`：Task / Session / Run / Step 错误
-- `1002xxx`：协议与参数错误
-- `1003xxx`：工具调用错误
-- `1004xxx`：权限与风险错误
-- `1005xxx`：存储与数据库错误
-- `1006xxx`：worker / sidecar 错误
-- `1007xxx`：系统与平台错误
-
-### 11.2 推荐错误码
-
-#### Task / Session / Run
-
-- `1001001` `TASK_NOT_FOUND`
-- `1001002` `SESSION_NOT_FOUND`
-- `1001003` `STEP_NOT_FOUND`
-- `1001004` `TASK_STATUS_INVALID`
-- `1001005` `TASK_ALREADY_FINISHED`
-- `1001006` `RUN_NOT_FOUND`
-
-#### 协议与参数
-
-- `1002001` `INVALID_PARAMS`
-- `1002002` `INVALID_EVENT_TYPE`
-- `1002003` `UNSUPPORTED_RESULT_TYPE`
-- `1002004` `SCHEMA_VALIDATION_FAILED`
-- `1002005` `JSON_RPC_METHOD_NOT_FOUND`
-
-#### 工具调用
-
-- `1003001` `TOOL_NOT_FOUND`
-- `1003002` `TOOL_EXECUTION_FAILED`
-- `1003003` `TOOL_TIMEOUT`
-- `1003004` `TOOL_OUTPUT_INVALID`
-
-#### 风险与权限
-
-- `1004001` `APPROVAL_REQUIRED`
-- `1004002` `APPROVAL_REJECTED`
-- `1004003` `WORKSPACE_BOUNDARY_DENIED`
-- `1004004` `COMMAND_NOT_ALLOWED`
-- `1004005` `CAPABILITY_DENIED`
-
-#### 存储
-
-- `1005001` `SQLITE_WRITE_FAILED`
-- `1005002` `ARTIFACT_NOT_FOUND`
-- `1005003` `CHECKPOINT_CREATE_FAILED`
-- `1005004` `STRONGHOLD_ACCESS_FAILED`
-- `1005005` `RAG_INDEX_UNAVAILABLE`
-
-#### Worker / Sidecar
-
-- `1006001` `WORKER_NOT_AVAILABLE`
-- `1006002` `PLAYWRIGHT_SIDECAR_FAILED`
-- `1006003` `OCR_WORKER_FAILED`
-- `1006004` `MEDIA_WORKER_FAILED`
-
-#### 系统 / 平台
-
-- `1007001` `PLATFORM_NOT_SUPPORTED`
-- `1007002` `TAURI_PLUGIN_FAILED`
-- `1007003` `DOCKER_BACKEND_UNAVAILABLE`
-- `1007004` `SANDBOX_PROFILE_INVALID`
-- `1007005` `PATH_POLICY_VIOLATION`
-
-### 11.3 错误处理约束
-
-- 前端只认错误码和错误类型，不猜字符串。
-- 历史 `40001`、`400xx` 旧格式全部废弃。
-- Go 返回错误时必须带 JSON-RPC `id` 或 `trace_id`。
-- worker 错误必须包装成统一错误码。
-- 新错误码必须先登记到 `/packages/protocol/errors`。
-
----
-
-## 12. Demo 主链路
-
-唯一 P0 主链路必须保持 task-centric：
+------
 
-用户输入或触发 → 悬浮球承接 → 返回意图或直接执行 → 气泡确认 → 前端通过 JSON-RPC 创建或更新 task → Go service 执行工具链 → 命中风险时等待授权 → 生成短结果或正式交付对象 → dashboard 展示 task / artifact / audit / recovery_point → 至少挂载一次记忆检索或记忆摘要。
+## 6. 目录与模块边界
 
-缺少以下任一节点，都不算主链路完整：
+### 6.1 顶层目录认知
 
-1. 入口触发
-2. 意图返回或直接执行判定
-3. 气泡确认
-4. `agent.task.start` 或等价 task 创建 / 更新
-5. 工具链执行
-6. 风险挂起与授权承接（如命中风险）
-7. `delivery_result` 或 artifact 生成
-8. dashboard 回显 task / artifact / audit / recovery_point
-9. 至少一次记忆检索或记忆摘要挂载
+工作时默认按以下目录分层理解：
 
----
+- `apps/desktop`：桌面前端
+- `services/local-service`：Go 本地 Harness Service
+- `workers/`：独立 worker / sidecar
+- `packages/protocol`：协议、类型、schema 真源
+- `packages/shared`：共享常量与纯函数
+- `docs/`：架构、协议、数据、模块、规范文档
 
-## 13. 跨平台抽象规则
+### 6.2 前端边界
 
-### 13.1 总原则
+前端只负责：
 
-所有平台能力必须先定义抽象接口，再写平台实现。
+- 交互承接
+- 视图呈现
+- 局部状态机
+- ViewModel / Query / Store
+- 平台能力桥接
+- RPC Client
 
-禁止在业务逻辑中直接出现：
+前端不负责：
 
-- `C:\`
-- `D:\`
-- `\\`
-- `/Users/...`
-- `/home/...`
-- 平台专属路径拼接
+- 编排真源
+- 模型调用决策
+- 风险审查最终裁决
+- 数据真源定义
 
-### 13.2 必须存在的抽象
+### 6.3 后端边界
 
-#### FileSystemAdapter
+后端负责：
 
-至少包含：
+- JSON-RPC Server
+- Orchestrator
+- Context Manager
+- Intent / Planning
+- RunEngine / Task 状态机
+- Delivery
+- Memory
+- Risk / Audit / Recovery
+- Storage
+- Trace / Eval
+- Tool / Plugin / Sandbox / Adapter
 
-- `Join(...)`
-- `Clean(path)`
-- `Abs(path)`
-- `Rel(base, target)`
-- `Normalize(path)`
-- `EnsureWithinWorkspace(path)`
-- `ReadFile(path)`
-- `WriteFile(path, content)`
-- `Move(src, dst)`
-- `MkdirAll(path)`
+后端不得：
 
-#### PathPolicy
+- 感知前端页面组件树
+- 依赖 Tauri 细节
+- 输出未登记对象给前端长期消费
 
-负责：
+------
 
-- 屏蔽盘符差异
-- 屏蔽路径分隔符差异
-- 统一路径合法性校验
-- 统一 workspace 边界校验
+## 7. 接任务前先做的检查清单
 
-#### OSCapabilityAdapter
+当你准备实现一个需求时，先回答下面 10 个问题；答不清不要开始写代码。
 
-负责：
+1. 这个需求属于哪个功能域？
+2. 这是 P0、P1、P2 还是 P3？会不会阻塞 P0 主链路？
+3. 它承接在哪个前端模块？
+4. 它编排在哪个后端模块？
+5. 它影响哪些正式对象？
+6. 是否需要新增协议方法？如果需要，是否已登记到协议真源？
+7. 是否需要新增表 / 字段 / 索引？如果需要，是否已回写数据文档？
+8. 是否涉及风险动作、授权、审计、恢复点？
+9. 最终结果通过什么 `delivery_result` 类型交付？
+10. 是否会打破 `task-centric` 主链路？
 
-- 托盘
-- 通知
-- 快捷键
-- 剪贴板
-- 屏幕授权
-- 外部命令启动
-- sidecar 生命周期管理
+若任一问题答案是“不确定”，先读文档、补设计、再编码。
 
-#### ExecutionBackendAdapter
+------
 
-负责：
+## 8. 不同类型任务的工作方式
 
-- Docker
-- SandboxProfile
-- ResourceLimit
-- Remote Backend
+### 8.1 做前端时
 
-#### StorageAdapter
+你必须：
 
-负责：
+- 先确认真实对象字段来自协议真源
+- 先区分局部状态与正式状态
+- 先通过服务层 / RPC Client 调用后端
+- 先设计交付承接方式，再补表现
 
-- SQLite
-- RAG 索引
-- Artifact 外置存储
-- Stronghold 机密存储
+你禁止：
 
-### 13.3 合并阻断条件
+- 自造正式状态
+- 自造长期依赖的假数据结构
+- 直接调用后端内部实现或系统能力
+- 让 UI 文案替代业务状态
 
-以下情况直接阻断合并：
+### 8.2 做后端时
 
-- 业务代码写死平台路径
-- 路径拼接直接使用字符串加法
-- 平台逻辑直接写入 orchestrator / delivery / memory
-- 未经过 `EnsureWithinWorkspace` 就写文件
-- sidecar / worker 启动绕过平台抽象层
+你必须：
 
----
+- 保持 `task` 与 `run` 稳定映射
+- 让工具结果先进入 `tool_call / event / delivery_result` 链
+- 让风险动作可授权、可审计、可恢复
+- 让错误进入正式错误码体系
 
-## 14. LLM / AI 服务接入规则
+你禁止：
 
-### 14.1 当前唯一实现标准
+- 绕过编排器直连前端
+- 绕过交付内核直接回结果
+- 把记忆逻辑侵入运行态状态机
+- 把平台细节写死在业务层
 
-统一模型接入方式为 OpenAI 官方 Responses API SDK。
+### 8.3 做协议 / schema 时
 
-### 14.2 接入位置
+你必须：
 
-模型 SDK 接入、模型配置和调用封装统一放在：
+- 保持方法名统一
+- 保持对象字段统一
+- 保持错误码统一
+- 保持 stable / planned 边界清晰
 
-- `/services/local-service/internal/model`
+你禁止：
 
-业务模块只能通过该目录访问模型，不得在以下目录直接调用 SDK：
+- 先实现再补协议
+- 同一能力保留两套名字
+- 返回未登记字段
+- 把通知当隐藏命令通道
 
-- `orchestrator`
-- `intent`
-- `memory`
-- `delivery`
-- 其他业务目录
+### 8.4 做数据层时
 
-### 14.3 强制要求
+你必须：
 
-- 模型切换通过配置完成，主要项包括 `model_id`、`endpoint`、`api_key`、预算策略
-- 所有模型入参与出参必须经过 `/packages/protocol` 建模
-- tool calling 结果回填必须走统一 `ToolCall` / `Event` 体系
-- 每次模型调用必须记录：
-  - `model`
-  - `token_usage`
-  - `latency`
-  - `request_id`
-  - `run_id`
-  - `task_id`
-- 前端不得直接持有模型调用能力
+- 明确用途、主键、外键、索引、读写者、生命周期
+- 保持运行态 / 记忆 / 前馈配置 / Trace-Eval 分层
+- 保持 `task` 与 `run` 双层模型不混写
 
-### 14.4 禁止
+你禁止：
 
-- 禁止在业务层直接写 Responses SDK 调用
-- 禁止不同模块各自封装一套模型 client
-- 禁止模型输出未经 schema 校验直接透传前端
-- 禁止把模型密钥写入 SQLite 或明文配置
+- 只改 SQL 不改文档
+- 只加字段不写语义
+- 用 trace 表代替业务真源
+- 把 `todo_items` 与 `tasks` 混成一层
 
----
+------
 
-## 15. SQLite + RAG + Workspace 存储规则
+## 9. 对 Agent 的具体执行要求
 
-### 15.1 存储职责划分
+### 9.1 修改任何代码前
 
-#### SQLite + WAL
+必须先做：
 
-负责：
+- 阅读相关文档
+- 阅读相关目录现有实现
+- 找出现有真源位置
+- 给出最小改动方案
+- 明确会改哪些文件
+- 明确不会改哪些边界
 
-- 结构化运行态
-- 审计
-- 授权记录
-- checkpoint
-- 任务状态
-- 事件索引
-- token 计量
+### 9.2 生成代码时
 
-#### 本地记忆检索层
+遵循：
 
-负责：
+- 先最小可用，再扩展
+- 优先补齐主链路，不优先做外围增强
+- 尽量沿用已有目录、命名、对象、接口
+- 一次提交只解决一个明确边界的问题
 
-- SQLite FTS5 检索
-- sqlite-vec 向量召回
-- 候选过滤
-- 排序与摘要回填
+生成代码时必须避免：
 
-#### Workspace
+- 大范围“顺手重构”
+- 把多个问题混在一个提交里
+- 创建名字相近的重复对象
+- 引入文档未定义的长期结构
 
-负责：
+### 9.3 改动后自检
 
-- 生成文档
-- 草稿
-- 报告
-- 导出文件
-- 模板
+提交前至少自检：
 
-#### Artifact
+- 是否遵守命名规范
+- 是否遵守模块边界
+- 是否影响 `task` 主链路
+- 是否新增了协议 / 表结构 / 错误码
+- 是否需要同步文档
+- 是否覆盖失败路径、授权路径、恢复路径
 
-负责：
+------
 
-- 截图
-- 录屏
-- 音视频中间产物
-- 大对象外置文件
+## 10. 文档回写规则
 
-#### Stronghold
+以下改动完成后，必须同步回写 `docs/`：
 
-负责：
+- 新增或修改正式协议方法
+- 新增或修改正式状态枚举
+- 新增或修改错误码
+- 新增或修改核心表 / 字段 / 索引
+- 新增或调整主链路时序
+- 新增或调整模块职责边界
+- 新增或调整 P0 / P1 优先级判断
 
-- API Key
-- 模型令牌
-- 敏感配置
-- 密钥材料
+不要只改代码不改文档，也不要只改文档不改真源。
 
-### 15.2 存储约束
+------
 
-- 结构化运行态不得写入 RAG
-- 语义记忆不得直接塞进主状态表
-- 大对象不得直接存入 SQLite
-- 敏感配置不得落入 SQLite 或 workspace
-- 所有写入必须带 task 关联信息、run 关联信息或来源信息
+## 11. P0 优先级守则
 
-### 15.3 记忆检索约束
+当前阶段默认优先级：
 
-- 本地记忆检索只能通过 Memory 层调用
-- 检索实现固定为 `SQLite FTS5 + sqlite-vec`
-- 返回结构必须标准化为 `MemoryCandidate` / `RetrievalHit`
-- 召回、过滤、排序必须与主状态机解耦
+- **第一优先：P0 主链路闭环**
+- **第二优先：P0 底座冻结项**
+- **第三优先：不破坏 P0 的 P1 补强**
+- **最后才是 P2 / P3 体验增强与生态扩展**
 
----
+凡是下列事情，若会阻塞 P0，一律降级处理：
 
-## 16. AI 编码约束
+- 复杂动画
+- 过早插件化
+- 过早多模型策略细化
+- 过早做高级感知包
+- 过早做漂亮但未接真实对象的页面
 
-### 16.1 AI 可以做的事
+------
 
-- 生成模块骨架
-- 生成重复样板代码
-- 补测试样例
-- 补协议样例
-- 补文档初稿
-- 补注释初稿
+## 12. 你应该如何汇报你的工作
 
-### 16.2 AI 禁止做的事
+当你完成一次实现或准备提交时，输出建议遵循以下结构：
 
-- 擅自新增目录
-- 擅自新增状态名
-- 擅自发明字段
-- 擅自发明 JSON-RPC 方法
-- 擅自新增错误码
-- 擅自写平台专属路径逻辑
-- 输出超长文件直接入主干
-- 前后端各自定义一套 task / run 映射结构
+1. 目标是什么
+2. 依据了哪些真源文档
+3. 改了哪些文件
+4. 没改哪些边界
+5. 风险点是什么
+6. 后续还需要谁继续接
 
-### 16.3 AI 产出流程
+如果只是草拟方案，不要伪装成“已经实现完成”。
 
-1. 先引用共享 schema
-2. 再引用统一 Prompt 模板
-3. 只生成当前模块最小闭环代码
-4. 人工整理 import、命名、注释、测试
-5. 本地跑主链路相关验证
-6. 通过后再提交
+------
 
----
+## 13. 明确禁止的行为清单
 
-## 17. Coding Agent 执行清单
+你不得：
 
-开始任何修改前，先检查：
+- 跳过 `docs/` 直接写代码
+- 编造项目不存在的目录结构
+- 编造协议方法、状态名、错误码、表名
+- 把聊天式长对话当成产品主入口
+- 把前端局部状态当成后端正式状态
+- 让 worker 直接成为正式交付出口
+- 绕开授权、审计、恢复点执行高风险动作
+- 把平台实现细节直接写进业务逻辑
+- 在未确认真源前大改命名
+- 以“只是 demo”为理由破坏统一项
 
-- 是否触碰协议真源？
-- 是否新增字段、状态、错误码、RPC 方法？
-- 是否影响 task / run / step / event / tool_call 主模型？
-- 是否影响主链路？
-- 是否涉及平台抽象层？
-- 是否涉及模型 SDK、Memory、Stronghold、RAG、SQLite？
-- 是否把平台逻辑写进业务层？
-- 是否引入了未登记的新命名？
-- 是否会造成前后端模型漂移？
+------
 
-如果任一答案为“是”，必须先更新对应真源或抽象层，再写代码。
+## 14. 建议的工作模式
 
----
+推荐你每次都按以下顺序工作：
 
-## 18. PR 自检要求
+1. 先读 `AGENTS.md`
+2. 再读 `docs/` 对应文档
+3. 再读相关目录当前实现
+4. 再写“理解摘要 + 改动计划”
+5. 再实施最小改动
+6. 再做自检
+7. 最后回写文档与说明
 
-每次提交前，至少补充并自检以下事项：
+------
 
-- 本次修改影响哪一个统一项
-- 是否新增字段 / 事件 / 方法 / 错误码
-- 是否影响 Demo 主链路
-- 是否涉及平台抽象层
-- 是否涉及本地记忆检索 / 模型 SDK / Stronghold
-- 是否由 AI 生成，人工整理点有哪些
-- 最小验证说明是否完整
+## 15. 一句话总原则
 
----
-
-## 19. 一句话总纲
-
-共享定义在最底层，后端 Harness 在中间编排，worker 提供外部能力，前端只能通过 JSON-RPC 协议调用后端；任何实现都不得突破这一边界。
+> 在 CialloClaw 中，Agent 的首要职责不是“尽快写代码”，而是**先对齐真源、守住边界、服务主链路，再做最小正确实现**。
