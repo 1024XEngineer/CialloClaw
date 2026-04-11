@@ -1,6 +1,6 @@
 import type { ShellBallVisualState } from "./shellBall.types";
 import { getShellBallVisibleBubbleItems } from "./shellBall.windowSync";
-import { useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
+import { emitShellBallBubbleAction, useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 
@@ -20,7 +20,16 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
 
   return (
     <div ref={rootRef} className="shell-ball-window shell-ball-window--bubble" aria-label="Shell-ball bubble window">
-      <ShellBallBubbleZone visualState={resolvedVisualState} bubbleItems={visibleBubbleItems} />
+      <ShellBallBubbleZone
+        visualState={resolvedVisualState}
+        bubbleItems={visibleBubbleItems}
+        onDeleteBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("delete", bubbleId);
+        }}
+        onPinBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("pin", bubbleId);
+        }}
+      />
     </div>
   );
 }

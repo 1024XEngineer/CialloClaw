@@ -53,6 +53,11 @@ type UseShellBallWindowMetricsInput = {
   clickThrough?: boolean;
 };
 
+type ShellBallHelperWindowInteractionMode = {
+  focusable: boolean;
+  ignoreCursorEvents: boolean;
+};
+
 export function createShellBallWindowFrame(
   contentSize: ShellBallContentSize,
   safeMargin = SHELL_BALL_WINDOW_SAFE_MARGIN_PX,
@@ -109,6 +114,24 @@ export function clampShellBallFrameToBounds(
     ...frame,
     x: Math.min(Math.max(frame.x, bounds.minX), maxX),
     y: Math.min(Math.max(frame.y, bounds.minY), maxY),
+  };
+}
+
+export function getShellBallHelperWindowInteractionMode(input: {
+  role: ShellBallHelperWindowRole;
+  visible: boolean;
+  clickThrough: boolean;
+}): ShellBallHelperWindowInteractionMode {
+  if (input.role === "bubble") {
+    return {
+      focusable: false,
+      ignoreCursorEvents: input.clickThrough || input.visible === false,
+    };
+  }
+
+  return {
+    focusable: true,
+    ignoreCursorEvents: false,
   };
 }
 
@@ -262,8 +285,14 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     const helperFrame = windowFrame;
 
     if (role === "bubble") {
-      void setShellBallWindowFocusable(role, false);
-      void setShellBallWindowIgnoreCursorEvents(role, clickThrough);
+      const interactionMode = getShellBallHelperWindowInteractionMode({
+        role,
+        visible,
+        clickThrough,
+      });
+
+      void setShellBallWindowFocusable(role, interactionMode.focusable);
+      void setShellBallWindowIgnoreCursorEvents(role, interactionMode.ignoreCursorEvents);
     }
 
     let cleanup: (() => void) | null = null;

@@ -12,11 +12,14 @@ export const shellBallWindowSyncEvents = Object.freeze({
   inputFocus: "desktop-shell-ball:input-focus",
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
+  bubbleAction: "desktop-shell-ball:bubble-action",
 });
 
 export type ShellBallHelperWindowRole = "bubble" | "input";
 
 export type ShellBallPrimaryAction = "attach_file" | "submit" | "primary_click";
+
+export type ShellBallBubbleAction = "pin" | "delete";
 
 export type ShellBallHelperWindowVisibility = {
   bubble: boolean;
@@ -74,6 +77,12 @@ export type ShellBallInputDraftPayload = {
 export type ShellBallPrimaryActionPayload = {
   source: ShellBallHelperWindowRole;
   action: ShellBallPrimaryAction;
+};
+
+export type ShellBallBubbleActionPayload = {
+  source: "bubble";
+  action: ShellBallBubbleAction;
+  bubbleId: string;
 };
 
 export function getShellBallHelperWindowVisibility(

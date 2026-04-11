@@ -155,7 +155,8 @@
   border-radius: 1.15rem;
   box-shadow: 0 16px 28px -24px rgba(62, 56, 48, 0.34);
   max-width: min(18rem, calc(100% - 2rem));
-  padding: 0.65rem 0.85rem;
+  padding: 1.65rem 0.85rem 0.65rem;
+  position: relative;
 }
 
 .shell-ball-bubble-message--agent {
@@ -172,6 +173,52 @@
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.shell-ball-bubble-message__control {
+  align-items: center;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(132, 118, 99, 0.14);
+  border-radius: 999px;
+  color: var(--shell-ball-copy);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  inset-block-start: 0.45rem;
+  line-height: 1;
+  min-height: 1.25rem;
+  padding: 0.2rem 0.45rem;
+  position: absolute;
+  text-transform: uppercase;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.shell-ball-bubble-message__control:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(106, 145, 200, 0.24);
+  color: var(--shell-ball-ink);
+  transform: translateY(-1px);
+}
+
+.shell-ball-bubble-message__control:focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(255, 251, 244, 0.92),
+    0 0 0 4px rgba(106, 145, 200, 0.22);
+  outline: 0;
+}
+
+.shell-ball-bubble-message__pin-control {
+  inset-inline-start: 0.55rem;
+}
+
+.shell-ball-bubble-message__delete-control {
+  inset-inline-end: 0.55rem;
 }
 
 .shell-ball-bubble-zone[data-state="waiting_auth"] {

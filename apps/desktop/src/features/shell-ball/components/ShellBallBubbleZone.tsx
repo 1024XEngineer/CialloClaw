@@ -6,9 +6,16 @@ import { ShellBallBubbleMessage as ShellBallBubbleMessageView } from "./ShellBal
 type ShellBallBubbleZoneProps = {
   visualState: ShellBallVisualState;
   bubbleItems?: ShellBallBubbleItem[];
+  onDeleteBubble?: (bubbleId: string) => void;
+  onPinBubble?: (bubbleId: string) => void;
 };
 
-export function ShellBallBubbleZone({ visualState, bubbleItems = [] }: ShellBallBubbleZoneProps) {
+export function ShellBallBubbleZone({
+  visualState,
+  bubbleItems = [],
+  onDeleteBubble,
+  onPinBubble,
+}: ShellBallBubbleZoneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,7 +37,11 @@ export function ShellBallBubbleZone({ visualState, bubbleItems = [] }: ShellBall
             data-freshness={item.desktop.freshnessHint ?? "stale"}
             data-motion={item.desktop.motionHint ?? "settle"}
           >
-            <ShellBallBubbleMessageView item={item} />
+            <ShellBallBubbleMessageView
+              item={item}
+              onDelete={onDeleteBubble}
+              onPin={onPinBubble}
+            />
           </div>
         ))}
         <div className="shell-ball-bubble-zone__bottom-anchor" aria-hidden="true" />

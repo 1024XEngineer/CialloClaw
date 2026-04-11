@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { shellBallWindowLabels } from "../../platform/shellBallWindowController";
-import type { ShellBallBubbleItem } from "./shellBall.bubble";
+import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import {
   createDefaultShellBallWindowSnapshot,
   createShellBallWindowSnapshot,
+  type ShellBallBubbleAction,
+  type ShellBallBubbleActionPayload,
   shellBallWindowSyncEvents,
   type ShellBallHelperReadyPayload,
   type ShellBallHelperWindowRole,
@@ -69,16 +71,40 @@ const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [
   },
 ];
 
+export function applyShellBallBubbleAction(
+  items: ShellBallBubbleItem[],
+  payload: Pick<ShellBallBubbleActionPayload, "action" | "bubbleId">,
+): ShellBallBubbleItem[] {
+  if (payload.action === "delete") {
+    return items.filter((item) => item.bubble.bubble_id !== payload.bubbleId);
+  }
+
+  return items.map((item) => {
+    if (item.bubble.bubble_id !== payload.bubbleId) {
+      return item;
+    }
+
+    return {
+      ...item,
+      bubble: {
+        ...item.bubble,
+        pinned: true,
+      },
+    };
+  });
+}
+
 export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
+  const [bubbleItems, setBubbleItems] = useState(() => cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS));
   const snapshot = useMemo(
     () =>
       createShellBallWindowSnapshot({
         visualState: input.visualState,
         inputValue: input.inputValue,
         voicePreview: input.voicePreview,
-        bubbleItems: SHELL_BALL_LOCAL_BUBBLE_ITEMS,
+        bubbleItems,
       }),
-    [input.inputValue, input.visualState, input.voicePreview],
+    [bubbleItems, input.inputValue, input.visualState, input.voicePreview],
   );
   const snapshotRef = useRef(snapshot);
   const handlersRef = useRef({
@@ -144,6 +170,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       }
     }
 
+    function handleBubbleAction(payload: ShellBallBubbleActionPayload) {
+      setBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
+    }
+
     void Promise.all([
       currentWindow.listen<ShellBallHelperReadyPayload>(
         shellBallWindowSyncEvents.helperReady,
@@ -171,6 +201,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           handlePrimaryAction(payload.action);
         },
       ),
+      currentWindow.listen<ShellBallBubbleActionPayload>(shellBallWindowSyncEvents.bubbleAction, ({ payload }) => {
+        handleBubbleAction(payload);
+      }),
     ]).then((unlisteners) => {
       if (disposed) {
         for (const unlisten of unlisteners) {
@@ -247,5 +280,13 @@ export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction,
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.primaryAction, {
     action,
     source,
+  });
+}
+
+export async function emitShellBallBubbleAction(action: ShellBallBubbleAction, bubbleId: string) {
+  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.bubbleAction, {
+    action,
+    bubbleId,
+    source: "bubble",
   });
 }
