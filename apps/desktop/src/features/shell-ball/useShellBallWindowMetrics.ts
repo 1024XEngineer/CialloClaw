@@ -38,6 +38,8 @@ type ShellBallWindowSize = {
   height: number;
 };
 
+type ShellBallWindowMetricsRole = UseShellBallWindowMetricsInput["role"];
+
 type ShellBallWindowFrame = ShellBallWindowSize & {
   x: number;
   y: number;
@@ -77,6 +79,22 @@ export function measureShellBallContentSize(element: ShellBallMeasurableElement)
   return {
     width: Math.max(rect.width, element.scrollWidth),
     height: Math.max(rect.height, element.scrollHeight),
+  };
+}
+
+export function measureShellBallContentSizeForRole(
+  role: ShellBallWindowMetricsRole,
+  element: ShellBallMeasurableElement,
+): ShellBallContentSize {
+  const contentSize = measureShellBallContentSize(element);
+
+  if (role !== "bubble") {
+    return contentSize;
+  }
+
+  return {
+    width: contentSize.width,
+    height: element.getBoundingClientRect().height,
   };
 }
 
@@ -176,7 +194,7 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
         return;
       }
 
-      const contentSize = measureShellBallContentSize(nextElement);
+      const contentSize = measureShellBallContentSizeForRole(role, nextElement);
       setWindowFrame(
         createShellBallWindowFrame(contentSize),
       );

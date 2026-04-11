@@ -68,6 +68,7 @@ import {
   getShellBallBubbleAnchor,
   getShellBallInputAnchor,
   measureShellBallContentSize,
+  measureShellBallContentSizeForRole,
 } from "./useShellBallWindowMetrics";
 import { applyShellBallBubbleAction } from "./useShellBallCoordinator";
 import {
@@ -2217,6 +2218,32 @@ test("shell-ball dashboard gesture policy stays task-2 explicit", () => {
 test("shell-ball window measurement expands to overflowing mascot visuals", () => {
   assert.deepEqual(
     measureShellBallContentSize({
+      getBoundingClientRect: () => ({ width: 100, height: 80 }),
+      scrollWidth: 148,
+      scrollHeight: 126,
+    }),
+    {
+      width: 148,
+      height: 126,
+    },
+  );
+});
+
+test("shell-ball bubble window measurement keeps history clipped to the rendered viewport", () => {
+  assert.deepEqual(
+    measureShellBallContentSizeForRole("bubble", {
+      getBoundingClientRect: () => ({ width: 100, height: 80 }),
+      scrollWidth: 148,
+      scrollHeight: 240,
+    }),
+    {
+      width: 148,
+      height: 80,
+    },
+  );
+
+  assert.deepEqual(
+    measureShellBallContentSizeForRole("ball", {
       getBoundingClientRect: () => ({ width: 100, height: 80 }),
       scrollWidth: 148,
       scrollHeight: 126,
