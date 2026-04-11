@@ -1,5 +1,6 @@
 import type { ShellBallVisualState } from "./shellBall.types";
-import { useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
+import { getShellBallVisibleBubbleItems } from "./shellBall.windowSync";
+import { emitShellBallBubbleAction, useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 
@@ -10,14 +11,25 @@ type ShellBallBubbleWindowProps = {
 export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProps) {
   const snapshot = useShellBallHelperWindowSnapshot({ role: "bubble" });
   const resolvedVisualState = visualState ?? snapshot.visualState;
+  const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const { rootRef } = useShellBallWindowMetrics({
     role: "bubble",
-    visible: snapshot.visibility.bubble,
+    visible: true,
+    clickThrough: snapshot.bubbleRegion.clickThrough,
   });
 
   return (
     <div ref={rootRef} className="shell-ball-window shell-ball-window--bubble" aria-label="Shell-ball bubble window">
-      <ShellBallBubbleZone visualState={resolvedVisualState} />
+      <ShellBallBubbleZone
+        visualState={resolvedVisualState}
+        bubbleItems={visibleBubbleItems}
+        onDeleteBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("delete", bubbleId);
+        }}
+        onPinBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("pin", bubbleId);
+        }}
+      />
     </div>
   );
 }

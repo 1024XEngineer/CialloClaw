@@ -1,7 +1,15 @@
 .shell-ball-window {
+  --shell-ball-helper-width: min(22rem, calc(100vw - 1rem));
   display: grid;
   justify-items: center;
   width: max-content;
+}
+
+.shell-ball-window--bubble {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
 }
 
 .shell-ball-surface {
@@ -83,56 +91,134 @@
 
 .shell-ball-bubble-zone {
   --shell-ball-bubble-accent: rgba(106, 145, 200, 0.18);
-  align-items: end;
+  align-items: stretch;
   display: grid;
-  justify-items: center;
+  justify-items: stretch;
   min-height: clamp(5.25rem, 12vw, 8.5rem);
-  padding: 0.4rem 0.25rem 0;
-  pointer-events: none;
+  overflow: hidden;
+  padding: 0;
+  pointer-events: auto;
   position: relative;
-  width: max-content;
+  width: var(--shell-ball-helper-width);
 }
 
 .shell-ball-bubble-zone::before {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0));
-  border-radius: 999px;
-  content: "";
-  filter: blur(16px);
-  height: clamp(2.8rem, 7vw, 4.2rem);
-  inset: auto 14% 0;
-  opacity: 0.75;
-  position: absolute;
+  content: none;
 }
 
-.shell-ball-bubble-zone__shell {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.54), rgba(255, 255, 255, 0.14)),
-    rgba(255, 251, 245, 0.2);
-  border: 1px dashed rgba(138, 125, 106, 0.22);
-  border-radius: 999px;
-  box-shadow:
-    0 18px 34px -30px rgba(82, 74, 62, 0.28),
-    0 1px 0 rgba(255, 255, 255, 0.54) inset;
-  height: clamp(2.4rem, 5vw, 3.2rem);
-  opacity: 0.72;
+.shell-ball-bubble-zone__scroll {
+  align-content: end;
+  display: grid;
+  gap: 0.5rem;
+  max-height: clamp(6.5rem, 28vh, 14rem);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 0.85rem 0.2rem;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+  width: 100%;
+}
+
+.shell-ball-bubble-zone__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.shell-ball-bubble-zone__message-entry {
+  display: grid;
+}
+
+.shell-ball-bubble-zone__bottom-anchor {
+  block-size: 0;
+}
+
+.shell-ball-bubble-zone__message-entry[data-freshness="fresh"][data-motion="settle"] {
+  animation: shell-ball-bubble-message-enter 220ms ease-out both;
+}
+
+.shell-ball-bubble-zone__message-row {
+  display: flex;
+  width: 100%;
+}
+
+.shell-ball-bubble-zone__message-row--agent {
+  justify-content: flex-start;
+}
+
+.shell-ball-bubble-zone__message-row--user {
+  justify-content: flex-end;
+}
+
+.shell-ball-bubble-message {
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 1.15rem;
+  box-shadow: 0 16px 28px -24px rgba(62, 56, 48, 0.34);
+  max-width: min(18rem, calc(100% - 2rem));
+  padding: 1.65rem 0.85rem 0.65rem;
   position: relative;
-  width: clamp(10rem, 18vw, 13rem);
 }
 
-.shell-ball-bubble-zone__shell::after {
-  background: linear-gradient(90deg, transparent, var(--shell-ball-bubble-accent), transparent);
-  border-radius: inherit;
-  content: "";
-  inset: 0.32rem;
-  opacity: 0.9;
+.shell-ball-bubble-message--agent {
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.84), rgba(245, 238, 228, 0.7));
+}
+
+.shell-ball-bubble-message--user {
+  background: linear-gradient(180deg, rgba(125, 157, 200, 0.92), rgba(92, 123, 167, 0.86));
+  color: #f8fbff;
+}
+
+.shell-ball-bubble-message__text {
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.shell-ball-bubble-message__control {
+  align-items: center;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(132, 118, 99, 0.14);
+  border-radius: 999px;
+  color: var(--shell-ball-copy);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  inset-block-start: 0.45rem;
+  line-height: 1;
+  min-height: 1.25rem;
+  padding: 0.2rem 0.45rem;
   position: absolute;
+  text-transform: uppercase;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
 
-.shell-ball-bubble-zone__shell--secondary {
-  height: clamp(1.6rem, 3.5vw, 2rem);
-  margin-top: 0.65rem;
-  opacity: 0.5;
-  width: clamp(5rem, 9vw, 7rem);
+.shell-ball-bubble-message__control:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(106, 145, 200, 0.24);
+  color: var(--shell-ball-ink);
+  transform: translateY(-1px);
+}
+
+.shell-ball-bubble-message__control:focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(255, 251, 244, 0.92),
+    0 0 0 4px rgba(106, 145, 200, 0.22);
+  outline: 0;
+}
+
+.shell-ball-bubble-message__pin-control {
+  inset-inline-start: 0.55rem;
+}
+
+.shell-ball-bubble-message__delete-control {
+  inset-inline-end: 0.55rem;
 }
 
 .shell-ball-bubble-zone[data-state="waiting_auth"] {
@@ -176,7 +262,7 @@
 
 .shell-ball-input-bar,
 .shell-ball-input-bar--hidden {
-  width: min(22rem, calc(100vw - 1rem));
+  width: var(--shell-ball-helper-width);
 }
 
 .shell-ball-input-bar {
@@ -1030,6 +1116,18 @@
   }
 }
 
+@keyframes shell-ball-bubble-message-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .shell-ball-mascot__float,
   .shell-ball-mascot__body-shell,
@@ -1049,7 +1147,9 @@
   .shell-ball-mascot__wing,
   .shell-ball-switcher__button,
   .shell-ball-input-bar,
-  .shell-ball-input-bar__action {
+  .shell-ball-input-bar__action,
+  .shell-ball-bubble-zone__message-entry[data-freshness="fresh"][data-motion="settle"] {
+    animation: none !important;
     transition-duration: 0.01ms;
   }
 
@@ -1080,6 +1180,10 @@
 }
 
 @media (max-width: 720px) {
+  .shell-ball-window {
+    --shell-ball-helper-width: min(20rem, calc(100vw - 0.75rem));
+  }
+
   .shell-ball-surface {
     padding: 0.75rem 0.55rem 0.9rem;
   }

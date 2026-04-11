@@ -13,8 +13,11 @@ import {
 } from "../../platform/shellBallWindowController";
 import { shellBallWindowSyncEvents, type ShellBallHelperWindowRole, type ShellBallWindowGeometry } from "./shellBall.windowSync";
 
+type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pinned">;
+
 export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 12;
-export const SHELL_BALL_WINDOW_GAP_PX = 12;
+export const SHELL_BALL_BUBBLE_GAP_PX = 6;
+export const SHELL_BALL_INPUT_GAP_PX = 12;
 
 type ShellBallContentSize = {
   width: number;
@@ -48,8 +51,14 @@ type ShellBallWindowBounds = {
 };
 
 type UseShellBallWindowMetricsInput = {
-  role: "ball" | ShellBallHelperWindowRole;
+  role: "ball" | AnchoredShellBallHelperWindowRole;
   visible?: boolean;
+  clickThrough?: boolean;
+};
+
+type ShellBallHelperWindowInteractionMode = {
+  focusable: boolean;
+  ignoreCursorEvents: boolean;
 };
 
 export function createShellBallWindowFrame(
@@ -76,7 +85,7 @@ export function getShellBallBubbleAnchor(input: {
   helperFrame: ShellBallWindowSize;
   gap?: number;
 }) {
-  const gap = input.gap ?? SHELL_BALL_WINDOW_GAP_PX;
+  const gap = input.gap ?? SHELL_BALL_BUBBLE_GAP_PX;
 
   return {
     x: Math.round(input.ballFrame.x + input.ballFrame.width / 2 - input.helperFrame.width / 2),
@@ -89,7 +98,7 @@ export function getShellBallInputAnchor(input: {
   helperFrame: ShellBallWindowSize;
   gap?: number;
 }) {
-  const gap = input.gap ?? SHELL_BALL_WINDOW_GAP_PX;
+  const gap = input.gap ?? SHELL_BALL_INPUT_GAP_PX;
 
   return {
     x: Math.round(input.ballFrame.x + input.ballFrame.width / 2 - input.helperFrame.width / 2),
@@ -108,6 +117,24 @@ export function clampShellBallFrameToBounds(
     ...frame,
     x: Math.min(Math.max(frame.x, bounds.minX), maxX),
     y: Math.min(Math.max(frame.y, bounds.minY), maxY),
+  };
+}
+
+export function getShellBallHelperWindowInteractionMode(input: {
+  role: AnchoredShellBallHelperWindowRole;
+  visible: boolean;
+  clickThrough: boolean;
+}): ShellBallHelperWindowInteractionMode {
+  if (input.role === "bubble") {
+    return {
+      focusable: false,
+      ignoreCursorEvents: input.clickThrough || input.visible === false,
+    };
+  }
+
+  return {
+    focusable: true,
+    ignoreCursorEvents: false,
   };
 }
 
@@ -132,7 +159,7 @@ function getShellBallBoundsFromMonitor(monitor: Monitor | null, geometry: ShellB
   };
 }
 
-export function useShellBallWindowMetrics({ role, visible = true }: UseShellBallWindowMetricsInput) {
+export function useShellBallWindowMetrics({ role, visible = true, clickThrough = false }: UseShellBallWindowMetricsInput) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [windowFrame, setWindowFrame] = useState<ShellBallWindowSize | null>(null);
   const geometryRef = useRef<ShellBallWindowGeometry | null>(null);
@@ -261,8 +288,14 @@ export function useShellBallWindowMetrics({ role, visible = true }: UseShellBall
     const helperFrame = windowFrame;
 
     if (role === "bubble") {
-      void setShellBallWindowFocusable(role, false);
-      void setShellBallWindowIgnoreCursorEvents(role, true);
+      const interactionMode = getShellBallHelperWindowInteractionMode({
+        role,
+        visible,
+        clickThrough,
+      });
+
+      void setShellBallWindowFocusable(role, interactionMode.focusable);
+      void setShellBallWindowIgnoreCursorEvents(role, interactionMode.ignoreCursorEvents);
     }
 
     let cleanup: (() => void) | null = null;
@@ -325,7 +358,7 @@ export function useShellBallWindowMetrics({ role, visible = true }: UseShellBall
       disposed = true;
       cleanup?.();
     };
-  }, [role, visible, windowFrame]);
+  }, [clickThrough, role, visible, windowFrame]);
 
   useEffect(() => {
     if (role === "ball") {
