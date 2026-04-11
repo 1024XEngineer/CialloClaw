@@ -17,6 +17,7 @@ type ShellBallSurfaceProps = {
   onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressEnd: (event: PointerEvent<HTMLButtonElement>) => boolean;
+  onPressCancel: (event: PointerEvent<HTMLButtonElement>) => void;
 };
 
 export function ShellBallSurface({
@@ -33,6 +34,7 @@ export function ShellBallSurface({
   onPressStart,
   onPressMove,
   onPressEnd,
+  onPressCancel,
 }: ShellBallSurfaceProps) {
   return (
     <div ref={containerRef} className="shell-ball-surface" aria-label="Shell-ball floating surface">
@@ -69,6 +71,7 @@ export function ShellBallSurface({
                   onPressStart={onPressStart}
                   onPressMove={onPressMove}
                   onPressEnd={onPressEnd}
+                  onPressCancel={onPressCancel}
                 />
               </div>
             </div>

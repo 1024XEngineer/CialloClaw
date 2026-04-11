@@ -80,6 +80,10 @@ export function getShellBallPostSubmitInputReset(inputValue: string) {
   };
 }
 
+export function getShellBallPressCancelEvent(state: ShellBallVisualState): Extract<ShellBallInteractionEvent, "voice_cancel"> | null {
+  return state === "voice_listening" ? "voice_cancel" : null;
+}
+
 export function syncShellBallInteractionController(input: {
   controller: ShellBallInteractionController;
   visualState: ShellBallVisualState;
@@ -301,6 +305,20 @@ export function useShellBallInteraction() {
     return false;
   }
 
+  function handlePressCancel(event: PointerEvent<HTMLButtonElement>) {
+    clearLongPressTimer();
+
+    const cancelEvent = getShellBallPressCancelEvent(controllerRef.current?.getState() ?? visualState);
+    pressStartXRef.current = null;
+    pressStartYRef.current = null;
+    setCurrentVoicePreview(null);
+
+    if (cancelEvent !== null) {
+      consumeInteraction();
+      dispatch(cancelEvent);
+    }
+  }
+
   function handleInputFocusChange(focused: boolean) {
     inputFocusedRef.current = focused;
     if (!focused) {
@@ -364,6 +382,7 @@ export function useShellBallInteraction() {
     handlePressStart,
     handlePressMove,
     handlePressEnd,
+    handlePressCancel,
     handleInputFocusChange,
     handleForceState,
   };

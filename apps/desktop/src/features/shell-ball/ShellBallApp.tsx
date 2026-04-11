@@ -24,6 +24,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePressStart,
     handlePressMove,
     handlePressEnd,
+    handlePressCancel,
     handleSubmitText,
     handleAttachFile,
     handleInputFocusChange,
@@ -71,6 +72,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onPressStart={handlePressStart}
       onPressMove={handlePressMove}
       onPressEnd={handlePressEnd}
+      onPressCancel={handlePressCancel}
     >
       {showDemoSwitcher ? (
         <ShellBallDevLayer value={visualState} onChange={handleForceState} />

@@ -63,6 +63,7 @@ import {
 import {
   getShellBallPostSubmitInputReset,
   getShellBallDashboardOpenGesturePolicy,
+  getShellBallPressCancelEvent,
   getShellBallVoicePreviewFromEvent,
   mapShellBallInteractionConsumedEventToFlag,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -1584,6 +1585,7 @@ test("shell-ball surface renders the mascot-only floating structure without the 
       onPressStart: () => {},
       onPressMove: () => {},
       onPressEnd: () => false,
+      onPressCancel: () => {},
     }),
   );
 
@@ -1609,6 +1611,7 @@ test("shell-ball surface reserves a host drag zone separate from the interaction
       onPressStart: () => {},
       onPressMove: () => {},
       onPressEnd: () => false,
+      onPressCancel: () => {},
     }),
   );
 
@@ -1734,6 +1737,31 @@ test("shell-ball mascot pointer policy keeps cancellation separate from successf
     getShellBallMascotPointerPhaseAction({ phase: "pointer_cancel", button: 1, isPrimary: false, pressHandled: false }),
     "cleanup_only",
   );
+});
+
+test("shell-ball press cancel policy clears pending press state and cancels active listening", () => {
+  assert.equal(getShellBallPressCancelEvent("voice_listening"), "voice_cancel");
+  assert.equal(getShellBallPressCancelEvent("hover_input"), null);
+  assert.equal(getShellBallPressCancelEvent("voice_locked"), null);
+});
+
+test("shell-ball cancel callback path is wired from mascot through app interaction handlers", () => {
+  const surfaceSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallSurface.tsx"), "utf8");
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(surfaceSource, /onPressCancel: \(event: PointerEvent<HTMLButtonElement>\) => void;/);
+  assert.match(surfaceSource, /onPressCancel=\{onPressCancel\}/);
+  assert.match(appSource, /handlePressCancel,/);
+  assert.match(appSource, /onPressCancel=\{handlePressCancel\}/);
+  assert.match(interactionSource, /function handlePressCancel\(event: PointerEvent<HTMLButtonElement>\)/);
+  assert.match(interactionSource, /clearLongPressTimer\(\);/);
+  assert.match(interactionSource, /pressStartXRef\.current = null;/);
+  assert.match(interactionSource, /pressStartYRef\.current = null;/);
+  assert.match(interactionSource, /setCurrentVoicePreview\(null\);/);
+  assert.match(interactionSource, /const cancelEvent = getShellBallPressCancelEvent\(/);
+  assert.match(interactionSource, /if \(cancelEvent !== null\) \{/);
+  assert.match(interactionSource, /dispatch\(cancelEvent\);/);
 });
 
 test("shell-ball surface passes mascot double-click wiring without collapsing the drag zone", () => {

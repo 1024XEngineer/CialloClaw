@@ -14,6 +14,7 @@ type ShellBallMascotProps = {
   onPressStart?: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove?: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressEnd?: (event: PointerEvent<HTMLButtonElement>) => boolean;
+  onPressCancel?: (event: PointerEvent<HTMLButtonElement>) => void;
 };
 
 type MotionStyle = CSSProperties & Record<string, string>;
@@ -77,6 +78,7 @@ export function ShellBallMascot({
   onPressStart = () => {},
   onPressMove = () => {},
   onPressEnd = () => false,
+  onPressCancel = () => {},
 }: ShellBallMascotProps) {
   const suppressGestureRef = useRef(false);
 
@@ -176,6 +178,7 @@ export function ShellBallMascot({
     }
 
     suppressGestureRef.current = false;
+    onPressCancel(event);
   }
 
   function handleClick(event: MouseEvent<HTMLButtonElement>) {
