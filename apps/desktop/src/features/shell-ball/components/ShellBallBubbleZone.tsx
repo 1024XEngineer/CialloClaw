@@ -57,6 +57,7 @@ export function ShellBallBubbleZone({
       <div
         ref={scrollRef}
         className="shell-ball-bubble-zone__scroll"
+        tabIndex={0}
         onScroll={() => {
           const scrollElement = scrollRef.current;
           if (scrollElement === null) {
@@ -65,6 +66,17 @@ export function ShellBallBubbleZone({
 
           const distanceFromBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop;
           shouldStickToBottomRef.current = distanceFromBottom <= SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX;
+        }}
+        onWheel={(event) => {
+          const scrollElement = scrollRef.current;
+          if (scrollElement === null) {
+            return;
+          }
+
+          scrollElement.scrollTop += event.deltaY;
+          const distanceFromBottom = scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop;
+          shouldStickToBottomRef.current = distanceFromBottom <= SHELL_BALL_BUBBLE_ZONE_AUTO_SCROLL_THRESHOLD_PX;
+          event.preventDefault();
         }}
       >
         {bubbleItems.map((item) => (

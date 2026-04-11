@@ -2727,6 +2727,61 @@ test("shell-ball bubble zone only reports interaction changes from pointer entry
   assert.deepEqual(interactionStates, [true, false]);
 });
 
+test("shell-ball bubble zone applies wheel deltas directly to history scroll position", () => {
+  const scrollElement = {
+    clientHeight: 80,
+    scrollHeight: 240,
+    scrollTop: 12,
+  };
+  const refs = [
+    { current: scrollElement },
+    { current: 0 },
+    { current: true },
+  ];
+  let refIndex = 0;
+
+  const { ShellBallBubbleZone: RuntimeShellBallBubbleZone } = withShellBallModuleRuntime("components/ShellBallBubbleZone.tsx", {
+    react: {
+      ...require("react"),
+      useEffect() {},
+      useRef<T>() {
+        return refs[refIndex++] as { current: T };
+      },
+    },
+    "./ShellBallBubbleMessage": {
+      ShellBallBubbleMessage() {
+        return null;
+      },
+    },
+  }, (moduleExports) => moduleExports as { ShellBallBubbleZone: typeof import("./components/ShellBallBubbleZone").ShellBallBubbleZone });
+
+  const tree = RuntimeShellBallBubbleZone({
+    visualState: "processing",
+    bubbleItems: [],
+  } as never) as {
+    props: {
+      children: {
+        props: {
+          onWheel?: (event: { deltaY: number; preventDefault: () => void }) => void;
+          tabIndex?: number;
+        };
+      };
+    };
+  };
+
+  let prevented = false;
+  tree.props.children.props.onWheel?.({
+    deltaY: 28,
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(tree.props.children.props.tabIndex, 0);
+  assert.equal(scrollElement.scrollTop, 40);
+  assert.equal(prevented, true);
+});
+
 test("shell-ball bubble zone does not snap back when the viewer scrolls away from the bottom", () => {
   const effects: Array<() => void> = [];
   const scrollElement = {
@@ -3233,7 +3288,7 @@ test("shell-ball bubble zone renders a real message list without placeholder chr
   assert.match(markup, /shell-ball-bubble-zone__message-row shell-ball-bubble-zone__message-row--user/);
   assert.match(
     markup,
-    /<section class="shell-ball-bubble-zone" data-state="processing"><div class="shell-ball-bubble-zone__scroll"><div class="shell-ball-bubble-zone__message-entry"/,
+    /<section class="shell-ball-bubble-zone" data-state="processing"><div class="shell-ball-bubble-zone__scroll" tabindex="0"><div class="shell-ball-bubble-zone__message-entry"/,
   );
   assert.doesNotMatch(markup, /shell-ball-bubble-zone__shell/);
   assert.doesNotMatch(markup, /shell-ball-bubble-zone__panel|shell-ball-bubble-zone__frame|shell-ball-bubble-zone__card/);
