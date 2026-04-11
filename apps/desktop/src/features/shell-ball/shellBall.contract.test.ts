@@ -32,6 +32,7 @@ import { ShellBallBubbleWindow } from "./ShellBallBubbleWindow";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallInputWindow } from "./ShellBallInputWindow";
 import { ShellBallMascot } from "./components/ShellBallMascot";
+import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
 import { ShellBallSurface } from "./ShellBallSurface";
 import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { shellBallWindowLabels, shellBallWindowPermissions } from "../../platform/shellBallWindowController";
@@ -1618,19 +1619,82 @@ test("shell-ball surface reserves a host drag zone separate from the interaction
   assert.match(markup, /shell-ball-surface__interaction-zone/);
 });
 
-test("shell-ball mascot exposes distinct single-click and double-click hotspot handlers", () => {
-  const mascotSource = readFileSync(
-    resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"),
-    "utf8",
+test("shell-ball mascot hotspot policy keeps single click inert outside locked voice", () => {
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "voice_locked",
+      gesture: "single_click",
+      suppressed: false,
+    }),
+    "primary_click",
   );
 
-  assert.match(mascotSource, /onDoubleClick\?: \(\) => void;/);
-  assert.match(mascotSource, /onDoubleClick = \(\) => \{\},/);
-  assert.match(mascotSource, /function handleClick\(event: MouseEvent<HTMLButtonElement>\)/);
-  assert.match(mascotSource, /function handleDoubleClick\(event: MouseEvent<HTMLButtonElement>\)/);
-  assert.match(mascotSource, /onClick=\{handleClick\}/);
-  assert.match(mascotSource, /onDoubleClick=\{handleDoubleClick\}/);
-  assert.notEqual(mascotSource.indexOf("onClick={handleClick}"), mascotSource.indexOf("onDoubleClick={handleDoubleClick}"));
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "idle",
+      gesture: "single_click",
+      suppressed: false,
+    }),
+    "noop",
+  );
+
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "hover_input",
+      gesture: "single_click",
+      suppressed: false,
+    }),
+    "noop",
+  );
+});
+
+test("shell-ball mascot hotspot policy opens dashboard only from resting double click", () => {
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "idle",
+      gesture: "double_click",
+      suppressed: false,
+    }),
+    "double_click",
+  );
+
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "hover_input",
+      gesture: "double_click",
+      suppressed: false,
+    }),
+    "double_click",
+  );
+
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "voice_locked",
+      gesture: "double_click",
+      suppressed: false,
+    }),
+    "noop",
+  );
+});
+
+test("shell-ball mascot hotspot policy drops suppressed sequences for both click kinds", () => {
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "voice_locked",
+      gesture: "single_click",
+      suppressed: true,
+    }),
+    "noop",
+  );
+
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "hover_input",
+      gesture: "double_click",
+      suppressed: true,
+    }),
+    "noop",
+  );
 });
 
 test("shell-ball surface passes mascot double-click wiring without collapsing the drag zone", () => {
@@ -1642,16 +1706,23 @@ test("shell-ball surface passes mascot double-click wiring without collapsing th
   assert.match(surfaceSource, /data-shell-ball-zone="interaction"/);
 });
 
-test("shell-ball app gates dashboard opening on mascot double click", () => {
-  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
-
-  assert.match(appSource, /import \{ openOrFocusDesktopWindow \} from "\.\.\/\.\.\/platform\/windowController";/);
-  assert.match(appSource, /shouldOpenDashboardFromDoubleClick,/);
-  assert.match(appSource, /function handleDoubleClick\(\)/);
-  assert.match(appSource, /if \(!shouldOpenDashboardFromDoubleClick\) \{/);
-  assert.match(appSource, /void openOrFocusDesktopWindow\("dashboard"\);/);
-  assert.match(appSource, /onPrimaryClick=\{handlePrimaryClick\}/);
-  assert.match(appSource, /onDoubleClick=\{handleDoubleClick\}/);
+test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "idle", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: true }),
+    false,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "voice_locked", interactionConsumed: false }),
+    false,
+  );
 });
 
 test("shell-ball demo switcher visibility stays dev-only", () => {

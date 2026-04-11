@@ -18,6 +18,30 @@ type ShellBallMascotProps = {
 
 type MotionStyle = CSSProperties & Record<string, string>;
 
+type ShellBallMascotHotspotGesture = "single_click" | "double_click";
+
+type ShellBallMascotHotspotGestureAction = "noop" | "primary_click" | "double_click";
+
+export function getShellBallMascotHotspotGestureAction(input: {
+  visualState: ShellBallVisualState;
+  gesture: ShellBallMascotHotspotGesture;
+  suppressed: boolean;
+}): ShellBallMascotHotspotGestureAction {
+  if (input.suppressed) {
+    return "noop";
+  }
+
+  if (input.gesture === "single_click") {
+    return input.visualState === "voice_locked" ? "primary_click" : "noop";
+  }
+
+  if (input.visualState === "idle" || input.visualState === "hover_input") {
+    return "double_click";
+  }
+
+  return "noop";
+}
+
 export function ShellBallMascot({
   visualState,
   voicePreview = null,
@@ -81,7 +105,13 @@ export function ShellBallMascot({
   }
 
   function handleClick(event: MouseEvent<HTMLButtonElement>) {
-    if (suppressGestureRef.current) {
+    const action = getShellBallMascotHotspotGestureAction({
+      visualState,
+      gesture: "single_click",
+      suppressed: suppressGestureRef.current,
+    });
+
+    if (action !== "primary_click") {
       return;
     }
 
@@ -89,7 +119,13 @@ export function ShellBallMascot({
   }
 
   function handleDoubleClick(event: MouseEvent<HTMLButtonElement>) {
-    if (suppressGestureRef.current) {
+    const action = getShellBallMascotHotspotGestureAction({
+      visualState,
+      gesture: "double_click",
+      suppressed: suppressGestureRef.current,
+    });
+
+    if (action !== "double_click") {
       return;
     }
 
