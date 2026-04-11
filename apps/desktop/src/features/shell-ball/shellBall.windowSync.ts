@@ -12,6 +12,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
   inputHover: "desktop-shell-ball:input-hover",
   inputFocus: "desktop-shell-ball:input-focus",
+  inputRequestFocus: "desktop-shell-ball:input-request-focus",
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
   bubbleAction: "desktop-shell-ball:bubble-action",
@@ -87,6 +88,10 @@ export type ShellBallInputDraftPayload = {
   value: string;
 };
 
+export type ShellBallInputRequestFocusPayload = {
+  token: number;
+};
+
 export type ShellBallPrimaryActionPayload = {
   source: ShellBallHelperWindowRole;
   action: ShellBallPrimaryAction;
@@ -100,7 +105,15 @@ export type ShellBallBubbleActionPayload = {
 
 export function getShellBallHelperWindowVisibility(
   visualState: ShellBallVisualState,
+  helpersVisible = true,
 ): ShellBallHelperWindowVisibility {
+  if (!helpersVisible) {
+    return {
+      bubble: false,
+      input: false,
+    };
+  }
+
   return {
     bubble: true,
     input: getShellBallInputBarMode(visualState) !== "hidden",
@@ -126,6 +139,7 @@ export function createShellBallWindowSnapshot(input: {
   inputValue: string;
   voicePreview: ShellBallVoicePreview;
   bubbleItems?: ShellBallBubbleItem[];
+  helpersVisible?: boolean;
 }): ShellBallWindowSnapshot {
   const bubbleItems = cloneShellBallBubbleItems(input.bubbleItems ?? []);
 
@@ -136,7 +150,7 @@ export function createShellBallWindowSnapshot(input: {
     voicePreview: input.voicePreview,
     bubbleItems,
     bubbleRegion: getShellBallBubbleRegionState(bubbleItems),
-    visibility: getShellBallHelperWindowVisibility(input.visualState),
+    visibility: getShellBallHelperWindowVisibility(input.visualState, input.helpersVisible),
   };
 }
 
@@ -146,5 +160,6 @@ export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot 
     inputValue: "",
     voicePreview: null,
     bubbleItems: [],
+    helpersVisible: true,
   });
 }

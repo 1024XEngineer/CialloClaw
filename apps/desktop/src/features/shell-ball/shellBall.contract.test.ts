@@ -228,6 +228,14 @@ function withWindowControllerRuntime<T>(runtime: {
       };
     }
 
+    if (request === "./dashboardWindowTransition") {
+      return {
+        requestShellBallDashboardOpenTransition() {
+          return Promise.resolve(true);
+        },
+      };
+    }
+
     return originalLoad(request, parent, isMain);
   };
 
@@ -250,6 +258,8 @@ function withWindowControllerRuntime<T>(runtime: {
 
 function withHideOnCloseRequestRuntime<T>(
   currentWindow: {
+    __calls__?: string[];
+    label?: string;
     hide: () => Promise<void> | void;
     onCloseRequested: (handler: (event: { preventDefault: () => void }) => Promise<void> | void) => unknown;
   },
@@ -267,6 +277,15 @@ function withHideOnCloseRequestRuntime<T>(
       return {
         getCurrentWindow() {
           return currentWindow;
+        },
+      };
+    }
+
+    if (request === "./dashboardWindowTransition") {
+      return {
+        requestShellBallDashboardCloseTransition() {
+          (currentWindow as { __calls__?: string[] }).__calls__?.push("requestShellBallDashboardCloseTransition");
+          return Promise.resolve(true);
         },
       };
     }
@@ -762,6 +781,7 @@ test("dashboard and control-panel stay hidden on cold launch until explicitly op
     app: {
       windows: Array<{
         label: string;
+        decorations?: boolean;
         visible?: boolean;
       }>;
     };
@@ -774,6 +794,8 @@ test("dashboard and control-panel stay hidden on cold launch until explicitly op
   assert.ok(controlPanelWindow);
   assert.equal(dashboardWindow.visible, false);
   assert.equal(controlPanelWindow.visible, false);
+  assert.equal(dashboardWindow.decorations, false);
+  assert.equal(controlPanelWindow.decorations, false);
 });
 
 test("shell-ball entries opt into transparent window mode", () => {
@@ -943,6 +965,9 @@ test("window controller focuses an existing labeled desktop window", async () =>
     async unminimize() {
       calls.push("unminimize");
     },
+    async setFullscreen(value: boolean) {
+      calls.push(`setFullscreen:${String(value)}`);
+    },
     async show() {
       calls.push("show");
     },
@@ -956,6 +981,7 @@ test("window controller focuses an existing labeled desktop window", async () =>
   ) as { permissions: string[] };
 
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-unminimize"), true);
+  assert.equal(capabilityConfig.permissions.includes("core:window:allow-set-fullscreen"), true);
 
   await withWindowControllerRuntime({
     getByLabel(label) {
@@ -966,7 +992,7 @@ test("window controller focuses an existing labeled desktop window", async () =>
     await openOrFocusDesktopWindow("dashboard");
   });
 
-  assert.deepEqual(calls, ["label:dashboard", "unminimize", "show", "setFocus"]);
+  assert.deepEqual(calls, ["label:dashboard", "unminimize", "setFullscreen:true", "show", "setFocus"]);
 });
 
 test("window controller recreates missing known desktop windows before focusing them", async () => {
@@ -977,6 +1003,7 @@ test("window controller recreates missing known desktop windows before focusing 
         title: "CialloClaw Dashboard",
         width: 1280,
         height: 860,
+        decorations: false,
         visible: false,
         url: "dashboard.html",
       },
@@ -987,6 +1014,7 @@ test("window controller recreates missing known desktop windows before focusing 
         title: "CialloClaw Control Panel",
         width: 1080,
         height: 760,
+        decorations: false,
         visible: false,
         url: "control-panel.html",
       },
@@ -998,6 +1026,9 @@ test("window controller recreates missing known desktop windows before focusing 
     const recreatedHandle = {
       async unminimize() {
         calls.push("unminimize");
+      },
+      async setFullscreen(value: boolean) {
+        calls.push(`setFullscreen:${String(value)}`);
       },
       async show() {
         calls.push("show");
@@ -1022,13 +1053,12 @@ test("window controller recreates missing known desktop windows before focusing 
       await openOrFocusDesktopWindow(scenario.label);
     });
 
-    assert.deepEqual(calls, [
-      `label:${scenario.label}`,
-      `create:${scenario.label}`,
-      "unminimize",
-      "show",
-      "setFocus",
-    ]);
+      assert.deepEqual(
+        calls,
+        scenario.label === "dashboard"
+          ? [`label:${scenario.label}`, `create:${scenario.label}`, "unminimize", "setFullscreen:true", "show", "setFocus"]
+          : [`label:${scenario.label}`, `create:${scenario.label}`, "unminimize", "show", "setFocus"],
+      );
   }
 });
 
@@ -1059,6 +1089,44 @@ test("hide-on-close helper prevents the close request and hides the current wind
   });
 
   assert.deepEqual(calls, ["onCloseRequested", "preventDefault", "hide"]);
+});
+
+test("hide-on-close helper waits for the dashboard close transition only in the dashboard window", async () => {
+  for (const scenario of [
+    {
+      label: "dashboard",
+      expectedCalls: ["onCloseRequested", "preventDefault", "requestShellBallDashboardCloseTransition", "hide"],
+    },
+    {
+      label: "control-panel",
+      expectedCalls: ["onCloseRequested", "preventDefault", "hide"],
+    },
+  ] as const) {
+    const calls: string[] = [];
+    let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+    await withHideOnCloseRequestRuntime({
+      __calls__: calls,
+      label: scenario.label,
+      onCloseRequested(handler) {
+        calls.push("onCloseRequested");
+        closeHandler = handler;
+        return "unlisten";
+      },
+      async hide() {
+        calls.push("hide");
+      },
+    }, async ({ installHideOnCloseRequest }) => {
+      installHideOnCloseRequest();
+      await closeHandler?.({
+        preventDefault() {
+          calls.push("preventDefault");
+        },
+      });
+    });
+
+    assert.deepEqual(calls, scenario.expectedCalls);
+  }
 });
 
 test("dashboard and control-panel entrypoints install hide-on-close handling", () => {
@@ -2795,6 +2863,9 @@ test("shell-ball detached bubble actions close pinned windows and delete detache
       openShellBallPinnedBubbleWindow() {
         return Promise.resolve();
       },
+      setShellBallPinnedBubbleWindowVisible() {
+        return Promise.resolve();
+      },
       shellBallWindowLabels,
     },
     "./shellBall.bubble": require(resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/shellBall.bubble.js")),
@@ -3392,14 +3463,14 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("confirming_intent"), "readonly");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
-  assert.equal(getShellBallInputBarMode("voice_listening"), "voice");
-  assert.equal(getShellBallInputBarMode("voice_locked"), "voice");
+  assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");
+  assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
 });
 
 test("shell-ball interaction timing constants stay frozen", () => {
   assert.equal(SHELL_BALL_HOVER_INTENT_MS, 360);
   assert.equal(SHELL_BALL_LEAVE_GRACE_MS, 180);
-  assert.equal(SHELL_BALL_LONG_PRESS_MS, 420);
+  assert.equal(SHELL_BALL_LONG_PRESS_MS, 1000);
   assert.equal(SHELL_BALL_LOCK_DELTA_PX, 48);
   assert.equal(SHELL_BALL_CANCEL_DELTA_PX, 48);
   assert.equal(SHELL_BALL_VERTICAL_PRIORITY_RATIO, 1.25);

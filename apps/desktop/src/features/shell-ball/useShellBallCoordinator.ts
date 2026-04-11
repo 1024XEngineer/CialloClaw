@@ -8,6 +8,7 @@ import {
   getShellBallPinnedBubbleWindowAnchor,
   getShellBallPinnedBubbleWindowLabel,
   openShellBallPinnedBubbleWindow,
+  setShellBallPinnedBubbleWindowVisible,
   shellBallWindowLabels,
 } from "../../platform/shellBallWindowController";
 import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall.bubble";
@@ -24,6 +25,7 @@ import {
   type ShellBallInputDraftPayload,
   type ShellBallInputFocusPayload,
   type ShellBallInputHoverPayload,
+  type ShellBallInputRequestFocusPayload,
   type ShellBallPinnedWindowDetachedPayload,
   type ShellBallPinnedWindowReadyPayload,
   type ShellBallPrimaryAction,
@@ -33,6 +35,7 @@ import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
 
 type ShellBallCoordinatorInput = {
   visualState: ShellBallVisualState;
+  helperWindowsVisible?: boolean;
   inputValue: string;
   voicePreview: ShellBallVoicePreview;
   setInputValue: (value: string) => void;
@@ -129,11 +132,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     () =>
       createShellBallWindowSnapshot({
         visualState: input.visualState,
+        helpersVisible: input.helperWindowsVisible ?? true,
         inputValue: input.inputValue,
         voicePreview: input.voicePreview,
         bubbleItems,
       }),
-    [bubbleItems, input.inputValue, input.visualState, input.voicePreview],
+    [bubbleItems, input.helperWindowsVisible, input.inputValue, input.visualState, input.voicePreview],
   );
   const snapshotRef = useRef(snapshot);
   const bubbleItemsRef = useRef(bubbleItems);
@@ -179,6 +183,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       emitSnapshotToLabel(shellBallWindowLabels.bubble),
       emitSnapshotToLabel(shellBallWindowLabels.input),
       ...pinnedBubbleLabels.map((label) => emitSnapshotToLabel(label)),
+      ...snapshotRef.current.bubbleItems
+        .filter((item) => item.bubble.pinned)
+        .map((item) => setShellBallPinnedBubbleWindowVisible(item.bubble.bubble_id, snapshotRef.current.visibility.bubble)),
     ]);
   }, [snapshot]);
 
@@ -403,6 +410,10 @@ export async function emitShellBallInputFocus(focused: boolean) {
 
 export async function emitShellBallInputDraft(value: string) {
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputDraft, { value });
+}
+
+export async function emitShellBallInputRequestFocus(token: number) {
+  await getCurrentWindow().emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.inputRequestFocus, { token });
 }
 
 export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction, source: ShellBallHelperWindowRole) {

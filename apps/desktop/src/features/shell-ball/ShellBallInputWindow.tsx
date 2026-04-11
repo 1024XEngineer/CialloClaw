@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode } from "./shellBall.types";
 import {
   emitShellBallInputDraft,
   emitShellBallInputFocus,
   emitShellBallInputHover,
+  emitShellBallInputRequestFocus,
   emitShellBallPrimaryAction,
   useShellBallHelperWindowSnapshot,
 } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
+import { shellBallWindowSyncEvents } from "./shellBall.windowSync";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 
 type ShellBallInputWindowProps = {
@@ -32,6 +35,8 @@ export function ShellBallInputWindow({
 }: ShellBallInputWindowProps) {
   const snapshot = useShellBallHelperWindowSnapshot({ role: "input" });
   const [draftValue, setDraftValue] = useState(value ?? snapshot.inputValue);
+  const [focusToken, setFocusToken] = useState(0);
+  const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
     if (value !== undefined) {
@@ -46,9 +51,43 @@ export function ShellBallInputWindow({
   const resolvedVoicePreview = voicePreview ?? snapshot.voicePreview;
   const resolvedValue = value ?? draftValue;
   const { rootRef } = useShellBallWindowMetrics({
+    clickThrough: resolvedMode === "interactive" && !isFocused,
     role: "input",
     visible: snapshot.visibility.input,
   });
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    let unlisten: (() => void) | null = null;
+    let unlistenFocusRequest: (() => void) | null = null;
+    void currentWindow.onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        setIsFocused(true);
+        void emitShellBallInputHover(true);
+        return;
+      }
+
+      setIsFocused(false);
+      void emitShellBallInputFocus(false);
+      void emitShellBallInputHover(false);
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+
+    void currentWindow.listen(shellBallWindowSyncEvents.inputRequestFocus, () => {
+      setFocusToken((current) => current + 1);
+      setIsFocused(true);
+      void currentWindow.setFocus();
+    }).then((dispose) => {
+      unlistenFocusRequest = dispose;
+    });
+
+    return () => {
+      unlisten?.();
+      unlistenFocusRequest?.();
+    };
+  }, []);
 
   function handleValueChange(nextValue: string) {
     if (onValueChange !== undefined) {
@@ -79,6 +118,7 @@ export function ShellBallInputWindow({
   }
 
   function handleFocusChange(focused: boolean) {
+    setIsFocused(focused);
     if (onFocusChange !== undefined) {
       onFocusChange(focused);
       return;
@@ -91,15 +131,17 @@ export function ShellBallInputWindow({
     <div
       ref={rootRef}
       className="shell-ball-window shell-ball-window--input"
-      aria-label="Shell-ball input window"
       onPointerEnter={() => {
         void emitShellBallInputHover(true);
       }}
       onPointerLeave={() => {
+        setIsFocused(false);
+        void emitShellBallInputFocus(false);
         void emitShellBallInputHover(false);
       }}
     >
       <ShellBallInputBar
+        focusToken={focusToken}
         mode={resolvedMode}
         voicePreview={resolvedVoicePreview}
         value={resolvedValue}
