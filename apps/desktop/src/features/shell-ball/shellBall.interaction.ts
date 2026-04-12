@@ -7,7 +7,7 @@ import type {
 
 export const SHELL_BALL_HOVER_INTENT_MS = 360;
 export const SHELL_BALL_LEAVE_GRACE_MS = 180;
-export const SHELL_BALL_LONG_PRESS_MS = 300;
+export const SHELL_BALL_LONG_PRESS_MS = 1000;
 export const SHELL_BALL_LOCK_DELTA_PX = 48;
 export const SHELL_BALL_CANCEL_DELTA_PX = 48;
 export const SHELL_BALL_VERTICAL_PRIORITY_RATIO = 1.25;
@@ -75,7 +75,7 @@ export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBall
       return "interactive";
     case "voice_listening":
     case "voice_locked":
-      return "voice";
+      return "hidden";
     case "confirming_intent":
     case "processing":
     case "waiting_auth":
@@ -235,6 +235,16 @@ export function resolveShellBallTransition(input: {
 
     case "voice_cancel":
       return { next: current === "voice_listening" ? "idle" : current };
+
+    case "voice_finish":
+      return {
+        next: current === "voice_listening" ? getShellBallProcessingReturnState(regionActive) : current,
+      };
+
+    case "primary_click_locked_voice_end":
+      return {
+        next: current === "voice_locked" ? getShellBallProcessingReturnState(regionActive) : current,
+      };
 
     case "auto_advance":
       if (current === "confirming_intent" || current === "waiting_auth") {

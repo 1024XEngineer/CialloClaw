@@ -10,11 +10,11 @@ export const shellBallWindowLabels = Object.freeze({
 export const shellBallPinnedBubbleWindowLabelPrefix = "shell-ball-bubble-pinned-";
 
 export const SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME = Object.freeze({
-  width: 360,
-  height: 140,
+  width: 270,
+  height: 105,
 });
 
-export const SHELL_BALL_PINNED_BUBBLE_WINDOW_ANCHOR_OFFSET_PX = 24;
+export const SHELL_BALL_PINNED_BUBBLE_WINDOW_ANCHOR_OFFSET_PX = 18;
 
 export const shellBallWindowPermissions = Object.freeze([
   "core:window:allow-show",

@@ -6,6 +6,8 @@ import { getShellBallMotionConfig } from "@/features/shell-ball/shellBall.motion
 import { ShellBallMascot } from "@/features/shell-ball/components/ShellBallMascot";
 import type { ShellBallVisualState } from "@/features/shell-ball/shellBall.types";
 import type { DashboardHomeModuleKey, DashboardVoiceSequence, DashboardVoiceStage } from "../dashboardHome.types";
+import "@/features/shell-ball/shellBall.css";
+import "../dashboardHome.css";
 
 type DashboardVoiceFieldProps = {
   isOpen: boolean;
@@ -244,6 +246,7 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
                 onPressMove={() => {}}
                 onPressStart={() => {}}
                 onPrimaryClick={() => {}}
+                showVoiceHints={false}
                 visualState={mascotState}
                 voicePreview={null}
               />

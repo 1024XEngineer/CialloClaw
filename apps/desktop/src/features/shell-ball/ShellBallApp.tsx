@@ -5,7 +5,7 @@ import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { ShellBallSurface } from "./ShellBallSurface";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
-import { useShellBallCoordinator } from "./useShellBallCoordinator";
+import { emitShellBallInputRequestFocus, useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import type { ShellBallDashboardTransitionRequest } from "../../platform/dashboardWindowTransition";
 import { shellBallDashboardTransitionEvents } from "../../platform/dashboardWindowTransition";
@@ -127,6 +127,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     inputValue,
     finalizedSpeechPayload,
     voicePreview,
+    voiceHoldProgress,
+    inputFocused,
     handlePrimaryClick,
     shouldOpenDashboardFromDoubleClick,
     handleRegionEnter,
@@ -138,6 +140,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleSubmitText,
     handleAttachFile,
     handleInputFocusChange,
+    handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
     handleForceState,
@@ -284,6 +287,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       dashboardTransitionPhase={dashboardTransitionPhase}
       visualState={visualState}
       voicePreview={voicePreview}
+      voiceHoldProgress={voiceHoldProgress}
       motionConfig={motionConfig}
       onDragStart={() => {
         void startShellBallWindowDragging();
@@ -292,14 +296,15 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onDoubleClick={handleDoubleClick}
       onRegionEnter={handleRegionEnter}
       onRegionLeave={handleRegionLeave}
+      inputFocused={inputFocused}
+      onInputProxyClick={() => {
+        handleInputFocusRequest();
+        void emitShellBallInputRequestFocus(Date.now());
+      }}
       onPressStart={handlePressStart}
       onPressMove={handlePressMove}
       onPressEnd={handlePressEnd}
       onPressCancel={handlePressCancel}
-    >
-      {showDemoSwitcher ? (
-        <ShellBallDevLayer value={visualState} onChange={handleForceState} />
-      ) : null}
-    </ShellBallSurface>
+    />
   );
 }

@@ -53,13 +53,12 @@ export function getInitialSecurityModuleData(): SecurityModuleData {
   };
 }
 
-export async function loadSecurityModuleData(): Promise<SecurityModuleData> {
-  try {
-    return await loadSecurityModuleRpcData();
-  } catch (error) {
-    console.warn("Security module RPC unavailable, using local mock fallback.", error);
+export async function loadSecurityModuleData(source: SecurityModuleSource = "rpc"): Promise<SecurityModuleData> {
+  if (source === "mock") {
     return getInitialSecurityModuleData();
   }
+
+  return loadSecurityModuleRpcData();
 }
 
 export async function loadSecurityModuleRpcData(): Promise<SecurityModuleData> {

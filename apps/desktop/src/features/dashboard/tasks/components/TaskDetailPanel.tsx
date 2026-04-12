@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock3, FolderOutput, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, Clock3, FolderOutput, RefreshCcw, ShieldAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,17 +13,27 @@ import { TaskProgressTimeline } from "./TaskProgressTimeline";
 
 type TaskDetailPanelProps = {
   detailData: TaskDetailData;
+  detailErrorMessage: string | null;
+  detailState: "loading" | "error" | "ready";
   feedback: string | null;
   onAction: (action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") => void;
   onClose: () => void;
+  onRetryDetail: (() => void) | null;
 };
 
-export function TaskDetailPanel({ detailData, feedback, onAction, onClose }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, feedback, onAction, onClose, onRetryDetail }: TaskDetailPanelProps) {
   const { detail, experience, task } = detailData;
   const progress = getTaskProgress(detail.timeline);
   const stateVoice = getTaskStateVoice(task, experience, detail.timeline);
   const ended = isTaskEnded(task);
   const waitingCopy = task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused" ? experience.waitingReason : task.status === "failed" || task.status === "blocked" ? experience.blockedReason : null;
+  const isDetailLoading = detailState === "loading";
+  const isDetailError = detailState === "error";
+  const progressLabel = progress.total > 0 ? `${progress.completedCount}/${progress.total}` : "无";
+  const detailNoticeTitle = isDetailLoading ? "正在同步更多详情" : "详情同步失败";
+  const detailNoticeBody = isDetailLoading
+    ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
+    : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
 
   return (
     <motion.section animate={{ opacity: 1, x: 0 }} className="task-detail-shell" initial={{ opacity: 0, x: 18 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
@@ -66,14 +76,30 @@ export function TaskDetailPanel({ detailData, feedback, onAction, onClose }: Tas
         </div>
         <div className="task-detail-shell__meta-card">
           <span>进度</span>
-          <strong>
-            {progress.completedCount}/{progress.total}
-          </strong>
+          <strong>{progressLabel}</strong>
         </div>
       </div>
 
       <ScrollArea className="task-detail-shell__scroll">
         <div className="task-detail-shell__body">
+          {detailState !== "ready" ? (
+            <section className="task-detail-card task-detail-card--notice">
+              <div className="task-detail-card__header task-detail-card__header--actionable">
+                <div>
+                  <p className="task-detail-card__eyebrow">详情状态</p>
+                  <h3 className="task-detail-card__title">{detailNoticeTitle}</h3>
+                </div>
+                {isDetailError && onRetryDetail ? (
+                  <button className="task-detail-card__action" onClick={onRetryDetail} type="button">
+                    <RefreshCcw className="h-4 w-4" />
+                    重试
+                  </button>
+                ) : null}
+              </div>
+              <p className="task-detail-ended-copy">{detailNoticeBody}</p>
+            </section>
+          ) : null}
+
           {!ended ? (
             <>
               {waitingCopy ? (
@@ -136,7 +162,7 @@ export function TaskDetailPanel({ detailData, feedback, onAction, onClose }: Tas
                       </article>
                     ))
                   ) : (
-                    <p className="task-detail-ended-copy">当前还没有挂载成果物，完成后会出现在这里。</p>
+                    <p className="task-detail-card__empty">无</p>
                   )}
                 </div>
               </section>
@@ -201,15 +227,19 @@ export function TaskDetailPanel({ detailData, feedback, onAction, onClose }: Tas
                   <h3 className="task-detail-card__title">已生成的结果</h3>
                 </div>
                 <div className="task-detail-output-list">
-                  {detail.artifacts.map((artifact) => (
-                    <article key={artifact.artifact_id} className="task-detail-output-item">
-                      <FolderOutput className="h-4 w-4" />
-                      <div>
-                        <p className="task-detail-output-item__title">{artifact.title}</p>
-                        <p className="task-detail-output-item__path">{artifact.path}</p>
-                      </div>
-                    </article>
-                  ))}
+                  {detail.artifacts.length > 0 ? (
+                    detail.artifacts.map((artifact) => (
+                      <article key={artifact.artifact_id} className="task-detail-output-item">
+                        <FolderOutput className="h-4 w-4" />
+                        <div>
+                          <p className="task-detail-output-item__title">{artifact.title}</p>
+                          <p className="task-detail-output-item__path">{artifact.path}</p>
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <p className="task-detail-card__empty">无</p>
+                  )}
                 </div>
               </section>
             </>

@@ -120,11 +120,35 @@ export class JsonRpcClientError extends Error {
 }
 
 // createTransport 处理当前模块的相关逻辑。
+function isTauriEnvironment() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function resolveDefaultTransportMode() {
+  if (import.meta.env.DEV) {
+    return "http";
+  }
+
+  return "named_pipe";
+}
+
+function resolveDebugRpcEndpoint() {
+  if (import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT) {
+    return import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT;
+  }
+
+  if (import.meta.env.DEV && !isTauriEnvironment()) {
+    return "/rpc";
+  }
+
+  return "http://127.0.0.1:4317/rpc";
+}
+
 function createTransport(): JsonRpcTransport {
-  const transportMode = import.meta.env.VITE_CIALLOCLAW_RPC_TRANSPORT ?? "named_pipe";
+  const transportMode = import.meta.env.VITE_CIALLOCLAW_RPC_TRANSPORT ?? resolveDefaultTransportMode();
 
   if (transportMode === "http") {
-    return new DebugHttpJsonRpcTransport(import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT ?? "http://127.0.0.1:4317/rpc");
+    return new DebugHttpJsonRpcTransport(resolveDebugRpcEndpoint());
   }
 
   return new NamedPipeJsonRpcTransport();

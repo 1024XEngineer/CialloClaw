@@ -4,7 +4,7 @@ import { Keyboard, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import ClickSpark from "@/components/ClickSpark";
 import { dashboardDecorOrbs, dashboardEntranceOrbs, dashboardModuleColors } from "@/features/dashboard/home/dashboardHome.config";
-import { dashboardHomeStates, dashboardSummonTemplates, dashboardVoiceSequences } from "@/features/dashboard/home/dashboardHome.mocks";
+import { dashboardHomeStates, dashboardSummonTemplates } from "@/features/dashboard/home/dashboardHome.mocks";
 import type { DashboardHomeEventStateKey, DashboardHomeModuleKey, DashboardHomeSummonEvent } from "@/features/dashboard/home/dashboardHome.types";
 import { DashboardCenterOrb } from "@/features/dashboard/home/components/DashboardCenterOrb";
 import { DashboardDecorOrb } from "@/features/dashboard/home/components/DashboardDecorOrb";
@@ -12,7 +12,6 @@ import { DashboardEntranceOrb } from "@/features/dashboard/home/components/Dashb
 import { DashboardEventOrb } from "@/features/dashboard/home/components/DashboardEventOrb";
 import { DashboardEventPanel } from "@/features/dashboard/home/components/DashboardEventPanel";
 import { DashboardOrbitRings } from "@/features/dashboard/home/components/DashboardOrbitRings";
-import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { cn } from "@/utils/cn";
 import "@/features/shell-ball/shellBall.css";
@@ -42,12 +41,16 @@ function getCenterState(activeStateKey: DashboardHomeEventStateKey | null) {
   return "hover_input" as const;
 }
 
-export function DashboardHome() {
+type DashboardHomeProps = {
+  onVoiceOpen: () => void;
+  voiceOpen: boolean;
+};
+
+export function DashboardHome({ onVoiceOpen, voiceOpen }: DashboardHomeProps) {
   const navigate = useNavigate();
   const [orbDragOffset, setOrbDragOffset] = useState({ x: 0, y: 0 });
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
   const [activeStateKey, setActiveStateKey] = useState<DashboardHomeEventStateKey | null>(null);
-  const [voiceOpen, setVoiceOpen] = useState(false);
   const [summons, setSummons] = useState<DashboardHomeSummonEvent[]>([]);
   const summonIndexRef = useRef(0);
   const summonIdRef = useRef(0);
@@ -103,52 +106,17 @@ export function DashboardHome() {
       }
 
       if (event.key === "Escape") {
-        if (voiceOpen) {
-          event.preventDefault();
-          setVoiceOpen(false);
-          return;
-        }
-
         if (activeStateKey) {
           event.preventDefault();
           setActiveStateKey(null);
         }
         return;
       }
-
-      if (!event.ctrlKey && !event.metaKey) {
-        return;
-      }
-
-      if (event.key === "1") {
-        event.preventDefault();
-        navigate(resolveDashboardModuleRoutePath("tasks"));
-      }
-
-      if (event.key === "2") {
-        event.preventDefault();
-        navigate(resolveDashboardModuleRoutePath("notes"));
-      }
-
-      if (event.key === "3") {
-        event.preventDefault();
-        navigate(resolveDashboardModuleRoutePath("memory"));
-      }
-
-      if (event.key === "4") {
-        event.preventDefault();
-        navigate(resolveDashboardModuleRoutePath("safety"));
-      }
-
-      if (event.key === "5") {
-        event.preventDefault();
-        setVoiceOpen(true);
-      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeStateKey, navigate, voiceOpen]);
+  }, [activeStateKey]);
 
   const centerVisualState = voiceOpen ? "voice_locked" : getCenterState(activeStateKey);
   const pageStyle = {
@@ -207,7 +175,7 @@ export function DashboardHome() {
           ? summons.map((event) => <DashboardEventOrb key={event.id} event={event} onDismiss={(id) => setSummons((current) => current.filter((item) => item.id !== id))} onExpand={(stateKey) => setActiveStateKey(stateKey)} />)
           : null}
 
-        <DashboardCenterOrb activeColor={activeModuleColor} onDragOffset={handleOrbDragOffset} onLongPress={() => setVoiceOpen(true)} visualState={centerVisualState} />
+        <DashboardCenterOrb activeColor={activeModuleColor} onDragOffset={handleOrbDragOffset} onLongPress={onVoiceOpen} visualState={centerVisualState} />
       </div>
 
       <div className={cn("dashboard-orbit-home__focus-bar", isOverlayOpen && "is-muted")}>
@@ -224,7 +192,6 @@ export function DashboardHome() {
 
       <DashboardEventPanel activeState={activeState} onClose={() => setActiveStateKey(null)} onStateChange={setActiveStateKey} />
 
-      <DashboardVoiceField isOpen={voiceOpen} onClose={() => setVoiceOpen(false)} onCommand={handleModuleNavigate} sequences={dashboardVoiceSequences} />
     </ClickSpark>
   );
 }

@@ -30,6 +30,8 @@ import type {
 } from "@cialloclaw/protocol";
 import { JsonRpcClientError } from "@/rpc/client";
 import { subscribeApprovalPending } from "@/rpc/subscriptions";
+import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
+import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import {
   getInitialSecurityModuleData,
   loadSecurityModuleData,
@@ -506,7 +508,9 @@ function getCardPreview(
 
 export function SecurityApp() {
   const navigate = useNavigate();
-  const [moduleData, setModuleData] = useState(() => getInitialSecurityModuleData());
+  const [dataMode, setDataMode] = useState<"rpc" | "mock">(() => loadDashboardDataMode("safety"));
+  const [moduleData, setModuleData] = useState<SecurityModuleData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [lastResolvedApproval, setLastResolvedApproval] = useState<SecurityRespondOutcome | null>(null);
@@ -518,42 +522,69 @@ export function SecurityApp() {
   const [draggingKey, setDraggingKey] = useState<SecurityCardKey | null>(null);
   const [activeDetailKey, setActiveDetailKey] = useState<SecurityCardKey | null>(null);
   const [boardReady, setBoardReady] = useState(false);
-  const sourceCopy = useMemo(() => getSourceCopy(moduleData), [moduleData]);
+  const sourceCopy = useMemo(() => (moduleData ? getSourceCopy(moduleData) : null), [moduleData]);
   const approvalLookup = useMemo(
-    () => new Map(moduleData.pending.map((approval) => [`approval:${approval.approval_id}`, approval] as const)),
-    [moduleData.pending],
+    () => new Map((moduleData?.pending ?? []).map((approval) => [`approval:${approval.approval_id}`, approval] as const)),
+    [moduleData?.pending],
   );
   const pendingCardKeys = useMemo(
-    () => moduleData.pending.map((approval) => `approval:${approval.approval_id}` as SecurityCardKey),
-    [moduleData.pending],
+    () => (moduleData?.pending ?? []).map((approval) => `approval:${approval.approval_id}` as SecurityCardKey),
+    [moduleData?.pending],
   );
   const cardKeys = useMemo(() => [...STATIC_CARD_KEYS, ...pendingCardKeys], [pendingCardKeys]);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const refreshSequenceRef = useRef(0);
 
-  const queueRpcRefresh = () => {
+  const queueRpcRefresh = useCallback(() => {
+    if (dataMode !== "rpc") {
+      return;
+    }
+
     const nextSequence = ++refreshSequenceRef.current;
 
     void loadSecurityModuleRpcData()
       .then((nextData) => {
         if (refreshSequenceRef.current === nextSequence) {
+          setLoadError(null);
           setModuleData(nextData);
         }
       })
-      .catch(() => undefined);
-  };
+      .catch((error) => {
+        if (refreshSequenceRef.current === nextSequence) {
+          setLoadError(formatRpcError(error));
+        }
+      });
+  }, [dataMode]);
+
+  useEffect(() => {
+    saveDashboardDataMode("safety", dataMode);
+  }, [dataMode]);
 
   useEffect(() => {
     const nextSequence = ++refreshSequenceRef.current;
-    void loadSecurityModuleData().then((nextData) => {
-      if (refreshSequenceRef.current === nextSequence) {
-        setModuleData(nextData);
-      }
-    });
+    setLoadError(null);
+
+    if (dataMode === "mock") {
+      setModuleData(getInitialSecurityModuleData());
+      return;
+    }
+
+    setModuleData(null);
+    void loadSecurityModuleData("rpc")
+      .then((nextData) => {
+        if (refreshSequenceRef.current === nextSequence) {
+          setModuleData(nextData);
+        }
+      })
+      .catch((error) => {
+        if (refreshSequenceRef.current === nextSequence) {
+          setLoadError(formatRpcError(error));
+        }
+      });
 
     const unsubscribe = subscribeApprovalPending((payload) => {
-      setModuleData((current) => mergePendingApproval(current, payload));
+      setModuleData((current) => (current ? mergePendingApproval(current, payload) : current));
       setFeedback(`收到新的待确认授权：${payload.approval_request.operation_name} · task ${payload.task_id}`);
       queueRpcRefresh();
     });
@@ -561,7 +592,7 @@ export function SecurityApp() {
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [dataMode, queueRpcRefresh]);
 
   useEffect(() => {
     setCardStack((currentStack) => {
@@ -572,13 +603,17 @@ export function SecurityApp() {
   }, [cardKeys]);
 
   useEffect(() => {
+    if (!moduleData) {
+      return;
+    }
+
     setRememberRuleByApprovalId((current) =>
       moduleData.pending.reduce<Record<string, boolean>>((nextState, approval) => {
         nextState[approval.approval_id] = current[approval.approval_id] ?? false;
         return nextState;
       }, {}),
     );
-  }, [moduleData.pending]);
+  }, [moduleData]);
 
   useEffect(() => {
     if (activeDetailKey && !cardKeys.includes(activeDetailKey)) {
@@ -673,6 +708,21 @@ export function SecurityApp() {
     };
   }, [activeDetailKey]);
 
+  if (!moduleData) {
+    return (
+      <main className="app-shell security-page">
+        <div className="security-page__frame">
+          <div className="security-surface security-page__topbar">
+            <Text>{loadError ? `安全页同步失败：${loadError}` : "正在同步安全数据..."}</Text>
+          </div>
+        </div>
+        <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
+      </main>
+    );
+  }
+
+  const resolvedSourceCopy = sourceCopy ?? getSourceCopy(moduleData);
+
   const handleRespond = async (approval: ApprovalRequest, decision: ApprovalDecision, rememberRule: boolean) => {
     setActiveApprovalId(approval.approval_id);
 
@@ -680,6 +730,10 @@ export function SecurityApp() {
       const result = await respondToApproval(approval, decision, rememberRule, moduleData.source);
 
       setModuleData((current) => {
+        if (!current) {
+          return current;
+        }
+
         const pending = current.pending.filter((item) => item.approval_id !== approval.approval_id);
         const nextTotal = Math.max(0, current.pendingPage.total - 1);
         const nextPendingCount = Math.max(0, current.summary.pending_authorizations - 1);
@@ -834,8 +888,8 @@ export function SecurityApp() {
         </article>
         <article className="security-page__detail-card">
           <p className="security-page__detail-label">数据来源</p>
-          <p className="security-page__detail-value">{sourceCopy.badge}</p>
-          <p className="security-page__detail-copy">{sourceCopy.description}</p>
+          <p className="security-page__detail-value">{resolvedSourceCopy.badge}</p>
+          <p className="security-page__detail-copy">{resolvedSourceCopy.description}</p>
         </article>
         <article className="security-page__detail-card">
           <p className="security-page__detail-label">分页状态</p>
@@ -1166,7 +1220,7 @@ export function SecurityApp() {
       return null;
     }
 
-    const preview = getCardPreview(activeDetailKey, moduleData, approvalLookup, sourceCopy, feedback, lastResolvedApproval);
+    const preview = getCardPreview(activeDetailKey, moduleData, approvalLookup, resolvedSourceCopy, feedback, lastResolvedApproval);
 
     return (
       <div className="security-page__detail-layer" onClick={closeDetail}>
@@ -1189,7 +1243,7 @@ export function SecurityApp() {
                     {preview.badgeLabel}
                   </Badge>
                   <Badge color={moduleData.source === "rpc" ? "green" : "amber"} variant="soft" highContrast>
-                    {sourceCopy.badge}
+                    {resolvedSourceCopy.badge}
                   </Badge>
                 </Flex>
                 <button type="button" className="security-page__close-button" onClick={closeDetail} aria-label="关闭详情视图">
@@ -1206,7 +1260,7 @@ export function SecurityApp() {
   };
 
   const renderDraggableCard = (key: SecurityCardKey, index: number) => {
-    const preview = getCardPreview(key, moduleData, approvalLookup, sourceCopy, feedback, lastResolvedApproval);
+    const preview = getCardPreview(key, moduleData, approvalLookup, resolvedSourceCopy, feedback, lastResolvedApproval);
     const Icon = preview.icon;
     const isDragging = draggingKey === key;
     const isExpanded = activeDetailKey === key;
@@ -1286,13 +1340,13 @@ export function SecurityApp() {
           </button>
         </Box>
 
-        <aside className={`security-page__source-status ${sourceCopy.className}`} aria-label="Security 数据来源状态">
+        <aside className={`security-page__source-status ${resolvedSourceCopy.className}`} aria-label="Security 数据来源状态">
           <Badge color={moduleData.source === "rpc" ? "green" : "amber"} variant="soft" highContrast>
-            {sourceCopy.badge}
+            {resolvedSourceCopy.badge}
           </Badge>
           <div className="security-page__source-copy">
-            <p className="security-page__source-title">{sourceCopy.title}</p>
-            <p className="security-page__source-description">{sourceCopy.description}</p>
+            <p className="security-page__source-title">{resolvedSourceCopy.title}</p>
+            <p className="security-page__source-description">{loadError && dataMode === "rpc" ? `${resolvedSourceCopy.description} · error：${loadError}` : resolvedSourceCopy.description}</p>
           </div>
         </aside>
 
@@ -1306,6 +1360,7 @@ export function SecurityApp() {
         {cardStack.map(renderDraggableCard)}
         {renderDetailOverlay()}
       </div>
+      <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
     </main>
   );
 }

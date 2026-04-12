@@ -216,6 +216,7 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
             onPressMove={() => {}}
             onPressStart={() => {}}
             onPrimaryClick={() => {}}
+            showVoiceHints={false}
             visualState={visualState}
             voicePreview={null}
           />

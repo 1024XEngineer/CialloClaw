@@ -19,7 +19,11 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
   });
 
   return (
-    <div ref={rootRef} className="shell-ball-window shell-ball-window--bubble" aria-label="Shell-ball bubble window">
+    <div
+      ref={rootRef}
+      className="shell-ball-window shell-ball-window--bubble"
+      data-visibility-phase={snapshot.bubbleRegion.visibilityPhase}
+    >
       <ShellBallBubbleZone
         visualState={resolvedVisualState}
         bubbleItems={visibleBubbleItems}

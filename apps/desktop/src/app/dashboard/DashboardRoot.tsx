@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
+import { dashboardVoiceSequences } from "@/features/dashboard/home/dashboardHome.mocks";
+import type { DashboardHomeModuleKey } from "@/features/dashboard/home/dashboardHome.types";
 import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
 import { NotesPage } from "@/features/dashboard/notes/NotesPage";
 import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
@@ -16,13 +19,19 @@ function useDashboardDomainExpansion() {
 
   useEffect(() => {
     let frame = 0;
+    let timeout = 0;
 
     const trigger = () => {
       window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
       setIsOpening(true);
       frame = window.requestAnimationFrame(() => {
         setIsOpening(false);
       });
+      // Hidden/background Tauri windows can miss the RAF edge and stay clipped.
+      timeout = window.setTimeout(() => {
+        setIsOpening(false);
+      }, 720);
     };
 
     const handleVisibilityChange = () => {
@@ -44,6 +53,7 @@ function useDashboardDomainExpansion() {
 
     return () => {
       window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
@@ -53,7 +63,67 @@ function useDashboardDomainExpansion() {
 
 function DashboardRoutes() {
   const location = useLocation();
+  const navigate = useNavigate();
   const isOpening = useDashboardDomainExpansion();
+  const [voiceOpen, setVoiceOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (voiceOpen) {
+          event.preventDefault();
+          setVoiceOpen(false);
+        }
+        return;
+      }
+
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+
+      if (event.key === "1") {
+        event.preventDefault();
+        setVoiceOpen(false);
+        navigate(resolveDashboardModuleRoutePath("tasks"));
+      }
+
+      if (event.key === "2") {
+        event.preventDefault();
+        setVoiceOpen(false);
+        navigate(resolveDashboardModuleRoutePath("notes"));
+      }
+
+      if (event.key === "3") {
+        event.preventDefault();
+        setVoiceOpen(false);
+        navigate(resolveDashboardModuleRoutePath("memory"));
+      }
+
+      if (event.key === "4") {
+        event.preventDefault();
+        setVoiceOpen(false);
+        navigate(resolveDashboardModuleRoutePath("safety"));
+      }
+
+      if (event.key === "5") {
+        event.preventDefault();
+        setVoiceOpen(true);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigate, voiceOpen]);
+
+  const handleVoiceCommand = (module: DashboardHomeModuleKey) => {
+    navigate(resolveDashboardModuleRoutePath(module));
+  };
 
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
@@ -68,7 +138,7 @@ function DashboardRoutes() {
           transition={{ duration: 0.46, ease: [0.22, 1, 0.36, 1] }}
         >
           <Routes location={location}>
-            <Route element={<DashboardHome />} path={resolveDashboardRoutePath("home")} />
+            <Route element={<DashboardHome onVoiceOpen={() => setVoiceOpen(true)} voiceOpen={voiceOpen} />} path={resolveDashboardRoutePath("home")} />
             <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
             <Route element={<NotesPage />} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
             <Route element={<MemoryPage />} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
@@ -77,6 +147,7 @@ function DashboardRoutes() {
           </Routes>
         </motion.div>
       </AnimatePresence>
+      <DashboardVoiceField isOpen={voiceOpen} onClose={() => setVoiceOpen(false)} onCommand={handleVoiceCommand} sequences={dashboardVoiceSequences} />
     </div>
   );
 }

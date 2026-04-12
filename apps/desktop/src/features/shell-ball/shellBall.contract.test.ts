@@ -3527,14 +3527,14 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("confirming_intent"), "readonly");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
-  assert.equal(getShellBallInputBarMode("voice_listening"), "voice");
-  assert.equal(getShellBallInputBarMode("voice_locked"), "voice");
+  assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");
+  assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
 });
 
 test("shell-ball interaction timing constants stay frozen", () => {
   assert.equal(SHELL_BALL_HOVER_INTENT_MS, 360);
   assert.equal(SHELL_BALL_LEAVE_GRACE_MS, 180);
-  assert.equal(SHELL_BALL_LONG_PRESS_MS, 300);
+  assert.equal(SHELL_BALL_LONG_PRESS_MS, 1000);
   assert.equal(SHELL_BALL_LOCK_DELTA_PX, 48);
   assert.equal(SHELL_BALL_CANCEL_DELTA_PX, 48);
   assert.equal(SHELL_BALL_VERTICAL_PRIORITY_RATIO, 1.25);

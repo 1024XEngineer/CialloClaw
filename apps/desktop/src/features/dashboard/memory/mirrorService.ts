@@ -93,28 +93,26 @@ export function getInitialMirrorOverviewData(): MirrorOverviewData {
   };
 }
 
-export async function loadMirrorOverviewData(): Promise<MirrorOverviewData> {
+export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc"): Promise<MirrorOverviewData> {
+  if (source === "mock") {
+    return getInitialMirrorOverviewData();
+  }
+
   const params: AgentMirrorOverviewGetParams = {
     request_meta: createRequestMeta(),
     include: ["history_summary", "daily_summary", "profile", "memory_references"],
   };
 
-  try {
-    const response = await requestMirrorOverview(params);
-    const overview = response.data;
+  const response = await requestMirrorOverview(params);
+  const overview = response.data;
 
-    return {
-      overview,
-      insight: buildMirrorInsightPreview(overview),
-      rpcContext: {
-        serverTime: response.meta?.server_time ?? null,
-        warnings: response.warnings,
-      },
-      source: "rpc",
-    };
-  } catch (error) {
-    console.warn("Mirror overview RPC unavailable, using local mock fallback.", error);
-
-    return getInitialMirrorOverviewData();
-  }
+  return {
+    overview,
+    insight: buildMirrorInsightPreview(overview),
+    rpcContext: {
+      serverTime: response.meta?.server_time ?? null,
+      warnings: response.warnings,
+    },
+    source: "rpc",
+  };
 }

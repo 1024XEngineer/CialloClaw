@@ -1,0 +1,46 @@
+.dashboard-mock-toggle {
+  align-items: center;
+  backdrop-filter: blur(14px);
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.96), rgba(244, 239, 232, 0.92));
+  border: 1px solid rgba(132, 118, 99, 0.18);
+  border-radius: 999px;
+  bottom: clamp(1rem, 2vw, 1.5rem);
+  box-shadow: 0 18px 40px -30px rgba(65, 55, 43, 0.24);
+  color: #4e463f;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 0.65rem;
+  padding: 0.72rem 1rem;
+  position: fixed;
+  right: clamp(1rem, 2vw, 1.5rem);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  z-index: 68;
+}
+
+.dashboard-mock-toggle:hover {
+  border-color: rgba(106, 145, 200, 0.28);
+  box-shadow: 0 20px 44px -30px rgba(65, 55, 43, 0.28);
+  transform: translateY(-1px);
+}
+
+.dashboard-mock-toggle:focus-visible {
+  outline: 2px solid rgba(106, 145, 200, 0.42);
+  outline-offset: 3px;
+}
+
+.dashboard-mock-toggle.is-active {
+  background: linear-gradient(180deg, rgba(230, 239, 252, 0.98), rgba(214, 229, 248, 0.94));
+  border-color: rgba(106, 145, 200, 0.34);
+}
+
+.dashboard-mock-toggle__label,
+.dashboard-mock-toggle__state {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboard-mock-toggle__state {
+  color: #4d6b93;
+}

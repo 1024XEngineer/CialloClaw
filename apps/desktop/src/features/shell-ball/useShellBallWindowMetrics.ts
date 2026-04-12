@@ -17,7 +17,7 @@ type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pin
 
 export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 12;
 export const SHELL_BALL_BUBBLE_GAP_PX = 6;
-export const SHELL_BALL_INPUT_GAP_PX = 12;
+export const SHELL_BALL_INPUT_GAP_PX = 4;
 export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 6;
 
 type ShellBallContentSize = {
@@ -133,6 +133,13 @@ export function getShellBallHelperWindowInteractionMode(input: {
     };
   }
 
+  if (input.role === "input") {
+    return {
+      focusable: !input.clickThrough,
+      ignoreCursorEvents: input.clickThrough || input.visible === false,
+    };
+  }
+
   return {
     focusable: true,
     ignoreCursorEvents: false,
@@ -202,7 +209,7 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     if (windowFrame === null) {

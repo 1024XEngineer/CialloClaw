@@ -4,11 +4,13 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, CircleDashed, NotebookPen, RefreshCcw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
+import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
-import { convertNoteToTask, loadNoteBucket } from "./notePage.service";
+import { convertNoteToTask, loadNoteBucket, type NotePageDataMode } from "./notePage.service";
 import type { NoteDetailAction, NoteListItem } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NotePreviewCard } from "./components/NotePreviewCard";
@@ -21,37 +23,42 @@ export function NotePage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [showMoreClosed, setShowMoreClosed] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [dataMode, setDataMode] = useState<NotePageDataMode>(() => loadDashboardDataMode("notes") as NotePageDataMode);
   const feedbackTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    saveDashboardDataMode("notes", dataMode);
+  }, [dataMode]);
 
   const [upcomingQuery, laterQuery, recurringQuery, closedQuery] = useQueries({
     queries: [
-      {
-        queryKey: ["dashboard", "notes", "bucket", "upcoming"],
-        queryFn: () => loadNoteBucket("upcoming"),
+        {
+          queryKey: ["dashboard", "notes", "bucket", dataMode, "upcoming"],
+          queryFn: () => loadNoteBucket("upcoming", dataMode),
         retry: false,
         refetchOnMount: false,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
-      {
-        queryKey: ["dashboard", "notes", "bucket", "later"],
-        queryFn: () => loadNoteBucket("later"),
+        {
+          queryKey: ["dashboard", "notes", "bucket", dataMode, "later"],
+          queryFn: () => loadNoteBucket("later", dataMode),
         retry: false,
         refetchOnMount: false,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
-      {
-        queryKey: ["dashboard", "notes", "bucket", "recurring_rule"],
-        queryFn: () => loadNoteBucket("recurring_rule"),
+        {
+          queryKey: ["dashboard", "notes", "bucket", dataMode, "recurring_rule"],
+          queryFn: () => loadNoteBucket("recurring_rule", dataMode),
         retry: false,
         refetchOnMount: false,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
-      {
-        queryKey: ["dashboard", "notes", "bucket", "closed"],
-        queryFn: () => loadNoteBucket("closed"),
+        {
+          queryKey: ["dashboard", "notes", "bucket", dataMode, "closed"],
+          queryFn: () => loadNoteBucket("closed", dataMode),
         retry: false,
         refetchOnMount: false,
         refetchOnReconnect: false,
@@ -95,7 +102,7 @@ export function NotePage() {
   }
 
   const convertMutation = useMutation({
-    mutationFn: (itemId: string) => convertNoteToTask(itemId),
+    mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: (outcome) => {
       showFeedback("已为这条事项生成任务，正在跳转到任务页。");
       navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: outcome.result.task.task_id, openDetail: true } });
@@ -370,6 +377,14 @@ export function NotePage() {
               </motion.aside>
             ) : null}
         </AnimatePresence>
+
+        <DashboardMockToggle
+          enabled={dataMode === "mock"}
+          onToggle={() => {
+            setFeedback(null);
+            setDataMode((current) => (current === "rpc" ? "mock" : "rpc"));
+          }}
+        />
       </>
     </main>
   );

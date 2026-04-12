@@ -12,6 +12,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
   inputHover: "desktop-shell-ball:input-hover",
   inputFocus: "desktop-shell-ball:input-focus",
+  inputRequestFocus: "desktop-shell-ball:input-request-focus",
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
   bubbleAction: "desktop-shell-ball:bubble-action",
@@ -30,10 +31,13 @@ export type ShellBallHelperWindowVisibility = {
   input: boolean;
 };
 
+export type ShellBallBubbleVisibilityPhase = "visible" | "fading" | "hidden";
+
 export type ShellBallBubbleRegionState = {
   strategy: "persistent";
   hasVisibleItems: boolean;
   clickThrough: boolean;
+  visibilityPhase: ShellBallBubbleVisibilityPhase;
 };
 
 export type ShellBallWindowSnapshot = {
@@ -87,6 +91,10 @@ export type ShellBallInputDraftPayload = {
   value: string;
 };
 
+export type ShellBallInputRequestFocusPayload = {
+  token: number;
+};
+
 export type ShellBallPrimaryActionPayload = {
   source: ShellBallHelperWindowRole;
   action: ShellBallPrimaryAction;
@@ -101,6 +109,7 @@ export type ShellBallBubbleActionPayload = {
 export function getShellBallHelperWindowVisibility(
   visualState: ShellBallVisualState,
   helpersVisible = true,
+  bubbleVisibilityPhase: ShellBallBubbleVisibilityPhase = "hidden",
 ): ShellBallHelperWindowVisibility {
   if (!helpersVisible) {
     return {
@@ -110,7 +119,7 @@ export function getShellBallHelperWindowVisibility(
   }
 
   return {
-    bubble: true,
+    bubble: bubbleVisibilityPhase !== "hidden",
     input: getShellBallInputBarMode(visualState) !== "hidden",
   };
 }
@@ -119,13 +128,17 @@ export function getShellBallVisibleBubbleItems(items: ShellBallBubbleItem[]): Sh
   return items.filter((item) => item.bubble.hidden === false && item.bubble.pinned === false);
 }
 
-export function getShellBallBubbleRegionState(items: ShellBallBubbleItem[]): ShellBallBubbleRegionState {
+export function getShellBallBubbleRegionState(
+  items: ShellBallBubbleItem[],
+  visibilityPhase: ShellBallBubbleVisibilityPhase = "hidden",
+): ShellBallBubbleRegionState {
   const visibleItems = getShellBallVisibleBubbleItems(items);
 
   return {
     strategy: "persistent",
     hasVisibleItems: visibleItems.length > 0,
-    clickThrough: visibleItems.length === 0,
+    clickThrough: visibleItems.length === 0 || visibilityPhase !== "visible",
+    visibilityPhase,
   };
 }
 
@@ -135,8 +148,10 @@ export function createShellBallWindowSnapshot(input: {
   voicePreview: ShellBallVoicePreview;
   bubbleItems?: ShellBallBubbleItem[];
   helpersVisible?: boolean;
+  bubbleVisibilityPhase?: ShellBallBubbleVisibilityPhase;
 }): ShellBallWindowSnapshot {
   const bubbleItems = cloneShellBallBubbleItems(input.bubbleItems ?? []);
+  const bubbleVisibilityPhase = input.bubbleVisibilityPhase ?? "hidden";
 
   return {
     visualState: input.visualState,
@@ -144,8 +159,8 @@ export function createShellBallWindowSnapshot(input: {
     inputValue: input.inputValue,
     voicePreview: input.voicePreview,
     bubbleItems,
-    bubbleRegion: getShellBallBubbleRegionState(bubbleItems),
-    visibility: getShellBallHelperWindowVisibility(input.visualState, input.helpersVisible),
+    bubbleRegion: getShellBallBubbleRegionState(bubbleItems, bubbleVisibilityPhase),
+    visibility: getShellBallHelperWindowVisibility(input.visualState, input.helpersVisible, bubbleVisibilityPhase),
   };
 }
 
@@ -156,5 +171,6 @@ export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot 
     voicePreview: null,
     bubbleItems: [],
     helpersVisible: true,
+    bubbleVisibilityPhase: "hidden",
   });
 }
