@@ -50,3 +50,13 @@ export async function respondSecurityDetailed(_params?: unknown) {
     },
   });
 }
+
+export async function submitInput(_params?: unknown) {
+  return {
+    task: {
+      task_id: "task_stub",
+      status: "processing",
+    },
+    bubble_message: null,
+  };
+}

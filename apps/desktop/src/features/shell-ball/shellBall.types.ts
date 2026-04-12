@@ -18,8 +18,6 @@ export type ShellBallInteractionEvent =
   | "press_start"
   | "voice_lock"
   | "voice_cancel"
-  | "voice_finish"
-  | "primary_click_locked_voice_end"
   | "auto_advance";
 
 export type ShellBallInputBarMode = "hidden" | "interactive" | "readonly" | "voice";

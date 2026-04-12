@@ -123,19 +123,6 @@ export function getShellBallVoicePreview(input: { deltaX: number; deltaY: number
   return null;
 }
 
-export function resolveShellBallVoiceReleaseEvent(
-  preview: ShellBallVoicePreview,
-): Extract<ShellBallInteractionEvent, "voice_lock" | "voice_cancel" | "voice_finish"> {
-  switch (preview) {
-    case "lock":
-      return "voice_lock";
-    case "cancel":
-      return "voice_cancel";
-    default:
-      return "voice_finish";
-  }
-}
-
 export function resolveShellBallHoverTiming(input: {
   current: ShellBallVisualState;
   event: ShellBallHoverTimingEvent;

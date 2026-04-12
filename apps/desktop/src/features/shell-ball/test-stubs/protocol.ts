@@ -29,6 +29,21 @@ export type RequestMeta = {
   client_time: string;
 };
 
+export type AgentInputSubmitParams = {
+  request_meta: RequestMeta;
+  session_id?: string;
+  source: "floating_ball" | "dashboard" | "tray_panel";
+  trigger: "voice_commit" | "hover_text_input";
+  input: {
+    type: "text";
+    text: string;
+    input_mode: "voice" | "text";
+  };
+  context: {
+    files: string[];
+  };
+};
+
 export type AgentSecuritySummaryGetParams = { request_meta: RequestMeta };
 export type AgentSecurityPendingListParams = { request_meta: RequestMeta; page?: number; limit?: number; offset?: number };
 export type AgentSecurityRespondParams = {

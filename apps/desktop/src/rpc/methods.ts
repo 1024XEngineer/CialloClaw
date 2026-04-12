@@ -1,4 +1,6 @@
 import type {
+  AgentInputSubmitParams,
+  AgentInputSubmitResult,
   AgentNotepadConvertToTaskParams,
   AgentNotepadConvertToTaskResult,
   AgentNotepadListParams,
@@ -34,6 +36,10 @@ import type {
 } from "@cialloclaw/protocol";
 import { RPC_METHODS } from "@cialloclaw/protocol";
 import { rpcClient, type JsonRpcResponsePayload } from "./client";
+
+export function submitInput(params: AgentInputSubmitParams) {
+  return rpcClient.request<AgentInputSubmitResult>(RPC_METHODS.AGENT_INPUT_SUBMIT, params);
+}
 
 // startTask 处理当前模块的相关逻辑。
 export function startTask(params: AgentTaskStartParams) {

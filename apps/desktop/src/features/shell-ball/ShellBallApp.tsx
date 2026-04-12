@@ -125,6 +125,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const {
     visualState,
     inputValue,
+    finalizedSpeechPayload,
     voicePreview,
     voiceHoldProgress,
     inputFocused,
@@ -141,6 +142,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusChange,
     handleInputFocusRequest,
     setInputValue,
+    acknowledgeFinalizedSpeechPayload,
+    handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const showDemoSwitcher = shouldShowShellBallDemoSwitcher(isDev);
@@ -266,8 +269,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
     inputValue,
+    finalizedSpeechPayload,
     voicePreview,
     setInputValue,
+    onFinalizedSpeechHandled: acknowledgeFinalizedSpeechPayload,
     onRegionEnter: handleRegionEnter,
     onRegionLeave: handleRegionLeave,
     onInputFocusChange: handleInputFocusChange,

@@ -1,14 +1,21 @@
+import type { AgentInputSubmitParams, RequestMeta } from "@cialloclaw/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
   getShellBallVoicePreview,
-  resolveShellBallVoiceReleaseEvent,
   SHELL_BALL_LONG_PRESS_MS,
   shouldRetainShellBallHoverInput,
   type ShellBallVoicePreview,
 } from "./shellBall.interaction";
+import {
+  collectShellBallSpeechTranscript,
+  composeShellBallSpeechDraft,
+  getShellBallSpeechRecognitionConstructor,
+  getShellBallSpeechRecognitionLanguage,
+  type ShellBallSpeechRecognition,
+} from "./shellBall.speech";
 import type { ShellBallInteractionEvent, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
@@ -23,6 +30,66 @@ type ShellBallInteractionConsumedEvent =
   | "long_press_voice_entry"
   | "voice_flow_consumed"
   | "force_state_reset";
+
+type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
+
+function createShellBallRequestMeta(): RequestMeta {
+  const now = new Date().toISOString();
+  const traceId = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `trace_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  return {
+    trace_id: traceId,
+    client_time: now,
+  };
+}
+
+export function createShellBallInputSubmitParams(input: {
+  text: string;
+  trigger: "voice_commit" | "hover_text_input";
+  inputMode: "voice" | "text";
+}): AgentInputSubmitParams | null {
+  const normalizedText = input.text.trim();
+
+  if (normalizedText === "") {
+    return null;
+  }
+
+  const requestMeta = createShellBallRequestMeta();
+
+  return {
+    request_meta: requestMeta,
+    source: "floating_ball",
+    trigger: input.trigger,
+    input: {
+      type: "text",
+      text: normalizedText,
+      input_mode: input.inputMode,
+    },
+    context: {
+      files: [],
+    },
+  };
+}
+
+async function submitShellBallInput(input: {
+  text: string;
+  trigger: "voice_commit" | "hover_text_input";
+  inputMode: "voice" | "text";
+}) {
+  const params = createShellBallInputSubmitParams(input);
+
+  if (params === null) {
+    return null;
+  }
+
+  const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
+    submitInput: (request: AgentInputSubmitParams) => Promise<unknown>;
+  }>;
+  const rpcMethods = await importRpcMethods();
+  return rpcMethods.submitInput(params);
+}
 
 export function mapShellBallInteractionConsumedEventToFlag(event: ShellBallInteractionConsumedEvent) {
   switch (event) {
@@ -96,10 +163,36 @@ export function syncShellBallInteractionController(input: {
   return input.controller.forceState(input.visualState, { regionActive: input.regionActive });
 }
 
+export function resolveShellBallVoiceRecognitionFinalState(input: {
+  reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">;
+  transcript: string;
+  baseDraft: string;
+  startState: ShellBallVisualState;
+}) {
+  const normalizedTranscript = input.transcript.trim();
+  const nextVisualState =
+    input.startState === "hover_input" || input.baseDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const);
+
+  if (input.reason === "finish" && normalizedTranscript !== "") {
+    return {
+      finalizedSpeechPayload: normalizedTranscript,
+      nextInputValue: input.baseDraft,
+      nextVisualState,
+    };
+  }
+
+  return {
+    finalizedSpeechPayload: null,
+    nextInputValue: input.baseDraft,
+    nextVisualState,
+  };
+}
+
 export function useShellBallInteraction() {
   const visualState = useShellBallStore((state) => state.visualState);
   const setVisualState = useShellBallStore((state) => state.setVisualState);
   const [inputValue, setInputValue] = useState("");
+  const [finalizedSpeechPayload, setFinalizedSpeechPayload] = useState<string | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
   const [voicePreview, setVoicePreview] = useState<ShellBallVoicePreview>(null);
   const [voiceHoldProgress, setVoiceHoldProgress] = useState(0);
@@ -114,8 +207,16 @@ export function useShellBallInteraction() {
   const longPressStartAtRef = useRef<number | null>(null);
   const setVisualStateRef = useRef(setVisualState);
   const controllerRef = useRef<ShellBallInteractionController | null>(null);
+  const inputValueRef = useRef(inputValue);
+  const recognitionRef = useRef<ShellBallSpeechRecognition | null>(null);
+  const recognitionSessionIdRef = useRef(0);
+  const recognitionStopReasonRef = useRef<ShellBallVoiceRecognitionStopReason>("none");
+  const voiceBaseDraftRef = useRef("");
+  const voiceTranscriptRef = useRef("");
+  const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
 
   setVisualStateRef.current = setVisualState;
+  inputValueRef.current = inputValue;
 
   if (controllerRef.current === null) {
     controllerRef.current = createShellBallInteractionController({
@@ -189,6 +290,157 @@ export function useShellBallInteraction() {
     syncVisualState();
   }
 
+  function syncVoiceDraft(transcript: string) {
+    voiceTranscriptRef.current = transcript;
+    setInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
+  }
+
+  async function finalizeVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
+    const resolution = resolveShellBallVoiceRecognitionFinalState({
+      reason,
+      transcript: voiceTranscriptRef.current,
+      baseDraft: voiceBaseDraftRef.current,
+      startState: voiceStartStateRef.current,
+    });
+    recognitionRef.current = null;
+    recognitionStopReasonRef.current = "none";
+    recognitionSessionIdRef.current += 1;
+
+    setInputValue(resolution.nextInputValue);
+    controllerRef.current?.forceState(resolution.nextVisualState, {
+      regionActive: resolution.nextVisualState === "hover_input",
+    });
+    syncVisualState();
+    voiceTranscriptRef.current = "";
+
+    if (resolution.finalizedSpeechPayload === null) {
+      return;
+    }
+
+    try {
+      await submitShellBallInput({
+        text: resolution.finalizedSpeechPayload,
+        trigger: "voice_commit",
+        inputMode: "voice",
+      });
+      setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
+    } catch (error) {
+      console.warn("shell-ball voice submit failed", error);
+    }
+  }
+
+  function acknowledgeFinalizedSpeechPayload() {
+    setFinalizedSpeechPayload(null);
+  }
+
+  function disposeVoiceRecognition() {
+    recognitionSessionIdRef.current += 1;
+    recognitionStopReasonRef.current = "none";
+    voiceTranscriptRef.current = "";
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+
+    if (recognition === null) {
+      return;
+    }
+
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+
+    try {
+      recognition.abort();
+    } catch {}
+  }
+
+  function stopVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
+    recognitionStopReasonRef.current = reason;
+    const recognition = recognitionRef.current;
+
+    if (recognition === null) {
+      finalizeVoiceRecognition(reason);
+      return;
+    }
+
+    try {
+      if (reason === "cancel") {
+        recognition.abort();
+        return;
+      }
+
+      recognition.stop();
+    } catch {
+      finalizeVoiceRecognition(reason);
+    }
+  }
+
+  function startVoiceRecognition() {
+    const Recognition = getShellBallSpeechRecognitionConstructor();
+
+    if (Recognition === null) {
+      return false;
+    }
+
+    disposeVoiceRecognition();
+    recognitionSessionIdRef.current += 1;
+    const sessionId = recognitionSessionIdRef.current;
+    const recognition = new Recognition();
+    recognitionRef.current = recognition;
+    recognitionStopReasonRef.current = "none";
+    voiceTranscriptRef.current = "";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = getShellBallSpeechRecognitionLanguage();
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      if (sessionId !== recognitionSessionIdRef.current) {
+        return;
+      }
+
+      syncVoiceDraft(collectShellBallSpeechTranscript(event.results));
+    };
+
+    recognition.onerror = (event) => {
+      if (sessionId !== recognitionSessionIdRef.current) {
+        return;
+      }
+
+      if (recognitionStopReasonRef.current === "cancel" && event.error === "aborted") {
+        return;
+      }
+
+      console.warn("shell-ball speech recognition error", event.error);
+      recognitionStopReasonRef.current = "cancel";
+    };
+
+    recognition.onend = () => {
+      if (sessionId !== recognitionSessionIdRef.current) {
+        return;
+      }
+
+      const stopReason = recognitionStopReasonRef.current;
+
+      if (stopReason === "finish" || stopReason === "cancel") {
+        void finalizeVoiceRecognition(stopReason);
+        return;
+      }
+
+      void finalizeVoiceRecognition("cancel");
+    };
+
+    try {
+      recognition.start();
+      return true;
+    } catch (error) {
+      console.warn("shell-ball speech recognition start failed", error);
+      recognitionRef.current = null;
+      recognitionStopReasonRef.current = "none";
+      recognitionSessionIdRef.current += 1;
+      return false;
+    }
+  }
+
   function syncHoverRetention() {
     if (regionActiveRef.current) {
       return;
@@ -209,8 +461,8 @@ export function useShellBallInteraction() {
       return;
     }
 
+    stopVoiceRecognition("finish");
     consumeInteraction();
-    dispatch("primary_click_locked_voice_end");
   }
 
   function handleRegionEnter() {
@@ -233,15 +485,27 @@ export function useShellBallInteraction() {
   }
 
   function handleSubmitText() {
+    const currentDraft = inputValue.trim();
     const reset = getShellBallPostSubmitInputReset(inputValue);
     if (reset === null) {
       return;
     }
 
-    dispatch("submit_text");
-    setInputValue(reset.nextInputValue);
-    inputFocusedRef.current = reset.nextFocused;
-    setInputFocused(reset.nextFocused);
+    void (async () => {
+      try {
+        await submitShellBallInput({
+          text: currentDraft,
+          trigger: "hover_text_input",
+          inputMode: "text",
+        });
+        dispatch("submit_text");
+        setInputValue(reset.nextInputValue);
+        inputFocusedRef.current = reset.nextFocused;
+        setInputFocused(reset.nextFocused);
+      } catch (error) {
+        console.warn("shell-ball text submit failed", error);
+      }
+    })();
   }
 
   function handleAttachFile() {
@@ -250,7 +514,6 @@ export function useShellBallInteraction() {
 
   function handlePressStart(event: PointerEvent<HTMLButtonElement>) {
     regionActiveRef.current = true;
-    // A new pointer sequence clears any prior voice-consumed flag before gesture eligibility is evaluated.
     resetInteractionConsumed();
     pressStartXRef.current = event.clientX;
     pressStartYRef.current = event.clientY;
@@ -279,6 +542,8 @@ export function useShellBallInteraction() {
 
     longPressHandleRef.current = globalThis.setTimeout(() => {
       longPressHandleRef.current = null;
+      voiceStartStateRef.current = controllerRef.current?.getState() ?? visualState;
+      voiceBaseDraftRef.current = inputValueRef.current;
       if (longPressProgressHandleRef.current !== null) {
         cancelAnimationFrame(longPressProgressHandleRef.current);
         longPressProgressHandleRef.current = null;
@@ -287,6 +552,15 @@ export function useShellBallInteraction() {
       setVoiceHoldProgress(0);
       setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("long_press_voice_entry"));
       dispatch("press_start");
+
+      if (!startVoiceRecognition()) {
+        setInputValue(voiceBaseDraftRef.current);
+        controllerRef.current?.forceState(
+          voiceStartStateRef.current === "hover_input" || voiceBaseDraftRef.current.trim() !== "" ? "hover_input" : "idle",
+          { regionActive: regionActiveRef.current },
+        );
+        syncVisualState();
+      }
     }, SHELL_BALL_LONG_PRESS_MS);
   }
 
@@ -324,6 +598,15 @@ export function useShellBallInteraction() {
         fallbackPreview: voicePreviewRef.current,
       });
 
+      if (finalPreview === "lock") {
+        dispatch("voice_lock");
+        pressStartXRef.current = null;
+        pressStartYRef.current = null;
+        setCurrentVoicePreview(null);
+        return true;
+      }
+
+      stopVoiceRecognition(finalPreview === "cancel" ? "cancel" : "finish");
       dispatch(resolveShellBallVoiceReleaseEvent(finalPreview));
       inputFocusedRef.current = false;
       setInputFocused(false);
@@ -331,7 +614,10 @@ export function useShellBallInteraction() {
       pressStartYRef.current = null;
       setCurrentVoicePreview(null);
       return true;
-    } else if (controllerRef.current?.getState() === "voice_locked") {
+    }
+
+    if (controllerRef.current?.getState() === "voice_locked") {
+      stopVoiceRecognition("finish");
       consumeInteraction();
       dispatch("primary_click_locked_voice_end");
       inputFocusedRef.current = false;
@@ -359,6 +645,7 @@ export function useShellBallInteraction() {
     setCurrentVoicePreview(null);
 
     if (cancelEvent !== null) {
+      stopVoiceRecognition("cancel");
       consumeInteraction();
       dispatch(cancelEvent);
     }
@@ -389,6 +676,7 @@ export function useShellBallInteraction() {
 
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
+    disposeVoiceRecognition();
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("force_state_reset"));
     pressStartXRef.current = null;
     pressStartYRef.current = null;
@@ -418,6 +706,7 @@ export function useShellBallInteraction() {
   useEffect(() => {
     return () => {
       clearLongPressTimer();
+      disposeVoiceRecognition();
       pressStartXRef.current = null;
       pressStartYRef.current = null;
       voicePreviewRef.current = null;
@@ -429,6 +718,8 @@ export function useShellBallInteraction() {
     visualState,
     inputValue,
     setInputValue,
+    finalizedSpeechPayload,
+    acknowledgeFinalizedSpeechPayload,
     voicePreview,
     voiceHoldProgress,
     inputFocused,
