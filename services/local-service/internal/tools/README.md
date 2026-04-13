@@ -299,6 +299,11 @@
 - plugin sidecar spec 声明
 - platform named pipe 最小状态骨架
 
+当前 `write_file` 的 `artifact_candidate` 正式消费规则已经冻结为：
+
+- `delivery` 已生成正式 artifact 时，以 `delivery` 为主
+- `delivery` 未生成 artifact 时，才由 `artifact_candidate` 兜底提升为正式 artifact
+
 ---
 
 ## 9. 禁止事项
