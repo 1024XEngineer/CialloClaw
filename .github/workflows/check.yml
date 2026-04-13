@@ -27,5 +27,9 @@ jobs:
       - name: Test Go code with coverage
         run: go test -v -race -covermode=atomic -coverprofile=coverage.out ./...
 
-      - name: Report Go coverage summary
-        run: go tool cover -func=coverage.out
+      - name: Upload code coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+          disable_search: true
+          files: coverage.out
