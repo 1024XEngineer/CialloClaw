@@ -1796,6 +1796,47 @@ func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetIncludesTaskCentricDeliveryAndAuditData(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail delivery")
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "collect detail view payload",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || len(deliveryResult) == 0 {
+		t.Fatalf("expected delivery_result in task detail response, got %+v", detailResult["delivery_result"])
+	}
+	auditRecords, ok := detailResult["audit_records"].([]map[string]any)
+	if !ok || len(auditRecords) == 0 {
+		t.Fatalf("expected audit_records in task detail response, got %+v", detailResult["audit_records"])
+	}
+	if detailResult["task"].(map[string]any)["task_id"] != taskID {
+		t.Fatalf("expected task detail task_id to match request, got %+v", detailResult["task"])
+	}
+}
+
 func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	service := newTestService()
 

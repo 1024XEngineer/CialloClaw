@@ -442,6 +442,10 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	deliveryResult := cloneMap(task.DeliveryResult)
+	artifacts := cloneMapSlice(task.Artifacts)
+	mirrorReferences := cloneMapSlice(task.MirrorReferences)
+	auditRecords := cloneMapSlice(task.AuditRecords)
 
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {
@@ -452,12 +456,19 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 			securitySummary["latest_restore_point"] = restorePoint
 		}
 	}
+	if len(auditRecords) == 0 {
+		if latestAudit := s.latestAuditRecordFromStorage(task.TaskID); latestAudit != nil {
+			auditRecords = []map[string]any{latestAudit}
+		}
+	}
 
 	return map[string]any{
 		"task":              taskMap(task),
 		"timeline":          timelineMap(task.Timeline),
-		"artifacts":         cloneMapSlice(task.Artifacts),
-		"mirror_references": cloneMapSlice(task.MirrorReferences),
+		"delivery_result":   deliveryResult,
+		"artifacts":         artifacts,
+		"mirror_references": mirrorReferences,
+		"audit_records":     auditRecords,
 		"security_summary":  securitySummary,
 	}, nil
 }
