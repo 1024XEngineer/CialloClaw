@@ -2,9 +2,11 @@ import type {
   AgentTaskDetailGetResult,
   AgentTaskControlParams,
   RequestMeta,
+  SecuritySummary,
   Task,
   TaskControlAction,
   TaskListGroup,
+  TaskStep,
 } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
@@ -94,6 +96,43 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
   };
 }
 
+function createSafeSecuritySummary(task: Task, summary: Partial<SecuritySummary> | null | undefined): SecuritySummary {
+  return {
+    latest_restore_point: summary?.latest_restore_point ?? null,
+    pending_authorizations: typeof summary?.pending_authorizations === "number" ? summary.pending_authorizations : task.status === "waiting_auth" ? 1 : 0,
+    risk_level: summary?.risk_level ?? task.risk_level,
+    security_status: summary?.security_status ?? (task.status === "waiting_auth" ? "pending_confirmation" : "normal"),
+  };
+}
+
+function normalizeTaskStep(step: TaskStep, taskId: string, index: number): TaskStep {
+  return {
+    input_summary: step?.input_summary ?? "",
+    name: step?.name ?? `步骤 ${index + 1}`,
+    order_index: typeof step?.order_index === "number" ? step.order_index : index + 1,
+    output_summary: step?.output_summary ?? "",
+    status: step?.status ?? "pending",
+    step_id: step?.step_id ?? `${taskId}-step-${index + 1}`,
+    task_id: step?.task_id ?? taskId,
+  };
+}
+
+function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): AgentTaskDetailGetResult {
+  if (!detail || !detail.task || !detail.task.task_id) {
+    throw new Error("task detail payload is missing task information");
+  }
+
+  const safeTask = detail.task;
+
+  return {
+    artifacts: Array.isArray(detail.artifacts) ? detail.artifacts : [],
+    mirror_references: Array.isArray(detail.mirror_references) ? detail.mirror_references : [],
+    security_summary: createSafeSecuritySummary(safeTask, detail.security_summary),
+    task: safeTask,
+    timeline: Array.isArray(detail.timeline) ? detail.timeline.map((step, index) => normalizeTaskStep(step, safeTask.task_id, index)) : [],
+  };
+}
+
 export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
   return {
     detail: createFallbackTaskDetail(item.task),
@@ -167,12 +206,14 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     return getMockTaskDetail(taskId);
   }
 
-  const detail = await withTimeout(
-    getTaskDetail({
-      request_meta: createRequestMeta(`task_detail_${taskId}`),
-      task_id: taskId,
-    }),
-    `task detail ${taskId}`,
+  const detail = normalizeTaskDetailResult(
+    await withTimeout(
+      getTaskDetail({
+        request_meta: createRequestMeta(`task_detail_${taskId}`),
+        task_id: taskId,
+      }),
+      `task detail ${taskId}`,
+    ),
   );
 
   return {
