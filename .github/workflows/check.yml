@@ -24,5 +24,8 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
-      - name: Test Go code
-        run: go test -v  ./...
+      - name: Test Go code with coverage
+        run: go test -v -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Report Go coverage summary
+        run: go tool cover -func=coverage.out
