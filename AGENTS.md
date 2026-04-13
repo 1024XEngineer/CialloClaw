@@ -36,14 +36,15 @@
 
 ### 必读顺序
 
-1. `docs/CialloClaw_开发统一规范_v18.md`
-2. `docs/CialloClaw_协议设计文档_v4.md`
-3. `docs/CialloClaw_数据设计文档_v6.md`
-4. `docs/CialloClaw_模块详细设计文档_v5.md`
-5. `docs/CialloClaw_分工安排和优先级划分_v12.md`
-6. `docs/原子功能.md`
+1. `docs/architecture-overview.md`
+2. `docs/development-guidelines.md`
+3. `docs/protocol-design.md`
+4. `docs/data-design.md`
+5. `docs/module-design.md`
+6. `docs/work-priority-plan.md`
+7. `docs/atomic-features.md`
 
-如果仓库中的文件名带有版本后缀、空格、括号、修订版等，以 **`docs/` 目录中的最新版本** 为准。
+如果仓库中的设计文档进行了英文重命名或后续版本替换，以 **`docs/` 目录中的最新英文命名文件** 为准。
 
 ### 阅读目标
 
@@ -73,13 +74,14 @@
 若多个信息源冲突，按以下优先级处理：
 
 1. 仓库中最新的协议真源与 schema 真源
-2. `docs/CialloClaw_开发统一规范_v18.md`
-3. `docs/CialloClaw_协议设计文档_v4.md`
-4. `docs/CialloClaw_数据设计文档_v6.md`
-5. `docs/CialloClaw_模块详细设计文档_v5.md`
-6. `docs/CialloClaw_分工安排和优先级划分_v12.md`
-7. 模块内 README / 注释 / 局部实现
-8. 你自己的推测
+2. `docs/architecture-overview.md`
+3. `docs/development-guidelines.md`
+4. `docs/protocol-design.md`
+5. `docs/data-design.md`
+6. `docs/module-design.md`
+7. `docs/work-priority-plan.md`
+8. 模块内 README / 注释 / 局部实现
+9. 你自己的推测
 
 当发现冲突时：
 
