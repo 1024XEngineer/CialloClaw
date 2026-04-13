@@ -472,6 +472,33 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 }
 
+func TestServiceNotepadConvertToTaskRequiresConfirmedFlag(t *testing.T) {
+	service := newTestService()
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_confirm",
+		"title":   "translate release draft",
+		"bucket":  "upcoming",
+		"status":  "normal",
+		"type":    "todo_item",
+	}})
+
+	_, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_confirm",
+		"confirmed": false,
+	})
+	if err == nil {
+		t.Fatal("expected convert_to_task to reject unconfirmed requests")
+	}
+	if err.Error() != "confirmed must be true to convert notepad item" {
+		t.Fatalf("expected confirmed validation error, got %v", err)
+	}
+
+	items, total := service.runEngine.NotepadItems("upcoming", 10, 0)
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected notepad item to remain untouched after rejected convert, total=%d len=%d", total, len(items))
+	}
+}
+
 func TestServiceExecutionAuditIDsStayUniqueAcrossToolAndTaskRecords(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime output")
 
@@ -1403,6 +1430,97 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.DashboardOverviewGet(map[string]any{
+		"include": []any{"focus_summary", "quick_actions"},
+	})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	overview := result["overview"].(map[string]any)
+	if _, ok := overview["focus_summary"]; !ok {
+		t.Fatal("expected focus_summary field to be present")
+	}
+	if _, ok := overview["quick_actions"]; !ok {
+		t.Fatal("expected quick_actions field to be present")
+	}
+	if overview["trust_summary"] != nil {
+		t.Fatalf("expected trust_summary placeholder to be nil when not requested, got %+v", overview["trust_summary"])
+	}
+	globalState, ok := overview["global_state"].(map[string]any)
+	if !ok || len(globalState) != 0 {
+		t.Fatalf("expected global_state placeholder to be empty map when not requested, got %+v", overview["global_state"])
+	}
+	highValueSignal, ok := overview["high_value_signal"].([]string)
+	if !ok || len(highValueSignal) != 0 {
+		t.Fatalf("expected high_value_signal placeholder to be empty slice when not requested, got %+v", overview["high_value_signal"])
+	}
+}
+
+func TestServiceDashboardOverviewFocusModeNarrowsSecondaryData(t *testing.T) {
+	service := newTestService()
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_focus",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "completed task for focus mode",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start completed task failed: %v", err)
+	}
+
+	_, err = service.StartTask(map[string]any{
+		"session_id": "sess_focus",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "waiting authorization task for focus mode",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start waiting auth task failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{
+		"focus_mode": true,
+	})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	overview := result["overview"].(map[string]any)
+	quickActions := overview["quick_actions"].([]string)
+	for _, action := range quickActions {
+		if action == "查看最近结果" {
+			t.Fatalf("expected focus mode to drop secondary quick action, got %v", quickActions)
+		}
+	}
+	highValueSignals := overview["high_value_signal"].([]string)
+	if len(highValueSignals) > 2 {
+		t.Fatalf("expected focus mode to narrow signal list, got %v", highValueSignals)
+	}
+}
+
 func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	service := newTestService()
 
@@ -1680,6 +1798,45 @@ func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail delivery")
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "collect detail view payload",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+
+	if _, ok := detailResult["delivery_result"]; ok {
+		t.Fatalf("expected task detail response not to expose undeclared delivery_result field, got %+v", detailResult["delivery_result"])
+	}
+	if _, ok := detailResult["audit_records"]; ok {
+		t.Fatalf("expected task detail response not to expose undeclared audit_records field, got %+v", detailResult["audit_records"])
+	}
+	if detailResult["task"].(map[string]any)["task_id"] != taskID {
+		t.Fatalf("expected task detail task_id to match request, got %+v", detailResult["task"])
+	}
+}
+
 func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	service := newTestService()
 
@@ -1703,6 +1860,48 @@ func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTaskStatusInvalid) {
 		t.Fatalf("expected pause from confirming_intent to return ErrTaskStatusInvalid, got %v", err)
+	}
+}
+
+func TestServiceTaskControlRequiresTaskID(t *testing.T) {
+	service := newTestService()
+
+	_, err := service.TaskControl(map[string]any{
+		"action": "pause",
+	})
+	if err == nil || err.Error() != "task_id is required" {
+		t.Fatalf("expected task_id required error, got %v", err)
+	}
+}
+
+func TestServiceTaskControlRequiresAction(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task control needs action",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.TaskControl(map[string]any{
+		"task_id": taskID,
+	})
+	if err == nil || err.Error() != "action is required" {
+		t.Fatalf("expected action required error, got %v", err)
 	}
 }
 

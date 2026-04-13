@@ -303,6 +303,68 @@ func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 	}
 }
 
+func TestDispatchMapsTaskControlMissingTaskIDToInvalidParams(t *testing.T) {
+	server := newTestServer()
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-missing-task-id"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"action": "pause",
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS mapping for missing task_id, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchMapsTaskControlMissingActionToInvalidParams(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task control rpc validation",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-missing-action"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS mapping for missing action, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
 func newTestServer() *Server {
 	orch := orchestrator.NewService(
 		contextsvc.NewService(),
