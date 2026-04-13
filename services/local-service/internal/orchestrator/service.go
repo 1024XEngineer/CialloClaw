@@ -295,6 +295,27 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !boolValue(params, "confirmed", false) {
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已取消本次处理，请重新告诉我你的目标。", task.UpdatedAt.Format(dateTimeLayout))
+		updatedTask, err := s.runEngine.ControlTask(task.TaskID, "cancel", bubble)
+		if err != nil {
+			switch {
+			case errors.Is(err, runengine.ErrTaskNotFound):
+				return nil, ErrTaskNotFound
+			case errors.Is(err, runengine.ErrTaskStatusInvalid):
+				return nil, ErrTaskStatusInvalid
+			case errors.Is(err, runengine.ErrTaskAlreadyFinished):
+				return nil, ErrTaskAlreadyFinished
+			default:
+				return nil, err
+			}
+		}
+		return map[string]any{
+			"task":            taskMap(updatedTask),
+			"bubble_message":  bubble,
+			"delivery_result": nil,
+		}, nil
+	}
 
 	intentValue := mapValue(params, "corrected_intent")
 	if len(intentValue) == 0 {
@@ -311,10 +332,11 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		return nil, ErrTaskNotFound
 	}
+	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
 	if requiresAuthorization(intentValue) {
-		updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, intentValue)
+		updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
 		if !ok {
 			return nil, ErrTaskNotFound
 		}
@@ -334,7 +356,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}, nil
 	}
 
-	updatedTask, ok := s.runEngine.ConfirmTask(task.TaskID, intentValue, bubble)
+	updatedTask, ok := s.runEngine.ConfirmTask(task.TaskID, updatedTitle, intentValue, bubble)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
@@ -1733,8 +1755,18 @@ func snapshotFromTask(task runengine.TaskRecord) contextsvc.TaskContextSnapshot 
 	return contextsvc.TaskContextSnapshot{
 		Trigger:   task.SourceType,
 		InputType: "text",
-		Text:      task.Title,
+		Text:      originalTextFromTaskTitle(task.Title),
 	}
+}
+
+func originalTextFromTaskTitle(title string) string {
+	trimmed := strings.TrimSpace(title)
+	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理："} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+		}
+	}
+	return trimmed
 }
 
 // memoryQueryFromSnapshot 处理当前模块的相关逻辑。

@@ -42,9 +42,12 @@ func TestEngineTaskLifecycle(t *testing.T) {
 		t.Fatal("expected initial presentation to be stored")
 	}
 
-	confirmed, ok := engine.ConfirmTask(task.TaskID, map[string]any{"name": "rewrite", "arguments": map[string]any{"tone": "professional"}}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "开始处理"})
+	confirmed, ok := engine.ConfirmTask(task.TaskID, "改写：整理测试任务", map[string]any{"name": "rewrite", "arguments": map[string]any{"tone": "professional"}}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "开始处理"})
 	if !ok {
 		t.Fatal("expected task confirmation to succeed")
+	}
+	if confirmed.Title != "改写：整理测试任务" {
+		t.Fatalf("expected confirmation to update task title, got %s", confirmed.Title)
 	}
 	if confirmed.Status != "processing" {
 		t.Fatalf("expected processing status after confirmation, got %s", confirmed.Status)
