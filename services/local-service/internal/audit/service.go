@@ -301,6 +301,10 @@ func fallbackToolAuditCandidate(toolCall tools.ToolCallRecord, tokenUsage map[st
 		"target":  "main_flow",
 		"result":  "success",
 	}
+	if toolCall.Status != tools.ToolCallStatusSucceeded {
+		candidate["summary"] = "tool execution failed"
+		candidate["result"] = string(toolCall.Status)
+	}
 
 	switch toolCall.ToolName {
 	case "generate_text":
@@ -311,6 +315,15 @@ func fallbackToolAuditCandidate(toolCall tools.ToolCallRecord, tokenUsage map[st
 		candidate["summary"] = "write file output"
 		if pathValue := stringValue(toolCall.Input, "path", ""); pathValue != "" {
 			candidate["target"] = pathValue
+		}
+	case "exec_command":
+		candidate["type"] = "command"
+		candidate["summary"] = "command execution completed"
+		if workingDir := stringValue(toolCall.Input, "working_dir", ""); workingDir != "" {
+			candidate["target"] = workingDir
+		}
+		if toolCall.Status != tools.ToolCallStatusSucceeded {
+			candidate["summary"] = "command execution failed"
 		}
 	}
 
