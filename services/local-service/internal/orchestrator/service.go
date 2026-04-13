@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -421,6 +422,14 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
 	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
+	if len(tasks) == 0 {
+		if persistedTasks, ok := s.listTasksFromStorage(group, sortBy, sortOrder, limit, offset); ok {
+			tasks = persistedTasks
+			if allPersistedTasks, totalOK := s.listTasksFromStorage(group, sortBy, sortOrder, 0, 0); totalOK {
+				total = len(allPersistedTasks)
+			}
+		}
+	}
 
 	items := make([]map[string]any, 0, len(tasks))
 	for _, task := range tasks {
@@ -439,6 +448,9 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.TaskDetail(taskID)
+	if !ok {
+		task, ok = s.taskDetailFromStorage(taskID)
+	}
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
@@ -1009,6 +1021,174 @@ func pageMap(limit, offset, total int) map[string]any {
 		"total":    total,
 		"has_more": offset+limit < total,
 	}
+}
+
+func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, bool) {
+	if s.storage == nil {
+		return nil, false
+	}
+	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if err != nil || len(records) == 0 {
+		return nil, false
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		task := taskRecordFromStorage(record)
+		if !matchesTaskGroup(task, group) {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	runengineSortTaskRecords(tasks, sortBy, sortOrder)
+	total := len(tasks)
+	if offset >= total {
+		return []runengine.TaskRecord{}, true
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return tasks[offset:end], true
+}
+
+func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
+	if s.storage == nil || strings.TrimSpace(taskID) == "" {
+		return runengine.TaskRecord{}, false
+	}
+	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	for _, record := range records {
+		if record.TaskID == taskID {
+			return taskRecordFromStorage(record), true
+		}
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func matchesTaskGroup(task runengine.TaskRecord, group string) bool {
+	switch group {
+	case "finished":
+		return isFinishedTaskStatus(task.Status)
+	case "unfinished":
+		return !isFinishedTaskStatus(task.Status)
+	default:
+		return true
+	}
+}
+
+func isFinishedTaskStatus(status string) bool {
+	switch status {
+	case "completed", "cancelled", "ended_unfinished", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func runengineSortTaskRecords(tasks []runengine.TaskRecord, sortBy, sortOrder string) {
+	switch sortBy {
+	case "started_at", "finished_at", "updated_at":
+	default:
+		sortBy = "updated_at"
+	}
+	if sortOrder != "asc" {
+		sortOrder = "desc"
+	}
+	sort.SliceStable(tasks, func(i, j int) bool {
+		left := taskSortTime(tasks[i], sortBy)
+		right := taskSortTime(tasks[j], sortBy)
+		if left.Equal(right) {
+			if sortOrder == "asc" {
+				return tasks[i].TaskID < tasks[j].TaskID
+			}
+			return tasks[i].TaskID > tasks[j].TaskID
+		}
+		if sortOrder == "asc" {
+			return left.Before(right)
+		}
+		return left.After(right)
+	})
+}
+
+func taskSortTime(task runengine.TaskRecord, sortBy string) time.Time {
+	switch sortBy {
+	case "started_at":
+		return task.StartedAt
+	case "finished_at":
+		if task.FinishedAt != nil {
+			return *task.FinishedAt
+		}
+		return time.Time{}
+	default:
+		return task.UpdatedAt
+	}
+}
+
+func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
+	return runengine.TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineFromStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func timelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+	result := make([]runengine.TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = runengine.TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+	return result
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // taskStatusForSuggestion 处理当前模块的相关逻辑。
