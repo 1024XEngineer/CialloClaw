@@ -60,9 +60,11 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	if err != nil {
 		t.Fatalf("new local path policy: %v", err)
 	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
 
 	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
-	auditService := audit.NewService()
+	auditService := audit.NewService(storageService.AuditWriter())
 	deliveryService := delivery.NewService()
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
@@ -71,14 +73,12 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), modelService, auditService, checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
-	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
-	t.Cleanup(func() { _ = storageService.Close() })
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
 		intent.NewService(),
-		runengine.NewEngine(),
+		mustNewStoredEngine(t, storageService.TaskRunStore()),
 		deliveryService,
 		memory.NewService(),
 		risk.NewService(),
@@ -88,6 +88,15 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
 
 	return service, workspaceRoot
+}
+
+func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengine.Engine {
+	t.Helper()
+	engine, err := runengine.NewEngineWithStore(taskStore)
+	if err != nil {
+		t.Fatalf("new stored engine: %v", err)
+	}
+	return engine
 }
 
 func newTestService() *Service {
@@ -1589,6 +1598,273 @@ func TestServiceSecurityRestorePointsListWithoutStorageReturnsEmptyPage(t *testi
 	page := result["page"].(map[string]any)
 	if page["total"] != 0 {
 		t.Fatalf("expected empty page metadata, got %+v", page)
+	}
+}
+
+func TestServiceTaskDetailGetFallsBackToStoredRecoveryPointForTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "task detail restore point fallback",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	err = service.storage.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_task_detail",
+		TaskID:          taskID,
+		Summary:         "stored recovery point for task detail",
+		CreatedAt:       "2026-04-08T10:02:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	securitySummary := result["security_summary"].(map[string]any)
+	latestRestorePoint := securitySummary["latest_restore_point"].(map[string]any)
+	if latestRestorePoint["recovery_point_id"] != "rp_task_detail" {
+		t.Fatalf("expected storage-backed restore point in task detail, got %+v", latestRestorePoint)
+	}
+}
+
+func TestServiceSecurityRestoreApplyRestoresWorkspaceAndReturnsFormalResult(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "新的内容")
+	originalPath := filepath.Join(workspaceRoot, "notes", "output.md")
+	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(originalPath, []byte("旧的内容"), 0o644); err != nil {
+		t.Fatalf("seed original file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	approvalID := startResult["task"].(map[string]any)["task_id"].(string)
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": approvalID,
+		"decision":    "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected write_file task to complete after authorization, got %+v", respondResult)
+	}
+
+	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+	points := pointsResult["items"].([]map[string]any)
+	if len(points) == 0 {
+		t.Fatal("expected completed write_file task to persist recovery point")
+	}
+
+	applyResult, err := service.SecurityRestoreApply(map[string]any{
+		"task_id":           taskID,
+		"recovery_point_id": points[0]["recovery_point_id"],
+	})
+	if err != nil {
+		t.Fatalf("security restore apply failed: %v", err)
+	}
+	if applyResult["applied"] != true {
+		t.Fatalf("expected restore apply success, got %+v", applyResult)
+	}
+	auditRecord := applyResult["audit_record"].(map[string]any)
+	if auditRecord["action"] != "restore_apply" || auditRecord["result"] != "success" {
+		t.Fatalf("expected restore audit success, got %+v", auditRecord)
+	}
+	bubble := applyResult["bubble_message"].(map[string]any)
+	if !strings.Contains(stringValue(bubble, "text", ""), "恢复点") {
+		t.Fatalf("expected bubble message to mention recovery point, got %+v", bubble)
+	}
+	restoredContent, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restoredContent) != "旧的内容" {
+		t.Fatalf("expected restore apply to recover original content, got %q", string(restoredContent))
+	}
+	updatedTask, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain available after restore")
+	}
+	if stringValue(updatedTask.SecuritySummary, "security_status", "") != "recovered" {
+		t.Fatalf("expected recovered security status, got %+v", updatedTask.SecuritySummary)
+	}
+}
+
+func TestServiceSecurityRestoreApplyReturnsStructuredFailure(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "新的内容")
+	originalPath := filepath.Join(workspaceRoot, "notes", "output.md")
+	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(originalPath, []byte("旧的内容"), 0o644); err != nil {
+		t.Fatalf("seed original file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	approvalID := startResult["task"].(map[string]any)["task_id"].(string)
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": approvalID,
+		"decision":    "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected write_file task to complete after authorization, got %+v", respondResult)
+	}
+	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+	points := pointsResult["items"].([]map[string]any)
+	if len(points) == 0 {
+		t.Fatal("expected completed write_file task to persist recovery point")
+	}
+	backupPath := filepath.Join(workspaceRoot, ".recovery_points", points[0]["recovery_point_id"].(string), "notes", "output.md")
+	if err := os.Remove(backupPath); err != nil {
+		t.Fatalf("remove backup snapshot: %v", err)
+	}
+
+	applyResult, err := service.SecurityRestoreApply(map[string]any{
+		"task_id":           taskID,
+		"recovery_point_id": points[0]["recovery_point_id"],
+	})
+	if err != nil {
+		t.Fatalf("security restore apply returned rpc error unexpectedly: %v", err)
+	}
+	if applyResult["applied"] != false {
+		t.Fatalf("expected restore apply failure result, got %+v", applyResult)
+	}
+	auditRecord := applyResult["audit_record"].(map[string]any)
+	if auditRecord["result"] != "failed" {
+		t.Fatalf("expected failed restore audit record, got %+v", auditRecord)
+	}
+	bubble := applyResult["bubble_message"].(map[string]any)
+	if !strings.Contains(stringValue(bubble, "text", ""), "恢复失败") {
+		t.Fatalf("expected failure bubble message, got %+v", bubble)
+	}
+	updatedTask, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain available after failed restore")
+	}
+	if stringValue(updatedTask.SecuritySummary, "security_status", "") != "execution_error" {
+		t.Fatalf("expected execution_error security status, got %+v", updatedTask.SecuritySummary)
+	}
+}
+
+func TestServiceSecurityRestoreApplySupportsPersistedTaskFallback(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "新的内容")
+	originalPath := filepath.Join(workspaceRoot, "notes", "output.md")
+	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(originalPath, []byte("旧的内容"), 0o644); err != nil {
+		t.Fatalf("seed original file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	approvalID := startResult["task"].(map[string]any)["task_id"].(string)
+	respondResult, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": approvalID, "decision": "allow_once"})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected task to complete before persisted fallback, got %+v", respondResult)
+	}
+	if _, err := service.TaskDetailGet(map[string]any{"task_id": taskID}); err != nil {
+		t.Fatalf("task detail get before persisted fallback failed: %v", err)
+	}
+	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+	points := pointsResult["items"].([]map[string]any)
+	if len(points) == 0 {
+		t.Fatal("expected recovery point to exist")
+	}
+	persistedEngine := runengine.NewEngine()
+	service.runEngine = persistedEngine
+
+	applyResult, err := service.SecurityRestoreApply(map[string]any{"task_id": taskID, "recovery_point_id": points[0]["recovery_point_id"]})
+	if err != nil {
+		t.Fatalf("security restore apply failed with persisted task fallback: %v", err)
+	}
+	if applyResult["applied"] != true {
+		t.Fatalf("expected restore apply success with persisted task fallback, got %+v", applyResult)
 	}
 }
 

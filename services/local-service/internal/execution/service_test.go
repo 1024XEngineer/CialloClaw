@@ -148,8 +148,12 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	if result.ToolOutput["audit_record"] == nil {
 		t.Fatalf("expected write_file tool output to include consumed audit record, got %+v", result.ToolOutput)
 	}
-	if result.ToolOutput["recovery_point"] != nil {
-		t.Fatalf("expected no recovery point for create flow, got %+v", result.ToolOutput)
+	recoveryPoint, ok := result.ToolOutput["recovery_point"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create flow to emit recovery point metadata, got %+v", result.ToolOutput)
+	}
+	if objects := recoveryPoint["objects"].([]string); len(objects) != 1 || objects[0] != "workspace/notes/output.md" {
+		t.Fatalf("expected create flow recovery point to target workspace/notes/output.md, got %+v", recoveryPoint)
 	}
 	if len(result.ToolCalls) != 2 {
 		t.Fatalf("expected generate_text + write_file tool chain, got %d calls", len(result.ToolCalls))
@@ -204,8 +208,70 @@ func TestExecuteWriteFileBubbleConsumesArtifactCandidate(t *testing.T) {
 	if result.ToolOutput["audit_record"] == nil {
 		t.Fatalf("expected audit candidate to be consumed, got %+v", result.ToolOutput)
 	}
+	if result.ToolOutput["recovery_point"] == nil {
+		t.Fatalf("expected create flow to expose recovery point candidate, got %+v", result.ToolOutput)
+	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "notes", "output.md")); err != nil {
 		t.Fatalf("expected write_file bubble path to still write file, got %v", err)
+	}
+}
+
+func TestExecuteWriteFileOverwriteCreatesAndAppliesRecoveryPoint(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "新的内容")
+	originalPath := filepath.Join(workspaceRoot, "notes", "output.md")
+	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(originalPath, []byte("旧的内容"), 0o644); err != nil {
+		t.Fatalf("seed original file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_restore",
+		RunID:        "run_restore",
+		Title:        "覆盖文件",
+		Intent:       map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "notes/output.md"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请覆盖该文件"},
+		DeliveryType: "workspace_document",
+		ResultTitle:  "文件写入结果",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.RecoveryPoint == nil {
+		t.Fatalf("expected overwrite execution to emit recovery point, got %+v", result.ToolOutput)
+	}
+	if result.ToolOutput["recovery_point"] == nil {
+		t.Fatalf("expected tool output to expose recovery point, got %+v", result.ToolOutput)
+	}
+	overwrittenContent, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatalf("read overwritten file: %v", err)
+	}
+	if !strings.Contains(string(overwrittenContent), "新的内容") {
+		t.Fatalf("expected file to be overwritten, got %q", string(overwrittenContent))
+	}
+
+	recoveryPoint := checkpoint.RecoveryPoint{
+		RecoveryPointID: result.RecoveryPoint["recovery_point_id"].(string),
+		TaskID:          result.RecoveryPoint["task_id"].(string),
+		Summary:         result.RecoveryPoint["summary"].(string),
+		CreatedAt:       result.RecoveryPoint["created_at"].(string),
+		Objects:         result.RecoveryPoint["objects"].([]string),
+	}
+	applyResult, err := service.ApplyRecoveryPoint(context.Background(), recoveryPoint)
+	if err != nil {
+		t.Fatalf("apply recovery point failed: %v", err)
+	}
+	if applyResult.RecoveryPointID != recoveryPoint.RecoveryPointID {
+		t.Fatalf("expected recovery point id to round-trip, got %+v", applyResult)
+	}
+	restoredContent, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restoredContent) != "旧的内容" {
+		t.Fatalf("expected restore to recover original content, got %q", string(restoredContent))
 	}
 }
 

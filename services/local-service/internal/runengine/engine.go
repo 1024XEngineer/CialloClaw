@@ -276,6 +276,35 @@ func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 	return record.clone(), true
 }
 
+// HydrateTaskFromStorage 将持久化快照重新装载回运行时内存，用于恢复重启后的治理动作。
+func (e *Engine) HydrateTaskFromStorage(record TaskRecord) TaskRecord {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cloned := record.clone()
+	if existing, ok := e.tasks[cloned.TaskID]; ok {
+		*existing = cloned
+		e.persistTaskLocked(existing)
+		return existing.clone()
+	}
+	stored := cloned
+	e.tasks[stored.TaskID] = &stored
+	e.taskOrder = append([]string{stored.TaskID}, e.taskOrder...)
+	if stored.SessionID != "" {
+		seen := false
+		for _, sessionID := range e.sessionOrder {
+			if sessionID == stored.SessionID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			e.sessionOrder = append(e.sessionOrder, stored.SessionID)
+		}
+	}
+	e.persistTaskLocked(&stored)
+	return stored.clone()
+}
+
 // ListTasks 列出Tasks。
 
 // ListTasks 按未完成/已完成分组列出任务，并在分页前应用统一排序规则。
@@ -456,7 +485,7 @@ func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[strin
 // CompleteTask 完成Task。
 
 // CompleteTask 把任务收敛到 completed，并写入正式交付结果、artifact 和恢复点摘要。
-func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any) (TaskRecord, bool) {
+func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -475,7 +504,11 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	record.Artifacts = cloneMapSlice(artifacts)
 	record.Timeline = advanceTimeline(record.Timeline, "return_result", "completed", "结果已正式交付")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
-	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, buildRecoveryPoint(record.TaskID, now))
+	restorePoint := buildRecoveryPoint(record.TaskID, now)
+	if len(latestRestorePoint) > 0 && len(latestRestorePoint[0]) > 0 {
+		restorePoint = cloneMap(latestRestorePoint[0])
+	}
+	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, restorePoint)
 	record.LatestEvent = e.buildEvent(record, "delivery.ready")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
@@ -484,6 +517,42 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	record.queueNotification("delivery.ready", map[string]any{
 		"task_id":         record.TaskID,
 		"delivery_result": cloneMap(record.DeliveryResult),
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// ApplyRecoveryOutcome 在恢复点应用后刷新任务的安全摘要与通知回写。
+func (e *Engine) ApplyRecoveryOutcome(taskID, securityStatus string, recoveryPoint map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.SecuritySummary = map[string]any{
+		"security_status":        firstNonEmpty(securityStatus, "recovered"),
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   cloneMap(recoveryPoint),
+	}
+	eventType := "recovery.failed"
+	if securityStatus == "recovered" {
+		eventType = "recovery.applied"
+	}
+	record.LatestEvent = e.buildEventWithPayload(record, eventType, map[string]any{
+		"status":            record.Status,
+		"security_status":   firstNonEmpty(securityStatus, "recovered"),
+		"recovery_point_id": stringValue(cloneMap(recoveryPoint), "recovery_point_id", ""),
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
 	})
 	e.persistTaskLocked(record)
 

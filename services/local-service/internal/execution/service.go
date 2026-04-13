@@ -3,7 +3,9 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"strings"
@@ -51,6 +53,7 @@ type Result struct {
 	DeliveryResult  map[string]any
 	Artifacts       []map[string]any
 	BubbleText      string
+	RecoveryPoint   map[string]any
 	ModelInvocation map[string]any
 	AuditRecord     map[string]any
 	ToolCalls       []tools.ToolCallRecord
@@ -252,6 +255,10 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 	if !ok || s.executor == nil {
 		return Result{}, false, nil
 	}
+	preWriteRecoveryPoint, err := s.prepareWriteFileRecoveryPoint(ctx, request, toolName, toolInput)
+	if err != nil {
+		return Result{}, false, err
+	}
 
 	workspacePath := workspacePathFromDeliveryResult(deliveryResult)
 	toolResult, err := s.executor.ExecuteToolWithContext(ctx, &tools.ToolExecuteContext{
@@ -265,11 +272,18 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 	if err != nil {
 		return Result{}, false, fmt.Errorf("execute tool %s: %w", toolName, err)
 	}
+	if len(preWriteRecoveryPoint) > 0 {
+		if toolResult.RawOutput == nil {
+			toolResult.RawOutput = map[string]any{}
+		}
+		toolResult.RawOutput["recovery_point"] = cloneOutput(preWriteRecoveryPoint)
+	}
 
 	result := Result{
 		Content:        outputText,
 		DeliveryResult: deliveryResult,
 		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
+		RecoveryPoint:  extractRecoveryPoint(toolResult.RawOutput),
 		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)},
 		ToolName:       toolName,
 		ToolInput:      toolInput,
@@ -458,21 +472,23 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 	}
 
 	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil {
-		createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
-		if err != nil {
-			return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
-		}
-		if shouldCreate {
-			point, err := s.checkpoint.Create(ctx, createInput)
+		if _, hasRecoveryPoint := merged["recovery_point"].(map[string]any); !hasRecoveryPoint {
+			createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
 			if err != nil {
-				return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+				return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
 			}
-			merged["recovery_point"] = map[string]any{
-				"recovery_point_id": point.RecoveryPointID,
-				"task_id":           point.TaskID,
-				"summary":           point.Summary,
-				"created_at":        point.CreatedAt,
-				"objects":           point.Objects,
+			if shouldCreate {
+				point, err := s.checkpoint.Create(ctx, createInput)
+				if err != nil {
+					return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+				}
+				merged["recovery_point"] = map[string]any{
+					"recovery_point_id": point.RecoveryPointID,
+					"task_id":           point.TaskID,
+					"summary":           point.Summary,
+					"created_at":        point.CreatedAt,
+					"objects":           point.Objects,
+				}
 			}
 		}
 	}
@@ -489,6 +505,73 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 	}
 
 	return merged, artifact, nil
+}
+
+// ApplyRecoveryPoint 将某个恢复点对应的工作区快照重新写回目标对象。
+func (s *Service) ApplyRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) (checkpoint.ApplyResult, error) {
+	if s.checkpoint == nil {
+		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point: checkpoint service unavailable")
+	}
+	if s.fileSystem == nil {
+		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point: file system unavailable")
+	}
+	result, err := s.checkpoint.Apply(ctx, s.fileSystem, point)
+	if err != nil {
+		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point %s: %w", point.RecoveryPointID, err)
+	}
+	return result, nil
+}
+
+func (s *Service) prepareWriteFileRecoveryPoint(ctx context.Context, request Request, toolName string, toolInput map[string]any) (map[string]any, error) {
+	if toolName != "write_file" || s.checkpoint == nil || s.fileSystem == nil {
+		return nil, nil
+	}
+	targetPath := stringValue(toolInput, "path", "")
+	if targetPath == "" {
+		return nil, nil
+	}
+	if _, err := s.fileSystem.Stat(targetPath); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("inspect write_file target %s: %w", targetPath, err)
+		}
+	}
+	point, err := s.checkpoint.CreateWithSnapshots(ctx, s.fileSystem, checkpoint.CreateInput{
+		TaskID:  request.TaskID,
+		Summary: "write_file_before_change",
+		Objects: []string{checkpointObjectPath(targetPath)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create pre-write recovery point: %w", err)
+	}
+	return map[string]any{
+		"recovery_point_id": point.RecoveryPointID,
+		"task_id":           point.TaskID,
+		"summary":           point.Summary,
+		"created_at":        point.CreatedAt,
+		"objects":           append([]string(nil), point.Objects...),
+	}, nil
+}
+
+func extractRecoveryPoint(output map[string]any) map[string]any {
+	if len(output) == 0 {
+		return nil
+	}
+	recoveryPoint, ok := output["recovery_point"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloneOutput(recoveryPoint)
+}
+
+func checkpointObjectPath(targetPath string) string {
+	if targetPath == "" {
+		return ""
+	}
+	normalized := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if normalized == "" || strings.HasPrefix(normalized, "workspace/") {
+		return normalized
+	}
+	return path.Join("workspace", normalized)
 }
 
 func cloneOutput(input map[string]any) map[string]any {

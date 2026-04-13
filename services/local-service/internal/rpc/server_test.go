@@ -298,6 +298,59 @@ func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore-apply.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_restore",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "restore runtime task",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	err = storageService.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_001",
+		TaskID:          taskID,
+		Summary:         "stored recovery point",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-security-restore-apply"`),
+		Method:  "agent.security.restore.apply",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":           taskID,
+			"recovery_point_id": "rp_001",
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if _, ok := data["applied"].(bool); !ok {
+		t.Fatalf("expected applied flag in restore result, got %+v", data)
+	}
+	if data["recovery_point"].(map[string]any)["recovery_point_id"] != "rp_001" {
+		t.Fatalf("expected rp_001 restore result, got %+v", data)
+	}
+}
+
 func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrStorageQueryFailed)
 	if rpcErr == nil {
@@ -305,6 +358,16 @@ func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
 	}
 	if rpcErr.Code != 1005001 || rpcErr.Message != "SQLITE_WRITE_FAILED" {
 		t.Fatalf("expected SQLITE_WRITE_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestDispatchMapsRecoveryPointNotFoundErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrRecoveryPointNotFound)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1005002 {
+		t.Fatalf("expected 1005002 mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
 	}
 }
 
