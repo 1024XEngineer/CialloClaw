@@ -1,11 +1,5 @@
-import type {
-  AgentTaskDetailGetResult,
-  AgentTaskControlParams,
-  RequestMeta,
-  Task,
-  TaskControlAction,
-  TaskListGroup,
-} from "@cialloclaw/protocol";
+import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup, TaskStep } from "@cialloclaw/protocol";
+import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
 import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
@@ -94,6 +88,59 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
   };
 }
 
+const riskLevels = new Set<string>(RISK_LEVELS);
+const securityStatuses = new Set<string>(SECURITY_STATUSES);
+const taskStepStatuses = new Set<string>(TASK_STEP_STATUSES);
+
+function isTaskStep(step: unknown): step is TaskStep {
+  if (!step || typeof step !== "object") {
+    return false;
+  }
+
+  const candidate = step as Partial<TaskStep>;
+  return (
+    typeof candidate.step_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.order_index === "number" &&
+    typeof candidate.input_summary === "string" &&
+    typeof candidate.output_summary === "string" &&
+    typeof candidate.status === "string" &&
+    taskStepStatuses.has(candidate.status)
+  );
+}
+
+function hasValidSecuritySummary(detail: AgentTaskDetailGetResult): boolean {
+  const summary = detail.security_summary as Partial<AgentTaskDetailGetResult["security_summary"]> | null | undefined;
+  return Boolean(
+    summary &&
+      typeof summary.pending_authorizations === "number" &&
+      typeof summary.risk_level === "string" &&
+      typeof summary.security_status === "string" &&
+      riskLevels.has(summary.risk_level) &&
+      securityStatuses.has(summary.security_status) &&
+      "latest_restore_point" in summary,
+  );
+}
+
+function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): AgentTaskDetailGetResult {
+  if (!detail || !detail.task || !detail.task.task_id) {
+    throw new Error("task detail payload is missing task information");
+  }
+
+  if (!hasValidSecuritySummary(detail)) {
+    throw new Error("task detail payload is missing security summary");
+  }
+
+  return {
+    artifacts: Array.isArray(detail.artifacts) ? detail.artifacts : [],
+    mirror_references: Array.isArray(detail.mirror_references) ? detail.mirror_references : [],
+    security_summary: detail.security_summary,
+    task: detail.task,
+    timeline: Array.isArray(detail.timeline) ? detail.timeline.filter(isTaskStep) : [],
+  };
+}
+
 export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
   return {
     detail: createFallbackTaskDetail(item.task),
@@ -167,12 +214,14 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     return getMockTaskDetail(taskId);
   }
 
-  const detail = await withTimeout(
-    getTaskDetail({
-      request_meta: createRequestMeta(`task_detail_${taskId}`),
-      task_id: taskId,
-    }),
-    `task detail ${taskId}`,
+  const detail = normalizeTaskDetailResult(
+    await withTimeout(
+      getTaskDetail({
+        request_meta: createRequestMeta(`task_detail_${taskId}`),
+        task_id: taskId,
+      }),
+      `task detail ${taskId}`,
+    ),
   );
 
   return {

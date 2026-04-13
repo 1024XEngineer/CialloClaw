@@ -32,6 +32,7 @@ var (
 	ErrTaskNotFound        = errors.New("task not found")
 	ErrTaskStatusInvalid   = errors.New("task status invalid")
 	ErrTaskAlreadyFinished = errors.New("task already finished")
+	ErrStorageQueryFailed  = errors.New("storage query failed")
 )
 
 // Service 提供当前模块的服务能力。
@@ -679,6 +680,48 @@ func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, er
 		"items": items,
 		"page":  pageMap(limit, offset, total),
 	}, nil
+}
+
+// SecurityAuditList 处理 agent.security.audit.list。
+func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if s.storage == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		items = append(items, record.Map())
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+func clampListLimit(limit int) int {
+	if limit <= 0 {
+		return 20
+	}
+	if limit > 100 {
+		return 100
+	}
+	return limit
+}
+
+func clampListOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 // PendingNotifications 返回待处理的Notifications。

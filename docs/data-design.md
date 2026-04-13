@@ -261,8 +261,8 @@
 
 ### 7A.2 todo_items / recurring_rules
 
-- `todo_items.todo_item_id`：巡检事项主键，表示尚未进入正式执行态的未来安排。
-- `todo_items.bucket`：事项桶位，区分 `upcoming / later / recurring / closed` 这类用户可见分组。
+- `todo_items.item_id`：巡检事项主键，表示尚未进入正式执行态的未来安排。
+- `todo_items.bucket`：事项桶位，区分 `upcoming / later / recurring_rule / closed` 这类用户可见分组。
 - `todo_items.status`：事项状态，不得直接映射成 `task.status`。
 - `todo_items.linked_task_id`：事项被升级为正式任务后才允许写入，用于建立来源追踪。
 - `todo_items.source_path / source_line`：用于把巡检结果精确回链到 Markdown 来源。
@@ -378,7 +378,7 @@ CREATE INDEX idx_tasks_primary_run_id ON tasks(primary_run_id);
 
 ```sql
 CREATE TABLE task_steps (
-    task_step_id TEXT PRIMARY KEY,               -- 任务步骤ID
+    step_id TEXT PRIMARY KEY,                    -- 任务步骤ID
     task_id TEXT NOT NULL,                       -- 所属任务ID
     name TEXT NOT NULL,                          -- 步骤名
     status TEXT NOT NULL,                        -- 步骤状态
@@ -396,9 +396,9 @@ CREATE INDEX idx_task_steps_task_order ON task_steps(task_id, order_index);
 
 ```sql
 CREATE TABLE todo_items (
-    todo_item_id TEXT PRIMARY KEY,               -- 事项ID
+    item_id TEXT PRIMARY KEY,                    -- 事项ID
     title TEXT NOT NULL,                         -- 事项标题
-    bucket TEXT NOT NULL,                        -- 分桶(upcoming/later/recurring/closed)
+    bucket TEXT NOT NULL,                        -- 分桶(upcoming/later/recurring_rule/closed)
     status TEXT NOT NULL,                        -- 当前状态
     source_path TEXT,                            -- 来源文件路径
     source_line INTEGER,                         -- 来源行号
@@ -417,8 +417,8 @@ CREATE INDEX idx_todo_items_linked_task_id ON todo_items(linked_task_id);
 
 ```sql
 CREATE TABLE recurring_rules (
-    recurring_rule_id TEXT PRIMARY KEY,          -- 规则ID
-    todo_item_id TEXT NOT NULL,                  -- 所属事项ID
+    rule_id TEXT PRIMARY KEY,                    -- 规则ID
+    item_id TEXT NOT NULL,                       -- 所属事项ID
     rule_type TEXT NOT NULL,                     -- 规则类型
     cron_expr TEXT,                              -- cron表达式
     interval_value INTEGER,                      -- 间隔值
@@ -427,9 +427,9 @@ CREATE TABLE recurring_rules (
     enabled INTEGER NOT NULL DEFAULT 1,          -- 是否启用
     created_at TEXT NOT NULL,                    -- 创建时间
     updated_at TEXT NOT NULL,                    -- 更新时间,
-    FOREIGN KEY(todo_item_id) REFERENCES todo_items(todo_item_id)
+    FOREIGN KEY(item_id) REFERENCES todo_items(item_id)
 );
-CREATE INDEX idx_recurring_rules_todo_item_id ON recurring_rules(todo_item_id);
+CREATE INDEX idx_recurring_rules_item_id ON recurring_rules(item_id);
 ```
 
 ### 7.6 runs

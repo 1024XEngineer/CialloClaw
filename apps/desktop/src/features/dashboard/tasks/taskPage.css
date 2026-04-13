@@ -306,7 +306,9 @@
 .task-preview-card-shell__list,
 .task-preview-finished-groups,
 .task-preview-card-shell--hint .dashboard-card__list {
+  align-content: start;
   flex: 1;
+  grid-auto-rows: max-content;
   min-height: 0;
   overflow: auto;
   padding-right: 0.3rem;
@@ -380,6 +382,7 @@
 }
 
 .task-preview-card {
+  align-content: start;
   background:
     linear-gradient(180deg, rgba(255, 252, 247, 0.9), rgba(246, 239, 231, 0.86)),
     color-mix(in srgb, var(--task-paper, rgba(255, 251, 245, 0.8)) 88%, var(--task-accent, #9fb7d8) 12%);
