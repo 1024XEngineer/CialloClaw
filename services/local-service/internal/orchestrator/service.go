@@ -681,6 +681,28 @@ func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, er
 	}, nil
 }
 
+// SecurityAuditList 处理 agent.security.audit.list。
+func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, error) {
+	limit := intValue(params, "limit", 20)
+	offset := intValue(params, "offset", 0)
+	taskID := stringValue(params, "task_id", "")
+	if s.storage == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		items = append(items, record.Map())
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
 // PendingNotifications 返回待处理的Notifications。
 
 // PendingNotifications 读取某个任务当前尚未消费的通知列表。

@@ -2,12 +2,15 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -15,9 +18,11 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -206,6 +211,48 @@ func TestDispatchMapsTaskControlFinishedErrors(t *testing.T) {
 	}
 	if errEnvelope.Error.Code != 1001005 || errEnvelope.Error.Message != "TASK_ALREADY_FINISHED" {
 		t.Fatalf("expected TASK_ALREADY_FINISHED mapping, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchReturnsSecurityAuditList(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "audit.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	err := storageService.AuditWriter().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_001",
+		TaskID:    "task_001",
+		Type:      "file",
+		Action:    "write_file",
+		Summary:   "stored audit record",
+		Target:    "workspace/result.md",
+		Result:    "success",
+		CreatedAt: "2026-04-08T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write audit record: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-security-audit-list"`),
+		Method:  "agent.security.audit.list",
+		Params: mustMarshal(t, map[string]any{
+			"limit":  20,
+			"offset": 0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one audit item, got %d", len(items))
+	}
+	if items[0]["audit_id"] != "audit_001" {
+		t.Fatalf("expected stored audit_001, got %+v", items[0])
 	}
 }
 

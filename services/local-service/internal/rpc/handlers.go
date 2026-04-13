@@ -30,6 +30,7 @@ func (s *Server) registerHandlers() {
 		"agent.dashboard.module.get":           s.handleAgentDashboardModuleGet,
 		"agent.mirror.overview.get":            s.handleAgentMirrorOverviewGet,
 		"agent.security.summary.get":           s.handleAgentSecuritySummaryGet,
+		"agent.security.audit.list":            s.handleAgentSecurityAuditList,
 		"agent.security.pending.list":          s.handleAgentSecurityPendingList,
 		"agent.security.respond":               s.handleAgentSecurityRespond,
 		"agent.settings.get":                   s.handleAgentSettingsGet,
@@ -172,6 +173,14 @@ func (s *Server) handleAgentMirrorOverviewGet(params map[string]any) (any, *rpcE
 func (s *Server) handleAgentSecuritySummaryGet(params map[string]any) (any, *rpcError) {
 	_ = params
 	data, err := s.orchestrator.SecuritySummaryGet()
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentSecurityPendingList 处理当前模块的相关逻辑。
+
+// handleAgentSecurityAuditList 处理 agent.security.audit.list。
+func (s *Server) handleAgentSecurityAuditList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SecurityAuditList(params)
 	return wrapOrchestratorResult(data, err)
 }
 

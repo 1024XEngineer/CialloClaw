@@ -1493,6 +1493,36 @@ func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	}
 }
 
+func TestServiceSecurityAuditListFallsBackToStoredAuditRecords(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err := service.storage.AuditWriter().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_001",
+		TaskID:    "task_external",
+		Type:      "file",
+		Action:    "write_file",
+		Summary:   "stored audit record",
+		Target:    "workspace/result.md",
+		Result:    "success",
+		CreatedAt: "2026-04-08T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write audit record failed: %v", err)
+	}
+
+	result, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security audit list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["audit_id"] != "audit_001" {
+		t.Fatalf("expected storage-backed audit record, got %+v", items)
+	}
+}
+
 func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	service := newTestService()
 
