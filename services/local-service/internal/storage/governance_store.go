@@ -311,11 +311,14 @@ func openSQLiteDatabase(databasePath string) (*sql.DB, error) {
 }
 
 func pageAuditRecords(items []audit.Record, limit, offset int) []audit.Record {
+	if offset < 0 {
+		offset = 0
+	}
 	if offset >= len(items) {
 		return nil
 	}
 	if limit <= 0 {
-		limit = len(items)
+		limit = 20
 	}
 	end := offset + limit
 	if end > len(items) {
@@ -325,11 +328,14 @@ func pageAuditRecords(items []audit.Record, limit, offset int) []audit.Record {
 }
 
 func pageRecoveryPoints(items []checkpoint.RecoveryPoint, limit, offset int) []checkpoint.RecoveryPoint {
+	if offset < 0 {
+		offset = 0
+	}
 	if offset >= len(items) {
 		return nil
 	}
 	if limit <= 0 {
-		limit = len(items)
+		limit = 20
 	}
 	end := offset + limit
 	if end > len(items) {

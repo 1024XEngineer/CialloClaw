@@ -38,6 +38,7 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - RPC response assembly does not belong here
 - Memory retrieval business logic does not belong here; only storage-facing contracts and temporary local implementations live here
 - Governance writer persistence now also belongs here, but governance rule evaluation still does not
+- `audit` 与 `recovery_point` 的最小读侧查询也已进入 storage 层
 - Artifact and Stronghold implementations do not belong here yet
 - Protocol schema ownership stays in `/packages/protocol`
 - Current SQLite search implementation uses an FTS5 skeleton plus fallback SQL scanning, and is still not the final FTS/vec retrieval design
@@ -48,6 +49,7 @@ This module owns the backend-local storage boundary inside `services/local-servi
 - The exact storage-facing interface for memory persistence
 - Whether artifact storage and secret storage share this module or split further
 - The final read/query interfaces for persisted audit and recovery-point data
+- governance 列表型接口（如 `agent.security.audit.list` / `agent.security.restore_points.list`）是否需要进一步分页与过滤增强
 - Whether database path validation should later depend on stronger path-policy checks
 - The final capability snapshot fields required by bootstrap or orchestrator
 - When the in-memory memory store should be replaced by SQLite-backed persistence
