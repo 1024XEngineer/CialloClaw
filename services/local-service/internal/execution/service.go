@@ -129,7 +129,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		AuditRecord:     cloneMap(trace.AuditRecord),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
 		ToolInput: map[string]any{
-			"intent_name":     stringValue(request.Intent, "name", "summarize"),
+			"intent_name":     effectiveIntentName(request.Intent),
 			"delivery_type":   deliveryType,
 			"input_preview":   truncateText(inputText, 96),
 			"available_tools": s.availableToolNames(),
@@ -586,7 +586,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 	toolResult, err := s.executeTool(ctx, request, "generate_text", map[string]any{
 		"prompt":        prompt,
 		"fallback_text": fallbackOutput(request, inputText),
-		"intent_name":   stringValue(request.Intent, "name", "summarize"),
+		"intent_name":   effectiveIntentName(request.Intent),
 	})
 	if err != nil {
 		return generationTrace{}, fmt.Errorf("generate text: %w", err)
@@ -674,10 +674,10 @@ func invocationRecordMap(record *model.InvocationRecord) map[string]any {
 }
 
 func buildPrompt(request Request, inputText string) string {
-	intentName := stringValue(request.Intent, "name", "summarize")
+	intentName := effectiveIntentName(request.Intent)
 	targetLanguage := stringValue(mapValue(request.Intent, "arguments"), "target_language", "中文")
 
-	instruction := "请整理以下内容并给出结果。"
+	instruction := "请先根据输入判断用户想要什么帮助；如果目标不明确，请明确指出需要用户补充处理方式，不要把内容误当成总结任务。"
 	switch intentName {
 	case "rewrite":
 		instruction = "请保留原意并以更清晰、可直接使用的中文改写以下内容。"
@@ -695,13 +695,15 @@ func buildPrompt(request Request, inputText string) string {
 }
 
 func fallbackOutput(request Request, inputText string) string {
-	intentName := stringValue(request.Intent, "name", "summarize")
+	intentName := effectiveIntentName(request.Intent)
 	normalized := normalizeWhitespace(inputText)
 	if normalized == "" {
 		normalized = "无可用输入"
 	}
 
 	switch intentName {
+	case "":
+		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
 	case "rewrite":
 		return "改写结果：\n" + normalized
 	case "translate":
@@ -725,6 +727,10 @@ func fallbackOutput(request Request, inputText string) string {
 	default:
 		return normalized
 	}
+}
+
+func effectiveIntentName(taskIntent map[string]any) string {
+	return strings.TrimSpace(stringValue(taskIntent, "name", ""))
 }
 
 func workspaceDocumentContent(title, outputText string) string {

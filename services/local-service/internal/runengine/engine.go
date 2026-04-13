@@ -313,8 +313,8 @@ func (e *Engine) ListTasks(group, sortBy, sortOrder string, limit, offset int) (
 // ConfirmTask 确认Task。
 
 // ConfirmTask 把处于 confirming_intent 的任务推进到 processing。
-// 这里会更新 intent、当前步骤和气泡展示，并推进 timeline。
-func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+// 这里会更新标题、intent、当前步骤和气泡展示，并推进 timeline。
+func (e *Engine) ConfirmTask(taskID, title string, intent map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -323,6 +323,7 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 		return TaskRecord{}, false
 	}
 
+	record.Title = firstNonEmpty(title, record.Title)
 	record.Intent = cloneMap(intent)
 	record.Status = "processing"
 	record.CurrentStep = "generate_output"
@@ -367,8 +368,8 @@ func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRec
 
 // UpdateIntent 更新Task当前生效意图。
 
-// UpdateIntent 在不改变整体任务身份的前提下覆盖当前生效意图。
-func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord, bool) {
+// UpdateIntent 在不改变整体任务身份的前提下覆盖当前生效意图与标题。
+func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -377,6 +378,7 @@ func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord,
 		return TaskRecord{}, false
 	}
 
+	record.Title = firstNonEmpty(title, record.Title)
 	record.Intent = cloneMap(intent)
 	record.UpdatedAt = e.now()
 	record.LatestEvent = e.buildEvent(record, "task.updated")

@@ -295,15 +295,48 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !boolValue(params, "confirmed", false) {
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已取消本次处理，请重新告诉我你的目标。", task.UpdatedAt.Format(dateTimeLayout))
+		updatedTask, err := s.runEngine.ControlTask(task.TaskID, "cancel", bubble)
+		if err != nil {
+			switch {
+			case errors.Is(err, runengine.ErrTaskNotFound):
+				return nil, ErrTaskNotFound
+			case errors.Is(err, runengine.ErrTaskStatusInvalid):
+				return nil, ErrTaskStatusInvalid
+			case errors.Is(err, runengine.ErrTaskAlreadyFinished):
+				return nil, ErrTaskAlreadyFinished
+			default:
+				return nil, err
+			}
+		}
+		return map[string]any{
+			"task":            taskMap(updatedTask),
+			"bubble_message":  bubble,
+			"delivery_result": nil,
+		}, nil
+	}
 
 	intentValue := mapValue(params, "corrected_intent")
 	if len(intentValue) == 0 {
 		intentValue = cloneMap(task.Intent)
 	}
+	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先明确告诉我你希望执行的处理方式。", task.UpdatedAt.Format(dateTimeLayout))
+		if updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+			return map[string]any{
+				"task":            taskMap(updatedTask),
+				"bubble_message":  bubble,
+				"delivery_result": nil,
+			}, nil
+		}
+		return nil, ErrTaskNotFound
+	}
+	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
 	if requiresAuthorization(intentValue) {
-		updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, intentValue)
+		updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
 		if !ok {
 			return nil, ErrTaskNotFound
 		}
@@ -323,7 +356,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}, nil
 	}
 
-	updatedTask, ok := s.runEngine.ConfirmTask(task.TaskID, intentValue, bubble)
+	updatedTask, ok := s.runEngine.ConfirmTask(task.TaskID, updatedTitle, intentValue, bubble)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
@@ -949,7 +982,10 @@ func bubbleTypeForSuggestion(requiresConfirm bool) string {
 // bubbleTextForInput 处理当前模块的相关逻辑。
 func bubbleTextForInput(suggestion intent.Suggestion) string {
 	if suggestion.RequiresConfirm {
-		return "你是想总结这段内容吗？"
+		if !suggestion.IntentConfirmed {
+			return "我还不确定你想如何处理这段内容，请确认目标。"
+		}
+		return confirmIntentText(suggestion.Intent)
 	}
 	return suggestion.ResultBubbleText
 }
@@ -957,9 +993,29 @@ func bubbleTextForInput(suggestion intent.Suggestion) string {
 // bubbleTextForStart 处理当前模块的相关逻辑。
 func bubbleTextForStart(suggestion intent.Suggestion) string {
 	if suggestion.RequiresConfirm {
-		return "你是想让我按当前对象继续处理吗？"
+		if !suggestion.IntentConfirmed {
+			return "我还不确定你想如何处理当前对象，请先确认。"
+		}
+		return confirmIntentText(suggestion.Intent)
 	}
 	return suggestion.ResultBubbleText
+}
+
+func confirmIntentText(taskIntent map[string]any) string {
+	switch stringValue(taskIntent, "name", "") {
+	case "translate":
+		return "你是想翻译这段内容吗？"
+	case "rewrite":
+		return "你是想改写这段内容吗？"
+	case "explain":
+		return "你是想解释这段内容吗？"
+	case "summarize":
+		return "你是想总结这段内容吗？"
+	case "write_file":
+		return "你是想把结果整理成文档吗？"
+	default:
+		return "请确认你希望我如何处理当前内容。"
+	}
 }
 
 // initialTimeline 处理当前模块的相关逻辑。
@@ -1699,8 +1755,18 @@ func snapshotFromTask(task runengine.TaskRecord) contextsvc.TaskContextSnapshot 
 	return contextsvc.TaskContextSnapshot{
 		Trigger:   task.SourceType,
 		InputType: "text",
-		Text:      task.Title,
+		Text:      originalTextFromTaskTitle(task.Title),
 	}
+}
+
+func originalTextFromTaskTitle(title string) string {
+	trimmed := strings.TrimSpace(title)
+	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理："} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+		}
+	}
+	return trimmed
 }
 
 // memoryQueryFromSnapshot 处理当前模块的相关逻辑。

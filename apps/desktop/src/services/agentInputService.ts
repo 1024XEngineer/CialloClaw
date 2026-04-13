@@ -3,13 +3,17 @@ import {
   recordMirrorConversationFailure,
   recordMirrorConversationStart,
   recordMirrorConversationSuccess,
-} from "@/services/mirrorMemoryService";
+} from "./mirrorMemoryService";
 
 type SubmitTextInputParams = {
   text: string;
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  options?: {
+    confirm_required?: boolean;
+    preferred_delivery?: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
+  };
 };
 
 function createRequestMeta(): AgentInputSubmitParams["request_meta"] {
@@ -43,6 +47,7 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
     context: {
       files: [],
     },
+    ...(input.options ? { options: input.options } : {}),
   };
 }
 

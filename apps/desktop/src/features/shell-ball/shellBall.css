@@ -121,7 +121,7 @@
   display: grid;
   gap: 0.4rem;
   justify-items: stretch;
-  min-height: clamp(3.95rem, 9vw, 6.4rem);
+  min-height: 0;
   overflow: hidden;
   padding: 0;
   pointer-events: auto;
@@ -134,25 +134,51 @@
 }
 
 .shell-ball-bubble-zone__scroll {
-  align-content: end;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.38rem;
-  max-height: clamp(4.88rem, 21vh, 10.5rem);
-  overflow: hidden auto;
+  height: clamp(14.6rem, 56vh, 22.5rem);
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: scroll;
   overscroll-behavior: contain;
-  padding: 0.64rem 0.15rem;
-  scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
-  mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+  padding: 0.64rem 0.32rem 0.64rem 0.15rem;
+  scrollbar-gutter: stable;
+  scrollbar-color: rgba(116, 126, 142, 0.46) rgba(255, 255, 255, 0.12);
+  scrollbar-width: thin;
   width: 100%;
 }
 
+.shell-ball-bubble-zone__spacer {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.shell-ball-bubble-zone__scroll:focus-visible {
+  outline: none;
+}
+
 .shell-ball-bubble-zone__scroll::-webkit-scrollbar {
-  display: none;
+  width: 6px;
+}
+
+.shell-ball-bubble-zone__scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+.shell-ball-bubble-zone__scroll::-webkit-scrollbar-thumb {
+  background: rgba(116, 126, 142, 0.44);
+  border-radius: 999px;
+}
+
+.shell-ball-bubble-zone__scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(116, 126, 142, 0.56);
 }
 
 .shell-ball-bubble-zone__message-entry {
-  display: grid;
+  display: block;
+  flex: 0 0 auto;
 }
 
 .shell-ball-bubble-zone__bottom-anchor {
@@ -1301,8 +1327,12 @@
   }
 
   .shell-ball-bubble-zone {
-    min-height: 3.45rem;
+    min-height: 0;
     padding-inline: 0;
+  }
+
+  .shell-ball-bubble-zone__scroll {
+    height: 12.8rem;
   }
 
   .shell-ball-surface__body {

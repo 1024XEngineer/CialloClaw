@@ -368,6 +368,28 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	}
 }
 
+func TestBuildPromptDoesNotDefaultUnknownIntentToSummarize(t *testing.T) {
+	prompt := buildPrompt(Request{Intent: map[string]any{}}, "输入内容:\n你好")
+
+	if strings.Contains(prompt, "请总结以下内容") {
+		t.Fatalf("expected unknown intent prompt not to force summarize, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "如果目标不明确") {
+		t.Fatalf("expected unknown intent prompt to ask for clarification behavior, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputRequestsClarificationWhenIntentMissing(t *testing.T) {
+	output := fallbackOutput(Request{Intent: map[string]any{}}, "你好")
+
+	if !strings.Contains(output, "请补充你的目标") {
+		t.Fatalf("expected unknown intent fallback to request clarification, got %s", output)
+	}
+	if strings.Contains(output, "总结结果") {
+		t.Fatalf("expected unknown intent fallback not to pretend summarize, got %s", output)
+	}
+}
+
 type stubExecutionCapability struct {
 	result tools.CommandExecutionResult
 	err    error

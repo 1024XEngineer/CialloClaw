@@ -128,7 +128,7 @@ export function getShellBallHelperWindowInteractionMode(input: {
 }): ShellBallHelperWindowInteractionMode {
   if (input.role === "bubble") {
     return {
-      focusable: false,
+      focusable: !input.clickThrough && input.visible,
       ignoreCursorEvents: input.clickThrough || input.visible === false,
     };
   }
@@ -185,7 +185,8 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
       }
 
       const isBallWindow = role === "ball";
-      const contentSize = measureShellBallContentSize(nextElement, !isBallWindow);
+      const includeScrollBounds = !isBallWindow && role !== "bubble";
+      const contentSize = measureShellBallContentSize(nextElement, includeScrollBounds);
       setWindowFrame(
         createShellBallWindowFrame(
           contentSize,

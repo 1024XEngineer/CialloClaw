@@ -1,4 +1,4 @@
-# CialloClaw 协议设计文档（v4）
+# CialloClaw 协议设计文档（v5）
 
 ## 1. 文档范围
 
@@ -353,6 +353,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：存储与数据库
 - `1006xxx`：worker / sidecar / plugin
 - `1007xxx`：系统与平台
+
+当前仓库错误码真源 `packages/protocol/errors/codes.ts` 已正式登记到 `1007xxx`。此外，为后续功能扩展预留：
+
 - `1008xxx`：模型与前馈配置
 - `1009xxx`：评估与人工升级
 
@@ -365,8 +368,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：数据库、Artifact、恢复点、Stronghold、RAG 等落盘能力异常。
 - `1006xxx`：worker / sidecar / plugin 进程不可用或输出非法。
 - `1007xxx`：平台和执行环境问题。
-- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常。
-- `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常。
+- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常，当前为预留段。
+- `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常，当前为预留段。
 
 ### 6.3 推荐错误码表
 
@@ -416,6 +419,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1006002` `PLAYWRIGHT_SIDECAR_FAILED`
 - `1006003` `OCR_WORKER_FAILED`
 - `1006004` `MEDIA_WORKER_FAILED`
+
+#### 预留错误码（尚未登记到错误码真源）
+
+以下错误码常量保留给后续功能使用。在它们正式写入 `packages/protocol/errors/codes.ts` 前，只能作为规划预留，不得被文档误解为当前仓库已经实现：
+
+##### Worker / Plugin 扩展预留
+
 - `1006005` `PLUGIN_NOT_AVAILABLE`
 - `1006006` `PLUGIN_PERMISSION_DENIED`
 - `1006007` `PLUGIN_OUTPUT_INVALID`
@@ -428,7 +438,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1007004` `SANDBOX_PROFILE_INVALID`
 - `1007005` `PATH_POLICY_VIOLATION`
 
-#### 模型与前馈配置
+##### 模型与前馈配置预留
 
 - `1008001` `MODEL_PROVIDER_NOT_FOUND`
 - `1008002` `MODEL_NOT_ALLOWED`
@@ -437,7 +447,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1008005` `PROMPT_TEMPLATE_NOT_FOUND`
 - `1008006` `LSP_DIAGNOSTIC_UNAVAILABLE`
 
-#### 评估与升级
+##### 评估与升级预留
 
 - `1009001` `REVIEW_FAILED`
 - `1009002` `DOOM_LOOP_DETECTED`
@@ -449,9 +459,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 前端只认错误码和错误类型，不猜字符串。
 - Go 返回错误时必须带 `id` 或 `trace_id`。
 - worker / sidecar / plugin 错误必须包装成统一错误码。
-- 多模型切换失败必须落到 `1008xxx`。
 - 插件安装 / 启停失败必须落到 `1006xxx`。
-- 审查失败 / 熔断 / 人工升级必须落到 `1009xxx`。
+- 多模型切换失败在对应能力正式落地后应落到 `1008xxx`。
+- 审查失败 / 熔断 / 人工升级在对应能力正式落地后应落到 `1009xxx`。
 
 ## 7. 方法集合与原子功能映射
 
@@ -1153,6 +1163,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.security_summary`  | 安全摘要       |
 
+其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
+
 ### agent.task.detail.get 出参示例
 
 ```json
@@ -1184,7 +1196,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "step_id": "step_2",
           "task_id": "task_201",
           "name": "generate_summary",
-          "status": "processing",
+          "status": "running",
           "order_index": 2,
           "input_summary": "读取文档内容",
           "output_summary": "正在生成摘要"
@@ -2343,7 +2355,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-
 ## 9. Notification / Subscription 说明
 
 ### 9.1 事件语义
@@ -2351,9 +2362,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `task.updated`：任务主状态或关键摘要变化
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
-- `plugin.updated`：插件状态变化
+- `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）
 - `plugin.metric.updated`：插件指标变化
 - `plugin.task.updated`：插件关联任务变化
+
+以下命名不属于正式前端订阅事件：
+- `plugin.registered`：插件注册属于后端内部事件，前端首次可见状态并入 `plugin.updated`
+- `overview.ready`：仪表盘初始化结果通过 `agent.dashboard.overview.get` 的正常响应返回
 
 ### 9.2 前端使用约束
 

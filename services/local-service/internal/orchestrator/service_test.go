@@ -172,6 +172,146 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_unknown_text",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected unknown short text to remain in confirming_intent, got %v", task["status"])
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || len(intentValue) != 0 {
+		t.Fatalf("expected unknown short text task to keep empty intent payload, got %+v", task["intent"])
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "我还不确定你想如何处理这段内容，请确认目标。" {
+		t.Fatalf("expected neutral confirmation prompt, got %v", bubble["text"])
+	}
+	if _, ok := result["delivery_result"]; ok {
+		t.Fatalf("expected no delivery result before intent is confirmed, got %+v", result["delivery_result"])
+	}
+	if _, ok := service.runEngine.GetTask(task["task_id"].(string)); !ok {
+		t.Fatal("expected task to remain available in runtime")
+	}
+}
+
+func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_unknown_confirm",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected task to remain in confirming_intent when no corrected intent is provided, got %v", task["status"])
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["text"] != "请先明确告诉我你希望执行的处理方式。" {
+		t.Fatalf("expected clarification bubble, got %v", bubble["text"])
+	}
+	if confirmResult["delivery_result"] != nil {
+		t.Fatalf("expected no delivery result while intent is still missing, got %+v", confirmResult["delivery_result"])
+	}
+}
+
+func TestServiceConfirmTaskCancelsUnknownIntentWhenRejected(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_unknown_cancel",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] != "cancelled" {
+		t.Fatalf("expected rejected unknown intent task to be cancelled, got %v", task["status"])
+	}
+}
+
+func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_unknown_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+		"corrected_intent": map[string]any{
+			"name":      "translate",
+			"arguments": map[string]any{"target_language": "en"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["title"] != "翻译：你好" {
+		t.Fatalf("expected corrected intent to rewrite placeholder title, got %v", task["title"])
+	}
+}
+
 func TestTaskInspectorRunAggregatesRuntimeState(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "inspector output")
 	now := time.Now().UTC()
@@ -835,7 +975,8 @@ func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	confirmResult, err := service.ConfirmTask(map[string]any{
-		"task_id": taskID,
+		"task_id":   taskID,
+		"confirmed": true,
 		"corrected_intent": map[string]any{
 			"name": "write_file",
 			"arguments": map[string]any{
@@ -909,7 +1050,8 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
-		"task_id": taskID,
+		"task_id":   taskID,
+		"confirmed": true,
 		"corrected_intent": map[string]any{
 			"name": "write_file",
 			"arguments": map[string]any{
@@ -1004,7 +1146,8 @@ func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
-		"task_id": taskID,
+		"task_id":   taskID,
+		"confirmed": true,
 		"corrected_intent": map[string]any{
 			"name": "summarize",
 			"arguments": map[string]any{
@@ -1067,7 +1210,8 @@ func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
-		"task_id": taskID,
+		"task_id":   taskID,
+		"confirmed": true,
 		"corrected_intent": map[string]any{
 			"name": "write_file",
 			"arguments": map[string]any{
