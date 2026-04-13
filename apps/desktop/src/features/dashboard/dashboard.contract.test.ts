@@ -169,50 +169,101 @@ function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentT
   };
 }
 
-test("buildDashboardSafetyNavigationState keeps approval and restore snapshots", () => {
+test("buildDashboardSafetyNavigationState follows the approved task-detail route shape", () => {
   const state = buildDashboardSafetyNavigationState(createDetail());
 
   assert.deepEqual(state, {
-    approval_request: createApprovalRequest(),
-    latest_restore_point: createRecoveryPoint(),
-    task_id: "task_dashboard_001",
+    approvalRequest: createApprovalRequest(),
+    source: "task-detail",
+    taskId: "task_dashboard_001",
   });
+
+  assert.deepEqual(buildDashboardSafetyNavigationState(createDetail({ approval_request: null })), {
+    restorePoint: createRecoveryPoint(),
+    source: "task-detail",
+    taskId: "task_dashboard_001",
+  });
+
+  assert.deepEqual(
+    buildDashboardSafetyNavigationState(
+      createDetail({
+        approval_request: null,
+        security_summary: {
+          latest_restore_point: null,
+          pending_authorizations: 0,
+          risk_level: "yellow",
+          security_status: "normal",
+        },
+      }),
+    ),
+    {
+      source: "task-detail",
+      taskId: "task_dashboard_001",
+    },
+  );
 });
 
 test("readDashboardSafetyNavigationState accepts valid routed state and rejects malformed values", () => {
   const state = buildDashboardSafetyNavigationState(createDetail({ approval_request: null }));
 
   assert.deepEqual(readDashboardSafetyNavigationState(state), state);
-  assert.equal(
+  assert.deepEqual(
     readDashboardSafetyNavigationState({
-      approval_request: null,
-      latest_restore_point: null,
-      task_id: "task_dashboard_001",
+      source: "task-detail",
+      taskId: "task_dashboard_001",
     }),
-    null,
+    {
+      source: "task-detail",
+      taskId: "task_dashboard_001",
+    },
   );
-  assert.equal(readDashboardSafetyNavigationState({ task_id: 42 }), null);
+  assert.equal(readDashboardSafetyNavigationState({ taskId: 42 }), null);
   assert.equal(
     readDashboardSafetyNavigationState({
-      approval_request: "approval_dashboard_001",
-      latest_restore_point: null,
-      task_id: "task_dashboard_001",
-    }),
-    null,
-  );
-  assert.equal(
-    readDashboardSafetyNavigationState({
-      approval_request: createApprovalRequest({ risk_level: "orange" as never }),
-      latest_restore_point: null,
-      task_id: "task_dashboard_001",
+      approvalRequest: "approval_dashboard_001",
+      source: "task-detail",
+      taskId: "task_dashboard_001",
     }),
     null,
   );
   assert.equal(
     readDashboardSafetyNavigationState({
-      approval_request: createApprovalRequest({ status: "waiting" as never }),
-      latest_restore_point: null,
-      task_id: "task_dashboard_001",
+      approvalRequest: createApprovalRequest({ risk_level: "orange" as never }),
+      source: "task-detail",
+      taskId: "task_dashboard_001",
+    }),
+    null,
+  );
+  assert.equal(
+    readDashboardSafetyNavigationState({
+      approvalRequest: createApprovalRequest({ status: "waiting" as never }),
+      source: "task-detail",
+      taskId: "task_dashboard_001",
+    }),
+    null,
+  );
+  assert.equal(
+    readDashboardSafetyNavigationState({
+      restorePoint: createRecoveryPoint(),
+      source: "task-detail",
+      taskId: "task_dashboard_001",
+      unknown: true,
+    }),
+    null,
+  );
+  assert.equal(
+    readDashboardSafetyNavigationState({
+      approvalRequest: createApprovalRequest(),
+      restorePoint: createRecoveryPoint(),
+      source: "task-detail",
+      taskId: "task_dashboard_001",
+    }),
+    null,
+  );
+  assert.equal(
+    readDashboardSafetyNavigationState({
+      source: "other",
+      taskId: "task_dashboard_001",
     }),
     null,
   );
@@ -221,20 +272,18 @@ test("readDashboardSafetyNavigationState accepts valid routed state and rejects 
 test("resolveDashboardSafetyFocusTarget prefers matching live approval data over restore point", () => {
   const state = buildDashboardSafetyNavigationState(createDetail());
   const liveApproval = createApprovalRequest({ reason: "Live approval state" });
-  const liveRestorePoint = createRecoveryPoint({ summary: "Live restore point" });
 
   const target = resolveDashboardSafetyFocusTarget({
-    livePending: liveApproval,
-    liveRestorePoint,
+    livePending: [liveApproval],
+    liveRestorePoint: createRecoveryPoint({ summary: "Live restore point" }),
     state,
   });
 
   assert.deepEqual(target, {
-    anchor_id: "approval:approval_dashboard_001",
-    approval_request: liveApproval,
+    activeDetailKey: "approval:approval_dashboard_001",
+    approvalSnapshot: liveApproval,
     feedback: null,
-    kind: "approval",
-    source: "live",
+    restorePointSnapshot: null,
   });
 });
 
@@ -242,17 +291,16 @@ test("resolveDashboardSafetyFocusTarget keeps approval snapshot renderable when 
   const state = buildDashboardSafetyNavigationState(createDetail());
 
   const target = resolveDashboardSafetyFocusTarget({
-    livePending: createApprovalRequest({ approval_id: "approval_dashboard_999" }),
+    livePending: [createApprovalRequest({ approval_id: "approval_dashboard_999" })],
     liveRestorePoint: createRecoveryPoint(),
     state,
   });
 
   assert.deepEqual(target, {
-    anchor_id: "approval:approval_dashboard_001",
-    approval_request: createApprovalRequest(),
+    activeDetailKey: "approval:approval_dashboard_001",
+    approvalSnapshot: createApprovalRequest(),
     feedback: "实时安全数据已变化，当前展示的是路由携带的快照。",
-    kind: "approval",
-    source: "snapshot",
+    restorePointSnapshot: null,
   });
 });
 
@@ -260,17 +308,16 @@ test("resolveDashboardSafetyFocusTarget keeps restore snapshot renderable when l
   const state = buildDashboardSafetyNavigationState(createDetail({ approval_request: null }));
 
   const target = resolveDashboardSafetyFocusTarget({
-    livePending: null,
+    livePending: [],
     liveRestorePoint: createRecoveryPoint({ recovery_point_id: "rp_dashboard_999" }),
     state,
   });
 
   assert.deepEqual(target, {
-    anchor_id: "restore_point:rp_dashboard_001",
+    activeDetailKey: "restore",
+    approvalSnapshot: null,
     feedback: "实时安全数据已变化，当前展示的是路由携带的快照。",
-    kind: "restore_point",
-    recovery_point: createRecoveryPoint(),
-    source: "snapshot",
+    restorePointSnapshot: createRecoveryPoint(),
   });
 });
 
@@ -279,25 +326,52 @@ test("resolveDashboardSafetyFocusTarget uses live restore point when it matches 
   const liveRestorePoint = createRecoveryPoint({ summary: "Live restore point" });
 
   const target = resolveDashboardSafetyFocusTarget({
-    livePending: null,
+    livePending: [],
     liveRestorePoint,
     state,
   });
 
   assert.deepEqual(target, {
-    anchor_id: "restore_point:rp_dashboard_001",
+    activeDetailKey: "restore",
+    approvalSnapshot: null,
     feedback: null,
-    kind: "restore_point",
-    recovery_point: liveRestorePoint,
-    source: "live",
+    restorePointSnapshot: liveRestorePoint,
   });
+});
+
+test("resolveDashboardSafetyFocusTarget returns empty focus state when no route anchor exists", () => {
+  const state = buildDashboardSafetyNavigationState(
+    createDetail({
+      approval_request: null,
+      security_summary: {
+        latest_restore_point: null,
+        pending_authorizations: 0,
+        risk_level: "yellow",
+        security_status: "normal",
+      },
+    }),
+  );
+
+  assert.deepEqual(
+    resolveDashboardSafetyFocusTarget({
+      livePending: [],
+      liveRestorePoint: null,
+      state,
+    }),
+    {
+      activeDetailKey: null,
+      approvalSnapshot: null,
+      feedback: null,
+      restorePointSnapshot: null,
+    },
+  );
 });
 
 test("task page query helpers expose stable prefixes and keys", () => {
   assert.deepEqual(dashboardTaskBucketQueryPrefix, ["dashboard", "tasks", "bucket"]);
   assert.deepEqual(dashboardTaskDetailQueryPrefix, ["dashboard", "tasks", "detail"]);
-  assert.deepEqual(buildDashboardTaskBucketQueryKey({ group: "unfinished", limit: 12, source: "rpc" }), ["dashboard", "tasks", "bucket", "rpc", "unfinished", 12]);
-  assert.deepEqual(buildDashboardTaskDetailQueryKey({ source: "mock", taskId: "task_dashboard_001" }), ["dashboard", "tasks", "detail", "mock", "task_dashboard_001"]);
+  assert.deepEqual(buildDashboardTaskBucketQueryKey("rpc", "unfinished", 12), ["dashboard", "tasks", "bucket", "rpc", "unfinished", 12]);
+  assert.deepEqual(buildDashboardTaskDetailQueryKey("mock", "task_dashboard_001"), ["dashboard", "tasks", "detail", "mock", "task_dashboard_001"]);
 });
 
 test("task detail normalization rejects string restore points in rpc mode and keeps null approval fallback", () => {

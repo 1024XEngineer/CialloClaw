@@ -4,40 +4,42 @@ import { isApprovalRequest, isRecoveryPoint } from "./dashboardContractValidator
 const dashboardSafetySnapshotFeedback = "实时安全数据已变化，当前展示的是路由携带的快照。";
 
 export type DashboardSafetyNavigationState = {
-  task_id: string;
-  approval_request: ApprovalRequest | null;
-  latest_restore_point: RecoveryPoint | null;
+  source: "task-detail";
+  taskId: string;
+  approvalRequest?: ApprovalRequest;
+  restorePoint?: RecoveryPoint;
 };
 
-export type DashboardSafetyFocusTarget =
-  | {
-      kind: "approval";
-      source: "live" | "snapshot";
-      anchor_id: `approval:${string}`;
-      approval_request: ApprovalRequest;
-      feedback: string | null;
-    }
-  | {
-      kind: "restore_point";
-      source: "live" | "snapshot";
-      anchor_id: `restore_point:${string}`;
-      recovery_point: RecoveryPoint;
-      feedback: string | null;
-    }
-  | null;
+export type DashboardSafetyFocusTarget = {
+  activeDetailKey: `approval:${string}` | "restore" | null;
+  approvalSnapshot: ApprovalRequest | null;
+  restorePointSnapshot: RecoveryPoint | null;
+  feedback: string | null;
+};
 
-export function buildDashboardSafetyNavigationState(detail: AgentTaskDetailGetResult): DashboardSafetyNavigationState | null {
+export function buildDashboardSafetyNavigationState(detail: AgentTaskDetailGetResult): DashboardSafetyNavigationState {
   const approvalRequest = detail.approval_request ?? null;
   const latestRestorePoint = detail.security_summary.latest_restore_point ?? null;
 
-  if (!approvalRequest && !latestRestorePoint) {
-    return null;
+  if (approvalRequest) {
+    return {
+      approvalRequest,
+      source: "task-detail",
+      taskId: detail.task.task_id,
+    };
+  }
+
+  if (latestRestorePoint) {
+    return {
+      restorePoint: latestRestorePoint,
+      source: "task-detail",
+      taskId: detail.task.task_id,
+    };
   }
 
   return {
-    approval_request: approvalRequest,
-    latest_restore_point: latestRestorePoint,
-    task_id: detail.task.task_id,
+    source: "task-detail",
+    taskId: detail.task.task_id,
   };
 }
 
@@ -47,29 +49,40 @@ export function readDashboardSafetyNavigationState(value: unknown): DashboardSaf
   }
 
   const candidate = value as Partial<DashboardSafetyNavigationState>;
-  const approvalRequest = candidate.approval_request ?? null;
-  const latestRestorePoint = candidate.latest_restore_point ?? null;
+  const approvalRequest = candidate.approvalRequest;
+  const restorePoint = candidate.restorePoint;
 
-  if (typeof candidate.task_id !== "string") {
+  for (const key of Object.keys(candidate)) {
+    if (key !== "approvalRequest" && key !== "restorePoint" && key !== "source" && key !== "taskId") {
+      return null;
+    }
+  }
+
+  if (candidate.source !== "task-detail") {
     return null;
   }
 
-  if (approvalRequest !== null && !isApprovalRequest(approvalRequest)) {
+  if (typeof candidate.taskId !== "string") {
     return null;
   }
 
-  if (latestRestorePoint !== null && !isRecoveryPoint(latestRestorePoint)) {
+  if (approvalRequest !== undefined && !isApprovalRequest(approvalRequest)) {
     return null;
   }
 
-  if (approvalRequest === null && latestRestorePoint === null) {
+  if (restorePoint !== undefined && !isRecoveryPoint(restorePoint)) {
+    return null;
+  }
+
+  if (approvalRequest !== undefined && restorePoint !== undefined) {
     return null;
   }
 
   return {
-    approval_request: approvalRequest,
-    latest_restore_point: latestRestorePoint,
-    task_id: candidate.task_id,
+    ...(approvalRequest ? { approvalRequest } : {}),
+    ...(restorePoint ? { restorePoint } : {}),
+    source: candidate.source,
+    taskId: candidate.taskId,
   };
 }
 
@@ -79,52 +92,60 @@ export function resolveDashboardSafetyFocusTarget({
   liveRestorePoint,
 }: {
   state: DashboardSafetyNavigationState | null;
-  livePending: ApprovalRequest | null;
+  livePending: ApprovalRequest[];
   liveRestorePoint: RecoveryPoint | null;
 }): DashboardSafetyFocusTarget {
-  if (!state) {
-    return null;
+  if (!state || !state.approvalRequest && !state.restorePoint) {
+    return {
+      activeDetailKey: null,
+      approvalSnapshot: null,
+      feedback: null,
+      restorePointSnapshot: null,
+    };
   }
 
-  if (state.approval_request) {
-    if (livePending?.approval_id === state.approval_request.approval_id) {
+  if (state.approvalRequest) {
+    const liveApproval = livePending.find((item) => item.approval_id === state.approvalRequest?.approval_id) ?? null;
+
+    if (liveApproval) {
       return {
-        anchor_id: `approval:${livePending.approval_id}`,
-        approval_request: livePending,
+        activeDetailKey: `approval:${liveApproval.approval_id}`,
+        approvalSnapshot: liveApproval,
         feedback: null,
-        kind: "approval",
-        source: "live",
+        restorePointSnapshot: null,
       };
     }
 
     return {
-      anchor_id: `approval:${state.approval_request.approval_id}`,
-      approval_request: state.approval_request,
+      activeDetailKey: `approval:${state.approvalRequest.approval_id}`,
+      approvalSnapshot: state.approvalRequest,
       feedback: dashboardSafetySnapshotFeedback,
-      kind: "approval",
-      source: "snapshot",
+      restorePointSnapshot: null,
     };
   }
 
-  if (state.latest_restore_point) {
-    if (liveRestorePoint?.recovery_point_id === state.latest_restore_point.recovery_point_id) {
+  if (state.restorePoint) {
+    if (liveRestorePoint?.recovery_point_id === state.restorePoint.recovery_point_id) {
       return {
-        anchor_id: `restore_point:${liveRestorePoint.recovery_point_id}`,
+        activeDetailKey: "restore",
+        approvalSnapshot: null,
         feedback: null,
-        kind: "restore_point",
-        recovery_point: liveRestorePoint,
-        source: "live",
+        restorePointSnapshot: liveRestorePoint,
       };
     }
 
     return {
-      anchor_id: `restore_point:${state.latest_restore_point.recovery_point_id}`,
+      activeDetailKey: "restore",
+      approvalSnapshot: null,
       feedback: dashboardSafetySnapshotFeedback,
-      kind: "restore_point",
-      recovery_point: state.latest_restore_point,
-      source: "snapshot",
+      restorePointSnapshot: state.restorePoint,
     };
   }
 
-  return null;
+  return {
+    activeDetailKey: null,
+    approvalSnapshot: null,
+    feedback: null,
+    restorePointSnapshot: null,
+  };
 }
