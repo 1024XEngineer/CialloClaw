@@ -83,7 +83,7 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
       latest_restore_point: null,
       pending_authorizations: 0,
       risk_level: task.risk_level,
-      security_status: task.status === "waiting_auth" ? "pending_confirmation" : "normal",
+      security_status: "normal",
     },
     task,
     timeline: [],

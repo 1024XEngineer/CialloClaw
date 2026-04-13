@@ -21,19 +21,32 @@ declare module "@/rpc/methods" {
   export function listTasks(params: AgentTaskListParams): Promise<AgentTaskListResult>;
 }
 
-import {
-  buildDashboardSafetyNavigationState,
-  readDashboardSafetyNavigationState,
-  resolveDashboardSafetyFocusTarget,
-} from "./shared/dashboardSafetyNavigation";
-import {
-  buildDashboardTaskBucketQueryKey,
-  buildDashboardTaskDetailQueryKey,
-  dashboardTaskBucketQueryPrefix,
-  dashboardTaskDetailQueryPrefix,
-} from "./tasks/taskPage.query";
-
 const desktopRoot = process.cwd();
+
+function loadDashboardSafetyNavigationModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSafetyNavigation.js")) as {
+      buildDashboardSafetyNavigationState: (detail: AgentTaskDetailGetResult) => unknown;
+      readDashboardSafetyNavigationState: (value: unknown) => unknown;
+      resolveDashboardSafetyFocusTarget: (input: {
+        state: unknown;
+        livePending: ApprovalRequest[];
+        liveRestorePoint: RecoveryPoint | null;
+      }) => unknown;
+    },
+  );
+}
+
+function loadTaskPageQueryModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.query.js")) as {
+      buildDashboardTaskBucketQueryKey: (dataMode: "rpc" | "mock", group: "unfinished" | "finished", limit: number) => unknown;
+      buildDashboardTaskDetailQueryKey: (dataMode: "rpc" | "mock", taskId: string) => unknown;
+      dashboardTaskBucketQueryPrefix: unknown;
+      dashboardTaskDetailQueryPrefix: unknown;
+    },
+  );
+}
 
 function withDesktopAliasRuntime<T>(callback: (requireFn: NodeRequire) => T): T {
   const NodeModule = require("node:module") as {
@@ -81,6 +94,10 @@ function withDesktopAliasRuntime<T>(callback: (requireFn: NodeRequire) => T): T 
   };
 
   NodeModule._load = function loadDesktopRuntime(request: string, parent: unknown, isMain: boolean) {
+    if (request === "@cialloclaw/protocol") {
+      return originalLoad(resolve(protocolRoot, "types/core.ts"), parent, isMain);
+    }
+
     if (request === "@/rpc/methods") {
       return {
         controlTask() {
@@ -170,6 +187,7 @@ function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentT
 }
 
 test("buildDashboardSafetyNavigationState follows the approved task-detail route shape", () => {
+  const { buildDashboardSafetyNavigationState } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail());
 
   assert.deepEqual(state, {
@@ -204,6 +222,7 @@ test("buildDashboardSafetyNavigationState follows the approved task-detail route
 });
 
 test("readDashboardSafetyNavigationState accepts valid routed state and rejects malformed values", () => {
+  const { buildDashboardSafetyNavigationState, readDashboardSafetyNavigationState } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail({ approval_request: null }));
 
   assert.deepEqual(readDashboardSafetyNavigationState(state), state);
@@ -286,6 +305,7 @@ test("readDashboardSafetyNavigationState accepts valid routed state and rejects 
 });
 
 test("resolveDashboardSafetyFocusTarget prefers matching live approval data over restore point", () => {
+  const { buildDashboardSafetyNavigationState, resolveDashboardSafetyFocusTarget } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail());
   const liveApproval = createApprovalRequest({ reason: "Live approval state" });
 
@@ -304,6 +324,7 @@ test("resolveDashboardSafetyFocusTarget prefers matching live approval data over
 });
 
 test("resolveDashboardSafetyFocusTarget keeps approval snapshot renderable when live approval changed away", () => {
+  const { buildDashboardSafetyNavigationState, resolveDashboardSafetyFocusTarget } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail());
 
   const target = resolveDashboardSafetyFocusTarget({
@@ -321,6 +342,7 @@ test("resolveDashboardSafetyFocusTarget keeps approval snapshot renderable when 
 });
 
 test("resolveDashboardSafetyFocusTarget keeps restore snapshot renderable when live restore point changed away", () => {
+  const { buildDashboardSafetyNavigationState, resolveDashboardSafetyFocusTarget } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail({ approval_request: null }));
 
   const target = resolveDashboardSafetyFocusTarget({
@@ -338,6 +360,7 @@ test("resolveDashboardSafetyFocusTarget keeps restore snapshot renderable when l
 });
 
 test("resolveDashboardSafetyFocusTarget uses live restore point when it matches and no approval is routed", () => {
+  const { buildDashboardSafetyNavigationState, resolveDashboardSafetyFocusTarget } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail({ approval_request: null }));
   const liveRestorePoint = createRecoveryPoint({ summary: "Live restore point" });
 
@@ -356,6 +379,7 @@ test("resolveDashboardSafetyFocusTarget uses live restore point when it matches 
 });
 
 test("resolveDashboardSafetyFocusTarget returns empty focus state when no route anchor exists", () => {
+  const { buildDashboardSafetyNavigationState, resolveDashboardSafetyFocusTarget } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(
     createDetail({
       approval_request: null,
@@ -384,6 +408,12 @@ test("resolveDashboardSafetyFocusTarget returns empty focus state when no route 
 });
 
 test("task page query helpers expose stable prefixes and keys", () => {
+  const {
+    buildDashboardTaskBucketQueryKey,
+    buildDashboardTaskDetailQueryKey,
+    dashboardTaskBucketQueryPrefix,
+    dashboardTaskDetailQueryPrefix,
+  } = loadTaskPageQueryModule();
   assert.deepEqual(dashboardTaskBucketQueryPrefix, ["dashboard", "tasks", "bucket"]);
   assert.deepEqual(dashboardTaskDetailQueryPrefix, ["dashboard", "tasks", "detail"]);
   assert.deepEqual(buildDashboardTaskBucketQueryKey("rpc", "unfinished", 12), ["dashboard", "tasks", "bucket", "rpc", "unfinished", 12]);
@@ -419,6 +449,7 @@ test("task detail normalization rejects string restore points in rpc mode and ke
 
     assert.equal(fallback.detail.approval_request, null);
     assert.equal(fallback.detail.security_summary.pending_authorizations, 0);
+    assert.equal(fallback.detail.security_summary.security_status, "normal");
   });
 });
 
@@ -552,6 +583,12 @@ test("TaskDetailPanel defers fallback auth summary copy until formal detail arri
 
   assert.match(panelSource, /detailData\.source === "fallback" \|\| detailState !== "ready"/);
   assert.match(panelSource, /等待详情同步/);
+});
+
+test("dashboard validators read enum truth sources from protocol exports", () => {
+  const validatorSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardContractValidators.ts"), "utf8");
+
+  assert.match(validatorSource, /import\s*\{[^}]*APPROVAL_STATUSES[^}]*RISK_LEVELS[^}]*\}\s*from\s*"@cialloclaw\/protocol"/);
 });
 
 function createFallbackExperience() {

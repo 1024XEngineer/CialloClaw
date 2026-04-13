@@ -1,8 +1,9 @@
+import { APPROVAL_STATUSES, RISK_LEVELS } from "@cialloclaw/protocol";
 import type { ApprovalRequest, Artifact, MirrorReference, RecoveryPoint, TaskStep } from "@cialloclaw/protocol";
 
 type Guard<T> = (value: unknown) => value is T;
-const approvalStatuses = new Set<string>(["pending", "approved", "denied"]);
-const riskLevels = new Set<string>(["green", "yellow", "red"]);
+const approvalStatuses = new Set<string>(APPROVAL_STATUSES);
+const riskLevels = new Set<string>(RISK_LEVELS);
 
 export function isBinaryPendingAuthorizations(value: unknown): value is 0 | 1 {
   return value === 0 || value === 1;
