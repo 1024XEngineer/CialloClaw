@@ -1448,13 +1448,15 @@ func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 		t.Fatal("expected quick_actions field to be present")
 	}
 	if overview["trust_summary"] != nil {
-		t.Fatalf("expected trust_summary to be omitted when not requested, got %+v", overview["trust_summary"])
+		t.Fatalf("expected trust_summary placeholder to be nil when not requested, got %+v", overview["trust_summary"])
 	}
-	if overview["global_state"] != nil {
-		t.Fatalf("expected global_state to be omitted when not requested, got %+v", overview["global_state"])
+	globalState, ok := overview["global_state"].(map[string]any)
+	if !ok || len(globalState) != 0 {
+		t.Fatalf("expected global_state placeholder to be empty map when not requested, got %+v", overview["global_state"])
 	}
-	if overview["high_value_signal"] != nil {
-		t.Fatalf("expected high_value_signal to be omitted when not requested, got %+v", overview["high_value_signal"])
+	highValueSignal, ok := overview["high_value_signal"].([]string)
+	if !ok || len(highValueSignal) != 0 {
+		t.Fatalf("expected high_value_signal placeholder to be empty slice when not requested, got %+v", overview["high_value_signal"])
 	}
 }
 
@@ -1796,7 +1798,7 @@ func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
 	}
 }
 
-func TestServiceTaskDetailGetIncludesTaskCentricDeliveryAndAuditData(t *testing.T) {
+func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task detail delivery")
 
 	startResult, err := service.StartTask(map[string]any{
@@ -1824,13 +1826,11 @@ func TestServiceTaskDetailGetIncludesTaskCentricDeliveryAndAuditData(t *testing.
 		t.Fatalf("task detail get failed: %v", err)
 	}
 
-	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
-	if !ok || len(deliveryResult) == 0 {
-		t.Fatalf("expected delivery_result in task detail response, got %+v", detailResult["delivery_result"])
+	if _, ok := detailResult["delivery_result"]; ok {
+		t.Fatalf("expected task detail response not to expose undeclared delivery_result field, got %+v", detailResult["delivery_result"])
 	}
-	auditRecords, ok := detailResult["audit_records"].([]map[string]any)
-	if !ok || len(auditRecords) == 0 {
-		t.Fatalf("expected audit_records in task detail response, got %+v", detailResult["audit_records"])
+	if _, ok := detailResult["audit_records"]; ok {
+		t.Fatalf("expected task detail response not to expose undeclared audit_records field, got %+v", detailResult["audit_records"])
 	}
 	if detailResult["task"].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("expected task detail task_id to match request, got %+v", detailResult["task"])

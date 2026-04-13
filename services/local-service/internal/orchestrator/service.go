@@ -442,10 +442,6 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	deliveryResult := cloneMap(task.DeliveryResult)
-	artifacts := cloneMapSlice(task.Artifacts)
-	mirrorReferences := cloneMapSlice(task.MirrorReferences)
-	auditRecords := cloneMapSlice(task.AuditRecords)
 
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {
@@ -456,19 +452,12 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 			securitySummary["latest_restore_point"] = restorePoint
 		}
 	}
-	if len(auditRecords) == 0 {
-		if latestAudit := s.latestAuditRecordFromStorage(task.TaskID); latestAudit != nil {
-			auditRecords = []map[string]any{latestAudit}
-		}
-	}
 
 	return map[string]any{
 		"task":              taskMap(task),
 		"timeline":          timelineMap(task.Timeline),
-		"delivery_result":   deliveryResult,
-		"artifacts":         artifacts,
-		"mirror_references": mirrorReferences,
-		"audit_records":     auditRecords,
+		"artifacts":         cloneMapSlice(task.Artifacts),
+		"mirror_references": cloneMapSlice(task.MirrorReferences),
 		"security_summary":  securitySummary,
 	}, nil
 }
@@ -674,18 +663,28 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	overview := map[string]any{}
 	if shouldIncludeOverviewField(includeAll, includeSet, "focus_summary") {
 		overview["focus_summary"] = focusSummary
+	} else {
+		overview["focus_summary"] = nil
 	}
 	if shouldIncludeOverviewField(includeAll, includeSet, "trust_summary") {
 		overview["trust_summary"] = trustSummary
+	} else {
+		overview["trust_summary"] = nil
 	}
 	if shouldIncludeOverviewField(includeAll, includeSet, "quick_actions") {
 		overview["quick_actions"] = quickActions
+	} else {
+		overview["quick_actions"] = []string{}
 	}
 	if shouldIncludeOverviewField(includeAll, includeSet, "global_state") {
 		overview["global_state"] = globalState
+	} else {
+		overview["global_state"] = map[string]any{}
 	}
 	if shouldIncludeOverviewField(includeAll, includeSet, "high_value_signal") {
 		overview["high_value_signal"] = highValueSignal
+	} else {
+		overview["high_value_signal"] = []string{}
 	}
 
 	return map[string]any{"overview": overview}, nil
