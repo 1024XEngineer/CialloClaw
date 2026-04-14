@@ -988,7 +988,7 @@ sequenceDiagram
 
 - 根目录 `go.mod` 采用 Go 1.26；
 - `services/local-service/internal/rpc` 已存在 `server.go`、`jsonrpc.go`、`handlers.go`、`namedpipe_windows.go`、`namedpipe_other.go`、`server_test.go`；
-- `tmp-local-service.err.log` 已记录 `transport=named_pipe` 和调试态 `debug_http=:4317`，说明当前实现已经按“正式 Named Pipe + 调试 HTTP”双通路在跑；
+- `server.go` 已注册 `/rpc`、`/events`、`/events/stream` 调试入口，`namedpipe_windows.go` / `namedpipe_other.go` 也保留了 Named Pipe 传输实现，说明当前实现已经按“正式 Named Pipe + 调试 HTTP”双通路在跑；
 - `handlers.go` 已把稳定方法组统一注册到 `agent.*` 路由上，说明本地接入层已经有明确收口点，而不是停留在概念图阶段。
 
 选择 Go local-service 的原因是：
