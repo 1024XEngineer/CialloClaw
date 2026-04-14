@@ -2236,9 +2236,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户选定某个恢复点并发起回滚时
-- **系统处理**：执行恢复点对应的工作区回滚，并回写任务、安全状态与审计记录
+- **系统处理**：先进入高风险授权链路；授权通过后执行恢复点对应的工作区回滚，并回写任务、安全状态与审计记录
 - **入参**：可选任务 ID、恢复点 ID
-- **出参**：是否成功、更新后的任务、恢复点、审计记录、状态气泡
+- **出参**：首次调用返回待授权状态；授权通过后由 `agent.security.respond` 返回最终恢复结果
 
 ### agent.security.restore.apply 入参说明
 
@@ -2269,11 +2269,17 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 | 字段                  | 中文说明         |
 | --------------------- | ---------------- |
-| `data.applied`        | 是否恢复成功     |
-| `data.task`           | 更新后的任务对象 |
+| `data.applied`        | 当前阶段是否已完成恢复；首次调用固定为 `false` |
+| `data.task`           | 更新后的任务对象；首次调用进入 `waiting_auth` |
 | `data.recovery_point` | 本次使用的恢复点 |
-| `data.audit_record`   | 恢复审计记录     |
+| `data.audit_record`   | 恢复审计记录；首次调用通常为 `null` |
 | `data.bubble_message` | 状态提示气泡     |
+
+### agent.security.restore.apply 两阶段说明
+
+1. 第一次调用 `agent.security.restore.apply` 只创建高风险授权请求，并返回 `waiting_auth`
+2. 用户确认后，再通过 `agent.security.respond` 执行真正的恢复动作
+3. 最终的恢复成功/失败、审计记录和状态气泡在 `agent.security.respond` 响应中返回
 
 ### agent.security.restore.apply 错误说明
 
@@ -2282,12 +2288,48 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `1005001` | `SQLITE_WRITE_FAILED` | 恢复点读取或持久化存储查询失败 |
 | `1005002` | `ARTIFACT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
 
-### agent.security.restore.apply 出参示例
+### agent.security.restore.apply 首次出参示例
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": "req_security_restore_apply_001",
+  "result": {
+    "data": {
+      "applied": false,
+      "task": {
+        "task_id": "task_301",
+        "status": "waiting_auth"
+      },
+      "recovery_point": {
+        "recovery_point_id": "rp_001",
+        "task_id": "task_301",
+        "summary": "write_file_before_change",
+        "created_at": "2026-04-07T11:04:30+08:00",
+        "objects": ["workspace/notes/output.md"]
+      },
+      "audit_record": null,
+      "bubble_message": {
+        "bubble_id": "bubble_301",
+        "task_id": "task_301",
+        "type": "status",
+        "text": "恢复点回滚属于高风险操作，请先确认授权。"
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:06:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+### agent.security.respond 恢复完成出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_respond_restore_001",
   "result": {
     "data": {
       "applied": true,
@@ -2318,11 +2360,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "type": "status",
         "text": "已根据恢复点 rp_001 恢复 1 个对象。"
       }
-    },
-    "meta": {
-      "server_time": "2026-04-07T11:06:01+08:00"
-    },
-    "warnings": []
+    }
   }
 }
 ```
