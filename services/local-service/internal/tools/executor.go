@@ -233,7 +233,7 @@ func (e *ToolExecutor) normalizeExecutionError(ctx context.Context, execErr erro
 	if execErr == nil {
 		execErr = ErrToolExecutionFailed
 	}
-	return fmt.Errorf("%w: %v", ErrToolExecutionFailed, execErr), ToolCallStatusFailed
+	return errors.Join(ErrToolExecutionFailed, execErr), ToolCallStatusFailed
 }
 
 func (e *ToolExecutor) buildErrorExecutionResult(ctx context.Context, metadata ToolMetadata, name string, toolResult *ToolResult, duration time.Duration, record ToolCallRecord, status ToolCallStatus, err error) *ToolExecutionResult {

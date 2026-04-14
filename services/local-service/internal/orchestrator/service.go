@@ -2427,6 +2427,10 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 		return "翻译结果", "结果已通过气泡返回", "翻译结果已经生成，可直接查看。"
 	case "explain":
 		return "解释结果", "结果已通过气泡返回", "这段内容的意思已经整理好了。"
+	case "page_read":
+		return "网页读取结果", "结果已通过气泡返回", "网页主要内容已经整理完成，可直接查看。"
+	case "page_search":
+		return "网页搜索结果", "结果已通过气泡返回", "网页搜索结果已经返回，可直接查看。"
 	case "write_file":
 		return "文件写入结果", "已为你写入文档并打开", "文件已经生成，可直接查看。"
 	default:
@@ -2439,7 +2443,7 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 // deliveryTypeFromIntent 根据意图类型返回默认交付方式。
 func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
-	case "translate", "explain":
+	case "translate", "explain", "page_read", "page_search":
 		return "bubble"
 	default:
 		return "workspace_document"

@@ -29,19 +29,42 @@ export type RequestMeta = {
   client_time: string;
 };
 
+export type RequestSource = "floating_ball" | "dashboard" | "tray_panel";
+
+export type InputMode = "voice" | "text";
+
 export type AgentInputSubmitParams = {
   request_meta: RequestMeta;
   session_id?: string;
-  source: "floating_ball" | "dashboard" | "tray_panel";
+  source: RequestSource;
   trigger: "voice_commit" | "hover_text_input";
   input: {
     type: "text";
     text: string;
-    input_mode: "voice" | "text";
+    input_mode: InputMode;
   };
   context: {
     files: string[];
   };
+  options?: {
+    confirm_required?: boolean;
+    preferred_delivery?: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
+  };
+};
+
+export type AgentInputSubmitResult = {
+  task: {
+    task_id: string;
+    status: string;
+  };
+  bubble_message: BubbleMessage | null;
+  delivery_result?: {
+    type?: string;
+    preview_text?: string | null;
+    payload?: {
+      task_id?: string | null;
+    } | null;
+  } | null;
 };
 
 export type AgentSecuritySummaryGetParams = { request_meta: RequestMeta };

@@ -4,6 +4,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,11 +49,46 @@ type successfulExecutionBackend struct {
 	result tools.CommandExecutionResult
 }
 
+type stubPlaywrightClient struct {
+	readResult   tools.BrowserPageReadResult
+	searchResult tools.BrowserPageSearchResult
+	err          error
+}
+
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	if b.result.ExitCode == 0 && b.result.Stdout == "" && b.result.Stderr == "" {
 		return tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}, nil
 	}
 	return b.result, nil
+}
+
+func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageReadResult{}, s.err
+	}
+	result := s.readResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageSearchResult{}, s.err
+	}
+	result := s.searchResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	if result.Query == "" {
+		result.Query = query
+	}
+	if limit > 0 && len(result.Matches) > limit {
+		result.Matches = result.Matches[:limit]
+		result.MatchCount = len(result.Matches)
+	}
+	return result, nil
 }
 
 type failingCheckpointWriter struct {
@@ -84,10 +121,14 @@ func timePointer(value time.Time) *time.Time {
 }
 
 func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, string) {
-	return newTestServiceWithExecutionOptions(t, modelOutput, platform.LocalExecutionBackend{}, nil)
+	return newTestServiceWithExecutionAndPlaywright(t, modelOutput, platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient())
 }
 
 func newTestServiceWithExecutionOptions(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer) (*Service, string) {
+	return newTestServiceWithExecutionAndPlaywright(t, modelOutput, executionBackend, checkpointWriter, sidecarclient.NewNoopPlaywrightSidecarClient())
+}
+
+func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -107,10 +148,13 @@ func newTestServiceWithExecutionOptions(t *testing.T, modelOutput string, execut
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, sidecarclient.NewNoopPlaywrightSidecarClient(), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -3236,6 +3280,207 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 	if output["audit_record"] == nil {
 		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+	}
+}
+
+func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{readResult: tools.BrowserPageReadResult{
+		Title:       "Example Domain",
+		TextContent: "This domain is for use in illustrative examples in documents.",
+		MIMEType:    "text/html",
+		TextType:    "text/html",
+		Source:      "playwright_sidecar",
+	}})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_page_read",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取这个网页",
+		},
+		"intent": map[string]any{
+			"name": "page_read",
+			"arguments": map[string]any{
+				"url": "https://example.com",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if !strings.Contains(bubble["text"].(string), "illustrative examples") {
+		t.Fatalf("expected bubble text to contain page preview, got %+v", bubble)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "page_read" {
+		t.Fatalf("expected runtime task to record page_read tool call, got %v", record.LatestToolCall["tool_name"])
+	}
+	output, ok := record.LatestToolCall["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
+	}
+	if output["title"] != "Example Domain" {
+		t.Fatalf("expected page_read tool output title to be recorded, got %+v", output)
+	}
+	if output["content_preview"] == nil {
+		t.Fatalf("expected page_read tool output preview to be recorded, got %+v", output)
+	}
+}
+
+func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{searchResult: tools.BrowserPageSearchResult{
+		Matches:    []string{"Keyword beta lives here"},
+		MatchCount: 1,
+		Source:     "playwright_sidecar",
+	}})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_page_search",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请搜索这个网页",
+		},
+		"intent": map[string]any{
+			"name": "page_search",
+			"arguments": map[string]any{
+				"url":   "https://example.com",
+				"query": "beta",
+				"limit": 2,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if !strings.Contains(bubble["text"].(string), "关键词") {
+		t.Fatalf("expected page_search bubble summary, got %+v", bubble)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "page_search" {
+		t.Fatalf("expected runtime task to record page_search tool call, got %+v", record.LatestToolCall)
+	}
+}
+
+func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.T) {
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{err: tools.ErrPlaywrightSidecarFailed})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_page_read_fail",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取这个网页",
+		},
+		"intent": map[string]any{
+			"name": "page_read",
+			"arguments": map[string]any{
+				"url": "https://example.com",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task should return task-centric failure result, got %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected failed task to remain in runtime")
+	}
+	if record.Status != "failed" {
+		t.Fatalf("expected failed status, got %+v", record)
+	}
+	if record.LatestToolCall["tool_name"] != "page_read" {
+		t.Fatalf("expected runtime task to record page_read failure, got %+v", record.LatestToolCall)
+	}
+	if record.LatestToolCall["error_code"] != tools.ToolErrorCodePlaywrightSidecarFail {
+		t.Fatalf("expected unified sidecar error code, got %+v", record.LatestToolCall)
+	}
+}
+
+func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Local Acceptance Page</title></head><body><p>Local acceptance page verifies end to end page read delivery.</p><p>Keyword beta lives here.</p></body></html>`))
+	})}
+	defer server.Close()
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("runtime start failed: %v", err)
+	}
+	defer runtime.Stop()
+
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, runtime.Client())
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_real_page_read",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取本地网页",
+		},
+		"intent": map[string]any{
+			"name": "page_read",
+			"arguments": map[string]any{
+				"url": "http://" + listener.Addr().String(),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if !strings.Contains(bubble["text"].(string), "Local acceptance page") {
+		t.Fatalf("expected real local page preview in bubble, got %+v", bubble)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "page_read" {
+		t.Fatalf("expected runtime task to record page_read tool call, got %+v", record.LatestToolCall)
+	}
+	if record.LatestEvent["type"] != "delivery.ready" {
+		t.Fatalf("expected delivery.ready latest event, got %+v", record.LatestEvent)
 	}
 }
 

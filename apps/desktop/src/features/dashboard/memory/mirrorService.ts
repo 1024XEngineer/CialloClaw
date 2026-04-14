@@ -1,11 +1,25 @@
 import type {
   AgentMirrorOverviewGetParams,
   AgentMirrorOverviewGetResult,
+  ApprovalRequest,
   MirrorReference,
   RequestMeta,
+  Task,
+  TokenCostSummary,
 } from "@cialloclaw/protocol";
 import mirrorOverviewMock from "./mirrorOverview.json";
 import { getMirrorOverviewDetailed as requestMirrorOverview } from "@/rpc/methods";
+import { loadMirrorConversationRecords, type MirrorConversationRecord } from "@/services/mirrorMemoryService";
+import { loadSecurityModuleData } from "@/features/dashboard/safety/securityService";
+import { loadTaskBuckets } from "@/features/dashboard/tasks/taskPage.service";
+import {
+  buildMirrorConversationSummary,
+  buildMirrorDailyDigest,
+  buildMirrorProfileBaseItems,
+  type MirrorConversationSummary,
+  type MirrorDailyDigest,
+  type MirrorProfileBaseItem,
+} from "./mirrorViewModel";
 
 type MirrorOverviewMock = typeof mirrorOverviewMock;
 export type MirrorOverviewSource = "rpc" | "mock";
@@ -25,6 +39,20 @@ export type MirrorOverviewData = {
     warnings: string[];
   };
   source: MirrorOverviewSource;
+  conversations: MirrorConversationRecord[];
+  conversationSummary: MirrorConversationSummary;
+  dailyDigest: MirrorDailyDigest;
+  profileItems: MirrorProfileBaseItem[];
+};
+
+type MirrorSupportContext = {
+  finishedTasks: Task[];
+  unfinishedTasks: Task[];
+  pendingApprovals: ApprovalRequest[];
+  latestRestorePointSummary: string | null;
+  securityStatus: string | null;
+  tokenCostSummary: TokenCostSummary | null;
+  warnings: string[];
 };
 
 function adaptMirrorReference(reference: MirrorOverviewMock["memory_references"][number]): MirrorReference {
@@ -36,7 +64,7 @@ function adaptMirrorReference(reference: MirrorOverviewMock["memory_references"]
 }
 
 function buildFallbackOverview(): AgentMirrorOverviewGetResult {
-  const overview = {
+  return {
     history_summary: mirrorOverviewMock.history_summary.map((item) => item),
     daily_summary: mirrorOverviewMock.daily_summary
       ? {
@@ -54,8 +82,6 @@ function buildFallbackOverview(): AgentMirrorOverviewGetResult {
       : null,
     memory_references: mirrorOverviewMock.memory_references.map(adaptMirrorReference),
   } satisfies AgentMirrorOverviewGetResult;
-
-  return overview;
 }
 
 function createRequestMeta(): RequestMeta {
@@ -65,37 +91,134 @@ function createRequestMeta(): RequestMeta {
   };
 }
 
-export function buildMirrorInsightPreview(overview: AgentMirrorOverviewGetResult): MirrorInsightPreview {
-  const latestReference = overview.memory_references[0] ?? null;
-  const completedTasks = overview.daily_summary?.completed_tasks ?? 0;
-  const generatedOutputs = overview.daily_summary?.generated_outputs ?? 0;
-  const preferredOutput = overview.profile?.preferred_output ?? "结构化摘要";
+function getEmptyMirrorSupportContext(): MirrorSupportContext {
+  return {
+    finishedTasks: [],
+    unfinishedTasks: [],
+    pendingApprovals: [],
+    latestRestorePointSummary: null,
+    securityStatus: null,
+    tokenCostSummary: null,
+    warnings: [],
+  };
+}
+
+async function loadMirrorSupportContext(source: MirrorOverviewSource): Promise<MirrorSupportContext> {
+  const [taskBucketsResult, securityResult] = await Promise.allSettled([
+    loadTaskBuckets({ source }),
+    loadSecurityModuleData(source),
+  ]);
+  const warnings: string[] = [];
+
+  const taskBuckets = taskBucketsResult.status === "fulfilled" ? taskBucketsResult.value : null;
+  if (taskBucketsResult.status === "rejected") {
+    warnings.push(taskBucketsResult.reason instanceof Error ? `task-context: ${taskBucketsResult.reason.message}` : "task-context: load failed");
+  }
+
+  const securityModule = securityResult.status === "fulfilled" ? securityResult.value : null;
+  if (securityResult.status === "rejected") {
+    warnings.push(securityResult.reason instanceof Error ? `security-context: ${securityResult.reason.message}` : "security-context: load failed");
+  }
 
   return {
-    badge: latestReference ? "mirror ready" : "mirror empty",
-    title: `今日记录了 ${completedTasks} 个完成任务`,
-    description: `当前偏好 ${preferredOutput}，并已累计 ${generatedOutputs} 份可复用输出线索。`,
+    finishedTasks: taskBuckets?.finished.items.map((item) => item.task) ?? [],
+    unfinishedTasks: taskBuckets?.unfinished.items.map((item) => item.task) ?? [],
+    pendingApprovals: securityModule?.pending ?? [],
+    latestRestorePointSummary:
+      securityModule?.summary.latest_restore_point && typeof securityModule.summary.latest_restore_point !== "string"
+        ? securityModule.summary.latest_restore_point.summary
+        : null,
+    securityStatus: securityModule?.summary.security_status ?? null,
+    tokenCostSummary: securityModule?.summary.token_cost_summary ?? null,
+    warnings,
+  };
+}
+
+export function buildMirrorInsightPreview(
+  overview: AgentMirrorOverviewGetResult,
+  dailyDigest: MirrorDailyDigest,
+  conversationSummary: MirrorConversationSummary,
+): MirrorInsightPreview {
+  const latestReference = overview.memory_references[0] ?? null;
+  const localConversationCopy =
+    conversationSummary.total_records > 0
+      ? `本地记录 ${conversationSummary.total_records} 条最近对话。`
+      : "当前没有本地对话记录。";
+
+  return {
+    badge: latestReference ? "mirror ready" : "mirror quiet",
+    title: dailyDigest.headline,
+    description: `${dailyDigest.lede} ${localConversationCopy}`,
     primaryReference: latestReference,
+  };
+}
+
+function buildMirrorOverviewData(
+  overview: AgentMirrorOverviewGetResult,
+  source: MirrorOverviewSource,
+  rpcContext: MirrorOverviewData["rpcContext"],
+  supportContext: MirrorSupportContext,
+): MirrorOverviewData {
+  const conversations = loadMirrorConversationRecords(source);
+  const conversationSummary = buildMirrorConversationSummary(conversations);
+  const dailyDigest = buildMirrorDailyDigest({
+    overview,
+    unfinished_tasks: supportContext.unfinishedTasks,
+    finished_tasks: supportContext.finishedTasks,
+    pending_approvals: supportContext.pendingApprovals,
+    security_status: supportContext.securityStatus,
+    latest_restore_point_summary: supportContext.latestRestorePointSummary,
+    token_cost_summary: supportContext.tokenCostSummary,
+    conversations,
+  });
+  const profileItems = buildMirrorProfileBaseItems({
+    profile: overview.profile,
+    conversations,
+  });
+
+  return {
+    overview,
+    insight: buildMirrorInsightPreview(overview, dailyDigest, conversationSummary),
+    rpcContext: {
+      ...rpcContext,
+      warnings: [...rpcContext.warnings, ...supportContext.warnings],
+    },
+    source,
+    conversations,
+    conversationSummary,
+    dailyDigest,
+    profileItems,
   };
 }
 
 export function getInitialMirrorOverviewData(): MirrorOverviewData {
   const overview = buildFallbackOverview();
 
-  return {
+  return buildMirrorOverviewData(
     overview,
-    insight: buildMirrorInsightPreview(overview),
-    rpcContext: {
+    "mock",
+    {
       serverTime: null,
       warnings: [],
     },
-    source: "mock",
-  };
+    getEmptyMirrorSupportContext(),
+  );
 }
 
 export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc"): Promise<MirrorOverviewData> {
   if (source === "mock") {
-    return getInitialMirrorOverviewData();
+    const overview = buildFallbackOverview();
+    const supportContext = await loadMirrorSupportContext("mock");
+
+    return buildMirrorOverviewData(
+      overview,
+      "mock",
+      {
+        serverTime: null,
+        warnings: [],
+      },
+      supportContext,
+    );
   }
 
   const params: AgentMirrorOverviewGetParams = {
@@ -103,16 +226,19 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
     include: ["history_summary", "daily_summary", "profile", "memory_references"],
   };
 
-  const response = await requestMirrorOverview(params);
+  const [response, supportContext] = await Promise.all([
+    requestMirrorOverview(params),
+    loadMirrorSupportContext("rpc"),
+  ]);
   const overview = response.data;
 
-  return {
+  return buildMirrorOverviewData(
     overview,
-    insight: buildMirrorInsightPreview(overview),
-    rpcContext: {
+    "rpc",
+    {
       serverTime: response.meta?.server_time ?? null,
       warnings: response.warnings,
     },
-    source: "rpc",
-  };
+    supportContext,
+  );
 }

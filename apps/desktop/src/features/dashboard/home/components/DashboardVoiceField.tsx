@@ -1,75 +1,372 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { Task } from "@cialloclaw/protocol";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Sparkles, X } from "lucide-react";
+import { LoaderCircle, Mic, RotateCcw, Sparkles, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { submitTextInput } from "@/services/agentInputService";
+import type { DashboardVoiceSequence } from "@/features/dashboard/home/dashboardHome.types";
+import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getShellBallMotionConfig } from "@/features/shell-ball/shellBall.motion";
 import { ShellBallMascot } from "@/features/shell-ball/components/ShellBallMascot";
+import {
+  collectShellBallSpeechTranscript,
+  getShellBallSpeechRecognitionConstructor,
+  getShellBallSpeechRecognitionLanguage,
+  normalizeShellBallSpeechTranscript,
+  type ShellBallSpeechRecognition,
+} from "@/features/shell-ball/shellBall.speech";
 import type { ShellBallVisualState } from "@/features/shell-ball/shellBall.types";
-import type { DashboardHomeModuleKey, DashboardVoiceSequence, DashboardVoiceStage } from "../dashboardHome.types";
 import "@/features/shell-ball/shellBall.css";
-import "../dashboardHome.css";
+import "@/features/dashboard/home/dashboardHome.css";
 
 type DashboardVoiceFieldProps = {
   isOpen: boolean;
   onClose: () => void;
-  onCommand: (module: DashboardHomeModuleKey) => void;
   sequences: DashboardVoiceSequence[];
 };
 
-const stageOrder: DashboardVoiceStage[] = ["ready", "listening", "understanding", "confirming", "executing"];
+type DashboardVoiceStage = "ready" | "listening" | "submitting" | "completed" | "error";
 
-export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: DashboardVoiceFieldProps) {
+type DashboardVoiceRecognitionStopReason = "none" | "finish" | "cancel";
+
+const stageOrder: DashboardVoiceStage[] = ["ready", "listening", "submitting", "completed", "error"];
+
+function getDashboardVoiceStatusLabel(stage: DashboardVoiceStage, taskStatus: Task["status"] | null) {
+  if (stage === "ready") {
+    return "正在准备语音场";
+  }
+
+  if (stage === "listening") {
+    return "正在听…";
+  }
+
+  if (stage === "submitting") {
+    return "正在提交到任务主链路";
+  }
+
+  if (stage === "error") {
+    return "语音暂未完成";
+  }
+
+  switch (taskStatus) {
+    case "confirming_intent":
+      return "已进入意图确认";
+    case "waiting_auth":
+      return "已进入授权确认";
+    case "waiting_input":
+      return "正在等待补充信息";
+    case "blocked":
+      return "任务暂时被阻塞";
+    case "failed":
+      return "任务返回失败状态";
+    case "completed":
+      return "任务已完成";
+    default:
+      return "语音内容已提交";
+  }
+}
+
+function getDashboardVoiceTaskRoute(status: Task["status"]) {
+  return status === "waiting_auth" ? resolveDashboardModuleRoutePath("safety") : resolveDashboardModuleRoutePath("tasks");
+}
+
+function getSpeechRecognitionErrorMessage(error: string) {
+  switch (error) {
+    case "audio-capture":
+      return "当前没有可用的麦克风设备。";
+    case "network":
+      return "语音转写网络暂时不可用，请稍后再试。";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "当前环境没有语音转写权限。";
+    case "no-speech":
+      return "没有检测到语音内容，请再试一次。";
+    default:
+      return "语音转写暂时不可用，请再试一次。";
+  }
+}
+
+export function DashboardVoiceField({ isOpen, onClose, sequences }: DashboardVoiceFieldProps) {
+  const navigate = useNavigate();
   const [stage, setStage] = useState<DashboardVoiceStage>("ready");
-  const [summary, setSummary] = useState("");
-  const [fragments, setFragments] = useState<string[]>([]);
-  const [executingStep, setExecutingStep] = useState("");
-  const [executingProgress, setExecutingProgress] = useState(0);
-  const [currentSequenceIndex, setCurrentSequenceIndex] = useState(0);
-  const timerRef = useRef<number | null>(null);
-  const executionTimersRef = useRef<number[]>([]);
+  const [transcript, setTranscript] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [submittedTaskStatus, setSubmittedTaskStatus] = useState<Task["status"] | null>(null);
+  const [submittedTaskId, setSubmittedTaskId] = useState<string | null>(null);
+  const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const completionTimerRef = useRef<number | null>(null);
+  const transcriptRef = useRef("");
+  const recognitionRef = useRef<ShellBallSpeechRecognition | null>(null);
+  const recognitionSessionIdRef = useRef(0);
+  const recognitionStopReasonRef = useRef<DashboardVoiceRecognitionStopReason>("none");
+  const recognitionErrorMessageRef = useRef<string | null>(null);
   const titleId = useId();
   const descriptionId = useId();
 
-  const activeSequence = sequences[currentSequenceIndex % sequences.length];
-  const mascotState: ShellBallVisualState = stage === "listening" ? "voice_listening" : stage === "executing" ? "voice_locked" : stage === "understanding" ? "processing" : "hover_input";
+  const activeStageIndex = stageOrder.indexOf(stage);
+  const hasTranscript = transcript.trim() !== "";
+  const mascotState: ShellBallVisualState = stage === "listening" ? "voice_listening" : stage === "submitting" ? "processing" : stage === "completed" ? "voice_locked" : "hover_input";
   const motionConfig = useMemo(() => getShellBallMotionConfig(mascotState), [mascotState]);
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
+  const clearCompletionTimer = useCallback(() => {
+    if (completionTimerRef.current !== null) {
+      window.clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = null;
     }
-
-    executionTimersRef.current.forEach((timer) => {
-      window.clearTimeout(timer);
-    });
-    executionTimersRef.current = [];
   }, []);
 
-  useEffect(() => {
-    if (!isOpen) {
-      clearTimer();
-      setStage("ready");
-      setFragments([]);
-      setSummary("");
-      setExecutingStep("");
-      setExecutingProgress(0);
+  const setLiveTranscript = useCallback((value: string) => {
+    transcriptRef.current = value;
+    setTranscript(value);
+  }, []);
+
+  const disposeVoiceRecognition = useCallback(() => {
+    recognitionSessionIdRef.current += 1;
+    recognitionStopReasonRef.current = "none";
+    recognitionErrorMessageRef.current = null;
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+
+    if (recognition === null) {
       return;
     }
 
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+
+    try {
+      recognition.abort();
+    } catch {}
+  }, []);
+
+  const resetVoiceField = useCallback(() => {
+    clearCompletionTimer();
+    recognitionErrorMessageRef.current = null;
     setStage("ready");
-    setFragments([]);
-    setSummary("");
-    setExecutingStep("");
-    setExecutingProgress(0);
+    setErrorMessage(null);
+    setSubmittedTaskStatus(null);
+    setSubmittedTaskId(null);
+    setSubmittedMessage(null);
+    setLiveTranscript("");
+  }, [clearCompletionTimer, setLiveTranscript]);
 
-    timerRef.current = window.setTimeout(() => setStage("listening"), 720);
+  const submitDashboardVoiceText = useCallback(async (text: string) => {
+    const finalizedTranscript = normalizeShellBallSpeechTranscript(text);
 
-    return clearTimer;
-  }, [clearTimer, isOpen]);
+    if (finalizedTranscript === "") {
+      setStage("error");
+      setErrorMessage("没有收到可提交的语音内容，请再试一次。");
+      return;
+    }
+
+    setLiveTranscript(finalizedTranscript);
+    setStage("submitting");
+    setErrorMessage(null);
+
+    try {
+      const result = await submitTextInput({
+        text: finalizedTranscript,
+        source: "dashboard",
+        trigger: "voice_commit",
+        inputMode: "voice",
+      });
+
+      if (result === null) {
+        setStage("error");
+        setErrorMessage("没有收到可提交的语音内容，请再试一次。");
+        return;
+      }
+
+      setSubmittedTaskStatus(result.task.status);
+      setSubmittedTaskId(result.task.task_id);
+      setSubmittedMessage(result.bubble_message?.text?.trim() || null);
+      setStage("completed");
+      clearCompletionTimer();
+      completionTimerRef.current = window.setTimeout(() => {
+        navigate(getDashboardVoiceTaskRoute(result.task.status), {
+          state: result.task.status === "waiting_auth"
+            ? undefined
+            : { focusTaskId: result.task.task_id, openDetail: true },
+        });
+        onClose();
+      }, 720);
+    } catch (error) {
+      console.warn("dashboard voice submit failed", error);
+      setStage("error");
+      setErrorMessage("语音内容提交失败，请稍后重试。");
+    }
+  }, [clearCompletionTimer, navigate, onClose, setLiveTranscript]);
+
+  const finalizeVoiceRecognition = useCallback(async (reason: Exclude<DashboardVoiceRecognitionStopReason, "none">) => {
+    recognitionRef.current = null;
+    recognitionStopReasonRef.current = "none";
+    recognitionSessionIdRef.current += 1;
+    const finalizedTranscript = normalizeShellBallSpeechTranscript(transcriptRef.current);
+
+    if (reason === "cancel") {
+      setStage("error");
+      setErrorMessage(recognitionErrorMessageRef.current ?? "语音转写已取消，请重试。");
+      return;
+    }
+
+    if (finalizedTranscript === "") {
+      setStage("error");
+      setErrorMessage(recognitionErrorMessageRef.current ?? "没有收到可提交的语音内容，请再试一次。");
+      return;
+    }
+
+    await submitDashboardVoiceText(finalizedTranscript);
+  }, [submitDashboardVoiceText]);
+
+  const stopVoiceRecognition = useCallback((reason: Exclude<DashboardVoiceRecognitionStopReason, "none">) => {
+    recognitionStopReasonRef.current = reason;
+    const recognition = recognitionRef.current;
+
+    if (recognition === null) {
+      void finalizeVoiceRecognition(reason);
+      return;
+    }
+
+    try {
+      if (reason === "cancel") {
+        recognition.abort();
+        return;
+      }
+
+      recognition.stop();
+    } catch {
+      void finalizeVoiceRecognition(reason);
+    }
+  }, [finalizeVoiceRecognition]);
+
+  const startVoiceRecognition = useCallback(() => {
+    const Recognition = getShellBallSpeechRecognitionConstructor();
+
+    if (Recognition === null) {
+      setStage("error");
+      setErrorMessage("当前环境不支持语音转写。\n请检查系统浏览器能力后重试。");
+      return false;
+    }
+
+    disposeVoiceRecognition();
+    clearCompletionTimer();
+    setLiveTranscript("");
+    setErrorMessage(null);
+    setStage("listening");
+    recognitionErrorMessageRef.current = null;
+    recognitionSessionIdRef.current += 1;
+    const sessionId = recognitionSessionIdRef.current;
+    const recognition = new Recognition();
+    recognitionRef.current = recognition;
+    recognitionStopReasonRef.current = "none";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = getShellBallSpeechRecognitionLanguage();
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      if (sessionId !== recognitionSessionIdRef.current) {
+        return;
+      }
+
+      setLiveTranscript(collectShellBallSpeechTranscript(event.results));
+    };
+
+    recognition.onerror = (event) => {
+      if (sessionId !== recognitionSessionIdRef.current) {
+        return;
+      }
+
+      if (recognitionStopReasonRef.current === "cancel" && event.error === "aborted") {
+        return;
+      }
+
+      recognitionErrorMessageRef.current = getSpeechRecognitionErrorMessage(event.error);
+      recognitionStopReasonRef.current = "cancel";
+    };
+
+    recognition.onend = () => {
+      if (sessionId !== recognitionSessionIdRef.current) {
+        return;
+      }
+
+      const stopReason = recognitionStopReasonRef.current;
+
+      if (stopReason === "finish" || stopReason === "cancel") {
+        void finalizeVoiceRecognition(stopReason);
+        return;
+      }
+
+      if (normalizeShellBallSpeechTranscript(transcriptRef.current) !== "") {
+        void finalizeVoiceRecognition("finish");
+        return;
+      }
+
+      setStage("error");
+      setErrorMessage(recognitionErrorMessageRef.current ?? "没有检测到语音内容，请再试一次。");
+    };
+
+    try {
+      recognition.start();
+      return true;
+    } catch (error) {
+      console.warn("dashboard speech recognition start failed", error);
+      recognitionRef.current = null;
+      recognitionStopReasonRef.current = "none";
+      recognitionSessionIdRef.current += 1;
+      setStage("error");
+      setErrorMessage("语音转写启动失败，请重新打开再试。");
+      return false;
+    }
+  }, [clearCompletionTimer, disposeVoiceRecognition, finalizeVoiceRecognition, setLiveTranscript]);
+
+  const handleClose = useCallback(() => {
+    disposeVoiceRecognition();
+    resetVoiceField();
+    onClose();
+  }, [disposeVoiceRecognition, onClose, resetVoiceField]);
+
+  const handleRestart = useCallback(() => {
+    resetVoiceField();
+    startVoiceRecognition();
+  }, [resetVoiceField, startVoiceRecognition]);
+
+  const handleSubmitCurrentTranscript = useCallback(() => {
+    if (hasTranscript) {
+      void finalizeVoiceRecognition("finish");
+      return;
+    }
+
+    handleRestart();
+  }, [finalizeVoiceRecognition, handleRestart, hasTranscript]);
+
+  const handleSuggestionSelect = useCallback((suggestion: string) => {
+    disposeVoiceRecognition();
+    clearCompletionTimer();
+    recognitionErrorMessageRef.current = null;
+    void submitDashboardVoiceText(suggestion);
+  }, [clearCompletionTimer, disposeVoiceRecognition, submitDashboardVoiceText]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      disposeVoiceRecognition();
+      resetVoiceField();
+      return;
+    }
+
+    resetVoiceField();
+    startVoiceRecognition();
+
+    return () => {
+      clearCompletionTimer();
+      disposeVoiceRecognition();
+    };
+  }, [clearCompletionTimer, disposeVoiceRecognition, isOpen, resetVoiceField, startVoiceRecognition]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -89,71 +386,10 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
     };
   }, [isOpen]);
 
-  useEffect(() => {
-    clearTimer();
-
-    if (!isOpen) {
-      return;
-    }
-
-    if (stage === "listening") {
-      timerRef.current = window.setTimeout(() => {
-        setFragments(activeSequence.fragments);
-        setStage("understanding");
-      }, 2100);
-      return;
-    }
-
-    if (stage === "understanding") {
-      timerRef.current = window.setTimeout(() => {
-        setSummary(activeSequence.summary);
-        setStage("confirming");
-      }, 1200);
-      return;
-    }
-
-    return;
-  }, [activeSequence.fragments, activeSequence.summary, clearTimer, isOpen, stage]);
-
-  useEffect(() => {
-    if (!isOpen || stage !== "executing") {
-      return;
-    }
-
-    activeSequence.executingSteps.forEach((step, index) => {
-      const stepTimer = window.setTimeout(() => {
-        setExecutingStep(step);
-        setExecutingProgress(Math.round(((index + 1) / activeSequence.executingSteps.length) * 100));
-        if (index === activeSequence.executingSteps.length - 1) {
-          const closeTimer = window.setTimeout(() => {
-            onCommand(activeSequence.module);
-            onClose();
-            setCurrentSequenceIndex((current) => current + 1);
-          }, 900);
-          executionTimersRef.current.push(closeTimer);
-        }
-      }, index * 680);
-
-      executionTimersRef.current.push(stepTimer);
-    });
-
-    return clearTimer;
-  }, [activeSequence.executingSteps, activeSequence.module, clearTimer, isOpen, onClose, onCommand, stage]);
-
-  function handleConfirm() {
-    setStage("executing");
-  }
-
-  function handleRetry() {
-    setFragments([]);
-    setSummary("");
-    setStage("listening");
-  }
-
   function handlePanelKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
-      onClose();
+      handleClose();
       return;
     }
 
@@ -199,7 +435,7 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
         className="dashboard-voice-field"
         exit={{ opacity: 0 }}
         initial={{ opacity: 0 }}
-        onClick={onClose}
+        onClick={handleClose}
       >
         <motion.div
           animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -223,15 +459,15 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
                 语音陪伴场
               </h2>
             </div>
-            <Button className="dashboard-orbit-panel__close" onClick={onClose} ref={closeButtonRef} size="icon-sm" variant="ghost">
+            <Button className="dashboard-orbit-panel__close" onClick={handleClose} ref={closeButtonRef} size="icon-sm" variant="ghost">
               <X className="h-4 w-4" />
               <span className="sr-only">关闭语音场</span>
             </Button>
           </div>
 
           <div className="dashboard-voice-field__stage-row">
-            {stageOrder.map((item) => (
-              <span key={item} className="dashboard-voice-field__stage-dot" data-active={item === stage ? "true" : "false"} />
+            {stageOrder.map((item, index) => (
+              <span key={item} className="dashboard-voice-field__stage-dot" data-active={index <= activeStageIndex ? "true" : "false"} />
             ))}
           </div>
 
@@ -254,68 +490,68 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
           </div>
 
           <div className="dashboard-voice-field__copy">
-            <p className="dashboard-voice-field__status">
-              <Mic className="h-4 w-4" />
-              {stage === "ready"
-                ? "直接说出你的想法"
-                : stage === "listening"
-                  ? "正在听…"
-                  : stage === "understanding"
-                    ? "我在整理你的意思"
-                    : stage === "confirming"
-                      ? "你是想让我…"
-                      : "正在处理…"}
+            <p className="dashboard-voice-field__status" data-stage={stage}>
+              {stage === "submitting" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+              {getDashboardVoiceStatusLabel(stage, submittedTaskStatus)}
             </p>
             <p className="dashboard-voice-field__subline" id={descriptionId}>
-              {stage === "confirming"
-                ? summary
-                : stage === "executing"
-                  ? executingStep
-                  : fragments.length > 0
-                    ? fragments.join(" · ")
-                    : activeSequence.suggestion}
+              {stage === "submitting"
+                ? "我正在把最终转写通过 agent.input.submit 送入任务入口。"
+                : stage === "completed"
+                  ? submittedTaskStatus === "waiting_auth"
+                    ? (submittedMessage ?? "语音内容已经进入正式任务链路，接下来会打开安全页继续处理授权。")
+                    : submittedTaskId
+                      ? (submittedMessage ?? `语音内容已经进入任务 ${submittedTaskId}，接下来会打开任务详情继续承接。`)
+                      : "语音内容已经进入正式任务链路，接下来会打开任务页继续承接。"
+                  : stage === "error"
+                    ? errorMessage ?? "这次语音没有形成可提交内容。"
+                    : "直接说出你的想法，停顿结束后会自动提交；也可以手动结束收音。"}
             </p>
+
+            <div aria-live="polite" className="dashboard-voice-field__transcript-shell">
+              <p className="dashboard-voice-field__transcript-eyebrow">live transcript</p>
+              <p className="dashboard-voice-field__transcript" data-empty={hasTranscript ? "false" : "true"}>
+                {hasTranscript ? transcript : "……正在等待你的语音内容"}
+              </p>
+            </div>
           </div>
 
-          {stage === "confirming" ? (
-            <div className="dashboard-voice-field__actions">
-              <Button className="dashboard-orbit-panel__primary-button" onClick={handleConfirm}>
-                开始执行
-                <Sparkles className="h-4 w-4" />
-              </Button>
-              <Button className="dashboard-orbit-panel__action-button dashboard-orbit-panel__action-button--mute" onClick={handleRetry} variant="ghost">
-                再详细一点
-              </Button>
-              <Button className="dashboard-orbit-panel__action-button dashboard-orbit-panel__action-button--mute" onClick={onClose} variant="ghost">
-                取消
-              </Button>
+          {stage === "submitting" ? (
+            <div className="dashboard-voice-field__progress-bar">
+              <motion.div animate={{ width: "100%" }} className="dashboard-voice-field__progress-fill" initial={{ width: "18%" }} transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }} />
             </div>
           ) : null}
 
-          {stage === "executing" ? (
-            <div className="dashboard-voice-field__progress-bar">
-              <motion.div animate={{ width: `${executingProgress}%` }} className="dashboard-voice-field__progress-fill" initial={{ width: 0 }} transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }} />
-            </div>
-          ) : (
-            <div className="dashboard-voice-field__suggestions">
-              {sequences.map((sequence, index) => (
-                <button
-                  key={sequence.suggestion}
-                  className="dashboard-voice-field__suggestion-chip"
-                  data-active={index === currentSequenceIndex % sequences.length ? "true" : "false"}
-                  onClick={() => {
-                    setCurrentSequenceIndex(index);
-                    setStage("listening");
-                    setFragments([]);
-                    setSummary("");
-                  }}
-                  type="button"
-                >
-                  {sequence.suggestion}
-                </button>
-              ))}
-            </div>
-          )}
+          {stage !== "submitting" && stage !== "completed" ? (
+            <>
+              <div className="dashboard-voice-field__actions">
+                <Button className="dashboard-orbit-panel__primary-button" onClick={stage === "listening" ? () => stopVoiceRecognition("finish") : handleSubmitCurrentTranscript}>
+                  {stage === "listening" ? "结束并提交" : hasTranscript ? "提交当前转写" : "重新开始"}
+                  <Sparkles className="h-4 w-4" />
+                </Button>
+                <Button className="dashboard-orbit-panel__action-button dashboard-orbit-panel__action-button--mute" onClick={handleRestart} variant="ghost">
+                  <RotateCcw className="h-4 w-4" />
+                  重新开始
+                </Button>
+                <Button className="dashboard-orbit-panel__action-button dashboard-orbit-panel__action-button--mute" onClick={handleClose} variant="ghost">
+                  取消
+                </Button>
+              </div>
+
+              <div className="dashboard-voice-field__suggestions" role="list" aria-label="语音快捷建议">
+                {sequences.map((sequence) => (
+                  <button
+                    key={sequence.suggestion}
+                    className="dashboard-voice-field__suggestion-chip"
+                    onClick={() => handleSuggestionSelect(sequence.suggestion)}
+                    type="button"
+                  >
+                    {sequence.suggestion}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
         </motion.div>
       </motion.div>
     </AnimatePresence>

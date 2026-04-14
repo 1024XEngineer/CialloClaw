@@ -12,3 +12,7 @@ export function loadStoredValue<T>(key: string): T | null {
 export function saveStoredValue<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
+
+export function removeStoredValue(key: string) {
+  window.localStorage.removeItem(key);
+}

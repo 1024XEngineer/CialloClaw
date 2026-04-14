@@ -1,5 +1,7 @@
 # CialloClaw
 
+[![code coverage](https://codecov.io/gh/1024XEngineer/CialloClaw/graph/badge.svg?branch=main)](https://codecov.io/gh/1024XEngineer/CialloClaw/tree/main)
+
 CialloClaw 是一个面向 Windows 优先落地的桌面协作 Agent 工程仓库，当前实现、目录边界与协作约束以根目录 `AGENTS.md` 和 `/docs` 下的最新英文文档主集为准。当前主集对应架构总览 v15、开发统一规范 v19、协议设计 v5、数据设计 v6、模块设计 v6、分工优先级 v14 与原子功能表。
 
 ## 技术基线

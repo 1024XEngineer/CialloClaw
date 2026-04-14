@@ -176,6 +176,34 @@ func TestDefaultRiskPrecheckerExecCommandRequiresApprovalAndImpactScope(t *testi
 	}
 }
 
+func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "page_read", DisplayName: "Page Read", Source: ToolSourceSidecar},
+		"page_read",
+		execCtx,
+		map[string]any{"url": "https://example.com/page"},
+	)
+	if input.Workspace.TargetPath != "https://example.com/page" {
+		t.Fatalf("expected URL target path, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within != nil {
+		t.Fatalf("expected page_read not to perform workspace boundary check, got %+v", input.Workspace)
+	}
+
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	webpages := result.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "https://example.com/page" {
+		t.Fatalf("expected webpage impact scope, got %+v", result.ImpactScope)
+	}
+}
+
 func TestToolExecutorBlocksDeniedPrecheck(t *testing.T) {
 	sink := &InMemoryToolCallSink{}
 	tool := &stubTool{

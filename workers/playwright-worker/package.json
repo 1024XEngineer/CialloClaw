@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc --project tsconfig.json"
+    "dev": "node src/index.js",
+    "build": "node --check src/index.js"
   },
   "dependencies": {
     "@cialloclaw/protocol": "workspace:*",

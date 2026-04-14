@@ -1,44 +1,172 @@
 package sidecarclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	runtimesrc "runtime"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
+const sidecarHealthTimeout = 5 * time.Second
+const sidecarDefaultTimeout = 20 * time.Second
+const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
+
+type workerInvoker interface {
+	Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error)
+}
+
+type sidecarRequest struct {
+	Action string `json:"action"`
+	URL    string `json:"url,omitempty"`
+	Query  string `json:"query,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+type sidecarResponse struct {
+	OK     bool              `json:"ok"`
+	Result map[string]any    `json:"result,omitempty"`
+	Error  *sidecarErrorBody `json:"error,omitempty"`
+}
+
+type sidecarErrorBody struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type commandWorkerInvoker struct {
+	entryPath string
+	command   string
+	args      []string
+}
+
+type sidecarTransportError struct {
+	err error
+}
+
+func (e sidecarTransportError) Error() string {
+	if e.err == nil {
+		return "sidecar transport failed"
+	}
+	return e.err.Error()
+}
+
+func (e sidecarTransportError) Unwrap() error {
+	return e.err
+}
+
+type sidecarRequestError struct {
+	code    string
+	message string
+}
+
+func (e sidecarRequestError) Error() string {
+	if strings.TrimSpace(e.message) != "" {
+		return strings.TrimSpace(e.message)
+	}
+	if strings.TrimSpace(e.code) != "" {
+		return strings.TrimSpace(e.code)
+	}
+	return "sidecar request failed"
+}
+
+func newCommandWorkerInvoker(entryPath string) commandWorkerInvoker {
+	return commandWorkerInvoker{
+		entryPath: entryPath,
+		command:   "node",
+		args:      []string{entryPath},
+	}
+}
+
+func (i commandWorkerInvoker) Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error) {
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return sidecarResponse{}, err
+	}
+	if strings.TrimSpace(i.entryPath) == "" {
+		return sidecarResponse{}, sidecarTransportError{err: errors.New("worker entry path is required")}
+	}
+	cmd := exec.CommandContext(ctx, i.command, i.args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Stdin = strings.NewReader(string(payload))
+	err = cmd.Run()
+	response, decodeErr := decodeSidecarResponse(stdout.Bytes())
+	if decodeErr == nil {
+		if !response.OK {
+			return response, sidecarRequestError{code: stringValue(responseErrorMap(response.Error), "code"), message: firstNonEmptyString(stringValue(responseErrorMap(response.Error), "message"), strings.TrimSpace(stderr.String()))}
+		}
+		if err == nil {
+			return response, nil
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return sidecarResponse{}, sidecarRequestError{code: "timeout", message: context.DeadlineExceeded.Error()}
+	}
+	if err != nil {
+		return sidecarResponse{}, sidecarTransportError{err: commandWorkerError(err, stderr.String())}
+	}
+	if decodeErr != nil {
+		return sidecarResponse{}, sidecarTransportError{err: fmt.Errorf("decode worker response: %w", decodeErr)}
+	}
+	return response, nil
+}
+
 type runtimePlaywrightClient struct {
 	runtime *PlaywrightSidecarRuntime
 }
 
-func (c runtimePlaywrightClient) ReadPage(_ context.Context, _ string) (tools.BrowserPageReadResult, error) {
+func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tools.BrowserPageReadResult, error) {
 	if c.runtime == nil || !c.runtime.Ready() {
 		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
 	}
+	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_read", URL: url})
+	if err != nil {
+		if shouldMarkRuntimeFailure(err) {
+			_ = c.runtime.markFailure()
+		}
+		return tools.BrowserPageReadResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+	}
 	return tools.BrowserPageReadResult{
-		URL:         "",
-		Title:       "playwright sidecar ready",
-		TextContent: "playwright sidecar transport skeleton is ready",
-		MIMEType:    "text/plain",
-		TextType:    "text/plain",
-		Source:      "playwright_sidecar_ready_stub",
+		URL:         stringValue(response.Result, "url"),
+		Title:       stringValue(response.Result, "title"),
+		TextContent: stringValue(response.Result, "text_content"),
+		MIMEType:    stringValue(response.Result, "mime_type"),
+		TextType:    stringValue(response.Result, "text_type"),
+		Source:      firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 
-func (c runtimePlaywrightClient) SearchPage(_ context.Context, _, _ string, _ int) (tools.BrowserPageSearchResult, error) {
+func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
 	if c.runtime == nil || !c.runtime.Ready() {
 		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
 	}
+	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
+	if err != nil {
+		if shouldMarkRuntimeFailure(err) {
+			_ = c.runtime.markFailure()
+		}
+		return tools.BrowserPageSearchResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+	}
 	return tools.BrowserPageSearchResult{
-		URL:        "",
-		Query:      "",
-		MatchCount: 0,
-		Matches:    []string{},
-		Source:     "playwright_sidecar_ready_stub",
+		URL:        stringValue(response.Result, "url"),
+		Query:      stringValue(response.Result, "query"),
+		MatchCount: intValue(response.Result, "match_count"),
+		Matches:    stringSliceValue(response.Result, "matches"),
+		Source:     firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 
@@ -50,11 +178,12 @@ func (c runtimePlaywrightClient) SearchPage(_ context.Context, _, _ string, _ in
 // - 当前最小 transport 规格
 // - 当前 sidecar 是否已进入 ready 状态
 type PlaywrightSidecarRuntime struct {
-	mu     sync.Mutex
-	spec   plugin.SidecarSpec
-	os     platform.OSCapabilityAdapter
-	ready  bool
-	client runtimePlaywrightClient
+	mu      sync.Mutex
+	spec    plugin.SidecarSpec
+	os      platform.OSCapabilityAdapter
+	ready   bool
+	invoker workerInvoker
+	client  runtimePlaywrightClient
 }
 
 // NewPlaywrightSidecarRuntime 创建并返回最小运行时骨架。
@@ -63,9 +192,14 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 	if !ok {
 		return nil, errors.New("playwright sidecar not declared")
 	}
+	entryPath, err := resolveWorkerEntryPath()
+	if err != nil {
+		return nil, err
+	}
 	runtime := &PlaywrightSidecarRuntime{
-		spec: spec,
-		os:   osCapability,
+		spec:    spec,
+		os:      osCapability,
+		invoker: newCommandWorkerInvoker(entryPath),
 	}
 	runtime.client = runtimePlaywrightClient{runtime: runtime}
 	return runtime, nil
@@ -96,6 +230,12 @@ func (r *PlaywrightSidecarRuntime) Start() error {
 	if err := r.os.EnsureNamedPipe(sidecarPipeName(r.spec.Name)); err != nil {
 		return err
 	}
+	healthCtx, cancel := context.WithTimeout(context.Background(), sidecarHealthTimeout)
+	defer cancel()
+	if _, err := r.invoke(healthCtx, sidecarRequest{Action: "health"}); err != nil {
+		_ = r.os.CloseNamedPipe(sidecarPipeName(r.spec.Name))
+		return fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ready = true
@@ -119,6 +259,159 @@ func (r *PlaywrightSidecarRuntime) Stop() error {
 // Client 返回当前运行时关联的最小 client。
 func (r *PlaywrightSidecarRuntime) Client() tools.PlaywrightSidecarClient {
 	return r.client
+}
+
+func (r *PlaywrightSidecarRuntime) invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error) {
+	if r == nil || r.invoker == nil {
+		return sidecarResponse{}, errors.New("playwright sidecar invoker is not available")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		boundedCtx, cancel := context.WithTimeout(ctx, sidecarDefaultTimeout)
+		defer cancel()
+		ctx = boundedCtx
+	}
+	return r.invoker.Invoke(ctx, request)
+}
+
+func (r *PlaywrightSidecarRuntime) markFailure() error {
+	r.mu.Lock()
+	r.ready = false
+	r.mu.Unlock()
+	if r.os == nil {
+		return nil
+	}
+	return r.os.CloseNamedPipe(sidecarPipeName(r.spec.Name))
+}
+
+func stringValue(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func intValue(values map[string]any, key string) int {
+	if len(values) == 0 {
+		return 0
+	}
+	switch typed := values[key].(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func stringSliceValue(values map[string]any, key string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	raw, ok := values[key].([]any)
+	if ok {
+		items := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+				items = append(items, strings.TrimSpace(value))
+			}
+		}
+		return items
+	}
+	if typed, ok := values[key].([]string); ok {
+		return append([]string(nil), typed...)
+	}
+	return nil
+}
+
+func resolveWorkerEntryPath() (string, error) {
+	return resolveRelativePathFromRoots(playwrightWorkerRelativePath, workerSearchRoots())
+}
+
+func workerSearchRoots() []string {
+	roots := make([]string, 0, 3)
+	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
+		roots = append(roots, filepath.Dir(exePath))
+	}
+	if _, file, _, ok := runtimesrc.Caller(0); ok && strings.TrimSpace(file) != "" {
+		roots = append(roots, filepath.Dir(file))
+	}
+	if workingDir, err := os.Getwd(); err == nil && strings.TrimSpace(workingDir) != "" {
+		roots = append(roots, workingDir)
+	}
+	return roots
+}
+
+func resolveRelativePathFromRoots(relativePath string, roots []string) (string, error) {
+	seen := make(map[string]struct{})
+	for _, root := range roots {
+		candidate, ok := searchUpwardsForRelativePath(root, relativePath, seen)
+		if ok {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("playwright worker entry not found: %s", relativePath)
+}
+
+func searchUpwardsForRelativePath(start, relativePath string, seen map[string]struct{}) (string, bool) {
+	if strings.TrimSpace(start) == "" {
+		return "", false
+	}
+	current := filepath.Clean(start)
+	for {
+		if _, ok := seen[current]; ok {
+			return "", false
+		}
+		seen[current] = struct{}{}
+		candidate := filepath.Join(current, relativePath)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
+}
+
+func decodeSidecarResponse(payload []byte) (sidecarResponse, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return sidecarResponse{}, errors.New("empty worker response")
+	}
+	var response sidecarResponse
+	if err := json.Unmarshal(trimmed, &response); err != nil {
+		return sidecarResponse{}, err
+	}
+	return response, nil
+}
+
+func responseErrorMap(errBody *sidecarErrorBody) map[string]any {
+	if errBody == nil {
+		return nil
+	}
+	return map[string]any{
+		"code":    errBody.Code,
+		"message": errBody.Message,
+	}
+}
+
+func commandWorkerError(err error, stderr string) error {
+	trimmed := strings.TrimSpace(stderr)
+	if trimmed != "" {
+		return fmt.Errorf("worker command failed: %s", trimmed)
+	}
+	return err
+}
+
+func shouldMarkRuntimeFailure(err error) bool {
+	var transportErr sidecarTransportError
+	return errors.As(err, &transportErr)
 }
 
 func sidecarPipeName(name string) string {

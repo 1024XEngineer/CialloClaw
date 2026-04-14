@@ -1108,6 +1108,187 @@
   gap: var(--mirror-space-3);
 }
 
+.mirror-page__detail-tabs,
+.mirror-page__detail-tab-panel,
+.mirror-page__conversation-days,
+.mirror-page__conversation-records,
+.mirror-page__profile-grid,
+.mirror-page__profile-archive-list,
+.mirror-page__risk-list,
+.mirror-page__stage-grid,
+.mirror-page__stage-task-list {
+  display: grid;
+  gap: var(--mirror-space-3);
+}
+
+.mirror-page__detail-tab-list {
+  align-self: start;
+  background: rgba(255, 251, 244, 0.76);
+  border: 1px solid rgba(143, 111, 77, 0.12);
+  border-radius: 999px;
+  margin-bottom: 0.15rem;
+  padding: 0.26rem;
+}
+
+.mirror-page__detail-tab-trigger {
+  border-radius: 999px;
+  color: var(--mirror-muted);
+  min-height: 2rem;
+  padding-inline: 0.95rem;
+}
+
+.mirror-page__detail-tab-trigger[data-active] {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--mirror-ink);
+}
+
+.mirror-page__detail-tab-panel {
+  min-height: 0;
+}
+
+.mirror-page__history-summary-grid,
+.mirror-page__summary-grid,
+.mirror-page__stage-grid,
+.mirror-page__profile-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mirror-page__continuity-card,
+.mirror-page__stage-card,
+.mirror-page__risk-card,
+.mirror-page__profile-item,
+.mirror-page__conversation-record {
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(143, 111, 77, 0.12);
+  border-radius: 1.2rem;
+  box-shadow: 0 18px 34px -30px rgba(97, 69, 42, 0.18);
+  padding: 1rem;
+}
+
+.mirror-page__stage-card-top,
+.mirror-page__conversation-meta,
+.mirror-page__conversation-day-header,
+.mirror-page__profile-actions,
+.mirror-page__profile-badges,
+.mirror-page__profile-local-note {
+  align-items: center;
+  display: flex;
+  gap: var(--mirror-space-2);
+}
+
+.mirror-page__stage-card-top,
+.mirror-page__conversation-meta,
+.mirror-page__conversation-day-header {
+  justify-content: space-between;
+}
+
+.mirror-page__profile-local-note {
+  background: rgba(255, 250, 242, 0.76);
+  border: 1px dashed rgba(143, 111, 77, 0.28);
+  border-radius: var(--mirror-radius-sm);
+  margin-bottom: 0.25rem;
+  padding: 0.9rem 1rem;
+}
+
+.mirror-page__conversation-day {
+  display: grid;
+  gap: var(--mirror-space-2);
+}
+
+.mirror-page__conversation-records,
+.mirror-page__profile-archive-list {
+  gap: var(--mirror-space-2);
+}
+
+.mirror-page__conversation-scroll,
+.mirror-page__profile-archive-scroll {
+  max-height: 26rem;
+}
+
+.mirror-page__conversation-meta-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.mirror-page__conversation-bubble {
+  border-radius: 1rem;
+  display: grid;
+  gap: 0.42rem;
+  margin-top: 0.85rem;
+  padding: 0.9rem 1rem;
+}
+
+.mirror-page__conversation-bubble--user {
+  background: rgba(255, 251, 244, 0.88);
+  border: 1px solid rgba(143, 111, 77, 0.1);
+}
+
+.mirror-page__conversation-bubble--agent {
+  background: rgba(244, 250, 246, 0.84);
+  border: 1px solid rgba(110, 148, 118, 0.14);
+}
+
+.mirror-page__conversation-bubble--failed {
+  background: rgba(255, 244, 240, 0.82);
+  border: 1px solid rgba(181, 116, 102, 0.16);
+}
+
+.mirror-page__stage-task-list {
+  gap: 0.7rem;
+  margin-top: 0.3rem;
+}
+
+.mirror-page__stage-task {
+  align-items: center;
+  background: rgba(255, 253, 249, 0.74);
+  border: 1px solid rgba(143, 111, 77, 0.08);
+  border-radius: 1rem;
+  display: flex;
+  gap: var(--mirror-space-2);
+  justify-content: space-between;
+  padding: 0.78rem 0.85rem;
+}
+
+.mirror-page__profile-item {
+  display: grid;
+  gap: var(--mirror-space-2);
+}
+
+.mirror-page__profile-item--archived {
+  background: rgba(252, 247, 240, 0.78);
+}
+
+.mirror-page__profile-actions {
+  flex-wrap: wrap;
+}
+
+.mirror-page__action-button {
+  border-color: rgba(143, 111, 77, 0.14) !important;
+  color: var(--mirror-copy) !important;
+}
+
+.mirror-page__profile-edit-shell {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.mirror-page__profile-edit-input {
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(143, 111, 77, 0.16);
+  border-radius: 1rem;
+  color: var(--mirror-ink);
+  font: inherit;
+  line-height: 1.6;
+  min-height: 5.5rem;
+  padding: 0.85rem 0.95rem;
+  resize: vertical;
+}
+
+.mirror-page__profile-edit-input:focus-visible {
+  outline: 2px solid var(--mirror-focus);
+  outline-offset: 4px;
+}
+
 .mirror-page__history-list,
 .mirror-page__detail-body {
   min-height: 0;
@@ -1284,6 +1465,12 @@
   .mirror-page__summary-grid {
     grid-template-columns: 1fr;
   }
+
+   .mirror-page__history-summary-grid,
+   .mirror-page__stage-grid,
+   .mirror-page__profile-grid {
+     grid-template-columns: 1fr;
+   }
 
   .mirror-page__draggable--pinned .mirror-page__card-surface {
     padding: 1.2rem 1.2rem 1.15rem;

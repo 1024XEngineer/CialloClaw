@@ -109,6 +109,9 @@ func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *Too
 	}
 
 	precheckInput.Workspace.TargetPath = targetPath
+	if isWebpageTool(precheckInput.ToolName) {
+		return precheckInput
+	}
 	if execCtx.Platform == nil {
 		precheckInput.Workspace.Within = withinWorkspacePath(execCtx.WorkspacePath, targetPath)
 		return precheckInput
@@ -139,16 +142,23 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 		outOfWorkspace = !*input.Workspace.Within
 	}
 
+	impactScope := risksvc.ImpactScope{
+		OutOfWorkspace: outOfWorkspace,
+	}
+	targetObject := input.Workspace.TargetPath
+	if isWebpageTool(input.ToolName) {
+		impactScope.Webpages = webpagesFromTarget(input.Workspace.TargetPath)
+	} else {
+		impactScope.Files = filesFromTarget(firstNonEmptyTarget(input.Workspace.TargetPath, input.Workspace.WorkspacePath))
+	}
+
 	assessment := risksvc.AssessmentInput{
 		OperationName:       input.ToolName,
-		TargetObject:        input.Workspace.TargetPath,
+		TargetObject:        targetObject,
 		CapabilityAvailable: true,
 		WorkspaceKnown:      workspaceKnown,
 		CommandPreview:      normalizeCommandString(input.Input),
-		ImpactScope: risksvc.ImpactScope{
-			Files:          filesFromTarget(firstNonEmptyTarget(input.Workspace.TargetPath, input.Workspace.WorkspacePath)),
-			OutOfWorkspace: outOfWorkspace,
-		},
+		ImpactScope:         impactScope,
 	}
 
 	if input.ToolName == "write_file" {
@@ -162,6 +172,11 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 	if toolName == "exec_command" {
 		if value, ok := input["working_dir"].(string); ok && strings.TrimSpace(value) != "" {
+			return value, true
+		}
+	}
+	if isWebpageTool(toolName) {
+		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
 			return value, true
 		}
 	}
@@ -214,6 +229,23 @@ func filesFromTarget(target string) []string {
 		return nil
 	}
 	return []string{trimmed}
+}
+
+func webpagesFromTarget(target string) []string {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return nil
+	}
+	return []string{trimmed}
+}
+
+func isWebpageTool(toolName string) bool {
+	switch toolName {
+	case "page_read", "page_search":
+		return true
+	default:
+		return false
+	}
 }
 
 func withinWorkspacePath(workspacePath, targetPath string) *bool {

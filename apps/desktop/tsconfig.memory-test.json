@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "./.cache/memory-tests",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/platform/storage.ts",
+    "src/services/mirrorMemoryService.ts",
+    "src/features/dashboard/memory/mirrorViewModel.ts",
+    "src/features/dashboard/memory/mirror.contract.test.ts"
+  ]
+}

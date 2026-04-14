@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "motion/react";
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
 import { dashboardVoiceSequences } from "@/features/dashboard/home/dashboardHome.mocks";
-import type { DashboardHomeModuleKey } from "@/features/dashboard/home/dashboardHome.types";
 import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
 import { NotesPage } from "@/features/dashboard/notes/NotesPage";
 import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
@@ -121,10 +120,6 @@ function DashboardRoutes() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigate, voiceOpen]);
 
-  const handleVoiceCommand = (module: DashboardHomeModuleKey) => {
-    navigate(resolveDashboardModuleRoutePath(module));
-  };
-
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
       <AnimatePresence mode="wait">
@@ -147,7 +142,7 @@ function DashboardRoutes() {
           </Routes>
         </motion.div>
       </AnimatePresence>
-      <DashboardVoiceField isOpen={voiceOpen} onClose={() => setVoiceOpen(false)} onCommand={handleVoiceCommand} sequences={dashboardVoiceSequences} />
+      <DashboardVoiceField isOpen={voiceOpen} onClose={() => setVoiceOpen(false)} sequences={dashboardVoiceSequences} />
     </div>
   );
 }

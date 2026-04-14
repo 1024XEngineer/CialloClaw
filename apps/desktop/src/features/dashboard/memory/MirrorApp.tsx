@@ -8,12 +8,13 @@ import {
   type PointerEvent,
 } from "react";
 import type { MirrorOverviewUpdatedNotification } from "@cialloclaw/protocol";
-import { BookMarked, BrainCircuit, CalendarDays, Clock3, X } from "lucide-react";
+import { X } from "lucide-react";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { loadMirrorOverviewData, type MirrorOverviewData, type MirrorOverviewSource } from "./mirrorService";
+import { MirrorDetailContent } from "./MirrorDetailContent";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
 import { MirrorDecorativeBirds } from "./MirrorDecorativeBirds";
 import {
@@ -25,6 +26,7 @@ import {
   type MirrorCardAccent,
   type MirrorDirectionKey,
 } from "./mirrorDirections";
+import { buildMirrorProfileView } from "./mirrorViewModel";
 import "./mirror.css";
 
 type ModulePosition = { x: number; y: number };
@@ -776,11 +778,13 @@ export function MirrorApp() {
     );
   }
 
-  const { overview, insight } = mirrorData;
+  const profileView = buildMirrorProfileView(mirrorData.profileItems);
+
+  const { overview } = mirrorData;
   const dataSourceDetails = [
     mirrorData.source === "rpc"
       ? "当前展示来自本地 JSON-RPC 服务。"
-      : "当前展示的是本地 mock 数据。",
+      : "当前展示的是本地 mock 示例数据。",
   ];
 
   if (mirrorData.rpcContext.serverTime) {
@@ -807,9 +811,8 @@ export function MirrorApp() {
     mirrorData.source === "rpc"
       ? { label: "LIVE", tone: "green" as const, copy: dataSourceDetails.join(" · ") }
       : { label: "MOCK", tone: "processing" as const, copy: dataSourceDetails.join(" · ") };
-  const dailySummary = overview.daily_summary;
-  const profile = overview.profile;
   const latestMemoryReference = overview.memory_references[0] ?? null;
+  const latestConversation = mirrorData.conversations[0] ?? null;
 
   const closeDetail = () => {
     setActiveDetailKey(null);
@@ -913,163 +916,24 @@ export function MirrorApp() {
     }
   };
 
-  const renderHistoryDetail = () => {
-    if (!overview.history_summary.length) {
-      return <p className="mirror-page__empty-state">暂无历史概要。</p>;
-    }
-
-    return (
-      <div className="mirror-page__history-list">
-        {overview.history_summary.map((item, index) => (
-          <article key={`${item}-${index}`} className="mirror-page__history-item">
-            <div className="mirror-page__history-index">0{index + 1}</div>
-            <div className="mirror-page__history-copy">
-              <p className="mirror-page__history-label">概要片段 {index + 1}</p>
-              <p className="mirror-page__history-text">{item}</p>
-            </div>
-          </article>
-        ))}
-      </div>
-    );
-  };
-
-  const renderProfileDetail = () => {
-    if (!profile) {
-      return <p className="mirror-page__empty-state">暂无用户画像。</p>;
-    }
-
-    return (
-      <div className="mirror-page__profile-list mirror-page__profile-list--expanded">
-        <article className="mirror-page__profile-card">
-          <div className="mirror-page__profile-heading">
-            <BrainCircuit className="mirror-page__profile-icon" />
-            <span>工作风格</span>
-          </div>
-          <p className="mirror-page__profile-copy">{profile.work_style}</p>
-        </article>
-
-        <article className="mirror-page__profile-card mirror-page__profile-card--accent">
-          <div className="mirror-page__profile-heading">
-            <BookMarked className="mirror-page__profile-icon" />
-            <span>偏好交付</span>
-          </div>
-          <p className="mirror-page__profile-copy">{profile.preferred_output}</p>
-        </article>
-
-        <article className="mirror-page__profile-card">
-          <div className="mirror-page__profile-heading">
-            <Clock3 className="mirror-page__profile-icon" />
-            <span>活跃时段</span>
-          </div>
-          <p className="mirror-page__hours-value">{profile.active_hours}</p>
-        </article>
-      </div>
-    );
-  };
-
-  const renderDailyDetail = () => {
-    if (!dailySummary) {
-      return <p className="mirror-page__empty-state">暂无日报与阶段总结。</p>;
-    }
-
-    return (
-      <div className="mirror-page__daily-stack mirror-page__daily-stack--expanded">
-        <div className="mirror-page__date-card">
-          <CalendarDays className="mirror-page__date-icon" />
-          <div>
-            <p className="mirror-page__micro-label">回看日期</p>
-            <p className="mirror-page__date-value">{formatMirrorDate(dailySummary.date)}</p>
-          </div>
-        </div>
-
-        <div className="mirror-page__summary-grid">
-          <article className="mirror-page__summary-card">
-            <p className="mirror-page__micro-label">当天完成事项</p>
-            <p className="mirror-page__summary-value">{dailySummary.completed_tasks}</p>
-            <p className="mirror-page__summary-copy">已完成任务数量</p>
-          </article>
-          <article className="mirror-page__summary-card mirror-page__summary-card--accent">
-            <p className="mirror-page__micro-label">沉淀成果</p>
-            <p className="mirror-page__summary-value">{dailySummary.generated_outputs}</p>
-            <p className="mirror-page__summary-copy">已生成输出数量</p>
-          </article>
-        </div>
-
-        <div className="mirror-page__detail-note-shell mirror-page__detail-note-shell--stage">
-          <p className="mirror-page__micro-label">阶段总结</p>
-          <p className="mirror-page__stage-headline">{insight.title}</p>
-          <p className="mirror-page__note">{insight.description}</p>
-        </div>
-      </div>
-    );
-  };
-
-  const renderMemoryDetail = () => {
-    if (!overview.memory_references.length) {
-      return <p className="mirror-page__empty-state">暂无近期记忆引用。</p>;
-    }
-
-    return (
-      <div className="mirror-page__memory-list mirror-page__memory-list--expanded">
-        {overview.memory_references.map((reference, index) => (
-          <article key={reference.memory_id} className="mirror-page__memory-card">
-            <div className="mirror-page__memory-header">
-              <div className="mirror-page__memory-meta">
-                <p className="mirror-page__memory-index">记录 {index + 1}</p>
-                <div className="mirror-page__memory-title-row">
-                  <BookMarked className="mirror-page__memory-icon" />
-                  <h3 className="mirror-page__memory-title">{reference.memory_id}</h3>
-                </div>
-              </div>
-              <StatusBadge tone="processing">引用记录</StatusBadge>
-            </div>
-
-            <p className="mirror-page__memory-reason">{reference.reason}</p>
-            <div className="mirror-page__memory-summary">{reference.summary}</div>
-          </article>
-        ))}
-      </div>
-    );
-  };
-
-  const renderDetailContent = () => {
-    if (!activeDetailKey) {
-      return null;
-    }
-
-    if (activeDetailKey === "history") {
-      return renderHistoryDetail();
-    }
-
-    if (activeDetailKey === "profile") {
-      return renderProfileDetail();
-    }
-
-    if (activeDetailKey === "dailyStage") {
-      return renderDailyDetail();
-    }
-
-    return renderMemoryDetail();
-  };
-
   const getDetailBadge = (key: MirrorDirectionKey): DetailBadge => {
     if (key === "dailyStage") {
       return {
-        label: dailySummary ? formatShortMirrorDate(dailySummary.date) : "暂无日报",
+        label: formatShortMirrorDate(mirrorData.dailyDigest.date),
         tone: "processing",
       };
     }
 
     if (key === "profile") {
       return {
-        label: profile ? "画像已整理" : "暂无画像",
+        label: profileView.total_items > 0 ? `${profileView.total_items} 项资料` : "暂无资料",
         tone: "green",
       };
     }
 
     if (key === "history") {
       return {
-        label: overview.history_summary.length ? `${overview.history_summary.length} 条概要` : "暂无概要",
+        label: mirrorData.conversationSummary.total_records ? `${mirrorData.conversationSummary.total_records} 条对话` : "暂无对话",
         tone: "processing",
       };
     }
@@ -1089,7 +953,14 @@ export function MirrorApp() {
 
     return (
       <div className="mirror-page__detail-layer" onClick={closeDetail}>
-        <div className="mirror-page__detail-panel" role="dialog" aria-modal="true" aria-label={`${getDirectionTitle(activeDetailKey)}详情`} onClick={(event) => event.stopPropagation()}>
+        <div
+          className="mirror-page__detail-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${getDirectionTitle(activeDetailKey)}详情`}
+          data-testid={`mirror-detail-${activeDetailKey}`}
+          onClick={(event) => event.stopPropagation()}
+        >
           <PanelSurface title={getDirectionTitle(activeDetailKey)} eyebrow={getDirectionEyebrow(activeDetailKey)}>
             <div className="mirror-page__detail-topbar">
               <div className="mirror-page__detail-meta">
@@ -1099,7 +970,17 @@ export function MirrorApp() {
                 <X className="mirror-page__close-icon" />
               </button>
             </div>
-            <div className="mirror-page__detail-body">{renderDetailContent()}</div>
+            <div className="mirror-page__detail-body">
+              <MirrorDetailContent
+                activeDetailKey={activeDetailKey}
+                conversationSummary={mirrorData.conversationSummary}
+                conversations={mirrorData.conversations}
+                dailyDigest={mirrorData.dailyDigest}
+                overview={overview}
+                profileView={profileView}
+                rpcContext={mirrorData.rpcContext}
+              />
+            </div>
           </PanelSurface>
         </div>
       </div>
@@ -1109,43 +990,48 @@ export function MirrorApp() {
   const getCardSummary = (key: MirrorDirectionKey): CardSummary => {
     if (key === "dailyStage") {
       return {
-        badge: dailySummary ? formatShortMirrorDate(dailySummary.date) : "待同步",
+        badge: formatShortMirrorDate(mirrorData.dailyDigest.date),
         tone: "processing",
-        detailLine: dailySummary ? insight.description : "等待新的日报同步后生成阶段总结。",
+        detailLine: mirrorData.dailyDigest.lede,
         accent: getMirrorDirectionMeta(key).accent,
-        mainLine: dailySummary ? insight.title : "暂无日报与阶段总结",
+        mainLine: mirrorData.dailyDigest.headline,
       };
     }
 
     if (key === "profile") {
+      const primaryProfileItem = profileView.backend_items[0] ?? profileView.local_stat_items[0] ?? null;
       return {
-        badge: profile ? "画像侧写" : "暂无画像",
+        badge: profileView.backend_items.length > 0 ? `${profileView.backend_items.length} 个后端字段` : "暂无后端字段",
         tone: "green",
-        detailLine: profile
-          ? `偏好 ${profile.preferred_output} · 活跃于 ${profile.active_hours}`
-          : "等待新的用户画像同步。",
+        detailLine: profileView.local_stat_items.length > 0 ? `${profileView.local_stat_items.length} 条最近本地统计。` : "仅显示后端画像字段。",
         accent: getMirrorDirectionMeta(key).accent,
-        mainLine: profile?.work_style ?? "暂无用户画像",
+        mainLine: primaryProfileItem?.value ?? "暂无画像资料",
       };
     }
 
     if (key === "history") {
       return {
-        badge: overview.history_summary.length ? `${overview.history_summary.length} 条概要` : "暂无概要",
+        badge: mirrorData.conversationSummary.total_records ? `${mirrorData.conversationSummary.total_records} 条对话` : "暂无对话",
         tone: "processing",
-        detailLine: overview.history_summary[1] ?? "轻触查看按片段整理的历史摘要。",
+        detailLine:
+          latestConversation?.agent_text ??
+          latestConversation?.user_text ??
+          overview.history_summary[1] ??
+          "轻触查看后端历史概要与最近 100 条本地对话记录。",
         accent: getMirrorDirectionMeta(key).accent,
-        mainLine: overview.history_summary[0] ?? "暂无历史概要",
+        mainLine: latestConversation?.user_text ?? overview.history_summary[0] ?? "暂无历史概要",
       };
     }
 
     return {
-      badge: `${overview.memory_references.length} 条引用`,
-      tone: "processing",
-      detailLine: latestMemoryReference?.reason ?? "等待新的记忆调用记录。",
-      accent: getMirrorDirectionMeta(key).accent,
-      mainLine: latestMemoryReference?.memory_id ?? "暂无近期被调用记忆",
-      emphasis: "memory",
+        badge: `${overview.memory_references.length} 条引用`,
+        tone: "processing",
+        detailLine:
+          latestMemoryReference?.reason ??
+          (mirrorData.conversationSummary.total_records > 0 ? `本地记录 ${mirrorData.conversationSummary.total_records} 条最近对话。` : "等待新的后端记忆引用记录。"),
+        accent: getMirrorDirectionMeta(key).accent,
+        mainLine: latestMemoryReference?.memory_id ?? "暂无近期被调用记忆",
+        emphasis: "memory",
     };
   };
 
@@ -1184,6 +1070,7 @@ export function MirrorApp() {
         className={`mirror-page__draggable mirror-page__draggable--${key}${isPinnedMemoryCard ? " mirror-page__draggable--pinned" : ""}${isDragging ? " is-dragging" : ""}${isExpanded ? " is-active" : ""}${boardReady ? " is-ready" : ""}`}
         data-accent={summary.accent}
         data-surface-kind={isPinnedMemoryCard ? "master" : "slide"}
+        data-testid={`mirror-card-${key}`}
         style={{
           height: `${moduleSize.height}px`,
           transform: `translate3d(${modulePositions[key].x}px, ${modulePositions[key].y}px, 0)`,
@@ -1227,7 +1114,7 @@ export function MirrorApp() {
 
   return (
     <main className="app-shell mirror-page">
-      <div className="mirror-page__canvas mirror-page__canvas--full" ref={canvasRef} aria-label="Mirror 检片台">
+      <div className="mirror-page__canvas mirror-page__canvas--full" ref={canvasRef} aria-label="Mirror 检片台" data-testid="mirror-canvas">
         <div className="mirror-page__source-status" aria-live="polite">
           <StatusBadge tone={dataSourceBadge.tone}>{dataSourceBadge.label}</StatusBadge>
           <p className="mirror-page__source-copy">{dataSourceBadge.copy}</p>
@@ -1251,7 +1138,7 @@ export function MirrorApp() {
           <MirrorDecorativeBirds />
         </section>
         {moduleStack.map(renderDraggableModule)}
-        {renderDetailOverlay()}
+        {activeDetailKey ? <div data-testid="mirror-detail-overlay">{renderDetailOverlay()}</div> : null}
       </div>
       <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
     </main>

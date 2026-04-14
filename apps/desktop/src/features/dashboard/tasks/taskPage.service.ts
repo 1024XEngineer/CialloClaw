@@ -1,6 +1,6 @@
 import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup, TaskStep } from "@cialloclaw/protocol";
-import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
+import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
 import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
 

@@ -1,7 +1,7 @@
 // 该文件封装前端镜子记忆服务调用。 
 import type { AgentMirrorOverviewGetResult, RequestMeta } from "@cialloclaw/protocol";
-import { RPC_METHODS } from "@cialloclaw/protocol";
 import { rpcClient } from "@/rpc/client";
+import { RPC_METHODS } from "@/rpc/protocolConstants";
 
 // getMirrorOverview 处理当前模块的相关逻辑。
 export function getMirrorOverview(taskId: string) {

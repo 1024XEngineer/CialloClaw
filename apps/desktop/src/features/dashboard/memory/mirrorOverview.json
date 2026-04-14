@@ -1,34 +1,34 @@
 {
   "history_summary": [
-    "过去 7 天更偏好先给结构化结论，再补充可执行步骤与边界说明。",
-    "对同一工作区内的延续性任务会主动复用既有上下文与命名约定。",
-    "当交付涉及风险或恢复点时，会优先请求显式确认而不是直接推进。"
+    "示例历史记录显示，近期结果里经常同时出现结构化结论、步骤、风险说明和下一步建议。",
+    "示例任务记录显示，同一工作区的延续任务会沿用既有命名和上下文线索。",
+    "示例安全记录显示，命中权限或恢复点时会先出现确认说明。"
   ],
   "daily_summary": {
-    "date": "2026-04-08",
-    "completed_tasks": 6,
-    "generated_outputs": 14
+    "date": "2026-04-13",
+    "completed_tasks": 4,
+    "generated_outputs": 9
   },
   "profile": {
-    "work_style": "先收敛协议与边界，再进入实现；倾向一次性交付完整可验证结果。",
-    "preferred_output": "结果页 + 结构化摘要 + 明确验证说明",
-    "active_hours": "09:30 - 18:30"
+    "work_style": "协议对齐优先，再进入实现。",
+    "preferred_output": "结果页 + 结构化摘要 + 验证说明",
+    "active_hours": "09:30 - 19:15"
   },
   "memory_references": [
     {
       "memory_id": "mem_contract_tailwind_desktop",
-      "reason": "当前桌面前端继续沿用 task-centric 与玻璃态 Tailwind 面板风格。",
-      "summary": "新增模块应复用 PanelSurface / StatusBadge，避免引入路由和额外依赖。"
+      "reason": "示例引用记录：桌面前端继续沿用 task-centric 和既有镜子页外壳。",
+      "summary": "新增内容继续接入现有 MirrorApp 与可拖动卡片布局，不新增独立路由。"
     },
     {
       "memory_id": "mem_delivery_preference_structured",
-      "reason": "近期多次交付都偏好高信息密度但分区清晰的结果页。",
-      "summary": "顶部提供价值摘要，正文按历史总结、画像、记忆引用拆分，方便团队协作评审。"
+      "reason": "示例引用记录：近期结果页通常采用分区清晰的结构化布局。",
+      "summary": "内容拆分为历史、日报、画像和本地对话记录等区域。"
     },
     {
       "memory_id": "mem_guardrail_confirmation_first",
-      "reason": "在存在权限或覆盖风险时，系统应把确认链路放在更显眼的位置。",
-      "summary": "镜像模块在展示时要强调用户偏好与记忆引用原因，而不是只列原始数据。"
+      "reason": "示例引用记录：存在权限、恢复点或覆盖风险时，会先显示确认链路。",
+      "summary": "镜子页会并列显示今日任务结果、等待确认项和记忆引用。"
     }
   ]
 }
