@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 )
@@ -335,11 +336,28 @@ func approvalBypassAllowed(execCtx *ToolExecuteContext, toolName string, prechec
 	if target == "" {
 		return false
 	}
-	return normalizeApprovalTarget(execCtx.ApprovedTargetObject) == normalizeApprovalTarget(target)
+	workspaceRoot := strings.TrimSpace(precheckInput.Workspace.WorkspacePath)
+	return normalizeApprovalTarget(execCtx.ApprovedTargetObject, workspaceRoot) == normalizeApprovalTarget(target, workspaceRoot)
 }
 
-func normalizeApprovalTarget(target string) string {
-	return strings.Trim(strings.ReplaceAll(strings.TrimSpace(target), "\\", "/"), "/")
+func normalizeApprovalTarget(target, workspaceRoot string) string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(target), "\\", "/")
+	workspaceRoot = strings.Trim(strings.ReplaceAll(strings.TrimSpace(workspaceRoot), "\\", "/"), "/")
+	normalized = strings.Trim(normalized, "/")
+	if workspaceRoot != "" {
+		if normalized == workspaceRoot {
+			return "."
+		}
+		if strings.HasPrefix(normalized, workspaceRoot+"/") {
+			normalized = strings.TrimPrefix(normalized, workspaceRoot+"/")
+		}
+	}
+	normalized = strings.TrimPrefix(normalized, "workspace/")
+	normalized = strings.TrimPrefix(normalized, "./")
+	if normalized == "" {
+		return "."
+	}
+	return strings.Trim(path.Clean(normalized), "/")
 }
 
 func normalizeDuration(duration time.Duration) time.Duration {

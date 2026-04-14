@@ -38,14 +38,16 @@ type Service struct {
 
 // Request 描述一次任务执行所需的最小输入。
 type Request struct {
-	TaskID          string
-	RunID           string
-	Title           string
-	Intent          map[string]any
-	Snapshot        contextsvc.TaskContextSnapshot
-	DeliveryType    string
-	ResultTitle     string
-	ApprovalGranted bool
+	TaskID               string
+	RunID                string
+	Title                string
+	Intent               map[string]any
+	Snapshot             contextsvc.TaskContextSnapshot
+	DeliveryType         string
+	ResultTitle          string
+	ApprovalGranted      bool
+	ApprovedOperation    string
+	ApprovedTargetObject string
 }
 
 // Result 描述执行完成后需要回填给 orchestrator 的交付与痕迹。
@@ -337,8 +339,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		return Result{}, false, nil
 	}
 
-	workspacePath := workspacePathFromDeliveryResult(deliveryResult)
-	toolResult, recoveryPoint, err := s.executeTool(ctx, request, workspacePath, toolName, toolInput)
+	toolResult, recoveryPoint, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
 		failedResult := Result{
 			Content:        outputText,
@@ -1187,22 +1188,20 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 		return "", nil, nil, false, nil
 	}
 	toolName, toolInput := "write_file", map[string]any{"path": writePath, "content": ""}
-	workspacePath := s.workspace
-	if toolName == "write_file" {
-		workspacePath = workspacePathFromDeliveryResult(deliveryResult)
-	}
-	return toolName, toolInput, s.toolExecutionContext(workspacePath, request), true, nil
+	return toolName, toolInput, s.toolExecutionContext(s.workspace, request), true, nil
 }
 
 func (s *Service) toolExecutionContext(workspacePath string, request Request) *tools.ToolExecuteContext {
 	workspacePath = firstNonEmpty(strings.TrimSpace(workspacePath), s.workspace)
+	approvedOperation := firstNonEmpty(strings.TrimSpace(request.ApprovedOperation), stringValue(request.Intent, "name", ""))
+	approvedTargetObject := firstNonEmpty(strings.TrimSpace(request.ApprovedTargetObject), approvedTargetObject(request.Intent, s.workspace))
 	return &tools.ToolExecuteContext{
 		TaskID:               request.TaskID,
 		RunID:                request.RunID,
 		WorkspacePath:        workspacePath,
 		ApprovalGranted:      request.ApprovalGranted,
-		ApprovedOperation:    stringValue(request.Intent, "name", ""),
-		ApprovedTargetObject: approvedTargetObject(request.Intent, s.workspace),
+		ApprovedOperation:    approvedOperation,
+		ApprovedTargetObject: approvedTargetObject,
 		Platform:             s.fileSystem,
 		Execution:            s.execution,
 		Playwright:           s.playwright,
@@ -1230,22 +1229,7 @@ func (s *Service) prepareGovernanceRecoveryPoint(ctx context.Context, request Re
 		}
 		return recoveryPointMap(point), nil
 	case "exec_command":
-		targetObject := stringValue(input, "working_dir", "")
-		if strings.TrimSpace(targetObject) == "" {
-			targetObject = firstNonEmpty(strings.TrimSpace(workspacePath), s.workspace)
-		}
-		if strings.TrimSpace(targetObject) == "" {
-			return nil, nil
-		}
-		point, err := s.checkpoint.Create(ctx, checkpoint.CreateInput{
-			TaskID:  request.TaskID,
-			Summary: "exec_command_before_change",
-			Objects: []string{targetObject},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrRecoveryPointPrepareFailed, err)
-		}
-		return recoveryPointMap(point), nil
+		return nil, nil
 	default:
 		return nil, nil
 	}
