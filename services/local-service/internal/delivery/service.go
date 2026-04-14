@@ -2,10 +2,12 @@
 package delivery
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const defaultWorkspaceRoot = "workspace"
@@ -133,6 +135,8 @@ func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]
 			"title":         artifactTitle(path, title),
 			"path":          path,
 			"mime_type":     "text/markdown",
+			"delivery_type": deliveryResult["type"],
+			"created_at":    time.Now().UTC().Format(time.RFC3339),
 		},
 	}
 }
@@ -170,16 +174,51 @@ func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[strin
 
 	result := make([]map[string]any, 0, len(artifacts))
 	for _, artifact := range artifacts {
+		deliveryPayloadJSON := "{}"
+		if payloadJSON, err := json.Marshal(mapValueOrEmpty(artifact, "delivery_payload")); err == nil {
+			deliveryPayloadJSON = string(payloadJSON)
+		}
 		result = append(result, map[string]any{
-			"artifact_id":   artifact["artifact_id"],
-			"task_id":       taskID,
-			"artifact_type": artifact["artifact_type"],
-			"path":          artifact["path"],
-			"mime_type":     artifact["mime_type"],
+			"artifact_id":           artifact["artifact_id"],
+			"task_id":               taskID,
+			"artifact_type":         artifact["artifact_type"],
+			"path":                  artifact["path"],
+			"mime_type":             artifact["mime_type"],
+			"title":                 artifact["title"],
+			"delivery_type":         artifact["delivery_type"],
+			"delivery_payload_json": deliveryPayloadJSON,
+			"created_at":            firstNonEmptyString(artifactStringValue(artifact, "created_at"), time.Now().UTC().Format(time.RFC3339)),
 		})
 	}
 
 	return result
+}
+
+func mapValueOrEmpty(values map[string]any, key string) map[string]any {
+	if values == nil {
+		return map[string]any{}
+	}
+	if nested, ok := values[key].(map[string]any); ok && nested != nil {
+		return nested
+	}
+	return map[string]any{}
+}
+
+func artifactStringValue(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // BuildApprovalExecutionPlan 构建授权通过后的继续执行计划。

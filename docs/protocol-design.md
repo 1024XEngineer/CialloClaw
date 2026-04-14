@@ -504,10 +504,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 7.2 planned
 
-- `agent.security.audit.list`
 - `agent.mirror.memory.manage`
-- `agent.task.artifact.list`
-- `agent.task.artifact.open`
 - `agent.delivery.open`
 - `agent.plugin.list`
 - `agent.plugin.enable`
@@ -677,6 +674,22 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 分析意图
   - 根据配置直接处理或进入意图确认
 - **入参**：会话信息、触发方式、任务输入对象、意图、交付偏好
+
+### 8.1.3 `agent.task.artifact.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：任务详情页、仪表盘结果区需要列出指定 `task_id` 的真实 artifact 时。
+- **系统处理**：按 `task_id` 查询真实 artifact store，并返回稳定分页结构。
+- **入参**：`task_id`、`limit`、`offset`
+- **出参**：`items` + `page`
+
+### 8.1.4 `agent.task.artifact.open`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户在任务详情或结果区点击某个 artifact，需要得到稳定打开动作时。
+- **系统处理**：根据 `task_id + artifact_id` 定位真实 artifact，并返回与之对齐的 `delivery_result`、`open_action`、`resolved_payload`。
+- **入参**：`task_id`、`artifact_id`
+- **出参**：`artifact`、`delivery_result`、`open_action`、`resolved_payload`
 - **出参**：任务对象、气泡消息、交付结果（如已完成）
 
 ### agent.task.start 入参说明

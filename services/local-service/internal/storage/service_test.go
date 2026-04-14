@@ -144,7 +144,7 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if !capabilities.Configured || !capabilities.SupportsStructuredData {
 		t.Fatalf("unexpected configured capabilities: %+v", capabilities)
 	}
-	if !capabilities.SupportsMemoryStore || capabilities.SupportsArtifactStore || capabilities.SupportsSecretStore {
+	if !capabilities.SupportsMemoryStore || !capabilities.SupportsArtifactStore || capabilities.SupportsSecretStore {
 		t.Fatalf("unexpected unsupported capabilities enabled: %+v", capabilities)
 	}
 	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
@@ -367,6 +367,38 @@ func TestTaskRunStoreReturnsWorkingImplementation(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].TaskID != taskID {
 		t.Fatalf("unexpected persisted task runs: %+v", records)
+	}
+}
+
+func TestArtifactStoreReturnsWorkingImplementation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifacts.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	store := service.ArtifactStore()
+	if store == nil {
+		t.Fatal("expected artifact store to be available")
+	}
+	err := store.SaveArtifacts(context.Background(), []ArtifactRecord{{
+		ArtifactID:          "art_001",
+		TaskID:              "task_001",
+		ArtifactType:        "generated_doc",
+		Title:               "result.md",
+		Path:                "workspace/result.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/result.md","task_id":"task_001"}`,
+		CreatedAt:           "2026-04-14T10:00:00Z",
+	}})
+	if err != nil {
+		t.Fatalf("SaveArtifacts returned error: %v", err)
+	}
+	items, total, err := store.ListArtifacts(context.Background(), "task_001", 20, 0)
+	if err != nil {
+		t.Fatalf("ListArtifacts returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ArtifactID != "art_001" {
+		t.Fatalf("unexpected artifact records: total=%d items=%+v", total, items)
 	}
 }
 

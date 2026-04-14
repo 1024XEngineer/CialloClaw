@@ -272,6 +272,35 @@ export interface AgentTaskDetailGetResult {
   security_summary: SecuritySummary;
 }
 
+// AgentTaskArtifactListParams defines the parameters for agent.task.artifact.list.
+export interface AgentTaskArtifactListParams {
+  request_meta: RequestMeta;
+  task_id: string;
+  limit: number;
+  offset: number;
+}
+
+// AgentTaskArtifactListResult defines the result for agent.task.artifact.list.
+export interface AgentTaskArtifactListResult {
+  items: Artifact[];
+  page: JsonRpcPage;
+}
+
+// AgentTaskArtifactOpenParams defines the parameters for agent.task.artifact.open.
+export interface AgentTaskArtifactOpenParams {
+  request_meta: RequestMeta;
+  task_id: string;
+  artifact_id: string;
+}
+
+// AgentTaskArtifactOpenResult defines the result for agent.task.artifact.open.
+export interface AgentTaskArtifactOpenResult {
+  artifact: Artifact;
+  delivery_result: DeliveryResult;
+  open_action: DeliveryType;
+  resolved_payload: DeliveryPayload;
+}
+
 // AgentTaskControlParams 定义当前模块的接口约束。
 export interface AgentTaskControlParams {
   request_meta: RequestMeta;

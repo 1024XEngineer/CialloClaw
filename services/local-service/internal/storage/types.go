@@ -24,6 +24,7 @@ type CapabilitySnapshot struct {
 	SupportsSecretStore    bool
 	MemoryStoreBackend     string
 	ToolCallStoreBackend   string
+	ArtifactStoreBackend   string
 	MemoryRetrievalBackend string
 	FallbackActive         bool
 }
@@ -55,6 +56,25 @@ type MemoryStore interface {
 	SaveRetrievalHits(ctx context.Context, hits []MemoryRetrievalRecord) error
 	SearchSummaries(ctx context.Context, taskID, runID, query string, limit int) ([]MemoryRetrievalRecord, error)
 	ListRecentSummaries(ctx context.Context, limit int) ([]MemorySummaryRecord, error)
+}
+
+// ArtifactRecord describes one persisted artifact snapshot.
+type ArtifactRecord struct {
+	ArtifactID          string
+	TaskID              string
+	ArtifactType        string
+	Title               string
+	Path                string
+	MimeType            string
+	DeliveryType        string
+	DeliveryPayloadJSON string
+	CreatedAt           string
+}
+
+// ArtifactStore defines artifact persistence and lookup behavior.
+type ArtifactStore interface {
+	SaveArtifacts(ctx context.Context, records []ArtifactRecord) error
+	ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error)
 }
 
 // TaskStepSnapshot 描述 task timeline 在存储层的快照格式。

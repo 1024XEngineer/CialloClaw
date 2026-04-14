@@ -354,6 +354,86 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsTaskArtifactList(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-list.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_rpc_001",
+		TaskID:              "task_rpc_001",
+		ArtifactType:        "generated_doc",
+		Title:               "rpc-artifact.md",
+		Path:                "workspace/rpc-artifact.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/rpc-artifact.md","task_id":"task_rpc_001"}`,
+		CreatedAt:           "2026-04-14T10:00:00Z",
+	}})
+	if err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-artifact-list"`),
+		Method:  "agent.task.artifact.list",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": "task_rpc_001",
+			"limit":   20,
+			"offset":  0,
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["artifact_id"] != "art_rpc_001" {
+		t.Fatalf("expected artifact list item, got %+v", items)
+	}
+}
+
+func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-open.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_rpc_open_001",
+		TaskID:              "task_rpc_open_001",
+		ArtifactType:        "generated_doc",
+		Title:               "rpc-open.md",
+		Path:                "workspace/rpc-open.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "open_file",
+		DeliveryPayloadJSON: `{"path":"workspace/rpc-open.md","task_id":"task_rpc_open_001"}`,
+		CreatedAt:           "2026-04-14T10:05:00Z",
+	}})
+	if err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-artifact-open"`),
+		Method:  "agent.task.artifact.open",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":     "task_rpc_open_001",
+			"artifact_id": "art_rpc_open_001",
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["open_action"] != "open_file" {
+		t.Fatalf("expected open_file action, got %+v", data)
+	}
+	if data["artifact"].(map[string]any)["artifact_id"] != "art_rpc_open_001" {
+		t.Fatalf("expected opened artifact, got %+v", data)
+	}
+}
+
 func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrStorageQueryFailed)
 	if rpcErr == nil {

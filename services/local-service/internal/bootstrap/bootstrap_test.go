@@ -51,6 +51,9 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
 		t.Fatalf("expected retrieval and search skeleton capabilities to be exposed: %+v", capabilities)
 	}
+	if !capabilities.SupportsArtifactStore {
+		t.Fatalf("expected artifact store capability to be exposed: %+v", capabilities)
+	}
 	if capabilities.MemoryRetrievalBackend != "sqlite_fts5+sqlite_vec" {
 		t.Fatalf("expected retrieval backend to be aligned, got %+v", capabilities)
 	}

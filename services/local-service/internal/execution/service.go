@@ -587,6 +587,12 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 			"title":         artifactCandidate["title"],
 			"path":          artifactCandidate["path"],
 			"mime_type":     artifactCandidate["mime_type"],
+			"delivery_type": "open_file",
+			"delivery_payload": map[string]any{
+				"path": artifactCandidate["path"],
+				"url":  nil,
+			},
+			"created_at": time.Now().UTC().Format(time.RFC3339),
 		}
 	}
 

@@ -99,6 +99,9 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].DeliveryResult["type"] != "workspace_document" {
 		t.Fatalf("expected delivery result to round-trip, got %+v", records[0].DeliveryResult)
 	}
+	if len(records[0].Artifacts) != 1 || records[0].Artifacts[0]["artifact_id"] != "art_001" {
+		t.Fatalf("expected artifacts to round-trip, got %+v", records[0].Artifacts)
+	}
 	if len(records[0].Notifications) != 1 || records[0].Notifications[0].Method != "task.updated" {
 		t.Fatalf("expected notifications to round-trip, got %+v", records[0].Notifications)
 	}
