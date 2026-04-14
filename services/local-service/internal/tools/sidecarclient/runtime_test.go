@@ -58,6 +58,9 @@ func TestPlaywrightSidecarRuntimeLifecycle(t *testing.T) {
 	if runtime.Ready() {
 		t.Fatal("expected runtime to start as not ready")
 	}
+	if !runtime.Available() {
+		t.Fatal("expected runtime to be available in repo checkout")
+	}
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -84,6 +87,23 @@ func TestPlaywrightSidecarRuntimeClientReturnsCapabilityErrorWhenNotReady(t *tes
 	_, err = runtime.Client().ReadPage(t.Context(), "https://example.com")
 	if err != tools.ErrPlaywrightSidecarFailed {
 		t.Fatalf("expected ErrPlaywrightSidecarFailed, got %v", err)
+	}
+}
+
+func TestUnavailablePlaywrightSidecarRuntimeDoesNotBlockLifecycle(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime := NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if runtime.Available() {
+		t.Fatal("expected unavailable runtime to report unavailable")
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("expected unavailable runtime start to noop, got %v", err)
+	}
+	if runtime.Ready() {
+		t.Fatal("expected unavailable runtime to remain not ready")
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatalf("expected unavailable runtime stop to noop, got %v", err)
 	}
 }
 

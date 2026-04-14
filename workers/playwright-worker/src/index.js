@@ -1,4 +1,5 @@
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process";
+import { chromium } from "playwright";
 
 const manifest = {
   worker_name: "playwright_worker",
@@ -44,28 +45,46 @@ function extractTitle(html, url) {
 }
 
 async function fetchPage(url) {
-  const response = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "user-agent": "CialloClawPlaywrightWorker/0.1",
-      accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`http_${response.status}`);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({
+      userAgent: "CialloClawPlaywrightWorker/0.1",
+    });
+    const page = await context.newPage();
+    const response = await page.goto(url, {
+      waitUntil: "networkidle",
+      timeout: 15000,
+    });
+    if (!response) {
+      throw new Error("navigation_failed");
+    }
+    if (!response.ok()) {
+      throw new Error(`http_${response.status()}`);
+    }
+    const html = await page.content();
+    const bodyText = await page.locator("body").innerText().catch(() => html);
+    const contentType = response.headers()["content-type"] ?? "text/html";
+    return {
+      url: page.url() || url,
+      html,
+      title: (await page.title()) || extractTitle(html, page.url()),
+      textContent: normalizeText(bodyText),
+      contentType,
+    };
+  } finally {
+    await browser.close();
   }
-  const html = await response.text();
-  const contentType = response.headers.get("content-type") ?? "text/html";
-  return {
-    url: response.url || url,
-    html,
-    contentType,
-  };
+}
+
+async function verifyBrowserReady() {
+  const browser = await chromium.launch({ headless: true });
+  await browser.close();
 }
 
 async function handleRequest(request) {
   switch (request.action) {
     case "health":
+      await verifyBrowserReady();
       return {
         ok: true,
         result: {
@@ -76,38 +95,37 @@ async function handleRequest(request) {
       };
     case "page_read": {
       const page = await fetchPage(request.url);
-      const textContent = normalizeText(page.html);
       return {
         ok: true,
         result: {
           url: page.url,
-          title: extractTitle(page.html, page.url),
-          text_content: textContent,
+          title: page.title,
+          text_content: page.textContent,
           mime_type: page.contentType,
           text_type: page.contentType,
-          source: "playwright_worker_http",
+          source: "playwright_worker_browser",
         },
       };
     }
     case "page_search": {
       const page = await fetchPage(request.url);
-      const textContent = normalizeText(page.html);
       const normalizedQuery = request.query.trim().toLowerCase();
       const rawLimit = Number(request.limit ?? 0);
       const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
-      const segments = textContent
+      const segments = page.textContent
         .split(/[.!?。！？]\s*/)
         .map((segment) => segment.trim())
         .filter(Boolean);
-      const matches = segments.filter((segment) => segment.toLowerCase().includes(normalizedQuery)).slice(0, limit);
+      const allMatches = segments.filter((segment) => segment.toLowerCase().includes(normalizedQuery));
+      const matches = allMatches.slice(0, limit);
       return {
         ok: true,
         result: {
           url: page.url,
           query: request.query,
-          match_count: matches.length,
+          match_count: allMatches.length,
           matches,
-          source: "playwright_worker_http",
+          source: "playwright_worker_browser",
         },
       };
     }

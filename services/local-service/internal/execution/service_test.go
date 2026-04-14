@@ -16,6 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -371,13 +372,16 @@ func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 	}})
 
 	result, err := service.Execute(context.Background(), Request{
-		TaskID:       "task_005",
-		RunID:        "run_005",
-		Title:        "页面读取",
-		Intent:       map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
-		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面"},
-		DeliveryType: "bubble",
-		ResultTitle:  "页面读取结果",
+		TaskID:               "task_005",
+		RunID:                "run_005",
+		Title:                "页面读取",
+		Intent:               map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "页面读取结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "page_read",
+		ApprovedTargetObject: "https://example.com",
 	})
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
@@ -401,13 +405,16 @@ func TestExecuteDirectSidecarPageSearchUsesToolExecutor(t *testing.T) {
 	}})
 
 	result, err := service.Execute(context.Background(), Request{
-		TaskID:       "task_006",
-		RunID:        "run_006",
-		Title:        "页面搜索",
-		Intent:       map[string]any{"name": "page_search", "arguments": map[string]any{"url": "https://example.com", "query": "example", "limit": 3}},
-		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请搜索页面"},
-		DeliveryType: "bubble",
-		ResultTitle:  "页面搜索结果",
+		TaskID:               "task_006",
+		RunID:                "run_006",
+		Title:                "页面搜索",
+		Intent:               map[string]any{"name": "page_search", "arguments": map[string]any{"url": "https://example.com", "query": "example", "limit": 3}},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请搜索页面"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "页面搜索结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "page_search",
+		ApprovedTargetObject: "https://example.com",
 	})
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
@@ -430,13 +437,16 @@ func TestExecuteDirectSidecarPageReadFailureReturnsMappedToolTrace(t *testing.T)
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{err: tools.ErrPlaywrightSidecarFailed})
 
 	result, err := service.Execute(context.Background(), Request{
-		TaskID:       "task_007",
-		RunID:        "run_007",
-		Title:        "页面读取失败",
-		Intent:       map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
-		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面"},
-		DeliveryType: "bubble",
-		ResultTitle:  "页面读取结果",
+		TaskID:               "task_007",
+		RunID:                "run_007",
+		Title:                "页面读取失败",
+		Intent:               map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "页面读取结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "page_read",
+		ApprovedTargetObject: "https://example.com",
 	})
 	if err == nil {
 		t.Fatal("expected page_read execution to fail")
@@ -607,6 +617,9 @@ func TestAssessGovernancePageReadUsesURLTarget(t *testing.T) {
 	if !assessment.ApprovalRequired {
 		t.Fatalf("expected page_read to require approval when flagged, got %+v", assessment)
 	}
+	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected page_read yellow risk level, got %+v", assessment)
+	}
 	webpages, _ := assessment.ImpactScope["webpages"].([]string)
 	if len(webpages) != 1 || webpages[0] != "https://example.com/demo" {
 		t.Fatalf("expected webpage impact scope to include target URL, got %+v", assessment.ImpactScope)
@@ -638,6 +651,9 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 	webpages, _ := assessment.ImpactScope["webpages"].([]string)
 	if len(webpages) != 1 || webpages[0] != "https://example.com/search" {
 		t.Fatalf("expected webpage impact scope to include search URL, got %+v", assessment.ImpactScope)
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected page_search to require approval, got %+v", assessment)
 	}
 }
 
