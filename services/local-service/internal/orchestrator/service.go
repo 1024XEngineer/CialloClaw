@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -421,6 +422,12 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
 	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
+	if total == 0 {
+		if persistedTasks, persistedTotal, ok := s.listTasksFromStorage(group, sortBy, sortOrder, limit, offset); ok {
+			tasks = persistedTasks
+			total = persistedTotal
+		}
+	}
 
 	items := make([]map[string]any, 0, len(tasks))
 	for _, task := range tasks {
@@ -439,6 +446,9 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.TaskDetail(taskID)
+	if !ok {
+		task, ok = s.taskDetailFromStorage(taskID)
+	}
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
@@ -698,7 +708,20 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 	tab := stringValue(params, "tab", "daily_summary")
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	if len(finishedTasks) == 0 {
+		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+			finishedTasks = persistedTasks
+		}
+	}
+	if len(unfinishedTasks) == 0 {
+		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
+			unfinishedTasks = persistedTasks
+		}
+	}
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	if pendingTotal == 0 {
+		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
+	}
 	latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...))
 	if latestAudit == nil {
 		latestAudit = s.latestAuditRecordFromStorage("")
@@ -722,6 +745,11 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	if len(finishedTasks) == 0 {
+		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+			finishedTasks = persistedTasks
+		}
+	}
 	memoryReferences := collectMirrorReferences(finishedTasks)
 	return map[string]any{
 		"history_summary": buildMirrorHistorySummary(finishedTasks, memoryReferences),
@@ -742,6 +770,19 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	if len(unfinishedTasks) == 0 {
+		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
+			unfinishedTasks = persistedTasks
+		}
+	}
+	if len(finishedTasks) == 0 {
+		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+			finishedTasks = persistedTasks
+		}
+	}
+	if pendingTotal == 0 {
+		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
+	}
 	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
 	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
 	latestRestorePoint := latestRestorePointFromTasks(allTasks)
@@ -1009,6 +1050,190 @@ func pageMap(limit, offset, total int) map[string]any {
 		"total":    total,
 		"has_more": offset+limit < total,
 	}
+}
+
+func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
+	if s.storage == nil {
+		return nil, 0, false
+	}
+	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if err != nil || len(records) == 0 {
+		return nil, 0, false
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		task := taskRecordFromStorage(record)
+		if !matchesTaskGroup(task, group) {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	runengineSortTaskRecords(tasks, sortBy, sortOrder)
+	total := len(tasks)
+	if offset >= total {
+		return []runengine.TaskRecord{}, total, true
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return tasks[offset:end], total, true
+}
+
+func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
+	if s.storage == nil || strings.TrimSpace(taskID) == "" {
+		return runengine.TaskRecord{}, false
+	}
+	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	for _, record := range records {
+		if record.TaskID == taskID {
+			return taskRecordFromStorage(record), true
+		}
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func matchesTaskGroup(task runengine.TaskRecord, group string) bool {
+	switch group {
+	case "finished":
+		return isFinishedTaskStatus(task.Status)
+	default:
+		return !isFinishedTaskStatus(task.Status)
+	}
+}
+
+func isFinishedTaskStatus(status string) bool {
+	switch status {
+	case "completed", "cancelled", "ended_unfinished", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func runengineSortTaskRecords(tasks []runengine.TaskRecord, sortBy, sortOrder string) {
+	switch sortBy {
+	case "started_at", "finished_at", "updated_at":
+	default:
+		sortBy = "updated_at"
+	}
+	if sortOrder != "asc" {
+		sortOrder = "desc"
+	}
+	sort.SliceStable(tasks, func(i, j int) bool {
+		left := taskSortTime(tasks[i], sortBy)
+		right := taskSortTime(tasks[j], sortBy)
+		if left.Equal(right) {
+			leftUpdated := tasks[i].UpdatedAt
+			rightUpdated := tasks[j].UpdatedAt
+			if leftUpdated.Equal(rightUpdated) {
+				if sortOrder == "asc" {
+					return tasks[i].TaskID < tasks[j].TaskID
+				}
+				return tasks[i].TaskID > tasks[j].TaskID
+			}
+			if sortOrder == "asc" {
+				return leftUpdated.Before(rightUpdated)
+			}
+			return leftUpdated.After(rightUpdated)
+		}
+		if sortOrder == "asc" {
+			return left.Before(right)
+		}
+		return left.After(right)
+	})
+}
+
+func countPendingApprovalTasks(tasks []runengine.TaskRecord) int {
+	count := 0
+	for _, task := range tasks {
+		if task.Status == "waiting_auth" && len(task.ApprovalRequest) != 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func taskSortTime(task runengine.TaskRecord, sortBy string) time.Time {
+	switch sortBy {
+	case "started_at":
+		return task.StartedAt
+	case "finished_at":
+		if task.FinishedAt != nil {
+			return *task.FinishedAt
+		}
+		return time.Time{}
+	default:
+		return task.UpdatedAt
+	}
+}
+
+func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
+	return runengine.TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            cloneMap(record.Intent),
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         record.StartedAt,
+		UpdatedAt:         record.UpdatedAt,
+		FinishedAt:        cloneTimePointer(record.FinishedAt),
+		Timeline:          timelineFromStorage(record.Timeline),
+		BubbleMessage:     cloneMap(record.BubbleMessage),
+		DeliveryResult:    cloneMap(record.DeliveryResult),
+		Artifacts:         cloneMapSlice(record.Artifacts),
+		AuditRecords:      cloneMapSlice(record.AuditRecords),
+		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+		SecuritySummary:   cloneMap(record.SecuritySummary),
+		ApprovalRequest:   cloneMap(record.ApprovalRequest),
+		PendingExecution:  cloneMap(record.PendingExecution),
+		Authorization:     cloneMap(record.Authorization),
+		ImpactScope:       cloneMap(record.ImpactScope),
+		TokenUsage:        cloneMap(record.TokenUsage),
+		MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+		MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+		StorageWritePlan:  cloneMap(record.StorageWritePlan),
+		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+		LatestEvent:       cloneMap(record.LatestEvent),
+		LatestToolCall:    cloneMap(record.LatestToolCall),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+}
+
+func timelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+	result := make([]runengine.TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = runengine.TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+	return result
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // taskStatusForSuggestion 处理当前模块的相关逻辑。

@@ -52,6 +52,10 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 	}, nil
 }
 
+func timePointer(value time.Time) *time.Time {
+	return &value
+}
+
 func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, string) {
 	t.Helper()
 
@@ -1347,6 +1351,218 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	}
 }
 
+func TestServiceTaskListFallsBackToStoredTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored task list")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_001",
+		SessionID:   "sess_stored",
+		RunID:       "run_stored_001",
+		Title:       "stored finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 9, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 9, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 9, 6, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != "task_stored_001" {
+		t.Fatalf("expected storage-backed task list item, got %+v", items)
+	}
+}
+
+func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime paging")
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_page",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime finished task",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime task failed: %v", err)
+	}
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_extra",
+		SessionID:   "sess_page",
+		RunID:       "run_stored_extra",
+		Title:       "stored finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 14, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 14, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 14, 6, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(100),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 0 {
+		t.Fatalf("expected empty page beyond runtime total, got %+v", items)
+	}
+	page := listResult["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected runtime total to stay unchanged, got %+v", page)
+	}
+}
+
+func TestServiceTaskListFallbackMatchesRuntimeUnknownGroupSemantics(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored unknown group")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_unfinished",
+		SessionID:   "sess_group",
+		RunID:       "run_stored_unfinished",
+		Title:       "stored unfinished task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 5, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("save unfinished task run failed: %v", err)
+	}
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_finished",
+		SessionID:   "sess_group",
+		RunID:       "run_stored_finished",
+		Title:       "stored finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 10, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 15, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 15, 16, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("save finished task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "unknown_group",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != "task_stored_unfinished" {
+		t.Fatalf("expected unknown group fallback to match runtime unfinished semantics, got %+v", items)
+	}
+}
+
+func TestServiceTaskListFallbackMatchesRuntimeSortTieBreaker(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored sort tie")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	finishedAt := time.Date(2026, 4, 14, 16, 0, 0, 0, time.UTC)
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_sort_older_update",
+		SessionID:   "sess_sort",
+		RunID:       "run_sort_old",
+		Title:       "older update task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 30, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 40, 0, 0, time.UTC),
+		FinishedAt:  timePointer(finishedAt),
+	})
+	if err != nil {
+		t.Fatalf("save first task run failed: %v", err)
+	}
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_sort_newer_update",
+		SessionID:   "sess_sort",
+		RunID:       "run_sort_new",
+		Title:       "newer update task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 35, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 50, 0, 0, time.UTC),
+		FinishedAt:  timePointer(finishedAt),
+	})
+	if err != nil {
+		t.Fatalf("save second task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "finished_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) < 2 || items[0]["task_id"] != "task_sort_newer_update" || items[1]["task_id"] != "task_sort_older_update" {
+		t.Fatalf("expected fallback sort tie-breaker to prefer newer updated_at, got %+v", items)
+	}
+}
+
 func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	service := newTestService()
 
@@ -1567,6 +1783,59 @@ func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	}
 }
 
+func TestServiceMirrorOverviewFallsBackToStoredFinishedTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored mirror overview")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_mirror_stored",
+		SessionID:   "sess_stored",
+		RunID:       "run_mirror_stored",
+		Title:       "stored mirror task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 11, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 11, 6, 0, 0, time.UTC)),
+		MirrorReferences: []map[string]any{{
+			"memory_id": "mem_stored_001",
+			"reason":    "stored memory hit",
+			"summary":   "stored mirror reference",
+		}},
+		DeliveryResult: map[string]any{
+			"type": "workspace_document",
+			"payload": map[string]any{
+				"path": "workspace/stored-result.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	result, err := service.MirrorOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("mirror overview failed: %v", err)
+	}
+
+	memoryReferences := result["memory_references"].([]map[string]any)
+	if len(memoryReferences) != 1 || memoryReferences[0]["memory_id"] != "mem_stored_001" {
+		t.Fatalf("expected storage-backed mirror references, got %+v", memoryReferences)
+	}
+	historySummary := result["history_summary"].([]string)
+	if len(historySummary) == 0 {
+		t.Fatal("expected storage-backed mirror history summary")
+	}
+	profile := result["profile"].(map[string]any)
+	if profile["preferred_output"] != "workspace_document" {
+		t.Fatalf("expected storage-backed mirror profile to infer workspace_document, got %+v", profile)
+	}
+}
+
 func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 	service := newTestService()
 
@@ -1717,6 +1986,103 @@ func TestServiceSecuritySummaryFallsBackToStoredRecoveryPoint(t *testing.T) {
 	}
 }
 
+func TestServiceSecuritySummaryFallsBackToStoredTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored security summary")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_finished",
+		SessionID:   "sess_stored",
+		RunID:       "run_security_finished",
+		Title:       "stored security task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 13, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 13, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 13, 6, 0, 0, time.UTC)),
+		SecuritySummary: map[string]any{
+			"security_status": "recoverable",
+			"latest_restore_point": map[string]any{
+				"recovery_point_id": "rp_security_001",
+				"task_id":           "task_security_finished",
+				"summary":           "stored security recovery point",
+				"created_at":        "2026-04-14T13:06:00Z",
+				"objects":           []string{"workspace/security.md"},
+			},
+		},
+		TokenUsage: map[string]any{
+			"total_tokens":   88,
+			"estimated_cost": 0.42,
+		},
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	summary := result["summary"].(map[string]any)
+	if summary["security_status"] != "recoverable" {
+		t.Fatalf("expected storage-backed security status, got %+v", summary)
+	}
+	latestRestorePoint := summary["latest_restore_point"].(map[string]any)
+	if latestRestorePoint["recovery_point_id"] != "rp_security_001" {
+		t.Fatalf("expected storage-backed recovery point from task run, got %+v", latestRestorePoint)
+	}
+	tokenCostSummary := summary["token_cost_summary"].(map[string]any)
+	if tokenCostSummary["current_task_tokens"] != 88 {
+		t.Fatalf("expected storage-backed token usage, got %+v", tokenCostSummary)
+	}
+}
+
+func TestServiceSecuritySummaryCountsStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_waiting_auth_stored",
+		SessionID:   "sess_waiting",
+		RunID:       "run_waiting_auth_stored",
+		Title:       "stored waiting auth task",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 17, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 17, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_waiting_001",
+			"task_id":     "task_waiting_auth_stored",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	summary := result["summary"].(map[string]any)
+	if summary["pending_authorizations"] != 1 {
+		t.Fatalf("expected stored waiting_auth task to count as pending authorization, got %+v", summary)
+	}
+}
+
 func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "dashboard audit trail")
 
@@ -1757,6 +2123,65 @@ func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	}
 	if !foundAuditHighlight {
 		t.Fatalf("expected dashboard highlights to expose runtime audit trail, got %+v", highlights)
+	}
+}
+
+func TestServiceDashboardModuleFallsBackToStoredTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored dashboard module")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_finished",
+		SessionID:   "sess_stored",
+		RunID:       "run_dashboard_finished",
+		Title:       "stored dashboard task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 12, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 12, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type": "workspace_document",
+			"payload": map[string]any{
+				"path": "workspace/dashboard.md",
+			},
+		},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_dashboard_001",
+			"task_id":    "task_dashboard_finished",
+			"action":     "write_file",
+			"summary":    "stored dashboard audit",
+			"created_at": "2026-04-14T12:06:00Z",
+			"result":     "success",
+			"target":     "workspace/dashboard.md",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("save finished task run failed: %v", err)
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "security",
+		"tab":    "audit",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	summary := moduleResult["summary"].(map[string]any)
+	if summary["completed_tasks"] != 1 {
+		t.Fatalf("expected storage-backed completed task count, got %+v", summary)
+	}
+	if summary["generated_outputs"] != 1 {
+		t.Fatalf("expected storage-backed generated output count, got %+v", summary)
+	}
+	highlights := moduleResult["highlights"].([]string)
+	if len(highlights) == 0 {
+		t.Fatal("expected storage-backed dashboard highlights")
 	}
 }
 
@@ -1834,6 +2259,53 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	}
 	if detailResult["task"].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("expected task detail task_id to match request, got %+v", detailResult["task"])
+	}
+}
+
+func TestServiceTaskDetailGetFallsBackToStoredTaskRun(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored task detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_detail",
+		SessionID:   "sess_stored",
+		RunID:       "run_stored_detail",
+		Title:       "stored detail task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 10, 6, 0, 0, time.UTC)),
+		Timeline: []storage.TaskStepSnapshot{{
+			StepID:        "step_deliver_result",
+			TaskID:        "task_stored_detail",
+			Name:          "deliver_result",
+			Status:        "completed",
+			OrderIndex:    1,
+			InputSummary:  "stored input",
+			OutputSummary: "stored output",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_stored_detail"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+
+	task := detailResult["task"].(map[string]any)
+	if task["task_id"] != "task_stored_detail" || task["title"] != "stored detail task" {
+		t.Fatalf("expected storage-backed task detail, got %+v", task)
+	}
+	timeline := detailResult["timeline"].([]map[string]any)
+	if len(timeline) != 1 || timeline[0]["name"] != "deliver_result" {
+		t.Fatalf("expected storage-backed timeline, got %+v", timeline)
 	}
 }
 
