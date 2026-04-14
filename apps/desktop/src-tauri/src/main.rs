@@ -606,7 +606,11 @@ fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
 }
 
 #[tauri::command]
-fn pick_shell_ball_files() -> Result<Vec<String>, String> {
+fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
+    if window.label() != SHELL_BALL_INPUT_WINDOW_LABEL {
+        return Err("pick_shell_ball_files is only available to shell-ball input window".into());
+    }
+
     let selected_files = rfd::FileDialog::new()
         .set_title("Select files")
         .pick_files()

@@ -180,22 +180,12 @@ function createShellBallSubmittedContentPreview(input: {
   return lines.join("\n");
 }
 
-function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fallbackCreatedAt: string) {
+export function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fallbackCreatedAt: string) {
   const deliveryPreview = result.delivery_result?.type === "bubble" ? result.delivery_result.preview_text?.trim() ?? "" : "";
   const bubbleMessage = result.bubble_message;
   const bubbleMessageText = bubbleMessage?.text.trim() ?? "";
 
   if (bubbleMessageText !== "" && bubbleMessage !== null && bubbleMessage !== undefined) {
-    return createShellBallTextBubbleItem({
-      role: "agent",
-      text: deliveryPreview,
-      bubbleType: "result",
-      createdAt: result.delivery_result?.payload?.task_id ? fallbackCreatedAt : bubbleMessage?.created_at ?? fallbackCreatedAt,
-      taskId: result.task.task_id,
-    });
-  }
-
-  if (bubbleMessage?.text.trim()) {
     return {
       bubble: {
         ...bubbleMessage,

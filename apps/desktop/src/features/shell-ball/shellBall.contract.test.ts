@@ -69,7 +69,7 @@ import {
   getShellBallInputAnchor,
   measureShellBallContentSize,
 } from "./useShellBallWindowMetrics";
-import { applyShellBallBubbleAction } from "./useShellBallCoordinator";
+import { applyShellBallBubbleAction, createShellBallAgentBubbleItem } from "./useShellBallCoordinator";
 import {
   createShellBallInputSubmitParams,
   getShellBallPostSubmitInputReset,
@@ -2713,6 +2713,35 @@ test("shell-ball coordinator bubble actions pin and delete local items", () => {
   });
 
   assert.equal(unpinnedItems[0]?.bubble.pinned, false);
+});
+
+test("shell-ball coordinator prefers bubble_message text over empty delivery preview", () => {
+  const createdItem = createShellBallAgentBubbleItem(
+    {
+      task: {
+        task_id: "task-bubble-message",
+      },
+      bubble_message: {
+        bubble_id: "bubble-message-1",
+        task_id: "task-bubble-message",
+        type: "result",
+        text: "真实气泡回复",
+        pinned: false,
+        hidden: true,
+        created_at: "2026-04-11T10:10:10.000Z",
+      },
+      delivery_result: {
+        type: "bubble",
+        preview_text: "   ",
+      },
+    } as any,
+    "2026-04-11T10:10:20.000Z",
+  );
+
+  assert.equal(createdItem.bubble.text, "真实气泡回复");
+  assert.equal(createdItem.bubble.hidden, false);
+  assert.equal(createdItem.bubble.created_at, "2026-04-11T10:10:10.000Z");
+  assert.equal(createdItem.role, "agent");
 });
 
 test("shell-ball coordinator bubble actions restore unpinned bubbles by timestamp then id", () => {
