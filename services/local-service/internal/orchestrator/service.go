@@ -2171,6 +2171,26 @@ func (s *Service) refreshMirrorReferences(taskID string) {
 	_, _ = s.runEngine.SetMirrorReferences(taskID, buildTaskMirrorReferences(task))
 }
 
+func (s *Service) syncTaskReadMirrorReferences(taskID string, references []map[string]any, err error) {
+	if err == nil {
+		_, _ = s.runEngine.SetMirrorReferences(taskID, cloneMapSlice(references))
+		return
+	}
+	if errors.Is(err, memory.ErrStoreNotConfigured) {
+		s.refreshMirrorReferences(taskID)
+	}
+}
+
+func (s *Service) syncTaskWriteMirrorReferences(taskID string, references []map[string]any, err error) {
+	if err == nil {
+		_, _ = s.runEngine.SetMirrorReferences(taskID, mergeMirrorReferences(currentTaskMirrorReferences(s.runEngine, taskID), references))
+		return
+	}
+	if errors.Is(err, memory.ErrStoreNotConfigured) {
+		s.refreshMirrorReferences(taskID)
+	}
+}
+
 func buildTaskMirrorReferences(task runengine.TaskRecord) []map[string]any {
 	references := make([]map[string]any, 0, len(task.MemoryReadPlans)+len(task.MemoryWritePlans))
 	for index, plan := range task.MemoryReadPlans {
@@ -2195,6 +2215,114 @@ func buildTaskMirrorReferences(task runengine.TaskRecord) []map[string]any {
 		})
 	}
 	return references
+}
+
+func currentTaskMirrorReferences(engine *runengine.Engine, taskID string) []map[string]any {
+	if engine == nil {
+		return nil
+	}
+	task, ok := engine.GetTask(taskID)
+	if !ok {
+		return nil
+	}
+	return cloneMapSlice(task.MirrorReferences)
+}
+
+func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any {
+	merged := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	for _, references := range referenceGroups {
+		for _, reference := range references {
+			memoryID := stringValue(reference, "memory_id", "")
+			if memoryID == "" {
+				continue
+			}
+			if _, ok := seen[memoryID]; ok {
+				continue
+			}
+			seen[memoryID] = struct{}{}
+			merged = append(merged, cloneMap(reference))
+		}
+	}
+	return merged
+}
+
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, error) {
+	if s.memory == nil {
+		return nil, memory.ErrStoreNotConfigured
+	}
+	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
+		TaskID: taskID,
+		RunID:  runID,
+		Query:  memoryQueryFromSnapshot(snapshot),
+		Limit:  memory.DefaultSearchLimit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	persistedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
+	if err := s.memory.WriteRetrievalHits(context.Background(), persistedHits); err != nil {
+		return nil, err
+	}
+	return mirrorReferencesFromRetrievalHits(persistedHits), nil
+}
+
+func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
+	if s.memory == nil {
+		return nil, memory.ErrStoreNotConfigured
+	}
+	summary := memory.MemorySummary{
+		MemorySummaryID: fmt.Sprintf("memsum_%s_%s", taskID, runID),
+		TaskID:          taskID,
+		RunID:           runID,
+		Summary:         buildMemorySummary(snapshot, taskIntent, deliveryResult),
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.memory.WriteSummary(context.Background(), summary); err != nil {
+		return nil, err
+	}
+	return []map[string]any{mirrorReferenceFromSummary(summary)}, nil
+}
+
+func mirrorReferencesFromRetrievalHits(hits []memory.RetrievalHit) []map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+	references := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
+		reason := "当前任务命中了历史记忆"
+		if strings.TrimSpace(hit.Source) != "" {
+			reason = fmt.Sprintf("当前任务命中了来源为 %s 的历史记忆", hit.Source)
+		}
+		references = append(references, map[string]any{
+			"memory_id": hit.MemoryID,
+			"reason":    reason,
+			"summary":   truncateText(hit.Summary, 64),
+		})
+	}
+	return references
+}
+
+func cloneRetrievalHitsForTask(taskID, runID string, hits []memory.RetrievalHit) []memory.RetrievalHit {
+	if len(hits) == 0 {
+		return nil
+	}
+	cloned := make([]memory.RetrievalHit, 0, len(hits))
+	for _, hit := range hits {
+		hit.TaskID = taskID
+		hit.RunID = runID
+		hit.RetrievalHitID = ""
+		cloned = append(cloned, hit)
+	}
+	return cloned
+}
+
+func mirrorReferenceFromSummary(summary memory.MemorySummary) map[string]any {
+	return map[string]any{
+		"memory_id": summary.MemorySummaryID,
+		"reason":    "任务完成后写入真实记忆摘要",
+		"summary":   truncateText(summary.Summary, 64),
+	}
 }
 
 func deriveImpactScopeFiles(task runengine.TaskRecord, pendingExecution map[string]any, deliveryService *delivery.Service) []string {
@@ -2295,7 +2423,8 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsv
 	}
 
 	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
-	s.refreshMirrorReferences(taskID)
+	references, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
+	s.syncTaskReadMirrorReferences(taskID, references, err)
 }
 
 // attachPostDeliveryHandoffs 处理当前模块的相关逻辑。
@@ -2308,13 +2437,14 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 			"backend":     s.memory.RetrievalBackend(),
 			"task_id":     taskID,
 			"run_id":      runID,
-			"summary":     buildMemorySummary(taskIntent, deliveryResult),
+			"summary":     buildMemorySummary(snapshot, taskIntent, deliveryResult),
 			"reason":      "任务完成后准备写入阶段摘要",
 			"source_type": snapshot.Trigger,
 		},
 	}
 	_, _ = s.runEngine.SetMemoryPlans(taskID, nil, writePlans)
-	s.refreshMirrorReferences(taskID)
+	references, err := s.materializeMemoryWriteReferences(taskID, runID, snapshot, taskIntent, deliveryResult)
+	s.syncTaskWriteMirrorReferences(taskID, references, err)
 
 	storageWritePlan := s.delivery.BuildStorageWritePlan(taskID, deliveryResult)
 	artifactPlans := s.delivery.BuildArtifactPersistPlans(taskID, artifacts)
@@ -2410,10 +2540,15 @@ func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 // buildMemorySummary 处理当前模块的相关逻辑。
 
 // buildMemorySummary 构造任务完成后写入 memory 的简要摘要。
-func buildMemorySummary(taskIntent map[string]any, deliveryResult map[string]any) string {
+func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) string {
 	intentName := stringValue(taskIntent, "name", "summarize")
 	title := stringValue(deliveryResult, "title", "任务结果")
-	return fmt.Sprintf("任务完成，意图=%s，交付=%s", intentName, title)
+	query := memoryQueryFromSnapshot(snapshot)
+	preview := stringValue(deliveryResult, "preview_text", "")
+	if preview == "" {
+		preview = title
+	}
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
 }
 
 // resultSpecFromIntent 处理当前模块的相关逻辑。
