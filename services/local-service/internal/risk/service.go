@@ -74,6 +74,13 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
+	if isWebpageOperation(input.OperationName) {
+		result.RiskLevel = RiskLevelYellow
+		result.ApprovalRequired = true
+		result.Reason = ReasonWebpageApproval
+		return result
+	}
+
 	if input.OperationName == "exec_command" {
 		result.RiskLevel = RiskLevelYellow
 		result.ApprovalRequired = true
@@ -138,4 +145,13 @@ func isApprovalCommand(commandPreview string) bool {
 	}
 
 	return false
+}
+
+func isWebpageOperation(operationName string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "page_read", "page_search":
+		return true
+	default:
+		return false
+	}
 }

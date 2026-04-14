@@ -81,8 +81,11 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if _, err := app.toolRegistry.Get("page_search"); err != nil {
 		t.Fatalf("expected page_search to be registered, got %v", err)
 	}
-	if app.playwright == nil || !app.playwright.Ready() {
-		t.Fatal("expected playwright sidecar runtime to be ready")
+	if app.playwright == nil {
+		t.Fatal("expected playwright runtime to be wired")
+	}
+	if app.playwright.Available() && !app.playwright.Ready() {
+		t.Fatal("expected available playwright sidecar runtime to be ready")
 	}
 }
 

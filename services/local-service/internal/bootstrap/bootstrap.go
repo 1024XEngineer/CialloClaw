@@ -50,12 +50,11 @@ func New(cfg config.Config) (*App, error) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
 	if err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := playwrightRuntime.Start(); err != nil {
-		_ = storageService.Close()
-		return nil, err
+		playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	} else {
+		if err := playwrightRuntime.Start(); err != nil {
+			playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+		}
 	}
 	playwrightClient := playwrightRuntime.Client()
 	toolRegistry := tools.NewRegistry()

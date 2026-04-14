@@ -118,6 +118,23 @@ func TestServiceAssess(t *testing.T) {
 			},
 		},
 		{
+			name: "webpage_read_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "page_read",
+				TargetObject:        "https://example.com/demo",
+				CapabilityAvailable: true,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"https://example.com/demo"},
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelYellow,
+				ApprovalRequired: true,
+				Reason:           ReasonWebpageApproval,
+				ImpactScope:      ImpactScope{Webpages: []string{"https://example.com/demo"}},
+			},
+		},
+		{
 			name: "write_file_unknown_workspace_requires_approval",
 			input: AssessmentInput{
 				OperationName:       "write_file",

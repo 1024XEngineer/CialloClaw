@@ -130,7 +130,10 @@ type runtimePlaywrightClient struct {
 }
 
 func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tools.BrowserPageReadResult, error) {
-	if c.runtime == nil || !c.runtime.Ready() {
+	if c.runtime == nil || !c.runtime.Available() {
+		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	if !c.runtime.Ready() {
 		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
 	}
 	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_read", URL: url})
@@ -151,7 +154,10 @@ func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tool
 }
 
 func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
-	if c.runtime == nil || !c.runtime.Ready() {
+	if c.runtime == nil || !c.runtime.Available() {
+		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	if !c.runtime.Ready() {
 		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
 	}
 	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
@@ -178,12 +184,13 @@ func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query stri
 // - 当前最小 transport 规格
 // - 当前 sidecar 是否已进入 ready 状态
 type PlaywrightSidecarRuntime struct {
-	mu      sync.Mutex
-	spec    plugin.SidecarSpec
-	os      platform.OSCapabilityAdapter
-	ready   bool
-	invoker workerInvoker
-	client  runtimePlaywrightClient
+	mu        sync.Mutex
+	spec      plugin.SidecarSpec
+	os        platform.OSCapabilityAdapter
+	ready     bool
+	available bool
+	invoker   workerInvoker
+	client    runtimePlaywrightClient
 }
 
 // NewPlaywrightSidecarRuntime 创建并返回最小运行时骨架。
@@ -197,12 +204,27 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 		return nil, err
 	}
 	runtime := &PlaywrightSidecarRuntime{
-		spec:    spec,
-		os:      osCapability,
-		invoker: newCommandWorkerInvoker(entryPath),
+		spec:      spec,
+		os:        osCapability,
+		ready:     false,
+		available: true,
+		invoker:   newCommandWorkerInvoker(entryPath),
 	}
 	runtime.client = runtimePlaywrightClient{runtime: runtime}
 	return runtime, nil
+}
+
+// NewUnavailablePlaywrightSidecarRuntime returns a disabled runtime placeholder.
+func NewUnavailablePlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) *PlaywrightSidecarRuntime {
+	spec, _ := pluginService.SidecarSpec("playwright_sidecar")
+	runtime := &PlaywrightSidecarRuntime{
+		spec:      spec,
+		os:        osCapability,
+		ready:     false,
+		available: false,
+	}
+	runtime.client = runtimePlaywrightClient{runtime: runtime}
+	return runtime
 }
 
 // Name 返回当前 sidecar 名称。
@@ -222,8 +244,18 @@ func (r *PlaywrightSidecarRuntime) Ready() bool {
 	return r.ready
 }
 
+// Available reports whether the runtime can attempt to start.
+func (r *PlaywrightSidecarRuntime) Available() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.available
+}
+
 // Start 进入当前阶段的最小 ready 状态。
 func (r *PlaywrightSidecarRuntime) Start() error {
+	if !r.Available() {
+		return nil
+	}
 	if r.os == nil {
 		return errors.New("os capability adapter is required")
 	}
@@ -244,6 +276,9 @@ func (r *PlaywrightSidecarRuntime) Start() error {
 
 // Stop 退出 ready 状态并关闭最小传输骨架。
 func (r *PlaywrightSidecarRuntime) Stop() error {
+	if !r.Available() {
+		return nil
+	}
 	if r.os == nil {
 		return nil
 	}

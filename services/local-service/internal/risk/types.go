@@ -17,6 +17,7 @@ const (
 	ReasonCommandNotAllowed = "command_not_allowed"
 	ReasonCommandApproval   = "command_requires_approval"
 	ReasonCapabilityDenied  = "capability_denied"
+	ReasonWebpageApproval   = "webpage_requires_approval"
 	ReasonWorkspaceUnknown  = "workspace_unknown"
 	ReasonNormal            = "normal"
 )
