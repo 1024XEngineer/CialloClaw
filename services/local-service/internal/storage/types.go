@@ -135,4 +135,5 @@ type AuditStore interface {
 type RecoveryPointStore interface {
 	WriteRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) error
 	ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error)
+	GetRecoveryPoint(ctx context.Context, recoveryPointID string) (checkpoint.RecoveryPoint, error)
 }

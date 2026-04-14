@@ -32,6 +32,8 @@ func (s *Server) registerHandlers() {
 		"agent.security.summary.get":           s.handleAgentSecuritySummaryGet,
 		"agent.security.audit.list":            s.handleAgentSecurityAuditList,
 		"agent.security.pending.list":          s.handleAgentSecurityPendingList,
+		"agent.security.restore_points.list":   s.handleAgentSecurityRestorePointsList,
+		"agent.security.restore.apply":         s.handleAgentSecurityRestoreApply,
 		"agent.security.respond":               s.handleAgentSecurityRespond,
 		"agent.settings.get":                   s.handleAgentSettingsGet,
 		"agent.settings.update":                s.handleAgentSettingsUpdate,
@@ -192,6 +194,22 @@ func (s *Server) handleAgentSecurityPendingList(params map[string]any) (any, *rp
 	return wrapOrchestratorResult(data, err)
 }
 
+// handleAgentSecurityRestorePointsList 处理当前模块的相关逻辑。
+
+// handleAgentSecurityRestorePointsList 处理 agent.security.restore_points.list。
+func (s *Server) handleAgentSecurityRestorePointsList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SecurityRestorePointsList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentSecurityRestoreApply 处理当前模块的相关逻辑。
+
+// handleAgentSecurityRestoreApply 处理 agent.security.restore.apply。
+func (s *Server) handleAgentSecurityRestoreApply(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SecurityRestoreApply(params)
+	return wrapOrchestratorResult(data, err)
+}
+
 // handleAgentSecurityRespond 处理当前模块的相关逻辑。
 
 // handleAgentSecurityRespond 处理 agent.security.respond。
@@ -255,6 +273,14 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			Message: "SQLITE_WRITE_FAILED",
 			Detail:  err.Error(),
 			TraceID: "trace_storage_query_failed",
+		}
+	}
+	if errors.Is(err, orchestrator.ErrRecoveryPointNotFound) {
+		return nil, &rpcError{
+			Code:    1005002,
+			Message: "ARTIFACT_NOT_FOUND",
+			Detail:  err.Error(),
+			TraceID: "trace_recovery_point_not_found",
 		}
 	}
 

@@ -1,4 +1,4 @@
-# CialloClaw 开发统一规范（修订版 v18）
+# CialloClaw 开发统一规范（修订版 v19）
 
 ## 1. 文档定位
 
@@ -92,7 +92,7 @@
 - `services/local-service`：Go 1.26 本地 Harness Service
 - `workers/`：独立 worker / sidecar
 - `packages/protocol`：协议、类型、schema 真源
-- `packages/shared`：跨端共享常量与纯函数
+- `packages/ui` / `packages/config`：共享 UI 与工程配置
 - `docs/`：架构、协议、数据、模块、规范等文档
 
 ### 4.2 前端结构
@@ -253,12 +253,16 @@ JSON-RPC 方法集合是前后端唯一正式调用入口。
 - `agent.input.submit`
 - `agent.task.start`
 - `agent.task.confirm`
-- `agent.task.cancel`
-- `agent.task.query`
-- `agent.notepad.inspect`
+- `agent.task.list`
+- `agent.task.detail.get`
+- `agent.task.control`
+- `agent.task_inspector.run`
+- `agent.notepad.list`
 - `agent.notepad.convert_to_task`
 - `agent.recommendation.get`
 - `agent.recommendation.feedback.submit`
+- `agent.dashboard.overview.get`
+- `agent.security.summary.get`
 - `agent.settings.get`
 - `agent.settings.update`
 
@@ -286,22 +290,33 @@ JSON-RPC 方法集合是前后端唯一正式调用入口。
 ### 8.1 错误码体系
 
 统一使用 `100xxxx` 整型错误码。  
-不同域必须预留段，例如：
+不同域必须按协议真源预留段，例如：
 
-- `1001xxx`：输入与参数错误
-- `1002xxx`：任务与状态错误
-- `1003xxx`：授权与安全错误
-- `1004xxx`：工具与 worker 错误
-- `1005xxx`：平台与文件系统错误
-- `1006xxx`：模型与推理错误
+- `1001xxx`：Task / Session / Run / Step
+- `1002xxx`：协议与参数
+- `1003xxx`：工具调用
+- `1004xxx`：权限与风险
+- `1005xxx`：存储与数据库
+- `1006xxx`：worker / sidecar / plugin
+- `1007xxx`：系统与平台
+
+当前仓库真源已正式登记到 `1007xxx`。此外，为后续功能扩展继续预留：
+
+- `1008xxx`：模型与前馈配置
+- `1009xxx`：评估与人工升级
+
+上述预留段在对应功能和正式错误码落地前，不得在代码中擅自占用，也不得误写成“当前已在错误码真源中登记完成”。
 
 ### 8.2 错误结构
 
-必须包含：
+必须对齐 JSON-RPC 2.0 错误对象，至少包含：
 
-- `code`
-- `message`
-- `details`
+- `error.code`
+- `error.message`
+- `error.data.trace_id`
+- `error.data.detail`
+
+其中 `error.data.detail` 仅作为排查辅助，不得作为前端业务判断依据。
 
 ### 8.3 错误处理原则
 

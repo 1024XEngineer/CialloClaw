@@ -30,6 +30,7 @@ type FileSystemAdapter interface {
 	Normalize(path string) string
 	EnsureWithinWorkspace(path string) (string, error)
 	WriteFile(path string, content []byte) error
+	Remove(path string) error
 	Move(src, dst string) error
 	MkdirAll(path string) error
 }
@@ -219,6 +220,15 @@ func (a *LocalFileSystemAdapter) WriteFile(path string, content []byte) error {
 	}
 
 	return os.WriteFile(safePath, content, 0o644)
+}
+
+// Remove 删除工作区内的目标文件。
+func (a *LocalFileSystemAdapter) Remove(path string) error {
+	safePath, err := a.policy.EnsureWithinWorkspace(path)
+	if err != nil {
+		return err
+	}
+	return os.Remove(safePath)
 }
 
 // Move 处理当前模块的相关逻辑。

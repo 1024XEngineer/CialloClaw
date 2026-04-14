@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -257,6 +258,102 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	err := storageService.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_001",
+		TaskID:          "task_001",
+		Summary:         "stored recovery point",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-security-restore-points-list"`),
+		Method:  "agent.security.restore_points.list",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": "task_001",
+			"limit":   20,
+			"offset":  0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one recovery point item, got %d", len(items))
+	}
+	if items[0]["recovery_point_id"] != "rp_001" {
+		t.Fatalf("expected stored rp_001, got %+v", items[0])
+	}
+}
+
+func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore-apply.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_restore",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "restore runtime task",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	err = storageService.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_001",
+		TaskID:          taskID,
+		Summary:         "stored recovery point",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-security-restore-apply"`),
+		Method:  "agent.security.restore.apply",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":           taskID,
+			"recovery_point_id": "rp_001",
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if _, ok := data["applied"].(bool); !ok {
+		t.Fatalf("expected applied flag in restore result, got %+v", data)
+	}
+	if data["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected restore apply rpc to enter waiting_auth, got %+v", data)
+	}
+	if data["recovery_point"].(map[string]any)["recovery_point_id"] != "rp_001" {
+		t.Fatalf("expected rp_001 restore result, got %+v", data)
+	}
+}
+
 func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrStorageQueryFailed)
 	if rpcErr == nil {
@@ -264,6 +361,16 @@ func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
 	}
 	if rpcErr.Code != 1005001 || rpcErr.Message != "SQLITE_WRITE_FAILED" {
 		t.Fatalf("expected SQLITE_WRITE_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestDispatchMapsRecoveryPointNotFoundErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrRecoveryPointNotFound)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1005002 {
+		t.Fatalf("expected 1005002 mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
 	}
 }
 
@@ -300,6 +407,68 @@ func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 	}
 	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
 		t.Fatalf("expected INVALID_PARAMS mapping for unsupported action, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchMapsTaskControlMissingTaskIDToInvalidParams(t *testing.T) {
+	server := newTestServer()
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-missing-task-id"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"action": "pause",
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS mapping for missing task_id, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchMapsTaskControlMissingActionToInvalidParams(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task control rpc validation",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-control-missing-action"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS mapping for missing action, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
 	}
 }
 

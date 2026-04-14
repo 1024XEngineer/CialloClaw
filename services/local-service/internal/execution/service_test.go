@@ -148,8 +148,12 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	if result.ToolOutput["audit_record"] == nil {
 		t.Fatalf("expected write_file tool output to include consumed audit record, got %+v", result.ToolOutput)
 	}
-	if result.ToolOutput["recovery_point"] != nil {
-		t.Fatalf("expected no recovery point for create flow, got %+v", result.ToolOutput)
+	recoveryPoint, ok := result.ToolOutput["recovery_point"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected create flow to emit recovery point metadata, got %+v", result.ToolOutput)
+	}
+	if objects := recoveryPoint["objects"].([]string); len(objects) != 1 || objects[0] != "workspace/notes/output.md" {
+		t.Fatalf("expected create flow recovery point to target workspace/notes/output.md, got %+v", recoveryPoint)
 	}
 	if len(result.ToolCalls) != 2 {
 		t.Fatalf("expected generate_text + write_file tool chain, got %d calls", len(result.ToolCalls))
@@ -204,8 +208,71 @@ func TestExecuteWriteFileBubbleConsumesArtifactCandidate(t *testing.T) {
 	if result.ToolOutput["audit_record"] == nil {
 		t.Fatalf("expected audit candidate to be consumed, got %+v", result.ToolOutput)
 	}
+	if result.ToolOutput["recovery_point"] == nil {
+		t.Fatalf("expected create flow to expose recovery point candidate, got %+v", result.ToolOutput)
+	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "notes", "output.md")); err != nil {
 		t.Fatalf("expected write_file bubble path to still write file, got %v", err)
+	}
+}
+
+func TestExecuteWriteFileOverwriteCreatesAndAppliesRecoveryPoint(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "新的内容")
+	originalPath := filepath.Join(workspaceRoot, "notes", "output.md")
+	if err := os.MkdirAll(filepath.Dir(originalPath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(originalPath, []byte("旧的内容"), 0o644); err != nil {
+		t.Fatalf("seed original file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:          "task_restore",
+		RunID:           "run_restore",
+		Title:           "覆盖文件",
+		Intent:          map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "notes/output.md"}},
+		Snapshot:        contextsvc.TaskContextSnapshot{InputType: "text", Text: "请覆盖该文件"},
+		DeliveryType:    "workspace_document",
+		ResultTitle:     "文件写入结果",
+		ApprovalGranted: true,
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.RecoveryPoint == nil {
+		t.Fatalf("expected overwrite execution to emit recovery point, got %+v", result.ToolOutput)
+	}
+	if result.ToolOutput["recovery_point"] == nil {
+		t.Fatalf("expected tool output to expose recovery point, got %+v", result.ToolOutput)
+	}
+	overwrittenContent, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatalf("read overwritten file: %v", err)
+	}
+	if !strings.Contains(string(overwrittenContent), "新的内容") {
+		t.Fatalf("expected file to be overwritten, got %q", string(overwrittenContent))
+	}
+
+	recoveryPoint := checkpoint.RecoveryPoint{
+		RecoveryPointID: result.RecoveryPoint["recovery_point_id"].(string),
+		TaskID:          result.RecoveryPoint["task_id"].(string),
+		Summary:         result.RecoveryPoint["summary"].(string),
+		CreatedAt:       result.RecoveryPoint["created_at"].(string),
+		Objects:         result.RecoveryPoint["objects"].([]string),
+	}
+	applyResult, err := service.ApplyRecoveryPoint(context.Background(), recoveryPoint)
+	if err != nil {
+		t.Fatalf("apply recovery point failed: %v", err)
+	}
+	if applyResult.RecoveryPointID != recoveryPoint.RecoveryPointID {
+		t.Fatalf("expected recovery point id to round-trip, got %+v", applyResult)
+	}
+	restoredContent, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restoredContent) != "旧的内容" {
+		t.Fatalf("expected restore to recover original content, got %q", string(restoredContent))
 	}
 }
 
@@ -365,6 +432,95 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	}
 	if !strings.Contains(result.BubbleText, "需要解释的文本") {
 		t.Fatalf("expected fallback bubble to include normalized input, got %s", result.BubbleText)
+	}
+}
+
+func TestBuildPromptDoesNotDefaultUnknownIntentToSummarize(t *testing.T) {
+	prompt := buildPrompt(Request{Intent: map[string]any{}}, "输入内容:\n你好")
+
+	if strings.Contains(prompt, "请总结以下内容") {
+		t.Fatalf("expected unknown intent prompt not to force summarize, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "如果目标不明确") {
+		t.Fatalf("expected unknown intent prompt to ask for clarification behavior, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputRequestsClarificationWhenIntentMissing(t *testing.T) {
+	output := fallbackOutput(Request{Intent: map[string]any{}}, "你好")
+
+	if !strings.Contains(output, "请补充你的目标") {
+		t.Fatalf("expected unknown intent fallback to request clarification, got %s", output)
+	}
+	if strings.Contains(output, "总结结果") {
+		t.Fatalf("expected unknown intent fallback not to pretend summarize, got %s", output)
+	}
+}
+
+func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID:       "task_auth_write",
+		RunID:        "run_auth_write",
+		Intent:       map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "notes/result.md", "require_authorization": true}},
+		DeliveryType: "workspace_document",
+		ResultTitle:  "授权写入",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected write_file governance path to be handled")
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected approval to be required, got %+v", assessment)
+	}
+	if assessment.OperationName != "write_file" {
+		t.Fatalf("expected write_file operation, got %+v", assessment)
+	}
+	expectedTarget := "notes/result.md"
+	if assessment.TargetObject != expectedTarget {
+		t.Fatalf("expected target object %q, got %q", expectedTarget, assessment.TargetObject)
+	}
+	files, _ := assessment.ImpactScope["files"].([]string)
+	expectedImpactFile := filepath.Join(workspaceRoot, "notes", "result.md")
+	if len(files) != 1 || files[0] != expectedImpactFile {
+		t.Fatalf("expected impact scope files to include %q, got %+v", expectedImpactFile, assessment.ImpactScope)
+	}
+}
+
+func TestAssessGovernanceExecCommandUsesWorkspaceTargetWithoutRecoveryPoint(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_exec_auth",
+		RunID:  "run_exec_auth",
+		Intent: map[string]any{"name": "exec_command", "arguments": map[string]any{
+			"command":               "git status",
+			"working_dir":           workspaceRoot,
+			"require_authorization": true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected exec_command governance path to be handled")
+	}
+	if assessment.OperationName != "exec_command" || assessment.TargetObject != workspaceRoot {
+		t.Fatalf("unexpected exec_command assessment: %+v", assessment)
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected exec_command to require approval when flagged, got %+v", assessment)
+	}
+
+	recoveryPoint, err := service.prepareGovernanceRecoveryPoint(context.Background(), Request{TaskID: "task_exec_auth"}, workspaceRoot, "exec_command", map[string]any{"working_dir": workspaceRoot})
+	if err != nil {
+		t.Fatalf("prepareGovernanceRecoveryPoint returned error: %v", err)
+	}
+	if recoveryPoint != nil {
+		t.Fatalf("expected exec_command not to create recovery point, got %+v", recoveryPoint)
 	}
 }
 

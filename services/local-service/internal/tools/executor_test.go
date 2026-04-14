@@ -208,3 +208,69 @@ func TestToolExecuteContextFields(t *testing.T) {
 		t.Fatalf("unexpected context fields: %+v", ctx)
 	}
 }
+
+func TestToolExecutorPrecheckToolWithContextReturnsAssessment(t *testing.T) {
+	exec := newExecutorForTest(&stubTool{
+		meta: ToolMetadata{Name: "write_file", DisplayName: "Write File", Source: ToolSourceBuiltin},
+	}, nil)
+
+	resultMeta, precheck, err := exec.PrecheckToolWithContext(context.Background(), &ToolExecuteContext{
+		WorkspacePath: "D:/workspace",
+	}, "write_file", map[string]any{"path": "notes/a.md"})
+	if err != nil {
+		t.Fatalf("PrecheckToolWithContext returned error: %v", err)
+	}
+	if resultMeta.Name != "write_file" {
+		t.Fatalf("expected metadata for write_file, got %+v", resultMeta)
+	}
+	if precheck == nil {
+		t.Fatal("expected precheck result")
+	}
+	if precheck.RiskLevel == "" {
+		t.Fatalf("expected risk level to be populated, got %+v", precheck)
+	}
+}
+
+func TestApprovalBypassAllowedUsesStoredOperationAndTarget(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		ApprovalGranted:      true,
+		ApprovedOperation:    "write_file",
+		ApprovedTargetObject: "workspace/notes/a.md",
+	}
+	precheckInput := RiskPrecheckInput{
+		Workspace: WorkspaceBoundaryInfo{
+			WorkspacePath: "D:/repo/workspace",
+			TargetPath:    "D:/repo/workspace/notes/a.md",
+		},
+	}
+	if !approvalBypassAllowed(execCtx, "write_file", precheckInput) {
+		t.Fatal("expected approval bypass to allow normalized stored target")
+	}
+	if approvalBypassAllowed(execCtx, "exec_command", precheckInput) {
+		t.Fatal("expected approval bypass to reject mismatched operation")
+	}
+
+	execCtx.ApprovedOperation = ""
+	execCtx.ApprovedTargetObject = ""
+	if !approvalBypassAllowed(execCtx, "write_file", precheckInput) {
+		t.Fatal("expected blank approved target to allow granted approval")
+	}
+}
+
+func TestNormalizeApprovalTargetHandlesWorkspaceForms(t *testing.T) {
+	workspaceRoot := "D:/repo/workspace"
+	inputs := []string{
+		"workspace/notes/a.md",
+		"./notes/a.md",
+		"D:/repo/workspace/notes/a.md",
+		"notes/a.md",
+	}
+	for _, input := range inputs {
+		if got := normalizeApprovalTarget(input, workspaceRoot); got != "notes/a.md" {
+			t.Fatalf("expected normalized path notes/a.md for %q, got %q", input, got)
+		}
+	}
+	if got := normalizeApprovalTarget(workspaceRoot, workspaceRoot); got != "." {
+		t.Fatalf("expected workspace root to normalize to '.', got %q", got)
+	}
+}

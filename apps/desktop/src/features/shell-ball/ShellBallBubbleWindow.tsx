@@ -1,6 +1,6 @@
 import type { ShellBallVisualState } from "./shellBall.types";
 import { getShellBallVisibleBubbleItems } from "./shellBall.windowSync";
-import { emitShellBallBubbleAction, useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
+import { emitShellBallBubbleAction, emitShellBallBubbleHover, useShellBallHelperWindowSnapshot } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 
@@ -23,6 +23,12 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
       ref={rootRef}
       className="shell-ball-window shell-ball-window--bubble"
       data-visibility-phase={snapshot.bubbleRegion.visibilityPhase}
+      onPointerEnter={() => {
+        void emitShellBallBubbleHover(true);
+      }}
+      onPointerLeave={() => {
+        void emitShellBallBubbleHover(false);
+      }}
     >
       <ShellBallBubbleZone
         visualState={resolvedVisualState}

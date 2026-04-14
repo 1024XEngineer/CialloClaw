@@ -10,6 +10,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   helperReady: "desktop-shell-ball:helper-ready",
   pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
+  bubbleHover: "desktop-shell-ball:bubble-hover",
   inputHover: "desktop-shell-ball:input-hover",
   inputFocus: "desktop-shell-ball:input-focus",
   inputRequestFocus: "desktop-shell-ball:input-request-focus",
@@ -80,6 +81,10 @@ export type ShellBallPinnedWindowDetachedPayload = {
 };
 
 export type ShellBallInputHoverPayload = {
+  active: boolean;
+};
+
+export type ShellBallBubbleHoverPayload = {
   active: boolean;
 };
 

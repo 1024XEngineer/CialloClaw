@@ -15,6 +15,7 @@ import (
 // 它既包含建议采用的 intent，也包含主链路创建 task 时需要的标题、来源类型和默认交付信息。
 type Suggestion struct {
 	Intent             map[string]any
+	IntentConfirmed    bool
 	TaskTitle          string
 	TaskSourceType     string
 	RequiresConfirm    bool
@@ -71,8 +72,12 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	}
 
 	intentName := stringValue(intent, "name")
+	intentConfirmed := intentName != ""
 	sourceType := sourceTypeFromSnapshot(snapshot)
 	requiresConfirm := confirmRequired
+	if !intentConfirmed {
+		requiresConfirm = true
+	}
 	if !requiresConfirm && len(explicitIntent) == 0 {
 		requiresConfirm = requiresConfirmation(snapshot, intentName)
 	}
@@ -82,6 +87,7 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 
 	return Suggestion{
 		Intent:             intent,
+		IntentConfirmed:    intentConfirmed,
 		TaskTitle:          s.buildTaskTitle(snapshot, intentName),
 		TaskSourceType:     sourceType,
 		RequiresConfirm:    requiresConfirm,
@@ -120,6 +126,10 @@ func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[str
 		return intentPayload("explain")
 	}
 
+	if shouldConfirmTextGoal(snapshot) {
+		return map[string]any{}
+	}
+
 	return intentPayload("summarize")
 }
 
@@ -130,6 +140,8 @@ func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[str
 func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
 	subject := subjectText(snapshot)
 	switch intentName {
+	case "":
+		return "确认处理方式：" + subject
 	case "rewrite":
 		return "改写：" + subject
 	case "translate":
@@ -154,6 +166,8 @@ func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intent
 // buildResultTitle 生成交付结果标题，用于 delivery_result 和 artifact 展示。
 func (s *Service) buildResultTitle(intentName string) string {
 	switch intentName {
+	case "":
+		return "待确认处理方式"
 	case "rewrite":
 		return "改写结果"
 	case "translate":
@@ -170,6 +184,8 @@ func (s *Service) buildResultTitle(intentName string) string {
 // buildResultBubbleText 生成完成后的结果气泡文案。
 func (s *Service) buildResultBubbleText(intentName string) string {
 	switch intentName {
+	case "":
+		return "请先告诉我希望如何处理这段内容。"
 	case "rewrite":
 		return "内容已经按要求改写完成，可直接查看。"
 	case "translate":
@@ -215,6 +231,8 @@ func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 
 func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName string) bool {
 	switch {
+	case intentName == "":
+		return true
 	case snapshot.InputType == "file":
 		return true
 	case snapshot.InputType == "text_selection":
@@ -224,6 +242,20 @@ func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName st
 	default:
 		return false
 	}
+}
+
+func shouldConfirmTextGoal(snapshot contextsvc.TaskContextSnapshot) bool {
+	if snapshot.InputType != "text" {
+		return false
+	}
+	trimmed := strings.TrimSpace(snapshot.Text)
+	if trimmed == "" {
+		return false
+	}
+	if isLongContent(trimmed) || isQuestionText(trimmed) {
+		return false
+	}
+	return utf8.RuneCountInString(trimmed) <= 12
 }
 
 func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
@@ -254,6 +286,8 @@ func detectIntentFromText(text string) string {
 	switch {
 	case value == "":
 		return ""
+	case strings.Contains(value, "总结") || strings.Contains(value, "概括") || strings.HasPrefix(value, "summarize") || strings.HasPrefix(value, "summary"):
+		return "summarize"
 	case strings.Contains(value, "翻译") || strings.HasPrefix(value, "translate") || strings.HasPrefix(value, "翻成"):
 		return "translate"
 	case strings.Contains(value, "改写") || strings.HasPrefix(value, "rewrite") || strings.Contains(value, "润色"):

@@ -42,9 +42,12 @@ func TestEngineTaskLifecycle(t *testing.T) {
 		t.Fatal("expected initial presentation to be stored")
 	}
 
-	confirmed, ok := engine.ConfirmTask(task.TaskID, map[string]any{"name": "rewrite", "arguments": map[string]any{"tone": "professional"}}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "开始处理"})
+	confirmed, ok := engine.ConfirmTask(task.TaskID, "改写：整理测试任务", map[string]any{"name": "rewrite", "arguments": map[string]any{"tone": "professional"}}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "开始处理"})
 	if !ok {
 		t.Fatal("expected task confirmation to succeed")
+	}
+	if confirmed.Title != "改写：整理测试任务" {
+		t.Fatalf("expected confirmation to update task title, got %s", confirmed.Title)
 	}
 	if confirmed.Status != "processing" {
 		t.Fatalf("expected processing status after confirmation, got %s", confirmed.Status)
@@ -320,6 +323,116 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	}
 	if deniedResult.Status != "cancelled" {
 		t.Fatalf("expected denied task to be cancelled, got %s", deniedResult.Status)
+	}
+}
+
+func TestEngineResolveAuthorizationClearsPendingPlanAndKeepsRestorePoint(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_resolve",
+		Title:       "待授权任务",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "write_file"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+	})
+	approvalRequest := map[string]any{"approval_id": "appr_resolve", "task_id": task.TaskID, "status": "pending"}
+	pendingExecution := map[string]any{"operation_name": "write_file", "target_object": "workspace/notes/a.md"}
+	bubble := map[string]any{"task_id": task.TaskID, "type": "status", "text": "等待授权"}
+	if _, ok := engine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); !ok {
+		t.Fatal("expected waiting approval transition to succeed")
+	}
+
+	record, ok := engine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task record")
+	}
+	record.SecuritySummary = map[string]any{
+		"security_status":        "pending_authorization",
+		"risk_level":             "yellow",
+		"pending_authorizations": 1,
+		"latest_restore_point": map[string]any{
+			"recovery_point_id": "rp_keep",
+		},
+	}
+	engine.tasks[task.TaskID] = &record
+
+	resolved, ok := engine.ResolveAuthorization(task.TaskID, map[string]any{"decision": "allow_once"}, map[string]any{"files": []string{"workspace/notes/a.md"}})
+	if !ok {
+		t.Fatal("expected resolve authorization to succeed")
+	}
+	if resolved.PendingExecution != nil || resolved.ApprovalRequest != nil {
+		t.Fatalf("expected pending authorization data cleared, got %+v", resolved)
+	}
+	if resolved.Authorization["decision"] != "allow_once" {
+		t.Fatalf("expected authorization stored, got %+v", resolved.Authorization)
+	}
+	latestRestore, _ := resolved.SecuritySummary["latest_restore_point"].(map[string]any)
+	if latestRestore["recovery_point_id"] != "rp_keep" {
+		t.Fatalf("expected latest restore point to be preserved, got %+v", resolved.SecuritySummary)
+	}
+
+	plan, ok := engine.PendingExecutionPlan(task.TaskID)
+	if ok || plan != nil {
+		t.Fatalf("expected no pending execution plan after resolve, got %+v", plan)
+	}
+}
+
+func TestEngineApplyRecoveryOutcomeSetsTerminalAndNonTerminalStatus(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_restore",
+		Title:       "恢复任务",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		Intent:      map[string]any{"name": "restore_apply"},
+		CurrentStep: "restore_apply",
+		RiskLevel:   "red",
+	})
+	if _, ok := engine.MarkWaitingApprovalWithPlan(task.TaskID, map[string]any{"approval_id": "appr_restore"}, map[string]any{"operation_name": "restore_apply"}, map[string]any{"text": "等待授权"}); !ok {
+		t.Fatal("expected waiting approval state")
+	}
+
+	recoveryPoint := map[string]any{"recovery_point_id": "rp_done"}
+	completed, ok := engine.ApplyRecoveryOutcome(task.TaskID, "completed", "recovered", recoveryPoint, map[string]any{"text": "恢复完成"})
+	if !ok {
+		t.Fatal("expected apply recovery outcome to succeed")
+	}
+	if completed.Status != "completed" || completed.FinishedAt == nil {
+		t.Fatalf("expected completed terminal state with finished_at, got %+v", completed)
+	}
+	if completed.PendingExecution != nil || completed.ApprovalRequest != nil {
+		t.Fatalf("expected approval artifacts cleared, got %+v", completed)
+	}
+	if completed.LatestEvent["type"] != "recovery.applied" {
+		t.Fatalf("expected recovery.applied event, got %+v", completed.LatestEvent)
+	}
+
+	processingTask := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_restore_retry",
+		Title:       "恢复重试",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		Intent:      map[string]any{"name": "restore_apply"},
+		CurrentStep: "restore_apply",
+		RiskLevel:   "red",
+	})
+	processing, ok := engine.ApplyRecoveryOutcome(processingTask.TaskID, "processing", "recovery_failed", recoveryPoint, map[string]any{"text": "恢复失败"})
+	if !ok {
+		t.Fatal("expected non-terminal recovery outcome to succeed")
+	}
+	if processing.Status != "processing" || processing.FinishedAt != nil {
+		t.Fatalf("expected non-terminal state without finished_at, got %+v", processing)
+	}
+	if processing.LatestEvent["type"] != "recovery.failed" {
+		t.Fatalf("expected recovery.failed event, got %+v", processing.LatestEvent)
 	}
 }
 

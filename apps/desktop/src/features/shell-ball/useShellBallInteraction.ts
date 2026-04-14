@@ -1,4 +1,4 @@
-import type { AgentInputSubmitParams, RequestMeta } from "@cialloclaw/protocol";
+import type { AgentInputSubmitParams, AgentInputSubmitResult, DeliveryResult, RequestMeta } from "@cialloclaw/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import {
@@ -32,6 +32,10 @@ type ShellBallInteractionConsumedEvent =
   | "force_state_reset";
 
 type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
+
+export type ShellBallInputSubmitResult = AgentInputSubmitResult & {
+  delivery_result?: DeliveryResult | null;
+};
 
 function createShellBallRequestMeta(): RequestMeta {
   const now = new Date().toISOString();
@@ -70,6 +74,10 @@ export function createShellBallInputSubmitParams(input: {
     context: {
       files: [],
     },
+    options: {
+      confirm_required: false,
+      preferred_delivery: "bubble",
+    },
   };
 }
 
@@ -77,7 +85,7 @@ async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
-}) {
+}): Promise<ShellBallInputSubmitResult | null> {
   const params = createShellBallInputSubmitParams(input);
 
   if (params === null) {
@@ -85,7 +93,7 @@ async function submitShellBallInput(input: {
   }
 
   const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
-    submitInput: (request: AgentInputSubmitParams) => Promise<unknown>;
+    submitInput: (request: AgentInputSubmitParams) => Promise<ShellBallInputSubmitResult>;
   }>;
   const rpcMethods = await importRpcMethods();
   return rpcMethods.submitInput(params);
@@ -484,28 +492,28 @@ export function useShellBallInteraction() {
     });
   }
 
-  function handleSubmitText() {
+  async function handleSubmitText() {
     const currentDraft = inputValue.trim();
     const reset = getShellBallPostSubmitInputReset(inputValue);
     if (reset === null) {
-      return;
+      return null;
     }
 
-    void (async () => {
-      try {
-        await submitShellBallInput({
-          text: currentDraft,
-          trigger: "hover_text_input",
-          inputMode: "text",
-        });
-        dispatch("submit_text");
-        setInputValue(reset.nextInputValue);
-        inputFocusedRef.current = reset.nextFocused;
-        setInputFocused(reset.nextFocused);
-      } catch (error) {
-        console.warn("shell-ball text submit failed", error);
-      }
-    })();
+    try {
+      const result = await submitShellBallInput({
+        text: currentDraft,
+        trigger: "hover_text_input",
+        inputMode: "text",
+      });
+      dispatch("submit_text");
+      setInputValue(reset.nextInputValue);
+      inputFocusedRef.current = reset.nextFocused;
+      setInputFocused(reset.nextFocused);
+      return result;
+    } catch (error) {
+      console.warn("shell-ball text submit failed", error);
+      return null;
+    }
   }
 
   function handleAttachFile() {

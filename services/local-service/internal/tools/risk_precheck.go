@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -19,6 +21,7 @@ type WorkspaceBoundaryInfo struct {
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	TargetPath    string `json:"target_path,omitempty"`
 	Within        *bool  `json:"within_workspace,omitempty"`
+	Exists        *bool  `json:"exists,omitempty"`
 }
 
 // PlatformCapabilityInfo 预留平台能力信息，后续可继续扩展审批/检查点能力接线。
@@ -38,11 +41,13 @@ type RiskPrecheckInput struct {
 
 // RiskPrecheckResult 是风险预检查的最小输出。
 type RiskPrecheckResult struct {
-	RiskLevel          string `json:"risk_level"`
-	ApprovalRequired   bool   `json:"approval_required"`
-	CheckpointRequired bool   `json:"checkpoint_required"`
-	Deny               bool   `json:"deny"`
-	DenyReason         string `json:"deny_reason,omitempty"`
+	RiskLevel          string         `json:"risk_level"`
+	ApprovalRequired   bool           `json:"approval_required"`
+	CheckpointRequired bool           `json:"checkpoint_required"`
+	Deny               bool           `json:"deny"`
+	Reason             string         `json:"reason,omitempty"`
+	DenyReason         string         `json:"deny_reason,omitempty"`
+	ImpactScope        map[string]any `json:"impact_scope,omitempty"`
 }
 
 // RiskPrechecker 在执行前完成本地风险判定，不直接触发工具执行。
@@ -74,7 +79,9 @@ func (p DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInp
 		ApprovalRequired:   assessment.ApprovalRequired,
 		CheckpointRequired: assessment.CheckpointRequired,
 		Deny:               assessment.Deny,
+		Reason:             assessment.Reason,
 		DenyReason:         assessment.Reason,
+		ImpactScope:        impactScopeMap(assessment.ImpactScope),
 	}, nil
 }
 
@@ -96,7 +103,7 @@ func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *Too
 		SupportsWorkspaceBoundary: execCtx.Platform != nil,
 	}
 
-	targetPath, ok := extractTargetPath(input)
+	targetPath, ok := extractTargetPath(precheckInput.ToolName, precheckInput.Input)
 	if !ok {
 		return precheckInput
 	}
@@ -114,6 +121,11 @@ func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *Too
 		precheckInput.Workspace.TargetPath = safePath
 		if absPath, err := execCtx.Platform.Abs(safePath); err == nil {
 			precheckInput.Workspace.TargetPath = absPath
+		}
+		if _, statErr := execCtx.Platform.Stat(safePath); statErr == nil {
+			precheckInput.Workspace.Exists = boolPtr(true)
+		} else if errors.Is(statErr, fs.ErrNotExist) {
+			precheckInput.Workspace.Exists = boolPtr(false)
 		}
 	}
 	return precheckInput
@@ -134,19 +146,25 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 		WorkspaceKnown:      workspaceKnown,
 		CommandPreview:      normalizeCommandString(input.Input),
 		ImpactScope: risksvc.ImpactScope{
-			Files:          filesFromTarget(input.Workspace.TargetPath),
+			Files:          filesFromTarget(firstNonEmptyTarget(input.Workspace.TargetPath, input.Workspace.WorkspacePath)),
 			OutOfWorkspace: outOfWorkspace,
 		},
 	}
 
 	if input.ToolName == "write_file" {
-		assessment.ImpactScope.OverwriteOrDeleteRisk = workspaceKnown && !outOfWorkspace
+		exists := input.Workspace.Exists != nil && *input.Workspace.Exists
+		assessment.ImpactScope.OverwriteOrDeleteRisk = workspaceKnown && !outOfWorkspace && exists
 	}
 
 	return assessment
 }
 
-func extractTargetPath(input map[string]any) (string, bool) {
+func extractTargetPath(toolName string, input map[string]any) (string, bool) {
+	if toolName == "exec_command" {
+		if value, ok := input["working_dir"].(string); ok && strings.TrimSpace(value) != "" {
+			return value, true
+		}
+	}
 	for _, key := range []string{"path", "target_path", "file_path"} {
 		value, ok := input[key].(string)
 		if ok && strings.TrimSpace(value) != "" {
@@ -154,6 +172,23 @@ func extractTargetPath(input map[string]any) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func firstNonEmptyTarget(primary, fallback string) string {
+	if strings.TrimSpace(primary) != "" {
+		return primary
+	}
+	return fallback
+}
+
+func impactScopeMap(scope risksvc.ImpactScope) map[string]any {
+	return map[string]any{
+		"files":                    append([]string(nil), scope.Files...),
+		"webpages":                 append([]string(nil), scope.Webpages...),
+		"apps":                     append([]string(nil), scope.Apps...),
+		"out_of_workspace":         scope.OutOfWorkspace,
+		"overwrite_or_delete_risk": scope.OverwriteOrDeleteRisk,
+	}
 }
 
 func normalizeCommandString(input map[string]any) string {

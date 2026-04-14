@@ -1,4 +1,4 @@
-# CialloClaw 架构总览文档（v14）
+# CialloClaw 架构总览文档（v15）
 
 ## 一、项目定位与设计动因
 
@@ -790,7 +790,7 @@ flowchart LR
 | --- | --- | --- |
 | `sessions` | 记录输入归属的协作会话 | `session_id`、`title`、`status` |
 | `tasks` | 记录正式任务主对象 | `task_id`、`session_id`、`status`、`request_source`、`request_trigger`、`primary_run_id` |
-| `task_steps` | 记录面向前端展示的阶段步骤 | `task_step_id`、`task_id`、`name`、`status`、`order_index` |
+| `task_steps` | 记录面向前端展示的阶段步骤 | `step_id`、`task_id`、`name`、`status`、`order_index` |
 | `runs` | 记录执行兼容主对象 | `run_id`、`task_id`、`status` |
 | `events` | 记录主链路事件与状态回流依据 | `event_id`、`task_id`、`type`、`payload_json` |
 
@@ -932,10 +932,10 @@ flowchart LR
 
 | 表 | 作用 | 关键字段 |
 | --- | --- | --- |
-| `todo_items` | 存储尚未转成正式任务的事项 | `todo_item_id`、`bucket`、`status`、`source_path`、`linked_task_id` |
-| `recurring_rules` | 存储周期规则和提醒策略 | `recurring_rule_id`、`todo_item_id`、`rule_type`、`reminder_strategy` |
+| `todo_items` | 存储尚未转成正式任务的事项 | `item_id`、`bucket`、`status`、`source_path`、`linked_task_id` |
+| `recurring_rules` | 存储周期规则和提醒策略 | `rule_id`、`item_id`、`rule_type`、`reminder_strategy` |
 | `tasks` | 存储升级后的正式任务 | `task_id`、`source_type`、`status` |
-| `task_steps` | 存储升级后面向前端的阶段信息 | `task_step_id`、`task_id`、`name`、`status` |
+| `task_steps` | 存储升级后面向前端的阶段信息 | `step_id`、`task_id`、`name`、`status` |
 
 #### 时序图
 

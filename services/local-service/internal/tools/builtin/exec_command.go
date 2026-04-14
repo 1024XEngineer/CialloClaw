@@ -73,6 +73,13 @@ func (t *ExecCommandTool) Execute(ctx context.Context, execCtx *tools.ToolExecut
 		"stdout_truncated": stdoutTruncated,
 		"stderr_truncated": stderrTruncated,
 		"exit_code":        result.ExitCode,
+		"audit_candidate": map[string]any{
+			"type":    "command",
+			"action":  "exec_command",
+			"summary": buildExecCommandAuditSummary(command, result.ExitCode),
+			"target":  workingDir,
+			"result":  commandAuditResult(result.ExitCode),
+		},
 	}
 
 	return &tools.ToolResult{
@@ -140,6 +147,20 @@ func buildExecCommandSummary(command string, args []string, workingDir string, r
 		"stdout_preview": previewText(result.Stdout, commandOutputPreviewLimit),
 		"stderr_preview": previewText(result.Stderr, commandOutputPreviewLimit),
 	}
+}
+
+func buildExecCommandAuditSummary(command string, exitCode int) string {
+	if exitCode == 0 {
+		return fmt.Sprintf("execute command: %s", command)
+	}
+	return fmt.Sprintf("command exited with code %d: %s", exitCode, command)
+}
+
+func commandAuditResult(exitCode int) string {
+	if exitCode == 0 {
+		return "success"
+	}
+	return "failed"
 }
 
 func resolveExecCommandWorkingDir(execCtx *tools.ToolExecuteContext, workingDir string) (string, error) {

@@ -296,14 +296,17 @@ type ModelCapability interface {
 // storage / platform / risk / audit / checkpoint 均为可选注入，
 // 工具实现使用前需做 nil 检查，不得假设一定可用。
 type ToolExecuteContext struct {
-	TaskID        string
-	RunID         string
-	StepID        string
-	TraceID       string
-	WorkspacePath string
-	Logger        any
-	Timeout       time.Duration
-	Cancel        context.CancelFunc
+	TaskID               string
+	RunID                string
+	StepID               string
+	TraceID              string
+	WorkspacePath        string
+	Logger               any
+	Timeout              time.Duration
+	Cancel               context.CancelFunc
+	ApprovalGranted      bool
+	ApprovedOperation    string
+	ApprovedTargetObject string
 
 	Storage    StorageCapability
 	Platform   PlatformCapability

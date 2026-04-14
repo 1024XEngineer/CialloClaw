@@ -68,9 +68,31 @@ func TestServiceAssess(t *testing.T) {
 				CommandPreview:      "powershell Get-Process",
 			},
 			want: AssessmentResult{
-				RiskLevel:        RiskLevelRed,
-				ApprovalRequired: true,
-				Reason:           ReasonCommandApproval,
+				RiskLevel:          RiskLevelRed,
+				ApprovalRequired:   true,
+				CheckpointRequired: true,
+				Reason:             ReasonCommandApproval,
+			},
+		},
+		{
+			name: "safe_command_still_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "exec_command",
+				TargetObject:        "D:/workspace",
+				CapabilityAvailable: true,
+				WorkspaceKnown:      true,
+				ImpactScope: ImpactScope{
+					Files: []string{"D:/workspace"},
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel:          RiskLevelYellow,
+				ApprovalRequired:   true,
+				CheckpointRequired: true,
+				Reason:             ReasonCommandApproval,
+				ImpactScope: ImpactScope{
+					Files: []string{"D:/workspace"},
+				},
 			},
 		},
 		{
@@ -123,6 +145,7 @@ func TestServiceAssess(t *testing.T) {
 			},
 			want: AssessmentResult{
 				RiskLevel:          RiskLevelYellow,
+				ApprovalRequired:   true,
 				CheckpointRequired: true,
 				Reason:             ReasonOverwriteOrDelete,
 				ImpactScope: ImpactScope{

@@ -51,6 +51,8 @@ export const RPC_METHODS_STABLE = {
   AGENT_DASHBOARD_MODULE_GET: "agent.dashboard.module.get",
   AGENT_MIRROR_OVERVIEW_GET: "agent.mirror.overview.get",
   AGENT_SECURITY_SUMMARY_GET: "agent.security.summary.get",
+  AGENT_SECURITY_RESTORE_POINTS_LIST: "agent.security.restore_points.list",
+  AGENT_SECURITY_RESTORE_APPLY: "agent.security.restore.apply",
   AGENT_SECURITY_PENDING_LIST: "agent.security.pending.list",
   AGENT_SECURITY_RESPOND: "agent.security.respond",
   AGENT_SETTINGS_GET: "agent.settings.get",
@@ -60,8 +62,6 @@ export const RPC_METHODS_STABLE = {
 // RPC_METHODS_PLANNED 定义共享常量。
 export const RPC_METHODS_PLANNED = {
   AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
-  AGENT_SECURITY_RESTORE_POINTS_LIST: "agent.security.restore_points.list",
-  AGENT_SECURITY_RESTORE_APPLY: "agent.security.restore.apply",
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
@@ -460,6 +460,36 @@ export interface AgentSecurityPendingListParams {
 export interface AgentSecurityPendingListResult {
   items: ApprovalRequest[];
   page: JsonRpcPage;
+}
+
+// AgentSecurityRestorePointsListParams 定义当前模块的接口约束。
+export interface AgentSecurityRestorePointsListParams {
+  request_meta: RequestMeta;
+  task_id?: string;
+  limit: number;
+  offset: number;
+}
+
+// AgentSecurityRestorePointsListResult 定义当前模块的接口约束。
+export interface AgentSecurityRestorePointsListResult {
+  items: RecoveryPoint[];
+  page: JsonRpcPage;
+}
+
+// AgentSecurityRestoreApplyParams 定义当前模块的接口约束。
+export interface AgentSecurityRestoreApplyParams {
+  request_meta: RequestMeta;
+  task_id?: string;
+  recovery_point_id: string;
+}
+
+// AgentSecurityRestoreApplyResult 定义当前模块的接口约束。
+export interface AgentSecurityRestoreApplyResult {
+  applied: boolean;
+  task: Task;
+  recovery_point: RecoveryPoint;
+  audit_record: AuditRecord | null;
+  bubble_message: BubbleMessage | null;
 }
 
 // AgentSecurityRespondParams 定义当前模块的接口约束。

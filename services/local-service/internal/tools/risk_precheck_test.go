@@ -59,9 +59,12 @@ func TestDefaultRiskPrecheckerReadFileLowRisk(t *testing.T) {
 	if result.RiskLevel != RiskLevelGreen || result.Deny || result.ApprovalRequired || result.CheckpointRequired {
 		t.Fatalf("unexpected precheck result: %+v", result)
 	}
+	if result.Reason != "normal" {
+		t.Fatalf("expected normal reason, got %+v", result)
+	}
 }
 
-func TestDefaultRiskPrecheckerWriteFileInsideWorkspace(t *testing.T) {
+func TestDefaultRiskPrecheckerWriteFileInsideWorkspaceCreateFlow(t *testing.T) {
 	prechecker := DefaultRiskPrechecker{}
 	within := true
 	result, err := prechecker.Precheck(context.Background(), RiskPrecheckInput{
@@ -77,7 +80,33 @@ func TestDefaultRiskPrecheckerWriteFileInsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.RiskLevel != RiskLevelYellow || result.Deny || result.ApprovalRequired || !result.CheckpointRequired {
+	if result.RiskLevel != RiskLevelGreen || result.Deny || result.ApprovalRequired || result.CheckpointRequired {
+		t.Fatalf("unexpected precheck result: %+v", result)
+	}
+	if files := result.ImpactScope["files"].([]string); len(files) != 1 || files[0] != "/workspace/report.txt" {
+		t.Fatalf("expected write_file impact scope to include target file, got %+v", result.ImpactScope)
+	}
+}
+
+func TestDefaultRiskPrecheckerWriteFileOverwriteRequiresApproval(t *testing.T) {
+	prechecker := DefaultRiskPrechecker{}
+	within := true
+	exists := true
+	result, err := prechecker.Precheck(context.Background(), RiskPrecheckInput{
+		Metadata: ToolMetadata{Name: "write_file", DisplayName: "Write", Source: ToolSourceBuiltin},
+		ToolName: "write_file",
+		Input:    map[string]any{"path": "report.txt"},
+		Workspace: WorkspaceBoundaryInfo{
+			WorkspacePath: "/workspace",
+			TargetPath:    "/workspace/report.txt",
+			Within:        &within,
+			Exists:        &exists,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || result.Deny || !result.ApprovalRequired || !result.CheckpointRequired {
 		t.Fatalf("unexpected precheck result: %+v", result)
 	}
 }
@@ -108,13 +137,42 @@ func TestDefaultRiskPrecheckerExecCommandHighRisk(t *testing.T) {
 	result, err := prechecker.Precheck(context.Background(), RiskPrecheckInput{
 		Metadata: ToolMetadata{Name: "exec_command", DisplayName: "Exec", Source: ToolSourceBuiltin},
 		ToolName: "exec_command",
-		Input:    map[string]any{"command": "rm -rf /tmp/demo"},
+		Input:    map[string]any{"command": "rm -rf /tmp/demo", "working_dir": "/workspace"},
+		Workspace: WorkspaceBoundaryInfo{
+			WorkspacePath: "/workspace",
+			TargetPath:    "/workspace",
+		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.RiskLevel != RiskLevelRed || !result.Deny {
 		t.Fatalf("unexpected precheck result: %+v", result)
+	}
+}
+
+func TestDefaultRiskPrecheckerExecCommandRequiresApprovalAndImpactScope(t *testing.T) {
+	prechecker := DefaultRiskPrechecker{}
+	within := true
+	result, err := prechecker.Precheck(context.Background(), RiskPrecheckInput{
+		Metadata: ToolMetadata{Name: "exec_command", DisplayName: "Exec", Source: ToolSourceBuiltin},
+		ToolName: "exec_command",
+		Input:    map[string]any{"command": "git status", "working_dir": "notes"},
+		Workspace: WorkspaceBoundaryInfo{
+			WorkspacePath: "/workspace",
+			TargetPath:    "/workspace/notes",
+			Within:        &within,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired || !result.CheckpointRequired {
+		t.Fatalf("unexpected precheck result: %+v", result)
+	}
+	files := result.ImpactScope["files"].([]string)
+	if len(files) != 1 || files[0] != "/workspace/notes" {
+		t.Fatalf("expected exec_command impact scope to include working dir, got %+v", result.ImpactScope)
 	}
 }
 

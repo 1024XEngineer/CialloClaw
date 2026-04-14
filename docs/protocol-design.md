@@ -1,4 +1,4 @@
-# CialloClaw 协议设计文档（v4）
+# CialloClaw 协议设计文档（v5）
 
 ## 1. 文档范围
 
@@ -353,6 +353,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：存储与数据库
 - `1006xxx`：worker / sidecar / plugin
 - `1007xxx`：系统与平台
+
+当前仓库错误码真源 `packages/protocol/errors/codes.ts` 已正式登记到 `1007xxx`。此外，为后续功能扩展预留：
+
 - `1008xxx`：模型与前馈配置
 - `1009xxx`：评估与人工升级
 
@@ -365,8 +368,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：数据库、Artifact、恢复点、Stronghold、RAG 等落盘能力异常。
 - `1006xxx`：worker / sidecar / plugin 进程不可用或输出非法。
 - `1007xxx`：平台和执行环境问题。
-- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常。
-- `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常。
+- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常，当前为预留段。
+- `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常，当前为预留段。
 
 ### 6.3 推荐错误码表
 
@@ -416,6 +419,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1006002` `PLAYWRIGHT_SIDECAR_FAILED`
 - `1006003` `OCR_WORKER_FAILED`
 - `1006004` `MEDIA_WORKER_FAILED`
+
+#### 预留错误码（尚未登记到错误码真源）
+
+以下错误码常量保留给后续功能使用。在它们正式写入 `packages/protocol/errors/codes.ts` 前，只能作为规划预留，不得被文档误解为当前仓库已经实现：
+
+##### Worker / Plugin 扩展预留
+
 - `1006005` `PLUGIN_NOT_AVAILABLE`
 - `1006006` `PLUGIN_PERMISSION_DENIED`
 - `1006007` `PLUGIN_OUTPUT_INVALID`
@@ -428,7 +438,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1007004` `SANDBOX_PROFILE_INVALID`
 - `1007005` `PATH_POLICY_VIOLATION`
 
-#### 模型与前馈配置
+##### 模型与前馈配置预留
 
 - `1008001` `MODEL_PROVIDER_NOT_FOUND`
 - `1008002` `MODEL_NOT_ALLOWED`
@@ -437,7 +447,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1008005` `PROMPT_TEMPLATE_NOT_FOUND`
 - `1008006` `LSP_DIAGNOSTIC_UNAVAILABLE`
 
-#### 评估与升级
+##### 评估与升级预留
 
 - `1009001` `REVIEW_FAILED`
 - `1009002` `DOOM_LOOP_DETECTED`
@@ -449,9 +459,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 前端只认错误码和错误类型，不猜字符串。
 - Go 返回错误时必须带 `id` 或 `trace_id`。
 - worker / sidecar / plugin 错误必须包装成统一错误码。
-- 多模型切换失败必须落到 `1008xxx`。
 - 插件安装 / 启停失败必须落到 `1006xxx`。
-- 审查失败 / 熔断 / 人工升级必须落到 `1009xxx`。
+- 多模型切换失败在对应能力正式落地后应落到 `1008xxx`。
+- 审查失败 / 熔断 / 人工升级在对应能力正式落地后应落到 `1009xxx`。
 
 ## 7. 方法集合与原子功能映射
 
@@ -482,6 +492,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.dashboard.module.get`
 - `agent.mirror.overview.get`
 - `agent.security.summary.get`
+- `agent.security.restore_points.list`
+- `agent.security.restore.apply`
 - `agent.security.pending.list`
 - `agent.security.respond`
 
@@ -493,8 +505,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 7.2 planned
 
 - `agent.security.audit.list`
-- `agent.security.restore_points.list`
-- `agent.security.restore.apply`
 - `agent.mirror.memory.manage`
 - `agent.task.artifact.list`
 - `agent.task.artifact.open`
@@ -1153,6 +1163,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.security_summary`  | 安全摘要       |
 
+其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
+
 ### agent.task.detail.get 出参示例
 
 ```json
@@ -1184,7 +1196,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "step_id": "step_2",
           "task_id": "task_201",
           "name": "generate_summary",
-          "status": "processing",
+          "status": "running",
           "order_index": 2,
           "input_summary": "读取文档内容",
           "output_summary": "正在生成摘要"
@@ -2140,6 +2152,221 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
+### 8.3.7 `agent.security.restore_points.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户在安全卫士或任务详情中查看恢复点列表时
+- **系统处理**：按任务或全局范围返回恢复点列表
+- **入参**：可选任务 ID、分页参数
+- **出参**：恢复点列表、分页信息
+
+### agent.security.restore_points.list 入参说明
+
+| 字段      | 中文说明        |
+| --------- | --------------- |
+| `task_id` | 可选的任务 ID   |
+| `limit`   | 每页条数        |
+| `offset`  | 分页偏移        |
+
+### agent.security.restore_points.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_points_001",
+  "method": "agent.security.restore_points.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_restore_points_001",
+      "client_time": "2026-04-07T11:05:00+08:00"
+    },
+    "task_id": "task_301",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.security.restore_points.list 出参说明
+
+| 字段                             | 中文说明     |
+| -------------------------------- | ------------ |
+| `data.items`                     | 恢复点列表   |
+| `data.items[].recovery_point_id` | 恢复点 ID    |
+| `data.items[].task_id`           | 关联任务 ID  |
+| `data.items[].summary`           | 恢复点说明   |
+| `data.items[].objects`           | 关联对象清单 |
+| `data.page`                      | 分页信息     |
+
+### agent.security.restore_points.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_points_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "recovery_point_id": "rp_001",
+          "task_id": "task_301",
+          "summary": "write_file_before_change",
+          "created_at": "2026-04-07T11:04:30+08:00",
+          "objects": ["workspace/notes/output.md"]
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:05:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.3.8 `agent.security.restore.apply`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户选定某个恢复点并发起回滚时
+- **系统处理**：先进入高风险授权链路；授权通过后执行恢复点对应的工作区回滚，并回写任务、安全状态与审计记录
+- **入参**：可选任务 ID、恢复点 ID
+- **出参**：首次调用返回待授权状态；授权通过后由 `agent.security.respond` 返回最终恢复结果
+
+### agent.security.restore.apply 入参说明
+
+| 字段                | 中文说明       |
+| ------------------- | -------------- |
+| `task_id`           | 可选的任务 ID  |
+| `recovery_point_id` | 目标恢复点 ID  |
+
+### agent.security.restore.apply 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_apply_001",
+  "method": "agent.security.restore.apply",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_restore_apply_001",
+      "client_time": "2026-04-07T11:06:00+08:00"
+    },
+    "task_id": "task_301",
+    "recovery_point_id": "rp_001"
+  }
+}
+```
+
+### agent.security.restore.apply 出参说明
+
+| 字段                  | 中文说明         |
+| --------------------- | ---------------- |
+| `data.applied`        | 当前阶段是否已完成恢复；首次调用固定为 `false` |
+| `data.task`           | 更新后的任务对象；首次调用进入 `waiting_auth` |
+| `data.recovery_point` | 本次使用的恢复点 |
+| `data.audit_record`   | 恢复审计记录；首次调用通常为 `null` |
+| `data.bubble_message` | 状态提示气泡     |
+
+### agent.security.restore.apply 两阶段说明
+
+1. 第一次调用 `agent.security.restore.apply` 只创建高风险授权请求，并返回 `waiting_auth`
+2. 用户确认后，再通过 `agent.security.respond` 执行真正的恢复动作
+3. 最终的恢复成功/失败、审计记录和状态气泡在 `agent.security.respond` 响应中返回
+
+### agent.security.restore.apply 错误说明
+
+| 错误码 | 错误名 | 中文说明 |
+| ------ | ------ | -------- |
+| `1005001` | `SQLITE_WRITE_FAILED` | 恢复点读取或持久化存储查询失败 |
+| `1005002` | `ARTIFACT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
+
+### agent.security.restore.apply 首次出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_apply_001",
+  "result": {
+    "data": {
+      "applied": false,
+      "task": {
+        "task_id": "task_301",
+        "status": "waiting_auth"
+      },
+      "recovery_point": {
+        "recovery_point_id": "rp_001",
+        "task_id": "task_301",
+        "summary": "write_file_before_change",
+        "created_at": "2026-04-07T11:04:30+08:00",
+        "objects": ["workspace/notes/output.md"]
+      },
+      "audit_record": null,
+      "bubble_message": {
+        "bubble_id": "bubble_301",
+        "task_id": "task_301",
+        "type": "status",
+        "text": "恢复点回滚属于高风险操作，请先确认授权。"
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:06:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+### agent.security.respond 恢复完成出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_respond_restore_001",
+  "result": {
+    "data": {
+      "applied": true,
+      "task": {
+        "task_id": "task_301",
+        "status": "completed"
+      },
+      "recovery_point": {
+        "recovery_point_id": "rp_001",
+        "task_id": "task_301",
+        "summary": "write_file_before_change",
+        "created_at": "2026-04-07T11:04:30+08:00",
+        "objects": ["workspace/notes/output.md"]
+      },
+      "audit_record": {
+        "audit_id": "audit_001",
+        "task_id": "task_301",
+        "type": "recovery",
+        "action": "restore_apply",
+        "summary": "已根据恢复点 rp_001 恢复 1 个对象。",
+        "target": "workspace/notes/output.md",
+        "result": "success",
+        "created_at": "2026-04-07T11:06:01+08:00"
+      },
+      "bubble_message": {
+        "bubble_id": "bubble_301",
+        "task_id": "task_301",
+        "type": "status",
+        "text": "已根据恢复点 rp_001 恢复 1 个对象。"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## 8.4 设置中心
 
 ### 8.4.1 `agent.settings.get`
@@ -2343,7 +2570,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-
 ## 9. Notification / Subscription 说明
 
 ### 9.1 事件语义
@@ -2351,9 +2577,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `task.updated`：任务主状态或关键摘要变化
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
-- `plugin.updated`：插件状态变化
+- `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）
 - `plugin.metric.updated`：插件指标变化
 - `plugin.task.updated`：插件关联任务变化
+
+以下命名不属于正式前端订阅事件：
+- `plugin.registered`：插件注册属于后端内部事件，前端首次可见状态并入 `plugin.updated`
+- `overview.ready`：仪表盘初始化结果通过 `agent.dashboard.overview.get` 的正常响应返回
 
 ### 9.2 前端使用约束
 

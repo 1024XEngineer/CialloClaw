@@ -23,9 +23,22 @@ type RecoveryPoint struct {
 	Objects         []string
 }
 
+// ApplyResult 描述一次恢复点应用成功后的最小结果。
+type ApplyResult struct {
+	RecoveryPointID string
+	RestoredObjects []string
+}
+
 // Writer 是恢复点输出边界。
 //
 // 当前不绑定数据库实现，后续由 storage 或其他持久化层注入。
 type Writer interface {
 	WriteRecoveryPoint(ctx context.Context, point RecoveryPoint) error
+}
+
+// SnapshotFileSystem 是 checkpoint 对工作区快照与恢复所需的最小文件接口。
+type SnapshotFileSystem interface {
+	ReadFile(path string) ([]byte, error)
+	WriteFile(path string, content []byte) error
+	Remove(path string) error
 }
