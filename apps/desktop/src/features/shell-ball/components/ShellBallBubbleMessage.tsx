@@ -1,4 +1,5 @@
 import type { ShellBallBubbleItem } from "../shellBall.bubble";
+import { ShellBallMarkdown } from "./ShellBallMarkdown";
 
 type ShellBallBubbleMessageProps = {
   item: ShellBallBubbleItem;
@@ -10,6 +11,11 @@ type ShellBallBubbleMessageProps = {
 
 export function ShellBallBubbleMessage({ item, onDelete, onPin, onCancelIntent, onConfirmIntent }: ShellBallBubbleMessageProps) {
   const bubbleId = item.bubble.bubble_id;
+  const bubbleText = item.bubble.text;
+  const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
+
+  void onDelete;
+  void onPin;
 
   return (
     <div
@@ -39,7 +45,11 @@ export function ShellBallBubbleMessage({ item, onDelete, onPin, onCancelIntent, 
             </button>
           </div>
         ) : null}
-        <p className="shell-ball-bubble-message__text">{item.bubble.text}</p>
+        {showMarkdown ? (
+          <ShellBallMarkdown text={bubbleText} />
+        ) : (
+          <p className="shell-ball-bubble-message__text">{bubbleText}</p>
+        )}
       </div>
     </div>
   );

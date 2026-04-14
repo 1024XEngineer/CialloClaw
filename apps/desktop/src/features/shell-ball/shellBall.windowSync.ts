@@ -16,6 +16,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   inputRequestFocus: "desktop-shell-ball:input-request-focus",
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
+  pendingFileAction: "desktop-shell-ball:pending-file-action",
   intentDecision: "desktop-shell-ball:intent-decision",
   bubbleAction: "desktop-shell-ball:bubble-action",
 });
@@ -23,6 +24,8 @@ export const shellBallWindowSyncEvents = Object.freeze({
 export type ShellBallHelperWindowRole = "bubble" | "input" | "pinned";
 
 export type ShellBallPrimaryAction = "attach_file" | "submit" | "primary_click";
+
+export type ShellBallPendingFileAction = "append" | "remove";
 
 export type ShellBallIntentDecision = "confirm" | "cancel";
 
@@ -48,6 +51,7 @@ export type ShellBallWindowSnapshot = {
   visualState: ShellBallVisualState;
   inputBarMode: ShellBallInputBarMode;
   inputValue: string;
+  pendingFiles: string[];
   voicePreview: ShellBallVoicePreview;
   bubbleItems: ShellBallBubbleItem[];
   bubbleRegion: ShellBallBubbleRegionState;
@@ -108,6 +112,16 @@ export type ShellBallPrimaryActionPayload = {
   action: ShellBallPrimaryAction;
 };
 
+export type ShellBallPendingFileActionPayload =
+  | {
+      action: "append";
+      paths: string[];
+    }
+  | {
+      action: "remove";
+      path: string;
+    };
+
 export type ShellBallIntentDecisionPayload = {
   source: ShellBallBubbleActionSource;
   taskId: string;
@@ -159,6 +173,7 @@ export function getShellBallBubbleRegionState(
 export function createShellBallWindowSnapshot(input: {
   visualState: ShellBallVisualState;
   inputValue: string;
+  pendingFiles?: string[];
   voicePreview: ShellBallVoicePreview;
   bubbleItems?: ShellBallBubbleItem[];
   helpersVisible?: boolean;
@@ -166,11 +181,13 @@ export function createShellBallWindowSnapshot(input: {
 }): ShellBallWindowSnapshot {
   const bubbleItems = cloneShellBallBubbleItems(input.bubbleItems ?? []);
   const bubbleVisibilityPhase = input.bubbleVisibilityPhase ?? "hidden";
+  const pendingFiles = [...(input.pendingFiles ?? [])];
 
   return {
     visualState: input.visualState,
     inputBarMode: getShellBallInputBarMode(input.visualState),
     inputValue: input.inputValue,
+    pendingFiles,
     voicePreview: input.voicePreview,
     bubbleItems,
     bubbleRegion: getShellBallBubbleRegionState(bubbleItems, bubbleVisibilityPhase),
@@ -182,6 +199,7 @@ export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot 
   return createShellBallWindowSnapshot({
     visualState: "idle",
     inputValue: "",
+    pendingFiles: [],
     voicePreview: null,
     bubbleItems: [],
     helpersVisible: true,
