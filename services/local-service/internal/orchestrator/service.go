@@ -598,9 +598,22 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 
 // DashboardOverviewGet 处理 agent.dashboard.overview.get。
 func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, error) {
-	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	runtimeUnfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	runtimeFinishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 	pendingApprovals, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+
+	// Always merge storage data with runtime data for complete dashboard view
+	allPersistedTasks := s.loadAllTasksFromStorage()
+	unfinishedTasks := mergeTaskLists(runtimeUnfinishedTasks, filterAndSortTasks(allPersistedTasks, "unfinished", "updated_at", "desc"))
+	finishedTasks := mergeTaskLists(runtimeFinishedTasks, filterAndSortTasks(allPersistedTasks, "finished", "finished_at", "desc"))
+	needStorageFallback := len(runtimeUnfinishedTasks) == 0 && len(runtimeFinishedTasks) == 0
+
+	if pendingTotal == 0 {
+		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
+	}
+	if len(pendingApprovals) == 0 && pendingTotal > 0 {
+		pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
+	}
 	focusMode := boolValue(params, "focus_mode", false)
 	requestedIncludes := stringSliceValue(params["include"])
 	includeAll := len(requestedIncludes) == 0
@@ -640,7 +653,11 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	}
 	var globalState map[string]any
 	if shouldIncludeOverviewField(includeAll, includeSet, "global_state") {
-		globalState = s.Snapshot()
+		// Only include global_state when runtime engine has active state
+		// to avoid contradictory data in cold-start fallback scenarios
+		if !needStorageFallback {
+			globalState = s.Snapshot()
+		}
 	}
 	highValueSignal := []string(nil)
 	if shouldIncludeOverviewField(includeAll, includeSet, "high_value_signal") {
@@ -687,6 +704,24 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	}
 
 	return map[string]any{"overview": overview}, nil
+}
+
+func pendingApprovalsFromTasks(tasks []runengine.TaskRecord) []map[string]any {
+	items := make([]map[string]any, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Status != "waiting_auth" || len(task.ApprovalRequest) == 0 {
+			continue
+		}
+		item := cloneMap(task.ApprovalRequest)
+		if stringValue(item, "task_id", "") == "" {
+			item["task_id"] = task.TaskID
+		}
+		if stringValue(item, "risk_level", "") == "" {
+			item["risk_level"] = task.RiskLevel
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 // DashboardModuleGet 处理当前模块的相关逻辑。
@@ -795,6 +830,27 @@ func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, er
 	limit := intValue(params, "limit", 20)
 	offset := intValue(params, "offset", 0)
 	items, total := s.runEngine.PendingApprovalRequests(limit, offset)
+
+	// Fallback to storage if runtime has no pending approvals
+	if total == 0 {
+		unfinishedTasks, totalTasks, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0)
+		if ok && totalTasks > 0 {
+			allPendingApprovals := pendingApprovalsFromTasks(unfinishedTasks)
+			total = len(allPendingApprovals)
+			if total > 0 {
+				start := offset
+				if start >= total {
+					start = total
+				}
+				end := start + limit
+				if end > total {
+					end = total
+				}
+				items = allPendingApprovals[start:end]
+			}
+		}
+	}
+
 	return map[string]any{
 		"items": items,
 		"page":  pageMap(limit, offset, total),
@@ -1210,6 +1266,61 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 		end = total
 	}
 	return tasks[offset:end], total, true
+}
+
+func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
+	if s.storage == nil {
+		return nil
+	}
+	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		tasks = append(tasks, taskRecordFromStorage(record))
+	}
+	return tasks
+}
+
+func filterAndSortTasks(tasks []runengine.TaskRecord, group, sortBy, sortOrder string) []runengine.TaskRecord {
+	if len(tasks) == 0 {
+		return nil
+	}
+	filtered := make([]runengine.TaskRecord, 0, len(tasks))
+	for _, task := range tasks {
+		if matchesTaskGroup(task, group) {
+			filtered = append(filtered, task)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	runengineSortTaskRecords(filtered, sortBy, sortOrder)
+	return filtered
+}
+
+func mergeTaskLists(runtimeTasks, storageTasks []runengine.TaskRecord) []runengine.TaskRecord {
+	if len(runtimeTasks) == 0 {
+		return storageTasks
+	}
+	if len(storageTasks) == 0 {
+		return runtimeTasks
+	}
+	// Build map of runtime task IDs for deduplication
+	runtimeIDs := make(map[string]struct{}, len(runtimeTasks))
+	for _, task := range runtimeTasks {
+		runtimeIDs[task.TaskID] = struct{}{}
+	}
+	// Merge: runtime tasks take precedence, add storage tasks not in runtime
+	merged := make([]runengine.TaskRecord, 0, len(runtimeTasks)+len(storageTasks))
+	merged = append(merged, runtimeTasks...)
+	for _, task := range storageTasks {
+		if _, exists := runtimeIDs[task.TaskID]; !exists {
+			merged = append(merged, task)
+		}
+	}
+	return merged
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {

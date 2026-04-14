@@ -2162,6 +2162,96 @@ func TestServiceDashboardOverviewFocusModeNarrowsSecondaryData(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardOverviewFallsBackToStoredTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored dashboard overview")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_waiting",
+		SessionID:   "sess_overview",
+		RunID:       "run_dashboard_waiting",
+		Title:       "stored waiting authorization task",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 18, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 18, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_dashboard_001",
+			"task_id":     "task_dashboard_waiting",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save waiting task run failed: %v", err)
+	}
+
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_finished",
+		SessionID:   "sess_overview",
+		RunID:       "run_dashboard_finished",
+		Title:       "stored finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 18, 10, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 18, 15, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 18, 16, 0, 0, time.UTC)),
+		SecuritySummary: map[string]any{
+			"latest_restore_point": map[string]any{
+				"recovery_point_id": "rp_dashboard_001",
+				"task_id":           "task_dashboard_finished",
+				"summary":           "stored restore point",
+			},
+		},
+		DeliveryResult: map[string]any{
+			"type": "workspace_document",
+			"payload": map[string]any{
+				"path": "workspace/dashboard-overview.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save finished task run failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	overview := result["overview"].(map[string]any)
+	focusSummary := overview["focus_summary"].(map[string]any)
+	if focusSummary["task_id"] != "task_dashboard_waiting" {
+		t.Fatalf("expected storage-backed focus summary to target waiting task, got %+v", focusSummary)
+	}
+	if focusSummary["status"] != "waiting_auth" {
+		t.Fatalf("expected storage-backed focus summary status waiting_auth, got %+v", focusSummary)
+	}
+	trustSummary := overview["trust_summary"].(map[string]any)
+	if trustSummary["pending_authorizations"] != 1 {
+		t.Fatalf("expected storage-backed pending authorization count, got %+v", trustSummary)
+	}
+	if trustSummary["has_restore_point"] != true {
+		t.Fatalf("expected storage-backed restore point signal, got %+v", trustSummary)
+	}
+	quickActions := overview["quick_actions"].([]string)
+	if len(quickActions) == 0 || quickActions[0] != "处理待授权操作" {
+		t.Fatalf("expected storage-backed quick actions to prioritize authorization handling, got %+v", quickActions)
+	}
+	highValueSignals := overview["high_value_signal"].([]string)
+	if len(highValueSignals) == 0 {
+		t.Fatal("expected storage-backed dashboard signals")
+	}
+}
+
 func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	service := newTestService()
 
