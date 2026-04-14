@@ -9,6 +9,7 @@ type ShellBallInputBarProps = {
   mode: ShellBallInputBarMode;
   voicePreview: ShellBallVoicePreview;
   value: string;
+  hasPendingFiles?: boolean;
   focusToken?: number;
   onValueChange: (value: string) => void;
   onAttachFile: () => void;
@@ -20,6 +21,7 @@ export function ShellBallInputBar({
   mode,
   voicePreview,
   value,
+  hasPendingFiles = false,
   focusToken = 0,
   onValueChange,
   onAttachFile,
@@ -33,7 +35,7 @@ export function ShellBallInputBar({
   const isReadonly = mode === "readonly";
   const isVoice = mode === "voice";
   const buttonsDisabled = isHidden || isReadonly || isVoice;
-  const submitDisabled = !isInteractive || trimmedValue === "";
+  const submitDisabled = !isInteractive || (trimmedValue === "" && !hasPendingFiles);
 
   useEffect(() => {
     if (inputRef.current === null) {

@@ -125,6 +125,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const {
     visualState,
     inputValue,
+    pendingFiles,
     finalizedSpeechPayload,
     voicePreview,
     voiceHoldProgress,
@@ -139,6 +140,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePressCancel,
     handleSubmitText,
     handleAttachFile,
+    handleDroppedFiles,
+    handleRemovePendingFile,
     handleInputFocusChange,
     handleInputFocusRequest,
     setInputValue,
@@ -149,9 +152,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const showDemoSwitcher = shouldShowShellBallDemoSwitcher(isDev);
   const { rootRef, windowFrame } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
+  const [fileDropActive, setFileDropActive] = useState(false);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const transitionQueueRef = useRef(Promise.resolve());
+  const dragDropHandlersRef = useRef({ handleDroppedFiles });
+
+  dragDropHandlersRef.current = { handleDroppedFiles };
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -257,6 +264,50 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, [windowFrame]);
 
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
+    void currentWindow.onDragDropEvent((event) => {
+      switch (event.payload.type) {
+        case "enter":
+        case "over":
+          setFileDropActive(true);
+          return;
+        case "leave":
+          setFileDropActive(false);
+          return;
+        case "drop":
+          setFileDropActive(false);
+          if (event.payload.paths.length === 0) {
+            return;
+          }
+
+          dragDropHandlersRef.current.handleDroppedFiles(event.payload.paths);
+          void emitShellBallInputRequestFocus(Date.now());
+          return;
+      }
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+
+      cleanup = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, []);
+
   function handleDoubleClick() {
     if (!shouldOpenDashboardFromDoubleClick) {
       return;
@@ -269,9 +320,12 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
     inputValue,
+    pendingFiles,
     finalizedSpeechPayload,
     voicePreview,
     setInputValue,
+    onAppendPendingFiles: handleDroppedFiles,
+    onRemovePendingFile: handleRemovePendingFile,
     onFinalizedSpeechHandled: acknowledgeFinalizedSpeechPayload,
     onRegionEnter: handleRegionEnter,
     onRegionLeave: handleRegionLeave,
@@ -285,6 +339,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
+      fileDropActive={fileDropActive}
       visualState={visualState}
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}

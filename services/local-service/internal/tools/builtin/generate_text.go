@@ -30,7 +30,7 @@ func NewGenerateTextTool() *GenerateTextTool {
 			Description:     "通过统一模型层生成当前任务所需的文本结果",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        tools.RiskLevelGreen,
-			TimeoutSec:      30,
+			TimeoutSec:      90,
 			InputSchemaRef:  "tools/generate_text/input",
 			OutputSchemaRef: "tools/generate_text/output",
 			SupportsDryRun:  false,

@@ -7,6 +7,7 @@ type ShellBallSurfaceProps = {
   children?: ReactNode;
   containerRef?: RefObject<HTMLDivElement>;
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
+  fileDropActive?: boolean;
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
   voiceHoldProgress?: number;
@@ -28,6 +29,7 @@ export function ShellBallSurface({
   children,
   containerRef,
   dashboardTransitionPhase = "idle",
+  fileDropActive = false,
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
@@ -51,6 +53,7 @@ export function ShellBallSurface({
       ref={containerRef}
       className="shell-ball-surface"
       data-dashboard-transition-phase={dashboardTransitionPhase}
+      data-file-drop-active={fileDropActive ? "true" : "false"}
     >
       <div className="shell-ball-surface__core">
         <div className="shell-ball-surface__interaction-shell">
@@ -61,6 +64,14 @@ export function ShellBallSurface({
             onPointerLeave={onRegionLeave}
           >
               <div className="shell-ball-surface__body">
+                <div
+                  aria-hidden={!fileDropActive}
+                  className="shell-ball-surface__file-drop-overlay"
+                  data-visible={fileDropActive ? "true" : "false"}
+                >
+                  <span className="shell-ball-surface__file-drop-plus shell-ball-surface__file-drop-plus--horizontal" />
+                  <span className="shell-ball-surface__file-drop-plus shell-ball-surface__file-drop-plus--vertical" />
+                </div>
                 <div className="shell-ball-surface__mascot-shell">
                   <ShellBallMascot
                     visualState={visualState}

@@ -384,10 +384,10 @@ fn show_shell_ball(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show_shell_ball_menu_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球")
-        .build(app)?;
-    let hide_shell_ball = MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "隐藏悬浮球")
-        .build(app)?;
+    let show_shell_ball_menu_item =
+        MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球").build(app)?;
+    let hide_shell_ball =
+        MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "隐藏悬浮球").build(app)?;
     let quit_app = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "关闭程序").build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .items(&[&show_shell_ball_menu_item, &hide_shell_ball, &quit_app])
@@ -420,11 +420,15 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                if let Err(error) = request_shell_ball_dashboard_open_transition(tray.app_handle()) {
-                    eprintln!("failed to trigger shell-ball dashboard transition from tray: {error}");
+                if let Err(error) = request_shell_ball_dashboard_open_transition(tray.app_handle())
+                {
+                    eprintln!(
+                        "failed to trigger shell-ball dashboard transition from tray: {error}"
+                    );
                 }
 
-                if let Err(error) = focus_webview_window(tray.app_handle(), DASHBOARD_WINDOW_LABEL) {
+                if let Err(error) = focus_webview_window(tray.app_handle(), DASHBOARD_WINDOW_LABEL)
+                {
                     eprintln!("failed to open dashboard from tray: {error}");
                 }
             }
@@ -601,6 +605,19 @@ fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
     None
 }
 
+#[tauri::command]
+fn pick_shell_ball_files() -> Result<Vec<String>, String> {
+    let selected_files = rfd::FileDialog::new()
+        .set_title("Select files")
+        .pick_files()
+        .unwrap_or_default();
+
+    Ok(selected_files
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect())
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
@@ -610,7 +627,8 @@ fn main() {
             named_pipe_subscribe,
             named_pipe_unsubscribe,
             shell_ball_set_ignore_cursor_events,
-            shell_ball_get_mouse_position
+            shell_ball_get_mouse_position,
+            pick_shell_ball_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

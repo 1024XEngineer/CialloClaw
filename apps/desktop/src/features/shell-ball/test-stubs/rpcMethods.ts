@@ -60,3 +60,14 @@ export async function submitInput(_params?: unknown) {
     bubble_message: null,
   };
 }
+
+export async function startTask(_params?: unknown) {
+  return {
+    task: {
+      task_id: "task_stub",
+      status: "processing",
+    },
+    bubble_message: null,
+    delivery_result: null,
+  };
+}

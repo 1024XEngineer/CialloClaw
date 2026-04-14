@@ -42,6 +42,39 @@ export type AgentInputSubmitParams = {
   context: {
     files: string[];
   };
+  options?: {
+    confirm_required?: boolean;
+    preferred_delivery?: DeliveryResult["type"];
+  };
+};
+
+export type DeliveryResult = {
+  type: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
+  title?: string;
+  preview_text?: string;
+  payload?: Record<string, any>;
+};
+
+export type AgentInputSubmitResult = {
+  task: Task;
+  bubble_message: BubbleMessage | null;
+  delivery_result?: DeliveryResult | null;
+};
+
+export type AgentTaskStartParams = {
+  request_meta: RequestMeta;
+  session_id?: string;
+  source: "floating_ball" | "dashboard" | "tray_panel";
+  trigger: "voice_commit" | "hover_text_input" | "text_selected_click" | "file_drop" | "error_detected" | "recommendation_click";
+  input: {
+    type: "text" | "text_selection" | "file" | "error";
+    text?: string;
+    files?: string[];
+  };
+  delivery?: {
+    preferred: DeliveryResult["type"];
+    fallback?: DeliveryResult["type"];
+  };
 };
 
 export type AgentSecuritySummaryGetParams = { request_meta: RequestMeta };

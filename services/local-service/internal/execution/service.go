@@ -754,7 +754,7 @@ func truncateBubbleText(outputText string) string {
 	if trimmed == "" {
 		return "结果已生成。"
 	}
-	return truncateText(trimmed, 480)
+	return trimmed
 }
 
 func deliveryPayloadPath(deliveryResult map[string]any) string {
@@ -841,10 +841,11 @@ func normalizeWhitespace(inputText string) string {
 }
 
 func truncateText(inputText string, maxLength int) string {
-	if maxLength <= 0 || len(inputText) <= maxLength {
+	runes := []rune(inputText)
+	if maxLength <= 0 || len(runes) <= maxLength {
 		return inputText
 	}
-	return inputText[:maxLength] + "..."
+	return string(runes[:maxLength]) + "..."
 }
 
 func mapValue(values map[string]any, key string) map[string]any {

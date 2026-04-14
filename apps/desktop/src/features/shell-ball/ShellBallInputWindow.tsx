@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode } from "./shellBall.types";
@@ -6,13 +7,20 @@ import {
   emitShellBallInputDraft,
   emitShellBallInputFocus,
   emitShellBallInputHover,
+  emitShellBallPendingFileAction,
   emitShellBallInputRequestFocus,
   emitShellBallPrimaryAction,
   useShellBallHelperWindowSnapshot,
 } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { shellBallWindowSyncEvents } from "./shellBall.windowSync";
+import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
+
+async function pickShellBallFiles(): Promise<string[]> {
+  const result = await invoke<string[]>("pick_shell_ball_files");
+  return Array.isArray(result) ? result : [];
+}
 
 type ShellBallInputWindowProps = {
   mode?: ShellBallInputBarMode;
@@ -105,7 +113,21 @@ export function ShellBallInputWindow({
       return;
     }
 
-    void emitShellBallPrimaryAction("attach_file", "input");
+    void (async () => {
+      try {
+        const selectedPaths = await pickShellBallFiles();
+        if (selectedPaths.length > 0) {
+          await emitShellBallPendingFileAction({
+            action: "append",
+            paths: selectedPaths,
+          });
+        }
+        await emitShellBallInputRequestFocus(Date.now());
+      } catch (error) {
+        console.warn("shell-ball file picker failed", error);
+        await emitShellBallPrimaryAction("attach_file", "input");
+      }
+    })();
   }
 
   function handleSubmit() {
@@ -115,6 +137,10 @@ export function ShellBallInputWindow({
     }
 
     void emitShellBallPrimaryAction("submit", "input");
+  }
+
+  function handleRemovePendingFile(path: string) {
+    void emitShellBallPendingFileAction({ action: "remove", path });
   }
 
   function handleFocusChange(focused: boolean) {
@@ -127,10 +153,17 @@ export function ShellBallInputWindow({
     void emitShellBallInputFocus(focused);
   }
 
+  function handlePointerDown() {
+    setIsFocused(true);
+    void emitShellBallInputFocus(true);
+    void getCurrentWindow().setFocus();
+  }
+
   return (
     <div
       ref={rootRef}
       className="shell-ball-window shell-ball-window--input"
+      onPointerDown={handlePointerDown}
       onPointerEnter={() => {
         void emitShellBallInputHover(true);
       }}
@@ -138,11 +171,13 @@ export function ShellBallInputWindow({
         void emitShellBallInputHover(false);
       }}
     >
+      <ShellBallAttachmentTray paths={snapshot.pendingFiles} onRemove={handleRemovePendingFile} />
       <ShellBallInputBar
         focusToken={focusToken}
         mode={resolvedMode}
         voicePreview={resolvedVoicePreview}
         value={resolvedValue}
+        hasPendingFiles={snapshot.pendingFiles.length > 0}
         onValueChange={handleValueChange}
         onAttachFile={handleAttachFile}
         onSubmit={handleSubmit}

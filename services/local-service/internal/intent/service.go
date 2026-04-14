@@ -214,6 +214,10 @@ func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 }
 
 func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName string) bool {
+	if snapshot.Trigger == "hover_text_input" || snapshot.Trigger == "voice_commit" {
+		return false
+	}
+
 	switch {
 	case snapshot.InputType == "file":
 		return true
