@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
@@ -16,6 +16,9 @@ import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { shellBallWindowSyncEvents } from "./shellBall.windowSync";
 import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
+
+const SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS = 160;
+const SHELL_BALL_INPUT_WINDOW_IME_GUARD_MS = 1400;
 
 async function pickShellBallFiles(): Promise<string[]> {
   const result = await invoke<string[]>("pick_shell_ball_files");
@@ -45,6 +48,60 @@ export function ShellBallInputWindow({
   const [draftValue, setDraftValue] = useState(value ?? snapshot.inputValue);
   const [focusToken, setFocusToken] = useState(0);
   const [isFocused, setIsFocused] = useState(false);
+  const compositionActiveRef = useRef(false);
+  const pendingWindowBlurRef = useRef(false);
+  const windowFocusedRef = useRef(false);
+  const pendingBlurTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const imeBlurGuardUntilRef = useRef(0);
+
+  const clearPendingBlurTimeout = () => {
+    if (pendingBlurTimeoutRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(pendingBlurTimeoutRef.current);
+    pendingBlurTimeoutRef.current = null;
+  };
+
+  const commitWindowBlur = () => {
+    clearPendingBlurTimeout();
+    pendingWindowBlurRef.current = false;
+    setIsFocused(false);
+    void emitShellBallInputFocus(false);
+    void emitShellBallInputHover(false);
+  };
+
+  const armImeBlurGuard = () => {
+    imeBlurGuardUntilRef.current = Math.max(imeBlurGuardUntilRef.current, Date.now() + SHELL_BALL_INPUT_WINDOW_IME_GUARD_MS);
+  };
+
+  const getImeBlurGuardRemainingMs = () => {
+    return Math.max(0, imeBlurGuardUntilRef.current - Date.now());
+  };
+
+  const isImeBlurGuardActive = () => {
+    return getImeBlurGuardRemainingMs() > 0;
+  };
+
+  const scheduleDeferredBlur = (delayMs: number) => {
+    clearPendingBlurTimeout();
+    pendingBlurTimeoutRef.current = window.setTimeout(() => {
+      if (windowFocusedRef.current) {
+        return;
+      }
+
+      if (compositionActiveRef.current || isImeBlurGuardActive()) {
+        scheduleDeferredBlur(
+          compositionActiveRef.current
+            ? SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS
+            : Math.max(SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS, getImeBlurGuardRemainingMs()),
+        );
+        return;
+      }
+
+      commitWindowBlur();
+    }, Math.max(SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS, delayMs));
+  };
 
   useEffect(() => {
     if (value !== undefined) {
@@ -66,24 +123,43 @@ export function ShellBallInputWindow({
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
+    windowFocusedRef.current = document.hasFocus();
 
     let unlisten: (() => void) | null = null;
     let unlistenFocusRequest: (() => void) | null = null;
     void currentWindow.onFocusChanged(({ payload: focused }) => {
+      windowFocusedRef.current = focused;
       if (focused) {
+        clearPendingBlurTimeout();
+        pendingWindowBlurRef.current = false;
         setIsFocused(true);
         void emitShellBallInputHover(true);
         return;
       }
 
-      setIsFocused(false);
-      void emitShellBallInputFocus(false);
-      void emitShellBallInputHover(false);
+      // Windows IME candidate popups can briefly blur the helper window.
+      // Keep the hover input alive until composition finishes or the blur persists.
+      if (compositionActiveRef.current) {
+        pendingWindowBlurRef.current = true;
+        scheduleDeferredBlur(SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS);
+        return;
+      }
+
+      if (isImeBlurGuardActive()) {
+        pendingWindowBlurRef.current = true;
+        scheduleDeferredBlur(getImeBlurGuardRemainingMs());
+        return;
+      }
+
+      scheduleDeferredBlur(SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS);
     }).then((dispose) => {
       unlisten = dispose;
     });
 
     void currentWindow.listen(shellBallWindowSyncEvents.inputRequestFocus, () => {
+      windowFocusedRef.current = true;
+      clearPendingBlurTimeout();
+      pendingWindowBlurRef.current = false;
       setFocusToken((current) => current + 1);
       setIsFocused(true);
       void currentWindow.setFocus();
@@ -92,6 +168,7 @@ export function ShellBallInputWindow({
     });
 
     return () => {
+      clearPendingBlurTimeout();
       unlisten?.();
       unlistenFocusRequest?.();
     };
@@ -150,10 +227,52 @@ export function ShellBallInputWindow({
       return;
     }
 
+    if (!focused && compositionActiveRef.current) {
+      pendingWindowBlurRef.current = true;
+      scheduleDeferredBlur(SHELL_BALL_INPUT_WINDOW_BLUR_GRACE_MS);
+      return;
+    }
+
+    if (!focused && isImeBlurGuardActive()) {
+      pendingWindowBlurRef.current = true;
+      scheduleDeferredBlur(getImeBlurGuardRemainingMs());
+      return;
+    }
+
     void emitShellBallInputFocus(focused);
   }
 
+  function handleCompositionStateChange(composing: boolean) {
+    compositionActiveRef.current = composing;
+
+    if (composing) {
+      armImeBlurGuard();
+      clearPendingBlurTimeout();
+      return;
+    }
+
+    if (!pendingWindowBlurRef.current || windowFocusedRef.current) {
+      return;
+    }
+
+    if (isImeBlurGuardActive()) {
+      scheduleDeferredBlur(getImeBlurGuardRemainingMs());
+      return;
+    }
+
+    // Flush the deferred blur once IME composition is done and the window never regained focus.
+    commitWindowBlur();
+  }
+
+  function handleTransientInputActivity() {
+    armImeBlurGuard();
+    clearPendingBlurTimeout();
+  }
+
   function handlePointerDown() {
+    windowFocusedRef.current = true;
+    clearPendingBlurTimeout();
+    pendingWindowBlurRef.current = false;
     setIsFocused(true);
     void emitShellBallInputFocus(true);
     void getCurrentWindow().setFocus();
@@ -182,6 +301,8 @@ export function ShellBallInputWindow({
         onAttachFile={handleAttachFile}
         onSubmit={handleSubmit}
         onFocusChange={handleFocusChange}
+        onCompositionStateChange={handleCompositionStateChange}
+        onTransientInputActivity={handleTransientInputActivity}
       />
     </div>
   );
