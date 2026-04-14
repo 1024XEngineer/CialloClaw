@@ -19,8 +19,6 @@ import {
   getShellBallSpeechRecognitionLanguage,
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
-import { createMockShellBallSubmitResult } from "./shellBall.mock";
 import { startTaskFromFiles } from "@/services/taskService";
 import type { ShellBallInteractionEvent, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
@@ -136,28 +134,16 @@ async function submitShellBallInput(input: {
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
 }): Promise<ShellBallInputSubmitResult | null> {
-  try {
-    return await submitTextInput({
-      text: input.text,
-      source: "floating_ball",
-      trigger: input.trigger,
-      inputMode: input.inputMode,
-      options: {
-        confirm_required: false,
-        preferred_delivery: "bubble",
-      },
-    });
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("shell-ball submit", error);
-      return createMockShellBallSubmitResult({
-        inputMode: input.inputMode,
-        text: input.text,
-      });
-    }
-
-    throw error;
-  }
+  return submitTextInput({
+    text: input.text,
+    source: "floating_ball",
+    trigger: input.trigger,
+    inputMode: input.inputMode,
+    options: {
+      confirm_required: false,
+      preferred_delivery: "bubble",
+    },
+  });
 }
 
 async function startShellBallFileTask(input: {

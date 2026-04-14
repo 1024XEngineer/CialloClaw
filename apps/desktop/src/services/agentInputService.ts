@@ -1,4 +1,6 @@
 import type { AgentInputSubmitParams, AgentInputSubmitResult } from "@cialloclaw/protocol";
+import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { createMockAgentInputSubmitResult, type MockAgentInputSubmitResult } from "./agentInputMock";
 import {
   recordMirrorConversationFailure,
   recordMirrorConversationStart,
@@ -51,6 +53,8 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
   };
 }
 
+export type SubmitTextInputResult = AgentInputSubmitResult | MockAgentInputSubmitResult;
+
 export async function submitTextInput(input: SubmitTextInputParams) {
   const params = createTextInputSubmitParams(input);
 
@@ -66,6 +70,16 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     recordMirrorConversationSuccess(params, result);
     return result;
   } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback(`agent.input.submit ${input.source}:${input.trigger}`, error);
+      const fallbackResult = createMockAgentInputSubmitResult({
+        inputMode: input.inputMode,
+        text: input.text,
+      });
+      recordMirrorConversationSuccess(params, fallbackResult);
+      return fallbackResult;
+    }
+
     recordMirrorConversationFailure(params, error);
     throw error;
   }

@@ -1,9 +1,6 @@
-import type { BubbleMessage, DeliveryResult, Task } from "@cialloclaw/protocol";
-import { createMockAgentInputSubmitResult } from "@/services/agentInputMock";
+import type { AgentInputSubmitResult, BubbleMessage, DeliveryResult, Task } from "@cialloclaw/protocol";
 
-type ShellBallMockResult = {
-  task: Task;
-  bubble_message: BubbleMessage | null;
+export type MockAgentInputSubmitResult = AgentInputSubmitResult & {
   delivery_result: DeliveryResult | null;
 };
 
@@ -26,6 +23,7 @@ function buildTask(input: {
   intentName: string;
 }) {
   const now = createTimestamp();
+
   return {
     task_id: input.taskId,
     title: input.title,
@@ -74,37 +72,67 @@ function buildDeliveryResult(taskId: string, previewText: string): DeliveryResul
   };
 }
 
-export function createMockShellBallSubmitResult(input: {
-  text: string;
-  inputMode: "voice" | "text";
-}): ShellBallMockResult {
-  return createMockAgentInputSubmitResult(input);
+function normalizeTitle(text: string) {
+  const trimmed = text.trim();
+
+  if (trimmed.length <= 18) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, 18)}...`;
 }
 
-export function createMockShellBallConfirmResult(input: {
-  taskId: string;
-  confirmed: boolean;
-}): ShellBallMockResult {
-  const previewText = input.confirmed
-    ? "JSON-RPC 当前未连通，已用 mock 模式继续执行，并生成了一条本地结果。"
-    : "JSON-RPC 当前未连通，这条 mock 任务已取消，不会继续执行。";
+function requiresIntentConfirmation(text: string) {
+  return /(删除|覆盖|安装|执行|发送|提交|改|写入|移动|重命名|替换)/.test(text);
+}
 
+export function createMockAgentInputSubmitResult(input: {
+  text: string;
+  inputMode: "voice" | "text";
+}): MockAgentInputSubmitResult {
+  const normalizedText = input.text.trim();
+  const taskId = createTaskId();
+  const sourceType = input.inputMode === "voice" ? "voice" : "hover_input";
+
+  if (requiresIntentConfirmation(normalizedText)) {
+    const task = buildTask({
+      taskId,
+      title: normalizeTitle(normalizedText),
+      sourceType,
+      status: "confirming_intent",
+      riskLevel: "yellow",
+      intentName: "offline_mock_confirm",
+    });
+    const bubbleText = "JSON-RPC 当前未连通，已切到 mock 模式。这条请求先模拟成待确认任务，你可以继续点确认或取消。";
+
+    return {
+      task,
+      bubble_message: buildBubble({
+        taskId,
+        text: bubbleText,
+        type: "intent_confirm",
+      }),
+      delivery_result: null,
+    };
+  }
+
+  const previewText = `JSON-RPC 当前未连通，已使用 mock 结果承接：${normalizedText}`;
   const task = buildTask({
-    taskId: input.taskId,
-    title: input.confirmed ? "Mock Confirmed Task" : "Mock Cancelled Task",
-    sourceType: "hover_input",
-    status: input.confirmed ? "completed" : "cancelled",
-    riskLevel: input.confirmed ? "yellow" : "green",
-    intentName: input.confirmed ? "offline_mock_confirmed" : "offline_mock_cancelled",
+    taskId,
+    title: normalizeTitle(normalizedText),
+    sourceType,
+    status: "completed",
+    riskLevel: "green",
+    intentName: "offline_mock_result",
   });
 
   return {
     task,
     bubble_message: buildBubble({
-      taskId: input.taskId,
+      taskId,
       text: previewText,
       type: "result",
     }),
-    delivery_result: input.confirmed ? buildDeliveryResult(input.taskId, previewText) : null,
+    delivery_result: buildDeliveryResult(taskId, previewText),
   };
 }
