@@ -18,6 +18,7 @@ import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { startTaskFromFiles } from "@/services/taskService";
 import {
   createDefaultShellBallWindowSnapshot,
   createShellBallWindowSnapshot,
@@ -352,6 +353,65 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }, SHELL_BALL_BUBBLE_HIDE_DELAY_MS);
   }, [applyBubbleVisibilityPhase, clearBubbleVisibilityTimers]);
 
+  const handleDroppedFiles = useCallback(async (paths: string[]) => {
+    const normalizedPaths = paths.map((path) => path.trim()).filter(Boolean);
+
+    if (normalizedPaths.length === 0) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const leadFile = normalizedPaths[0].split(/[\\/]/).pop() ?? normalizedPaths[0];
+    const userText = normalizedPaths.length === 1 ? `拖入文件：${leadFile}` : `拖入 ${normalizedPaths.length} 个文件`;
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallTextBubbleItem({
+          role: "user",
+          text: userText,
+          bubbleType: "status",
+          createdAt,
+        }),
+      ]),
+    );
+    revealBubbleRegion();
+
+    try {
+      const result = await startTaskFromFiles(normalizedPaths, {
+        delivery: {
+          preferred: "bubble",
+          fallback: "task_detail",
+        },
+        source: "floating_ball",
+      });
+
+      syncShellBallVisualStateFromTaskStatus(result.task.status);
+
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallAgentBubbleItem(result, new Date().toISOString()),
+        ]),
+      );
+      revealBubbleRegion();
+    } catch (error) {
+      console.warn("shell-ball file drop start failed", error);
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: error instanceof Error ? error.message : "文件承接失败，请稍后再试。",
+            bubbleType: "status",
+            createdAt: new Date().toISOString(),
+          }),
+        ]),
+      );
+      revealBubbleRegion();
+    }
+  }, [revealBubbleRegion]);
+
   useEffect(() => {
     const visibleBubbleCount = getShellBallVisibleBubbleItems(bubbleItems).length;
     const previousVisibleBubbleCount = previousVisibleBubbleCountRef.current;
@@ -607,6 +667,18 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       switch (action) {
         case "attach_file":
           handlersRef.current.onAttachFile();
+          setBubbleItems((currentItems) =>
+            sortShellBallBubbleItemsByTimestamp([
+              ...currentItems,
+              createShellBallTextBubbleItem({
+                role: "agent",
+                text: "把文件拖到悬浮球上，就会按 issue #187 的 file_drop 入口创建任务。",
+                bubbleType: "status",
+                createdAt: new Date().toISOString(),
+              }),
+            ]),
+          );
+          revealBubbleRegion();
           break;
         case "submit": {
           const submittedText = snapshotRef.current.inputValue.trim();
@@ -796,7 +868,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     };
   }, [revealBubbleRegion, scheduleBubbleRegionHide]);
 
-  return { snapshot };
+  return { snapshot, handleDroppedFiles };
 }
 
 export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {
