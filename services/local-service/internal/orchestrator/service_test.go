@@ -1611,6 +1611,59 @@ func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	}
 }
 
+func TestServiceMirrorOverviewFallsBackToStoredFinishedTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored mirror overview")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_mirror_stored",
+		SessionID:   "sess_stored",
+		RunID:       "run_mirror_stored",
+		Title:       "stored mirror task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 11, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 11, 6, 0, 0, time.UTC)),
+		MirrorReferences: []map[string]any{{
+			"memory_id": "mem_stored_001",
+			"reason":    "stored memory hit",
+			"summary":   "stored mirror reference",
+		}},
+		DeliveryResult: map[string]any{
+			"type": "workspace_document",
+			"payload": map[string]any{
+				"path": "workspace/stored-result.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	result, err := service.MirrorOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("mirror overview failed: %v", err)
+	}
+
+	memoryReferences := result["memory_references"].([]map[string]any)
+	if len(memoryReferences) != 1 || memoryReferences[0]["memory_id"] != "mem_stored_001" {
+		t.Fatalf("expected storage-backed mirror references, got %+v", memoryReferences)
+	}
+	historySummary := result["history_summary"].([]string)
+	if len(historySummary) == 0 {
+		t.Fatal("expected storage-backed mirror history summary")
+	}
+	profile := result["profile"].(map[string]any)
+	if profile["preferred_output"] != "workspace_document" {
+		t.Fatalf("expected storage-backed mirror profile to infer workspace_document, got %+v", profile)
+	}
+}
+
 func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 	service := newTestService()
 

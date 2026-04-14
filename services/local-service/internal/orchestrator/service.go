@@ -734,6 +734,11 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	if len(finishedTasks) == 0 {
+		if persistedTasks, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+			finishedTasks = persistedTasks
+		}
+	}
 	memoryReferences := collectMirrorReferences(finishedTasks)
 	return map[string]any{
 		"history_summary": buildMirrorHistorySummary(finishedTasks, memoryReferences),
