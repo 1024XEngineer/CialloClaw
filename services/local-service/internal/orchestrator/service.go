@@ -32,12 +32,13 @@ import (
 
 // ErrTaskNotFound 表示调用方给出的 task_id 在当前运行态中不存在。
 var (
-	ErrTaskNotFound          = errors.New("task not found")
-	ErrArtifactNotFound      = errors.New("artifact not found")
-	ErrTaskStatusInvalid     = errors.New("task status invalid")
-	ErrTaskAlreadyFinished   = errors.New("task already finished")
-	ErrStorageQueryFailed    = errors.New("storage query failed")
-	ErrRecoveryPointNotFound = errors.New("recovery point not found")
+	ErrTaskNotFound           = errors.New("task not found")
+	ErrArtifactNotFound       = errors.New("artifact not found")
+	ErrTaskStatusInvalid      = errors.New("task status invalid")
+	ErrTaskAlreadyFinished    = errors.New("task already finished")
+	ErrStorageQueryFailed     = errors.New("storage query failed")
+	ErrStrongholdAccessFailed = errors.New("stronghold access failed")
+	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
 )
 
 // Service 提供当前模块的服务能力。
@@ -1286,6 +1287,11 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 // SettingsGet 处理 agent.settings.get。
 func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 	settings := s.runEngine.Settings()
+	settingsWithSecrets, err := s.attachSensitiveSettingAvailability(settings)
+	if err != nil {
+		return nil, err
+	}
+	settings = settingsWithSecrets
 	scope := stringValue(params, "scope", "all")
 	if scope == "all" {
 		return map[string]any{"settings": settings}, nil
@@ -1303,7 +1309,22 @@ func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 
 // SettingsUpdate 处理 agent.settings.update，并返回生效设置和应用模式。
 func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) {
+	if dataLog := mapValue(params, "data_log"); len(dataLog) > 0 {
+		if apiKey := stringValue(dataLog, "api_key", ""); apiKey != "" {
+			provider := s.providerForSettingsUpdate(dataLog)
+			if err := s.persistModelSecret(provider, apiKey); err != nil {
+				return nil, err
+			}
+			delete(dataLog, "api_key")
+			params["data_log"] = dataLog
+		}
+	}
 	effectiveSettings, updatedKeys, applyMode, needRestart := s.runEngine.UpdateSettings(params)
+	effectiveSettingsWithSecrets, err := s.attachSensitiveSettingAvailability(effectiveSettings)
+	if err != nil {
+		return nil, err
+	}
+	effectiveSettings = effectiveSettingsWithSecrets
 	return map[string]any{
 		"updated_keys":       updatedKeys,
 		"effective_settings": effectiveSettings,
@@ -1462,6 +1483,83 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 		}
 	}
 	return runengine.TaskRecord{}, false
+}
+
+func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (map[string]any, error) {
+	cloned := cloneMap(settings)
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	dataLog := cloneMap(mapValue(cloned, "data_log"))
+	if dataLog == nil {
+		dataLog = map[string]any{}
+	}
+	provider, configured, err := s.modelSecretConfigured(providerFromSettings(dataLog, s.defaultSettingsProvider()))
+	if err != nil {
+		return nil, err
+	}
+	if stringValue(dataLog, "provider", "") == "" && provider != "" {
+		dataLog["provider"] = provider
+	}
+	dataLog["provider_api_key_configured"] = configured
+	cloned["data_log"] = dataLog
+	return cloned, nil
+}
+
+func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
+	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
+		return resolvedProvider, false, nil
+	}
+	_, err := s.storage.SecretStore().GetSecret(context.Background(), "model", resolvedProvider+"_api_key")
+	if err == nil {
+		return resolvedProvider, true, nil
+	}
+	if errors.Is(err, storage.ErrSecretNotFound) {
+		return resolvedProvider, false, nil
+	}
+	if errors.Is(err, storage.ErrSecretStoreAccessFailed) {
+		return resolvedProvider, false, ErrStrongholdAccessFailed
+	}
+	return resolvedProvider, false, err
+}
+
+func (s *Service) persistModelSecret(provider, apiKey string) error {
+	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
+		return ErrStrongholdAccessFailed
+	}
+	if err := s.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       resolvedProvider + "_api_key",
+		Value:     strings.TrimSpace(apiKey),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		if errors.Is(err, storage.ErrSecretStoreAccessFailed) {
+			return ErrStrongholdAccessFailed
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) providerForSettingsUpdate(dataLog map[string]any) string {
+	return providerFromSettings(dataLog, s.defaultSettingsProvider())
+}
+
+func (s *Service) defaultSettingsProvider() string {
+	if s.model == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.model.Provider())
+}
+
+func providerFromSettings(dataLog map[string]any, fallback string) string {
+	provider := firstNonEmptyString(stringValue(dataLog, "provider", ""), fallback)
+	if provider == "openai" {
+		return model.OpenAIResponsesProvider
+	}
+	return provider
 }
 
 func matchesTaskGroup(task runengine.TaskRecord, group string) bool {

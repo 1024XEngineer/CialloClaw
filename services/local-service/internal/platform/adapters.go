@@ -58,6 +58,7 @@ type ExecutionBackendAdapter interface {
 // StorageAdapter 定义当前模块的接口约束。
 type StorageAdapter interface {
 	DatabasePath() string
+	SecretStorePath() string
 }
 
 // LocalPathPolicy 定义当前模块的数据结构。
@@ -407,4 +408,17 @@ func NewLocalStorageAdapter(databasePath string) *LocalStorageAdapter {
 // DatabasePath 处理当前模块的相关逻辑。
 func (a *LocalStorageAdapter) DatabasePath() string {
 	return a.databasePath
+}
+
+// SecretStorePath returns the dedicated Stronghold-compatible secret store path.
+func (a *LocalStorageAdapter) SecretStorePath() string {
+	trimmed := strings.TrimSpace(a.databasePath)
+	if trimmed == "" {
+		return ""
+	}
+	ext := filepath.Ext(trimmed)
+	if ext == "" {
+		return trimmed + ".stronghold.db"
+	}
+	return strings.TrimSuffix(trimmed, ext) + ".stronghold" + ext
 }

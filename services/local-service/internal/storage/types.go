@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -25,9 +26,17 @@ type CapabilitySnapshot struct {
 	MemoryStoreBackend     string
 	ToolCallStoreBackend   string
 	ArtifactStoreBackend   string
+	SecretStoreBackend     string
 	MemoryRetrievalBackend string
 	FallbackActive         bool
 }
+
+var (
+	// ErrSecretNotFound reports that the requested secret key does not exist.
+	ErrSecretNotFound = errors.New("secret not found")
+	// ErrSecretStoreAccessFailed reports that the stronghold-compatible secret store could not be accessed.
+	ErrSecretStoreAccessFailed = errors.New("secret store access failed")
+)
 
 // MemorySummaryRecord 描述当前模块记录。
 type MemorySummaryRecord struct {
@@ -75,6 +84,21 @@ type ArtifactRecord struct {
 type ArtifactStore interface {
 	SaveArtifacts(ctx context.Context, records []ArtifactRecord) error
 	ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error)
+}
+
+// SecretRecord captures one secret value persisted outside the normal settings path.
+type SecretRecord struct {
+	Namespace string
+	Key       string
+	Value     string
+	UpdatedAt string
+}
+
+// SecretStore defines Stronghold-compatible secret storage behavior.
+type SecretStore interface {
+	PutSecret(ctx context.Context, record SecretRecord) error
+	GetSecret(ctx context.Context, namespace, key string) (SecretRecord, error)
+	DeleteSecret(ctx context.Context, namespace, key string) error
 }
 
 // TaskStepSnapshot 描述 task timeline 在存储层的快照格式。

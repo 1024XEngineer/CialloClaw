@@ -87,6 +87,12 @@
 - Artifact：正式产物
 - Stronghold：密钥与敏感配置
 
+补充约束：
+
+- Stronghold 必须独立于普通设置快照与业务状态存储路径；
+- 模型 API Key、长期令牌和其他敏感配置不能继续作为普通 `settings` 字段或环境变量的正式真源；
+- `settings.get / settings.update` 只能暴露脱敏状态，例如“是否已配置”，不能回传真实 secret。
+
 ---
 
 ## 4. 建模原则

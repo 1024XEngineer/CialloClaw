@@ -541,6 +541,16 @@ func TestDispatchMapsRecoveryPointNotFoundErrors(t *testing.T) {
 	}
 }
 
+func TestDispatchMapsStrongholdErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrStrongholdAccessFailed)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1005004 || rpcErr.Message != "STRONGHOLD_ACCESS_FAILED" {
+		t.Fatalf("expected STRONGHOLD_ACCESS_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
 func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 	server := newTestServer()
 

@@ -304,6 +304,14 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_storage_query_failed",
 		}
 	}
+	if errors.Is(err, orchestrator.ErrStrongholdAccessFailed) {
+		return nil, &rpcError{
+			Code:    1005004,
+			Message: "STRONGHOLD_ACCESS_FAILED",
+			Detail:  err.Error(),
+			TraceID: "trace_stronghold_access_failed",
+		}
+	}
 	if errors.Is(err, orchestrator.ErrRecoveryPointNotFound) {
 		return nil, &rpcError{
 			Code:    1005002,

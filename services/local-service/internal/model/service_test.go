@@ -24,7 +24,22 @@ type stubSecretSource struct {
 	err    error
 }
 
+type stubSecretStore struct {
+	apiKey string
+	err    error
+}
+
 func (s stubSecretSource) ResolveModelAPIKey(provider string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	if provider == "" {
+		return "", nil
+	}
+	return s.apiKey, nil
+}
+
+func (s stubSecretStore) ResolveModelAPIKey(provider string) (string, error) {
 	if s.err != nil {
 		return "", s.err
 	}
@@ -158,11 +173,11 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 			Provider:            OpenAIResponsesProvider,
 			ModelID:             "gpt-5.4",
 			Endpoint:            server.URL,
-			APIKey:              "test-key",
 			SingleTaskLimit:     10.0,
 			DailyLimit:          50.0,
 			BudgetAutoDowngrade: true,
 		},
+		APIKey: "test-key",
 	})
 	if err != nil {
 		t.Fatalf("NewServiceFromConfig returned error: %v", err)
@@ -178,8 +193,8 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 	}
 }
 
-// TestNewServiceFromConfigUsesModelConfigAPIKey 验证NewServiceFromConfigUsesModelConfigAPIKey。
-func TestNewServiceFromConfigUsesModelConfigAPIKey(t *testing.T) {
+// TestNewServiceFromConfigUsesServiceConfigAPIKey 验证NewServiceFromConfigUsesServiceConfigAPIKey。
+func TestNewServiceFromConfigUsesServiceConfigAPIKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer model-config-key" {
 			t.Fatalf("authorization header mismatch: got %q", got)
@@ -194,11 +209,11 @@ func TestNewServiceFromConfigUsesModelConfigAPIKey(t *testing.T) {
 			Provider:            OpenAIResponsesProvider,
 			ModelID:             "gpt-5.4",
 			Endpoint:            server.URL,
-			APIKey:              "model-config-key",
 			SingleTaskLimit:     10.0,
 			DailyLimit:          50.0,
 			BudgetAutoDowngrade: true,
 		},
+		APIKey: "model-config-key",
 	})
 	if err != nil {
 		t.Fatalf("NewServiceFromConfig returned error: %v", err)
@@ -281,5 +296,56 @@ func TestNewServiceFromConfigReturnsSecretSourceError(t *testing.T) {
 	})
 	if !errors.Is(err, ErrSecretSourceFailed) {
 		t.Fatalf("expected ErrSecretSourceFailed, got %v", err)
+	}
+}
+
+func TestNewServiceFromConfigReturnsSecretNotFound(t *testing.T) {
+	_, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+		SecretSource: stubSecretSource{err: ErrSecretNotFound},
+	})
+	if !errors.Is(err, ErrSecretSourceFailed) || !errors.Is(err, ErrSecretNotFound) {
+		t.Fatalf("expected missing secret error chain, got %v", err)
+	}
+}
+
+func TestStaticSecretSourceUsesSecretStore(t *testing.T) {
+	source := NewStaticSecretSource(stubSecretStore{apiKey: "secret-store-key"})
+	apiKey, err := source.ResolveModelAPIKey(OpenAIResponsesProvider)
+	if err != nil {
+		t.Fatalf("ResolveModelAPIKey returned error: %v", err)
+	}
+	if apiKey != "secret-store-key" {
+		t.Fatalf("unexpected secret key: %q", apiKey)
+	}
+}
+
+func TestStaticSecretSourceFailsWithoutStore(t *testing.T) {
+	source := NewStaticSecretSource(nil)
+	if _, err := source.ResolveModelAPIKey(OpenAIResponsesProvider); !errors.Is(err, ErrSecretSourceFailed) {
+		t.Fatalf("expected ErrSecretSourceFailed, got %v", err)
+	}
+}
+
+func TestNewServiceFromConfigReturnsMissingSecretWhenNoAPIKeyProvided(t *testing.T) {
+	_, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+	})
+	if !errors.Is(err, ErrSecretSourceFailed) || !errors.Is(err, ErrSecretNotFound) {
+		t.Fatalf("expected missing secret error chain, got %v", err)
 	}
 }

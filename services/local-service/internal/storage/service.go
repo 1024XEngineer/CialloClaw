@@ -2,6 +2,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -48,12 +49,14 @@ type Service struct {
 	taskRunStore       TaskRunStore
 	toolCallStore      ToolCallStore
 	artifactStore      ArtifactStore
+	secretStore        SecretStore
 	auditStore         AuditStore
 	recoveryPointStore RecoveryPointStore
 	memoryStoreName    string
 	taskRunStoreName   string
 	toolCallStoreName  string
 	artifactStoreName  string
+	secretStoreName    string
 	retrievalBackend   string
 	storeInitErr       error
 	fallbackActive     bool
@@ -65,12 +68,14 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
+	secretStore := SecretStore(newInMemorySecretStore())
 	auditStore := AuditStore(newInMemoryAuditStore())
 	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
 	memoryStoreName := memoryStoreBackendInMemory
 	taskRunStoreName := memoryStoreBackendInMemory
 	toolCallStoreName := memoryStoreBackendInMemory
 	artifactStoreName := memoryStoreBackendInMemory
+	secretStoreName := memoryStoreBackendInMemory
 	retrievalBackend := memoryRetrievalBackendInMemory
 	storeInitErrors := make([]error, 0, 2)
 	fallbackActive := false
@@ -118,6 +123,18 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
+				sqliteSecretStore, err := NewSQLiteSecretStore(secretPath)
+				if err == nil {
+					secretStore = sqliteSecretStore
+					secretStoreName = memoryStoreBackendSQLite
+				}
+				if err != nil {
+					storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize stronghold secret store: %w", err))
+					fallbackActive = true
+				}
+			}
+
 			sqliteAuditStore, err := NewSQLiteAuditStore(databasePath)
 			if err == nil {
 				auditStore = sqliteAuditStore
@@ -146,12 +163,14 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		taskRunStore:       taskRunStore,
 		toolCallStore:      toolCallStore,
 		artifactStore:      artifactStore,
+		secretStore:        secretStore,
 		auditStore:         auditStore,
 		recoveryPointStore: recoveryPointStore,
 		memoryStoreName:    memoryStoreName,
 		taskRunStoreName:   taskRunStoreName,
 		toolCallStoreName:  toolCallStoreName,
 		artifactStoreName:  artifactStoreName,
+		secretStoreName:    secretStoreName,
 		retrievalBackend:   retrievalBackend,
 		storeInitErr:       storeInitErr,
 		fallbackActive:     fallbackActive,
@@ -219,10 +238,11 @@ func (s *Service) Capabilities() CapabilitySnapshot {
 		SupportsFTS5:           structuredReady,
 		SupportsSQLiteVecStub:  structuredReady,
 		SupportsArtifactStore:  s.artifactStore != nil,
-		SupportsSecretStore:    false,
+		SupportsSecretStore:    s.secretStore != nil,
 		MemoryStoreBackend:     s.memoryStoreName,
 		ToolCallStoreBackend:   s.toolCallStoreName,
 		ArtifactStoreBackend:   s.artifactStoreName,
+		SecretStoreBackend:     s.secretStoreName,
 		MemoryRetrievalBackend: s.retrievalBackend,
 		FallbackActive:         s.fallbackActive,
 	}
@@ -244,6 +264,26 @@ func (s *Service) ToolCallSink() tools.ToolCallSink {
 // ArtifactStore returns the configured artifact store.
 func (s *Service) ArtifactStore() ArtifactStore {
 	return s.artifactStore
+}
+
+// SecretStore returns the configured secret store.
+func (s *Service) SecretStore() SecretStore {
+	return s.secretStore
+}
+
+// ResolveModelAPIKey returns one model provider API key from the dedicated secret store.
+func (s *Service) ResolveModelAPIKey(provider string) (string, error) {
+	if s.secretStore == nil {
+		return "", ErrSecretStoreAccessFailed
+	}
+	record, err := s.secretStore.GetSecret(context.Background(), "model", strings.TrimSpace(provider)+"_api_key")
+	if err != nil {
+		if errors.Is(err, ErrSecretNotFound) {
+			return "", err
+		}
+		return "", err
+	}
+	return secretRecordValue(record), nil
 }
 
 func (s *Service) AuditWriter() audit.Writer {
@@ -275,6 +315,9 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.artifactStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.secretStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.auditStore.(interface{ Close() error }); ok {

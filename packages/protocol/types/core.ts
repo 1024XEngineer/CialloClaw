@@ -410,6 +410,7 @@ export interface SettingsSnapshot {
     data_log: {
       provider: string;
       budget_auto_downgrade: boolean;
+      provider_api_key_configured: boolean;
     };
   };
 }

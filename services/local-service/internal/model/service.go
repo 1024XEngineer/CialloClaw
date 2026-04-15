@@ -29,11 +29,37 @@ var ErrModelProviderUnsupported = errors.New("model provider unsupported")
 // ErrSecretSourceFailed 定义当前模块的基础变量。
 var ErrSecretSourceFailed = errors.New("model secret source failed")
 
+// ErrSecretNotFound reports that no secret could be resolved for the requested provider.
+var ErrSecretNotFound = errors.New("model secret not found")
+
 // SecretSource 是面向 Stronghold 等机密存储能力的最小接口。
 //
 // 当前阶段只定义边界，不绑定具体实现。
 type SecretSource interface {
 	ResolveModelAPIKey(provider string) (string, error)
+}
+
+// StaticSecretSource resolves model credentials from a storage-backed secret store.
+type StaticSecretSource struct {
+	store SecretStore
+}
+
+// SecretStore defines the minimal secret store dependency required by the model layer.
+type SecretStore interface {
+	ResolveModelAPIKey(provider string) (string, error)
+}
+
+// NewStaticSecretSource creates a secret source backed by the provided secret store.
+func NewStaticSecretSource(store SecretStore) *StaticSecretSource {
+	return &StaticSecretSource{store: store}
+}
+
+// ResolveModelAPIKey loads one provider key from the secret store.
+func (s *StaticSecretSource) ResolveModelAPIKey(provider string) (string, error) {
+	if s == nil || s.store == nil {
+		return "", ErrSecretSourceFailed
+	}
+	return s.store.ResolveModelAPIKey(strings.TrimSpace(provider))
 }
 
 // ServiceConfig 描述当前模块配置。
@@ -128,15 +154,18 @@ func ValidateModelConfig(cfg config.ModelConfig) error {
 // buildClient 处理当前模块的相关逻辑。
 func buildClient(cfg ServiceConfig) (Client, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(cfg.ModelConfig.APIKey)
-	}
 	if apiKey == "" && cfg.SecretSource != nil {
 		resolvedKey, err := cfg.SecretSource.ResolveModelAPIKey(strings.TrimSpace(cfg.ModelConfig.Provider))
 		if err != nil {
+			if errors.Is(err, ErrSecretNotFound) {
+				return nil, errors.Join(ErrSecretSourceFailed, ErrSecretNotFound)
+			}
 			return nil, errors.Join(ErrSecretSourceFailed, err)
 		}
 		apiKey = strings.TrimSpace(resolvedKey)
+	}
+	if apiKey == "" {
+		return nil, errors.Join(ErrSecretSourceFailed, ErrSecretNotFound)
 	}
 
 	switch strings.TrimSpace(cfg.ModelConfig.Provider) {

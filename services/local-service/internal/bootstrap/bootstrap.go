@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -70,11 +71,16 @@ func New(cfg config.Config) (*App, error) {
 	)
 
 	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-		ModelConfig: cfg.Model,
+		ModelConfig:  cfg.Model,
+		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
-		_ = storageService.Close()
-		return nil, err
+		if errors.Is(err, model.ErrSecretSourceFailed) && (errors.Is(err, model.ErrSecretNotFound) || errors.Is(err, storage.ErrSecretNotFound)) {
+			modelService = model.NewService(cfg.Model)
+		} else {
+			_ = storageService.Close()
+			return nil, err
+		}
 	}
 
 	deliveryService := delivery.NewService()

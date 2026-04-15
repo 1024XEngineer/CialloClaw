@@ -23,6 +23,14 @@ func (s stubAdapter) DatabasePath() string {
 	return s.databasePath
 }
 
+// SecretStorePath 处理当前模块的相关逻辑。
+func (s stubAdapter) SecretStorePath() string {
+	if s.databasePath == "" {
+		return ""
+	}
+	return s.databasePath + ".stronghold"
+}
+
 // TestBackendReturnsSQLiteWAL 验证BackendReturnsSQLiteWAL。
 func TestBackendReturnsSQLiteWAL(t *testing.T) {
 	service := NewService(nil)
@@ -144,7 +152,7 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if !capabilities.Configured || !capabilities.SupportsStructuredData {
 		t.Fatalf("unexpected configured capabilities: %+v", capabilities)
 	}
-	if !capabilities.SupportsMemoryStore || !capabilities.SupportsArtifactStore || capabilities.SupportsSecretStore {
+	if !capabilities.SupportsMemoryStore || !capabilities.SupportsArtifactStore || !capabilities.SupportsSecretStore {
 		t.Fatalf("unexpected unsupported capabilities enabled: %+v", capabilities)
 	}
 	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
@@ -155,6 +163,9 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	}
 	if capabilities.MemoryRetrievalBackend != memoryRetrievalBackendSQLite {
 		t.Fatalf("unexpected retrieval backend: %+v", capabilities)
+	}
+	if capabilities.SecretStoreBackend != memoryStoreBackendSQLite {
+		t.Fatalf("unexpected secret backend: %+v", capabilities)
 	}
 }
 
@@ -399,6 +410,71 @@ func TestArtifactStoreReturnsWorkingImplementation(t *testing.T) {
 	}
 	if total != 1 || len(items) != 1 || items[0].ArtifactID != "art_001" {
 		t.Fatalf("unexpected artifact records: total=%d items=%+v", total, items)
+	}
+}
+
+func TestSecretStoreReturnsWorkingImplementation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secrets.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	store := service.SecretStore()
+	if store == nil {
+		t.Fatal("expected secret store to be available")
+	}
+	record := SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "secret-key",
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}
+	if err := store.PutSecret(context.Background(), record); err != nil {
+		t.Fatalf("PutSecret returned error: %v", err)
+	}
+	resolved, err := store.GetSecret(context.Background(), record.Namespace, record.Key)
+	if err != nil {
+		t.Fatalf("GetSecret returned error: %v", err)
+	}
+	if resolved.Value != "secret-key" {
+		t.Fatalf("unexpected secret value: %+v", resolved)
+	}
+	value, err := service.ResolveModelAPIKey("openai_responses")
+	if err != nil {
+		t.Fatalf("ResolveModelAPIKey returned error: %v", err)
+	}
+	if value != "secret-key" {
+		t.Fatalf("unexpected resolved key: %q", value)
+	}
+}
+
+func TestResolveModelAPIKeyReturnsNotFoundWhenSecretMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-secret.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	_, err := service.ResolveModelAPIKey("openai_responses")
+	if !errors.Is(err, ErrSecretNotFound) {
+		t.Fatalf("expected ErrSecretNotFound, got %v", err)
+	}
+}
+
+func TestResolveModelAPIKeyReturnsAccessFailureWhenStoreClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "closed-secret.db")
+	service := NewService(stubAdapter{databasePath: path})
+	record := SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "secret-key",
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), record); err != nil {
+		t.Fatalf("PutSecret returned error: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	_, err := service.ResolveModelAPIKey("openai_responses")
+	if !errors.Is(err, ErrSecretStoreAccessFailed) {
+		t.Fatalf("expected ErrSecretStoreAccessFailed, got %v", err)
 	}
 }
 
