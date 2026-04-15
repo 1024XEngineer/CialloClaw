@@ -199,12 +199,15 @@ func TestLocalPlatformAdaptersCoverUtilityMethods(t *testing.T) {
 		t.Fatal("expected empty target rejection")
 	}
 	legacyBackend := LocalExecutionBackend{}
-	if legacyBackend.Name() != "docker" {
+	if legacyBackend.Name() != "local_host" {
 		t.Fatalf("unexpected legacy backend name: %q", legacyBackend.Name())
 	}
 	result, err := legacyBackend.RunCommand(context.Background(), "go", []string{"env", "GOROOT"}, workspaceRoot)
 	if err != nil {
 		t.Fatalf("RunCommand returned error: %v", err)
+	}
+	if result.ExecutionBackend != "local_host" {
+		t.Fatalf("expected local execution backend metadata, got %+v", result)
 	}
 	if result.ExitCode != 0 {
 		t.Fatalf("expected zero exit code, got %+v", result)

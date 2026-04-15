@@ -49,7 +49,7 @@ func TestDockerSandboxExecutionBackendBuildsRestrictedDockerRun(t *testing.T) {
 		t.Fatalf("expected execution backend metadata, got %+v", result)
 	}
 	joinedArgs := strings.Join(runner.lastArgs, " ")
-	for _, fragment := range []string{"run", "--rm", "--network none", "--cpus 1.0", "--memory 512m", "--pids-limit 128", "--read-only", "--security-opt no-new-privileges", "--mount", "target=/workspace,readonly", "--workdir /workspace/subdir", defaultDockerSandboxImage, "go test ./..."} {
+	for _, fragment := range []string{"run", "--rm", "--network none", "--cpus 1.0", "--memory 512m", "--pids-limit 128", "--read-only", "--security-opt no-new-privileges", "HOME=/tmp/home", "XDG_CACHE_HOME=/tmp/xdg-cache", "GOCACHE=/tmp/go-cache", "GOMODCACHE=/tmp/go-mod-cache", "GOTMPDIR=/tmp/go-tmp", "target=/workspace,readonly", "--workdir /workspace/subdir", defaultDockerSandboxImage, "go test ./..."} {
 		if !strings.Contains(joinedArgs, fragment) {
 			t.Fatalf("expected docker args to contain %q, got %q", fragment, joinedArgs)
 		}
@@ -126,5 +126,35 @@ func TestDockerSandboxExecutionBackendReportsMissingDockerCLI(t *testing.T) {
 	_, err := backend.RunCommand(context.Background(), "go", []string{"test", "./..."}, backend.workspaceRoot)
 	if !errors.Is(err, ErrDockerSandboxUnavailable) {
 		t.Fatalf("expected ErrDockerSandboxUnavailable, got %v", err)
+	}
+}
+
+func TestControlledExecutionBackendRoutesWindowsShellCommandsToLocalHost(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	backend := NewControlledExecutionBackend(workspaceRoot)
+	result, err := backend.RunCommand(context.Background(), "cmd", []string{"/c", "echo", "ok"}, workspaceRoot)
+	if err != nil {
+		t.Fatalf("RunCommand returned error: %v", err)
+	}
+	if result.ExecutionBackend != "local_host" {
+		t.Fatalf("expected local_host backend, got %+v", result)
+	}
+}
+
+func TestControlledExecutionBackendRoutesLinuxCommandsToSandbox(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	runner := &stubDockerSandboxRunner{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}}
+	backend := NewControlledExecutionBackend(workspaceRoot)
+	backend.sandbox.runner = runner
+	backend.sandbox.nameGenerator = func() string { return "sandbox-test-routed" }
+	result, err := backend.RunCommand(context.Background(), "go", []string{"test", "./..."}, workspaceRoot)
+	if err != nil {
+		t.Fatalf("RunCommand returned error: %v", err)
+	}
+	if result.ExecutionBackend != "docker_sandbox" {
+		t.Fatalf("expected docker_sandbox backend, got %+v", result)
+	}
+	if len(runner.lastArgs) == 0 {
+		t.Fatal("expected sandbox runner to be invoked")
 	}
 }

@@ -81,14 +81,14 @@ func (t *ExecCommandTool) Execute(ctx context.Context, execCtx *tools.ToolExecut
 			"result":  commandAuditResult(result.ExitCode),
 		},
 	}
-	if backendName := executionBackendName(execCtx.Execution, result); backendName != "" {
+	if backendName := executionBackendName(result); backendName != "" {
 		rawOutput["execution_backend"] = backendName
 	}
 	if sandboxInfo := sandboxResultInfo(result); len(sandboxInfo) > 0 {
 		rawOutput["sandbox"] = sandboxInfo
 	}
 	summaryOutput := buildExecCommandSummary(command, args, workingDir, result)
-	if backendName := executionBackendName(execCtx.Execution, result); backendName != "" {
+	if backendName := executionBackendName(result); backendName != "" {
 		summaryOutput["execution_backend"] = backendName
 	}
 
@@ -205,14 +205,8 @@ func previewText(input string, limit int) string {
 	return trimmed[:limit]
 }
 
-func executionBackendName(execution tools.ExecutionCapability, result tools.CommandExecutionResult) string {
-	if strings.TrimSpace(result.ExecutionBackend) != "" {
-		return strings.TrimSpace(result.ExecutionBackend)
-	}
-	if named, ok := execution.(interface{ Name() string }); ok {
-		return strings.TrimSpace(named.Name())
-	}
-	return ""
+func executionBackendName(result tools.CommandExecutionResult) string {
+	return strings.TrimSpace(result.ExecutionBackend)
 }
 
 func sandboxResultInfo(result tools.CommandExecutionResult) map[string]any {

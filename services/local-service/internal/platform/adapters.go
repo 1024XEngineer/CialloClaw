@@ -307,7 +307,7 @@ type LocalExecutionBackend struct{}
 
 // Name 处理当前模块的相关逻辑。
 func (LocalExecutionBackend) Name() string {
-	return "docker"
+	return "local_host"
 }
 
 // RunCommand 执行最小受控命令。
@@ -322,8 +322,9 @@ func (LocalExecutionBackend) RunCommand(ctx context.Context, command string, arg
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	result := tools.CommandExecutionResult{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
+		Stdout:           stdout.String(),
+		Stderr:           stderr.String(),
+		ExecutionBackend: (LocalExecutionBackend{}).Name(),
 	}
 	if cmd.ProcessState != nil {
 		result.ExitCode = cmd.ProcessState.ExitCode()

@@ -20,6 +20,11 @@ import (
 const (
 	defaultDockerSandboxImage      = "docker.io/library/golang:1.26-bookworm"
 	dockerSandboxMountPath         = "/workspace"
+	dockerSandboxHomePath          = "/tmp/home"
+	dockerSandboxGoCachePath       = "/tmp/go-cache"
+	dockerSandboxGoModCachePath    = "/tmp/go-mod-cache"
+	dockerSandboxGoTmpPath         = "/tmp/go-tmp"
+	dockerSandboxXDGCachePath      = "/tmp/xdg-cache"
 	dockerSandboxDefaultCPU        = "1.0"
 	dockerSandboxDefaultMemory     = "512m"
 	dockerSandboxDefaultPIDsLimit  = 128
@@ -28,22 +33,17 @@ const (
 )
 
 var defaultDockerSandboxCommands = map[string]struct{}{
-	"bash":    {},
-	"bun":     {},
-	"cargo":   {},
-	"git":     {},
-	"go":      {},
-	"make":    {},
-	"node":    {},
-	"npm":     {},
-	"npx":     {},
-	"pnpm":    {},
-	"python":  {},
-	"python3": {},
-	"pytest":  {},
-	"rustc":   {},
-	"sh":      {},
-	"yarn":    {},
+	"bash": {},
+	"git":  {},
+	"go":   {},
+	"make": {},
+	"sh":   {},
+}
+
+var defaultControlledLocalCommands = map[string]struct{}{
+	"cmd":        {},
+	"powershell": {},
+	"pwsh":       {},
 }
 
 var (
@@ -88,6 +88,15 @@ type dockerSandboxRunner interface {
 
 type dockerCLIRunner struct{}
 
+// ControlledExecutionBackend routes commands either to Docker sandbox execution
+// or to a constrained local backend for Windows shell commands that cannot run
+// inside the Linux container image.
+type ControlledExecutionBackend struct {
+	sandbox       *DockerSandboxExecutionBackend
+	local         LocalExecutionBackend
+	localCommands map[string]struct{}
+}
+
 // NewDockerSandboxExecutionBackend creates a Docker-backed command executor.
 func NewDockerSandboxExecutionBackend(workspaceRoot string) *DockerSandboxExecutionBackend {
 	backend := &DockerSandboxExecutionBackend{
@@ -104,6 +113,31 @@ func NewDockerSandboxExecutionBackend(workspaceRoot string) *DockerSandboxExecut
 	}
 	backend.nameGenerator = backend.defaultContainerName
 	return backend
+}
+
+// NewControlledExecutionBackend creates the default command executor used by the
+// service. Linux-friendly developer commands prefer Docker sandbox execution,
+// while Windows shell commands keep using the controlled host path.
+func NewControlledExecutionBackend(workspaceRoot string) *ControlledExecutionBackend {
+	return &ControlledExecutionBackend{
+		sandbox:       NewDockerSandboxExecutionBackend(workspaceRoot),
+		local:         LocalExecutionBackend{},
+		localCommands: cloneDockerSandboxAllowlist(defaultControlledLocalCommands),
+	}
+}
+
+// Name reports the routed backend identifier.
+func (*ControlledExecutionBackend) Name() string {
+	return "controlled"
+}
+
+// RunCommand routes one command to the correct controlled execution path.
+func (b *ControlledExecutionBackend) RunCommand(ctx context.Context, command string, args []string, workingDir string) (tools.CommandExecutionResult, error) {
+	commandName := normalizeExecutionCommandName(command)
+	if _, ok := b.localCommands[commandName]; ok {
+		return b.local.RunCommand(ctx, command, args, workingDir)
+	}
+	return b.sandbox.RunCommand(ctx, command, args, workingDir)
 }
 
 // Name reports the execution backend identifier used by audit and tool traces.
@@ -186,6 +220,11 @@ func (b *DockerSandboxExecutionBackend) buildDockerArgs(containerName, workspace
 		"--security-opt", "no-new-privileges",
 		"--read-only",
 		"--tmpfs", fmt.Sprintf("/tmp:rw,noexec,nosuid,size=%d", b.limits.TmpfsSize),
+		"--env", fmt.Sprintf("HOME=%s", dockerSandboxHomePath),
+		"--env", fmt.Sprintf("XDG_CACHE_HOME=%s", dockerSandboxXDGCachePath),
+		"--env", fmt.Sprintf("GOCACHE=%s", dockerSandboxGoCachePath),
+		"--env", fmt.Sprintf("GOMODCACHE=%s", dockerSandboxGoModCachePath),
+		"--env", fmt.Sprintf("GOTMPDIR=%s", dockerSandboxGoTmpPath),
 		"--mount", fmt.Sprintf("type=bind,src=%s,target=%s,readonly", filepath.ToSlash(workspaceRoot), dockerSandboxMountPath),
 		"--workdir", containerWorkingDir,
 		b.image,
@@ -213,12 +252,10 @@ func dockerSandboxImage() string {
 }
 
 func (b *DockerSandboxExecutionBackend) normalizeCommand(command string) (string, error) {
-	trimmed := strings.TrimSpace(command)
-	if trimmed == "" {
+	baseName := normalizeExecutionCommandName(command)
+	if baseName == "" {
 		return "", ErrDockerSandboxCommandNotAllowed
 	}
-	baseName := strings.ToLower(filepath.Base(trimmed))
-	baseName = strings.TrimSuffix(baseName, ".exe")
 	if _, ok := b.allowed[baseName]; !ok {
 		return "", fmt.Errorf("%w: %s", ErrDockerSandboxCommandNotAllowed, baseName)
 	}
@@ -231,6 +268,15 @@ func cloneDockerSandboxAllowlist(source map[string]struct{}) map[string]struct{}
 		result[key] = struct{}{}
 	}
 	return result
+}
+
+func normalizeExecutionCommandName(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return ""
+	}
+	baseName := strings.ToLower(filepath.Base(trimmed))
+	return strings.TrimSuffix(baseName, ".exe")
 }
 
 func (dockerCLIRunner) RunDocker(ctx context.Context, args []string) (tools.CommandExecutionResult, error) {
