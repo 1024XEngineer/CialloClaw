@@ -1240,6 +1240,27 @@
   gap: 0.6rem;
 }
 
+.mirror-page__conversation-date-shell,
+.mirror-page__conversation-date-control,
+.mirror-page__conversation-date-meta {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mirror-page__conversation-date-control {
+  max-width: 18rem;
+}
+
+.mirror-page__conversation-date-input {
+  background: rgba(255, 250, 242, 0.84);
+  border: 1px solid rgba(143, 111, 77, 0.14);
+  border-radius: 0.95rem;
+  color: var(--mirror-ink);
+  font: inherit;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.82rem;
+}
+
 .mirror-page__conversation-filter {
   background: rgba(255, 250, 242, 0.84);
   border: 1px solid rgba(143, 111, 77, 0.14);
@@ -1276,7 +1297,8 @@
 }
 
 .mirror-page__conversation-filter:focus-visible,
-.mirror-page__task-link:focus-visible {
+.mirror-page__task-link:focus-visible,
+.mirror-page__conversation-date-input:focus-visible {
   outline: 2px solid var(--mirror-focus);
   outline-offset: 4px;
 }

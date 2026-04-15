@@ -87,6 +87,8 @@ function MirrorHistoryDetail({
     [conversationFilters, conversations],
   );
   const groupedConversations = useMemo(() => groupMirrorConversationRecords(filteredConversations), [filteredConversations]);
+  const oldestConversationDateKey = conversationDateOptions.at(-1)?.date_key ?? null;
+  const newestConversationDateKey = conversationDateOptions[0]?.date_key ?? null;
   const dominantSource = conversationSummary.dominant_source ? getMirrorConversationSourceLabel(conversationSummary.dominant_source) : "等待新记录";
   const dominantMode = conversationSummary.dominant_input_mode ? getMirrorConversationInputModeLabel(conversationSummary.dominant_input_mode) : "等待新记录";
   const taskLinkedConversationCount = conversations.filter((record) => record.task_id).length;
@@ -244,24 +246,33 @@ function MirrorHistoryDetail({
           </div>
 
           {conversationDateOptions.length > 0 ? (
-            <div className="mirror-page__conversation-filter-bar">
-              <button
-                type="button"
-                className={`mirror-page__conversation-filter${conversationDateFilter === "all" ? " is-active" : ""}`}
-                onClick={() => setConversationDateFilter("all")}
-              >
-                全部日期
-              </button>
-              {conversationDateOptions.map((option) => (
-                <button
-                  key={option.date_key}
-                  type="button"
-                  className={`mirror-page__conversation-filter${conversationDateFilter === option.date_key ? " is-active" : ""}`}
-                  onClick={() => setConversationDateFilter(option.date_key)}
-                >
-                  {option.label} · {option.count}
-                </button>
-              ))}
+            <div className="mirror-page__conversation-date-shell">
+              <label className="mirror-page__conversation-date-control">
+                <span className="mirror-page__micro-label">按日期回看</span>
+                <input
+                  type="date"
+                  className="mirror-page__conversation-date-input"
+                  value={conversationDateFilter === "all" ? "" : conversationDateFilter}
+                  min={oldestConversationDateKey ?? undefined}
+                  max={newestConversationDateKey ?? undefined}
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value.trim();
+                    setConversationDateFilter(nextValue.length > 0 ? nextValue : "all");
+                  }}
+                />
+              </label>
+              <div className="mirror-page__conversation-date-meta">
+                <p className="mirror-page__summary-copy">
+                  {oldestConversationDateKey && newestConversationDateKey
+                    ? `留空显示全部日期，可修改范围 ${oldestConversationDateKey} ~ ${newestConversationDateKey}。`
+                    : "留空显示全部日期。"}
+                </p>
+                {conversationDateFilter !== "all" ? (
+                  <button type="button" className="mirror-page__task-link" onClick={() => setConversationDateFilter("all")}>
+                    清除日期
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </div>
