@@ -167,7 +167,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
   if (data.source === "mock") {
     const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
       projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.data_log.provider_api_key_configured || data.providerApiKeyInput.trim() !== "",
+      data.settings.data_log.provider_api_key_configured,
     );
     const nextDesktopSettings: DesktopSettings = {
       settings: nextSettingsSnapshot,
@@ -226,7 +226,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
     logRpcMockFallback("control panel save", error);
     const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
       projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.data_log.provider_api_key_configured || data.providerApiKeyInput.trim() !== "",
+      data.settings.data_log.provider_api_key_configured,
     );
     const nextDesktopSettings: DesktopSettings = {
       settings: nextSettingsSnapshot,

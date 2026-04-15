@@ -221,7 +221,13 @@ export function ShellBallInputWindow({
   }
 
   function handleFocusChange(focused: boolean) {
-    setIsFocused(focused);
+    if (focused) {
+      windowFocusedRef.current = true;
+      clearPendingBlurTimeout();
+      pendingWindowBlurRef.current = false;
+      setIsFocused(true);
+    }
+
     if (onFocusChange !== undefined) {
       onFocusChange(focused);
       return;
@@ -237,6 +243,11 @@ export function ShellBallInputWindow({
       pendingWindowBlurRef.current = true;
       scheduleDeferredBlur(getImeBlurGuardRemainingMs());
       return;
+    }
+
+    if (!focused) {
+      pendingWindowBlurRef.current = false;
+      setIsFocused(false);
     }
 
     void emitShellBallInputFocus(focused);

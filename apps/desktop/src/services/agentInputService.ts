@@ -76,7 +76,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
         inputMode: input.inputMode,
         text: input.text,
       });
-      recordMirrorConversationSuccess(params, fallbackResult);
+      recordMirrorConversationFailure(params, error);
       return fallbackResult;
     }
 
