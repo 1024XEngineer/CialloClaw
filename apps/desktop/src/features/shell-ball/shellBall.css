@@ -539,7 +539,7 @@
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  top: 50%;
+  top: calc(50% - 2px);
   transform: translate(-50%, -50%) scale(0.96);
   transition:
     opacity 180ms ease,
@@ -566,6 +566,24 @@
 .shell-ball-surface__file-drop-plus--vertical {
   border-left-width: 2px;
   height: 3rem;
+}
+
+.shell-ball-surface__text-drop-target {
+  background: transparent;
+  border: 0;
+  caret-color: transparent;
+  color: transparent;
+  inset: 0;
+  opacity: 0;
+  padding: 0;
+  pointer-events: none;
+  position: absolute;
+  resize: none;
+  z-index: 8;
+}
+
+.shell-ball-surface__text-drop-target[data-visible="true"] {
+  pointer-events: auto;
 }
 
 .shell-ball-attachment-tray {

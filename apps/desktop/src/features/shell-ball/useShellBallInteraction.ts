@@ -1,5 +1,5 @@
 import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
 import {
@@ -36,6 +36,13 @@ type ShellBallInteractionConsumedEvent =
   | "force_state_reset";
 
 type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
+
+const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
+  "audio-capture",
+  "language-not-supported",
+  "not-allowed",
+  "service-not-allowed",
+]);
 
 export type ShellBallInputSubmitResult = NonNullable<Awaited<ReturnType<typeof submitTextInput>>> & {
   delivery_result?: {
@@ -84,6 +91,31 @@ function normalizeShellBallPendingFiles(filePaths: string[]) {
 
 function mergeShellBallPendingFiles(currentPaths: string[], incomingPaths: string[]) {
   return normalizeShellBallPendingFiles([...currentPaths, ...incomingPaths]);
+}
+
+export function normalizeShellBallDroppedText(text: string) {
+  return text.replace(/\r\n/g, "\n").trim();
+}
+
+export function appendShellBallDroppedText(input: {
+  currentValue: string;
+  droppedText: string;
+}) {
+  const normalizedDroppedText = normalizeShellBallDroppedText(input.droppedText);
+
+  if (normalizedDroppedText === "") {
+    return input.currentValue;
+  }
+
+  if (input.currentValue.trim() === "") {
+    return normalizedDroppedText;
+  }
+
+  if (/\s$/.test(input.currentValue)) {
+    return `${input.currentValue}${normalizedDroppedText}`;
+  }
+
+  return `${input.currentValue}\n${normalizedDroppedText}`;
 }
 
 export function createShellBallInputSubmitParams(input: {
@@ -210,6 +242,26 @@ export function shouldKeepShellBallVoicePreviewOnRegionLeave(state: ShellBallVis
   return state === "voice_listening";
 }
 
+export function shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(state: ShellBallVisualState) {
+  return state === "voice_listening" || state === "voice_locked";
+}
+
+export function shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd(error: string | null) {
+  return error === null || !SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS.has(error);
+}
+
+export function getShellBallVoiceRecognitionUnexpectedEndFallbackState(input: {
+  currentState: ShellBallVisualState;
+  startState: ShellBallVisualState;
+  committedDraft: string;
+}) {
+  if (input.currentState === "voice_listening" || input.currentState === "voice_locked") {
+    return "hover_input" as const;
+  }
+
+  return input.startState === "hover_input" || input.committedDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const);
+}
+
 export function getShellBallPostSubmitInputReset(inputValue: string) {
   if (inputValue.trim() === "") {
     return null;
@@ -301,6 +353,7 @@ export function useShellBallInteraction() {
   const recognitionRef = useRef<ShellBallSpeechRecognition | null>(null);
   const recognitionSessionIdRef = useRef(0);
   const recognitionStopReasonRef = useRef<ShellBallVoiceRecognitionStopReason>("none");
+  const recognitionErrorRef = useRef<string | null>(null);
   const voiceBaseDraftRef = useRef("");
   const voiceTranscriptRef = useRef("");
   const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
@@ -333,7 +386,7 @@ export function useShellBallInteraction() {
     syncVisualState();
   }
 
-  function clearLongPressTimer() {
+  const clearLongPressTimer = useCallback(() => {
     if (longPressHandleRef.current === null) {
       if (longPressProgressHandleRef.current !== null) {
         cancelAnimationFrame(longPressProgressHandleRef.current);
@@ -353,7 +406,7 @@ export function useShellBallInteraction() {
     }
     longPressStartAtRef.current = null;
     setVoiceHoldProgress(0);
-  }
+  }, []);
 
   function resetInteractionConsumed() {
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("press_start"));
@@ -390,6 +443,14 @@ export function useShellBallInteraction() {
   function syncVoiceDraft(transcript: string) {
     voiceTranscriptRef.current = transcript;
     setInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
+  }
+
+  function preserveUnexpectedVoiceTranscriptDraft() {
+    const committedDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, voiceTranscriptRef.current);
+    voiceBaseDraftRef.current = committedDraft;
+    voiceTranscriptRef.current = "";
+    setInputValue(committedDraft);
+    return committedDraft;
   }
 
   async function finalizeVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
@@ -433,9 +494,10 @@ export function useShellBallInteraction() {
     setFinalizedSpeechPayload(null);
   }
 
-  function disposeVoiceRecognition() {
+  const disposeVoiceRecognition = useCallback(() => {
     recognitionSessionIdRef.current += 1;
     recognitionStopReasonRef.current = "none";
+    recognitionErrorRef.current = null;
     voiceTranscriptRef.current = "";
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
@@ -451,7 +513,7 @@ export function useShellBallInteraction() {
     try {
       recognition.abort();
     } catch {}
-  }
+  }, []);
 
   function stopVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
     recognitionStopReasonRef.current = reason;
@@ -487,6 +549,7 @@ export function useShellBallInteraction() {
     const recognition = new Recognition();
     recognitionRef.current = recognition;
     recognitionStopReasonRef.current = "none";
+    recognitionErrorRef.current = null;
     voiceTranscriptRef.current = "";
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -506,12 +569,12 @@ export function useShellBallInteraction() {
         return;
       }
 
-      if (recognitionStopReasonRef.current === "cancel" && event.error === "aborted") {
+      if (recognitionStopReasonRef.current !== "none") {
         return;
       }
 
+      recognitionErrorRef.current = event.error;
       console.warn("shell-ball speech recognition error", event.error);
-      recognitionStopReasonRef.current = "cancel";
     };
 
     recognition.onend = () => {
@@ -520,9 +583,33 @@ export function useShellBallInteraction() {
       }
 
       const stopReason = recognitionStopReasonRef.current;
+      const recognitionError = recognitionErrorRef.current;
+      recognitionErrorRef.current = null;
 
       if (stopReason === "finish" || stopReason === "cancel") {
         void finalizeVoiceRecognition(stopReason);
+        return;
+      }
+
+      const currentState = controllerRef.current?.getState() ?? visualState;
+
+      if (shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(currentState)) {
+        const committedDraft = preserveUnexpectedVoiceTranscriptDraft();
+
+        if (shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd(recognitionError) && startVoiceRecognition()) {
+          return;
+        }
+
+        setCurrentVoicePreview(null);
+        controllerRef.current?.forceState(
+          getShellBallVoiceRecognitionUnexpectedEndFallbackState({
+            currentState,
+            startState: voiceStartStateRef.current,
+            committedDraft,
+          }),
+          { regionActive: regionActiveRef.current, hoverRetained: false },
+        );
+        syncVisualState();
         return;
       }
 
@@ -580,7 +667,7 @@ export function useShellBallInteraction() {
 
     dispatch("pointer_leave_region", {
       regionActive: false,
-      hoverRetained: false,
+      hoverRetained: getHoverRetained(),
     });
   }
 
@@ -810,6 +897,20 @@ export function useShellBallInteraction() {
     syncVisualState();
   }
 
+  function handleDroppedText(text: string) {
+    const nextInputValue = appendShellBallDroppedText({
+      currentValue: inputValueRef.current,
+      droppedText: text,
+    });
+
+    if (nextInputValue === inputValueRef.current) {
+      return;
+    }
+
+    setInputValue(nextInputValue);
+    handleInputFocusRequest();
+  }
+
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
     disposeVoiceRecognition();
@@ -822,10 +923,6 @@ export function useShellBallInteraction() {
     controllerRef.current?.forceState(state, { regionActive: regionActiveRef.current });
     syncVisualState();
   }
-
-  useEffect(() => {
-    syncHoverRetention();
-  }, [inputValue, pendingFiles]);
 
   useEffect(() => {
     if (controllerRef.current === null) {
@@ -848,7 +945,7 @@ export function useShellBallInteraction() {
       voicePreviewRef.current = null;
       controllerRef.current?.dispose();
     };
-  }, []);
+  }, [clearLongPressTimer, disposeVoiceRecognition]);
 
   return {
     visualState,
@@ -874,6 +971,7 @@ export function useShellBallInteraction() {
     handleAttachFile,
     handleDroppedFiles,
     handleRemovePendingFile,
+    handleDroppedText,
     handlePressStart,
     handlePressMove,
     handlePressEnd,

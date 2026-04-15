@@ -143,17 +143,19 @@ export function TaskPage() {
       return;
     }
 
-    const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
+    function invalidateTaskQueries() {
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
+    }
+
+    const clearDeliverySubscription = subscribeDeliveryReady(() => {
+      invalidateTaskQueries();
     });
 
     const clearTaskSubscription = selectedTaskId
       ? subscribeTask(selectedTaskId, () => {
-          for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
-            void queryClient.invalidateQueries({ queryKey });
-          }
+          invalidateTaskQueries();
         })
       : () => {};
 

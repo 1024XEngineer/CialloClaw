@@ -1,4 +1,4 @@
-// 该入口负责启动桌面端 Tauri 宿主。
+// This entry point boots the desktop Tauri host process.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::Value;
