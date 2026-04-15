@@ -63,6 +63,17 @@ type stubPlaywrightClient struct {
 	err              error
 }
 
+type stubOCRWorkerClient struct {
+	result tools.OCRTextResult
+	err    error
+}
+
+type stubMediaWorkerClient struct {
+	transcodeResult tools.MediaTranscodeResult
+	framesResult    tools.MediaFrameExtractResult
+	err             error
+}
+
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	if b.result.ExitCode == 0 && b.result.Stdout == "" && b.result.Stderr == "" {
 		return tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}, nil
@@ -121,6 +132,48 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 	return result, nil
 }
 
+func (s stubOCRWorkerClient) ExtractText(_ context.Context, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubOCRWorkerClient) OCRImage(_ context.Context, _ string, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubOCRWorkerClient) OCRPDF(_ context.Context, _ string, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubMediaWorkerClient) TranscodeMedia(_ context.Context, _, _, _ string) (tools.MediaTranscodeResult, error) {
+	if s.err != nil {
+		return tools.MediaTranscodeResult{}, s.err
+	}
+	return s.transcodeResult, nil
+}
+
+func (s stubMediaWorkerClient) NormalizeRecording(_ context.Context, _, _ string) (tools.MediaTranscodeResult, error) {
+	if s.err != nil {
+		return tools.MediaTranscodeResult{}, s.err
+	}
+	return s.transcodeResult, nil
+}
+
+func (s stubMediaWorkerClient) ExtractFrames(_ context.Context, _, _ string, _ float64, _ int) (tools.MediaFrameExtractResult, error) {
+	if s.err != nil {
+		return tools.MediaFrameExtractResult{}, s.err
+	}
+	return s.framesResult, nil
+}
+
 type failingCheckpointWriter struct {
 	err error
 }
@@ -173,6 +226,10 @@ func newTestServiceWithExecutionOptions(t *testing.T, modelOutput string, execut
 }
 
 func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient) (*Service, string) {
+	return newTestServiceWithExecutionWorkers(t, modelOutput, executionBackend, checkpointWriter, playwrightClient, sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
+}
+
+func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -195,10 +252,16 @@ func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, 
 	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
 		t.Fatalf("register playwright tools: %v", err)
 	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -4406,6 +4469,109 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 	}
 	if record.LatestToolCall["tool_name"] != "page_search" {
 		t.Fatalf("expected runtime task to record page_search tool call, got %+v", record.LatestToolCall)
+	}
+}
+
+func TestServiceWorkerToolWritesToolCallEventNotification(t *testing.T) {
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), stubOCRWorkerClient{result: tools.OCRTextResult{Path: "notes/demo.txt", Text: "hello from ocr", Language: "plain_text", PageCount: 1, Source: "ocr_worker_text"}}, sidecarclient.NewNoopMediaWorkerClient())
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_ocr_extract",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请提取文本",
+		},
+		"intent": map[string]any{
+			"name": "extract_text",
+			"arguments": map[string]any{
+				"path": "notes/demo.txt",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "extract_text" {
+		t.Fatalf("expected extract_text latest tool call, got %+v", record.LatestToolCall)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected task notifications")
+	}
+	foundToolCallEvent := false
+	for _, notification := range notifications {
+		if notification.Method != "tool_call.completed" {
+			continue
+		}
+		toolCall, _ := notification.Params["tool_call"].(map[string]any)
+		eventPayload, _ := notification.Params["event"].(map[string]any)
+		payload, _ := eventPayload["payload"].(map[string]any)
+		if toolCall["tool_name"] == "extract_text" && payload["source"] == "ocr_worker_text" {
+			foundToolCallEvent = true
+		}
+	}
+	if !foundToolCallEvent {
+		t.Fatal("expected tool_call.completed notification to be queued for OCR worker")
+	}
+}
+
+func TestServiceMediaWorkerPropagatesArtifactsAndWorkerEventPayload(t *testing.T) {
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), stubMediaWorkerClient{transcodeResult: tools.MediaTranscodeResult{InputPath: "clips/demo.mov", OutputPath: "clips/demo.mp4", Format: "mp4", Source: "media_worker_ffmpeg"}})
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_media_transcode",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请转码视频",
+		},
+		"intent": map[string]any{
+			"name": "transcode_media",
+			"arguments": map[string]any{
+				"path":        "clips/demo.mov",
+				"output_path": "clips/demo.mp4",
+				"format":      "mp4",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "transcode_media" {
+		t.Fatalf("expected transcode_media latest tool call, got %+v", record.LatestToolCall)
+	}
+	toolOutput, _ := record.LatestToolCall["output"].(map[string]any)
+	if toolOutput["output_path"] != "clips/demo.mp4" {
+		t.Fatalf("expected media worker output path in tool call, got %+v", toolOutput)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected task notifications")
+	}
+	foundToolCallEvent := false
+	for _, notification := range notifications {
+		if notification.Method != "tool_call.completed" {
+			continue
+		}
+		eventPayload, _ := notification.Params["event"].(map[string]any)
+		payload, _ := eventPayload["payload"].(map[string]any)
+		if payload["source"] == "media_worker_ffmpeg" && payload["output_path"] == "clips/demo.mp4" {
+			foundToolCallEvent = true
+		}
+	}
+	if !foundToolCallEvent {
+		t.Fatalf("expected media worker tool_call.completed notification with output metadata, got %+v", notifications)
 	}
 }
 
