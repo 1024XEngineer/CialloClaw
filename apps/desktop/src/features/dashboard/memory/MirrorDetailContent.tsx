@@ -70,25 +70,26 @@ function MirrorHistoryDetail({
   const [conversationScopeFilter, setConversationScopeFilter] = useState<MirrorConversationScopeFilter>("all");
   const [conversationSourceFilter, setConversationSourceFilter] = useState<MirrorConversationRecord["source"] | "all">("all");
   const [conversationInputModeFilter, setConversationInputModeFilter] = useState<MirrorConversationInputModeFilter>("all");
-  const [conversationDateFilter, setConversationDateFilter] = useState<string | "all">("all");
+  const [conversationDateFilter, setConversationDateFilter] = useState<string | "all" | null>(null);
+  const conversationDateOptions = useMemo(() => buildMirrorConversationDateOptions(conversations), [conversations]);
+  const oldestConversationDateKey = conversationDateOptions.at(-1)?.date_key ?? null;
+  const newestConversationDateKey = conversationDateOptions[0]?.date_key ?? null;
+  const effectiveConversationDateFilter = conversationDateFilter ?? newestConversationDateKey ?? "all";
   const conversationFilters = useMemo(
     () =>
       ({
         scope: conversationScopeFilter,
         source: conversationSourceFilter,
         input_mode: conversationInputModeFilter,
-        date_key: conversationDateFilter,
+        date_key: effectiveConversationDateFilter,
       } satisfies MirrorConversationFilters),
-    [conversationDateFilter, conversationInputModeFilter, conversationScopeFilter, conversationSourceFilter],
+    [conversationInputModeFilter, conversationScopeFilter, conversationSourceFilter, effectiveConversationDateFilter],
   );
-  const conversationDateOptions = useMemo(() => buildMirrorConversationDateOptions(conversations), [conversations]);
   const filteredConversations = useMemo(
     () => filterMirrorConversationRecords(conversations, conversationFilters),
     [conversationFilters, conversations],
   );
   const groupedConversations = useMemo(() => groupMirrorConversationRecords(filteredConversations), [filteredConversations]);
-  const oldestConversationDateKey = conversationDateOptions.at(-1)?.date_key ?? null;
-  const newestConversationDateKey = conversationDateOptions[0]?.date_key ?? null;
   const dominantSource = conversationSummary.dominant_source ? getMirrorConversationSourceLabel(conversationSummary.dominant_source) : "等待新记录";
   const dominantMode = conversationSummary.dominant_input_mode ? getMirrorConversationInputModeLabel(conversationSummary.dominant_input_mode) : "等待新记录";
   const taskLinkedConversationCount = conversations.filter((record) => record.task_id).length;
@@ -100,10 +101,10 @@ function MirrorHistoryDetail({
   const textConversationCount = conversations.filter((record) => record.input_mode === "text").length;
 
   useEffect(() => {
-    if (conversationDateFilter !== "all" && !conversationDateOptions.some((option) => option.date_key === conversationDateFilter)) {
-      setConversationDateFilter("all");
+    if (conversationDateFilter && !conversationDateOptions.some((option) => option.date_key === conversationDateFilter)) {
+      setConversationDateFilter(newestConversationDateKey ?? "all");
     }
-  }, [conversationDateFilter, conversationDateOptions]);
+  }, [conversationDateFilter, conversationDateOptions, newestConversationDateKey]);
 
   return (
     <Tabs className="mirror-page__detail-tabs" defaultValue={conversations.length > 0 ? "conversation" : "summary"}>
@@ -252,7 +253,7 @@ function MirrorHistoryDetail({
                 <input
                   type="date"
                   className="mirror-page__conversation-date-input"
-                  value={conversationDateFilter === "all" ? "" : conversationDateFilter}
+                  value={effectiveConversationDateFilter === "all" ? "" : effectiveConversationDateFilter}
                   min={oldestConversationDateKey ?? undefined}
                   max={newestConversationDateKey ?? undefined}
                   onChange={(event) => {
@@ -267,7 +268,12 @@ function MirrorHistoryDetail({
                     ? `留空显示全部日期，可修改范围 ${oldestConversationDateKey} ~ ${newestConversationDateKey}。`
                     : "留空显示全部日期。"}
                 </p>
-                {conversationDateFilter !== "all" ? (
+                {conversationDateFilter === "all" ? (
+                  <button type="button" className="mirror-page__task-link" onClick={() => setConversationDateFilter(newestConversationDateKey ?? "all")}>
+                    回到最新日期
+                  </button>
+                ) : null}
+                {effectiveConversationDateFilter !== "all" ? (
                   <button type="button" className="mirror-page__task-link" onClick={() => setConversationDateFilter("all")}>
                     清除日期
                   </button>
