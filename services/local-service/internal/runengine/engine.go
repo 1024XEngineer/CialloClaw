@@ -257,6 +257,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 
 	e.tasks[taskID] = record
 	e.taskOrder = append([]string{taskID}, e.taskOrder...)
+	e.trackSessionLocked(record.SessionID)
 	e.persistTaskLocked(record)
 
 	return record.clone()
@@ -275,6 +276,33 @@ func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 	}
 
 	return record.clone(), true
+}
+
+// ActiveSessionTask returns the current task that is holding execution for the
+// given session. Only runtime-active states participate in the session queue.
+func (e *Engine) ActiveSessionTask(sessionID, excludeTaskID string) (TaskRecord, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return TaskRecord{}, false
+	}
+
+	for _, taskID := range e.taskOrder {
+		if taskID == excludeTaskID {
+			continue
+		}
+		record := e.tasks[taskID]
+		if record == nil || record.SessionID != sessionID {
+			continue
+		}
+		if isSessionBusyTask(record) {
+			return record.clone(), true
+		}
+	}
+
+	return TaskRecord{}, false
 }
 
 // HydrateTaskFromStorage 将持久化快照重新装载回运行时内存，用于恢复重启后的治理动作。
@@ -903,6 +931,102 @@ func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
 	return cloneMap(record.PendingExecution), true
 }
 
+// QueueTaskForSession blocks a task behind another active task in the same
+// session so the session-level agent loop remains serial.
+func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "blocked"
+	record.CurrentStep = "session_queue"
+	record.UpdatedAt = e.now()
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.Timeline = advanceTimeline(record.Timeline, "session_queue", "pending", "等待同一会话中的前序任务完成")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEventWithPayload(record, "task.session_queued", map[string]any{
+		"status":           record.Status,
+		"blocking_task_id": blockingTaskID,
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	record.queueNotification("task.session_queued", map[string]any{
+		"task_id":          record.TaskID,
+		"blocking_task_id": blockingTaskID,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// NextQueuedTaskForSession returns the earliest queued task that is waiting for
+// the same session lane to become available.
+func (e *Engine) NextQueuedTaskForSession(sessionID string) (TaskRecord, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return TaskRecord{}, false
+	}
+
+	var selected *TaskRecord
+	for _, taskID := range e.taskOrder {
+		record := e.tasks[taskID]
+		if record == nil || record.SessionID != sessionID {
+			continue
+		}
+		if record.Status != "blocked" || record.CurrentStep != "session_queue" {
+			continue
+		}
+		if selected == nil || record.StartedAt.Before(selected.StartedAt) {
+			selected = record
+		}
+	}
+	if selected == nil {
+		return TaskRecord{}, false
+	}
+	return selected.clone(), true
+}
+
+// ResumeQueuedTask returns a queued session task to processing once the session
+// lane becomes available again.
+func (e *Engine) ResumeQueuedTask(taskID, stepName string, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "processing"
+	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	record.UpdatedAt = e.now()
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", "前序任务完成，当前会话任务开始执行")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEventWithPayload(record, "task.session_resumed", map[string]any{
+		"status": record.Status,
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	record.queueNotification("task.session_resumed", map[string]any{
+		"task_id": record.TaskID,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // SetMemoryPlans 设置MemoryPlans。
 
 // SetMemoryPlans 记录 memory 读取/写入计划，供主链路后续交接和观测使用。
@@ -1451,6 +1575,18 @@ func currentTimelineStatus(timeline []TaskStepRecord) string {
 	return timeline[len(timeline)-1].Status
 }
 
+func isSessionBusyTask(record *TaskRecord) bool {
+	if record == nil {
+		return false
+	}
+	switch record.Status {
+	case "processing", "waiting_auth", "paused":
+		return true
+	default:
+		return false
+	}
+}
+
 // advanceTimeline 处理当前模块的相关逻辑。
 
 // advanceTimeline 推进 task timeline。
@@ -1522,6 +1658,19 @@ func buildRecoveryPoint(taskID string, createdAt time.Time) map[string]any {
 		"created_at":        createdAt.Format(time.RFC3339),
 		"objects":           []string{defaultRecoveryPathObj},
 	}
+}
+
+func (e *Engine) trackSessionLocked(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	for _, existing := range e.sessionOrder {
+		if existing == sessionID {
+			return
+		}
+	}
+	e.sessionOrder = append(e.sessionOrder, sessionID)
 }
 
 // timelineCurrentStepID 处理当前模块的相关逻辑。

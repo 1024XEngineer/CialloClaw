@@ -197,6 +197,12 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
 	deliveryResult := map[string]any(nil)
 	if !suggestion.RequiresConfirm {
+		if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+			return nil, queueErr
+		} else if queued {
+			task = queuedTask
+			bubble = queueBubble
+		} else {
 		governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
 		if governanceErr != nil {
 			return nil, governanceErr
@@ -209,6 +215,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
 		if execErr != nil {
 			return nil, execErr
+		}
 		}
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
@@ -266,6 +273,14 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 			task, _ = s.runEngine.GetTask(task.TaskID)
 			response["task"] = taskMap(task)
 		}
+		return response, nil
+	}
+
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return nil, queueErr
+	} else if queued {
+		response["task"] = taskMap(queuedTask)
+		response["bubble_message"] = queueBubble
 		return response, nil
 	}
 
@@ -619,6 +634,11 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 			return nil, ErrTaskAlreadyFinished
 		default:
 			return nil, err
+		}
+	}
+	if taskIsTerminal(updatedTask.Status) {
+		if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+			return nil, queueErr
 		}
 	}
 
@@ -1219,6 +1239,9 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 			return nil, ErrTaskNotFound
 		}
 		updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(s.audit.BuildAuthorizationAudit(updatedTask.TaskID, updatedTask.RunID, decision, impactScope)), nil)
+		if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+			return nil, queueErr
+		}
 		return map[string]any{
 			"authorization_record": authorizationRecord,
 			"task":                 taskMap(updatedTask),
@@ -1271,6 +1294,11 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	}
 	if updatedTask.Status == "failed" {
 		deliveryResult = nil
+	}
+	if taskIsTerminal(updatedTask.Status) {
+		if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+			return nil, queueErr
+		}
 	}
 
 	response := map[string]any{
@@ -1338,6 +1366,73 @@ func taskMap(record runengine.TaskRecord) map[string]any {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
 	}
 	return result
+}
+
+func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, bool, error) {
+	activeTask, ok := s.runEngine.ActiveSessionTask(task.SessionID, task.TaskID)
+	if !ok {
+		return runengine.TaskRecord{}, nil, false, nil
+	}
+
+	bubble := s.delivery.BuildBubbleMessage(
+		task.TaskID,
+		"status",
+		fmt.Sprintf("当前会话已有任务 %s 正在执行，本任务已排队等待。", truncateText(activeTask.Title, 24)),
+		task.UpdatedAt.Format(dateTimeLayout),
+	)
+	queuedTask, changed := s.runEngine.QueueTaskForSession(task.TaskID, activeTask.TaskID, bubble)
+	if !changed {
+		return runengine.TaskRecord{}, nil, false, ErrTaskNotFound
+	}
+	return queuedTask, bubble, true, nil
+}
+
+func (s *Service) drainSessionQueue(sessionID string) error {
+	for {
+		nextTask, ok := s.runEngine.NextQueuedTaskForSession(sessionID)
+		if !ok {
+			return nil
+		}
+
+		bubble := s.delivery.BuildBubbleMessage(
+			nextTask.TaskID,
+			"status",
+			"前序任务已完成，当前会话中的下一个任务开始执行。",
+			nextTask.UpdatedAt.Format(dateTimeLayout),
+		)
+		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, executionStepName(nextTask.Intent), bubble)
+		if !changed {
+			return ErrTaskNotFound
+		}
+
+		governedTask, _, handled, governanceErr := s.handleTaskGovernanceDecision(resumedTask, resumedTask.Intent)
+		if governanceErr != nil {
+			return governanceErr
+		}
+		if handled {
+			if taskIsTerminal(governedTask.Status) {
+				continue
+			}
+			return nil
+		}
+
+		updatedTask, _, _, _, err := s.executeTask(governedTask, snapshotFromTask(governedTask), governedTask.Intent)
+		if err != nil {
+			return err
+		}
+		if !taskIsTerminal(updatedTask.Status) {
+			return nil
+		}
+	}
+}
+
+func taskIsTerminal(status string) bool {
+	switch status {
+	case "completed", "cancelled", "ended_unfinished", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 // timelineMap 处理当前模块的相关逻辑。

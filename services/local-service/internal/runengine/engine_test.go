@@ -326,6 +326,75 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	}
 }
 
+func TestEngineSessionQueueBlocksAndResumesQueuedTasks(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+
+	active := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_queue",
+		Title:       "active task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "agent_loop",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "input",
+			OutputSummary: "running",
+		}},
+	})
+
+	queued := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_queue",
+		Title:       "queued task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "agent_loop",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "input",
+			OutputSummary: "running",
+		}},
+	})
+
+	activeTask, ok := engine.ActiveSessionTask("sess_queue", queued.TaskID)
+	if !ok || activeTask.TaskID != active.TaskID {
+		t.Fatalf("expected active session task to be the first task, got %+v ok=%v", activeTask, ok)
+	}
+
+	blocked, ok := engine.QueueTaskForSession(queued.TaskID, active.TaskID, map[string]any{"task_id": queued.TaskID, "type": "status", "text": "queued"})
+	if !ok {
+		t.Fatal("expected queue transition to succeed")
+	}
+	if blocked.Status != "blocked" || blocked.CurrentStep != "session_queue" {
+		t.Fatalf("expected queued task to enter blocked/session_queue, got %+v", blocked)
+	}
+
+	next, ok := engine.NextQueuedTaskForSession("sess_queue")
+	if !ok || next.TaskID != queued.TaskID {
+		t.Fatalf("expected next queued task lookup to find queued task, got %+v ok=%v", next, ok)
+	}
+
+	resumed, ok := engine.ResumeQueuedTask(queued.TaskID, "agent_loop", map[string]any{"task_id": queued.TaskID, "type": "status", "text": "resume"})
+	if !ok {
+		t.Fatal("expected queued task resume to succeed")
+	}
+	if resumed.Status != "processing" || resumed.CurrentStep != "agent_loop" {
+		t.Fatalf("expected resumed task to return to processing/agent_loop, got %+v", resumed)
+	}
+	if resumed.LatestEvent["type"] != "task.session_resumed" {
+		t.Fatalf("expected session resumed event, got %+v", resumed.LatestEvent)
+	}
+}
+
 func TestEngineResolveAuthorizationClearsPendingPlanAndKeepsRestorePoint(t *testing.T) {
 	engine := NewEngine()
 	now := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)

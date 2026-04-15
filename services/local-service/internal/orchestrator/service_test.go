@@ -381,6 +381,116 @@ func TestServiceSubmitInputUsesSuggestedWorkspaceDeliveryForLongAgentLoopInput(t
 	}
 }
 
+func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Queued task output.")
+
+	firstResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_serial",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please write this into a file after authorization.",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path":           "workspace_document",
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first start task failed: %v", err)
+	}
+	if firstResult["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected first task to wait for authorization, got %+v", firstResult["task"])
+	}
+
+	secondResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_serial",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second submit input failed: %v", err)
+	}
+
+	secondTask := secondResult["task"].(map[string]any)
+	if secondTask["status"] != "blocked" {
+		t.Fatalf("expected second task to be queued as blocked, got %+v", secondTask)
+	}
+	if secondTask["current_step"] != "session_queue" {
+		t.Fatalf("expected queued task current_step=session_queue, got %+v", secondTask)
+	}
+	if _, ok := secondResult["delivery_result"]; ok {
+		t.Fatalf("expected queued task not to return delivery_result yet, got %+v", secondResult["delivery_result"])
+	}
+}
+
+func TestServiceSecurityRespondResumesQueuedSessionTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Queued task resumed output.")
+
+	firstResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_resume_queue",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please write this into a file after authorization.",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path":           "workspace_document",
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first start task failed: %v", err)
+	}
+	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
+
+	secondResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_resume_queue",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second submit input failed: %v", err)
+	}
+	secondTaskID := secondResult["task"].(map[string]any)["task_id"].(string)
+
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":       firstTaskID,
+		"approval_id":   "appr_resume_queue",
+		"decision":      "allow_once",
+		"remember_rule": false,
+	}); err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	secondTask, ok := service.runEngine.GetTask(secondTaskID)
+	if !ok {
+		t.Fatal("expected queued second task to remain available in runtime")
+	}
+	if secondTask.Status != "completed" {
+		t.Fatalf("expected queued second task to resume and complete, got %+v", secondTask)
+	}
+	if secondTask.CurrentStep != "return_result" {
+		t.Fatalf("expected resumed task to finish through return_result, got %+v", secondTask)
+	}
+}
+
 func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 	service := newTestService()
 
@@ -2818,7 +2928,7 @@ func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	highlights := moduleResult["highlights"].([]string)
 	foundAuditHighlight := false
 	for _, highlight := range highlights {
-		if strings.Contains(highlight, "generate_text") || strings.Contains(highlight, "publish_result") {
+		if strings.Contains(highlight, "generate_text") || strings.Contains(highlight, "publish_result") || strings.Contains(highlight, "write_file") {
 			foundAuditHighlight = true
 			break
 		}
