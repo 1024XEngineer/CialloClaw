@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { GripHorizontal, X } from "lucide-react";
 import { Button, Heading, SegmentedControl, Slider, Switch, Text, TextArea, TextField } from "@radix-ui/themes";
 import {
   loadControlPanelData,
@@ -6,6 +7,7 @@ import {
   saveControlPanelData,
   type ControlPanelData,
 } from "@/services/controlPanelService";
+import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
 
 type PanelTone = "blush" | "warm" | "mist" | "leaf";
 
@@ -205,6 +207,33 @@ export function ControlPanelApp() {
     setDraft((current) => (current ? updater(current) : current));
   };
 
+  // The top bar doubles as the drag region, but interactive controls inside it
+  // must keep their own pointer behavior instead of starting a window move.
+  const handleTopbarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+
+    if (target?.closest("button, input, textarea, select, [role='switch']")) {
+      return;
+    }
+
+    void startCurrentDesktopWindowDragging();
+  };
+
+  const handleWindowDragPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    void startCurrentDesktopWindowDragging();
+  };
+
+  // Stop the close button press from bubbling into the drag region before
+  // the click handler requests the native close flow.
+  const handleWindowClosePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+  };
+
+  const handleWindowCloseClick = () => {
+    void requestCurrentDesktopWindowClose();
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
@@ -248,6 +277,72 @@ export function ControlPanelApp() {
   return (
     <main className="app-shell control-panel-page">
       <div className="control-panel-page__frame">
+        <section
+          className="control-panel-page__topbar control-panel-page__tone-surface--warm"
+          aria-label="控制面板窗口操作"
+          onPointerDown={handleTopbarPointerDown}
+        >
+          <div className="control-panel-page__page-copy">
+            <Text as="p" size="1" className="control-panel-page__meta-label">
+              Desktop Control Surface
+            </Text>
+            <Heading size="6" className="control-panel-page__page-title">
+              控制面板
+            </Heading>
+            <Text as="p" size="2" className="control-panel-page__meta-text">
+              拖动顶部区域可以移动窗口，按 Esc 或右上角按钮可以关闭。
+            </Text>
+          </div>
+
+          <div className="control-panel-page__topbar-side">
+            <div className="control-panel-page__meta-grid">
+              <div className="control-panel-page__meta-item">
+                <Text as="p" size="1" className="control-panel-page__meta-label">
+                  数据来源
+                </Text>
+                <div className="control-panel-page__meta-value">{sourceValue}</div>
+              </div>
+
+              <div className="control-panel-page__meta-item">
+                <Text as="p" size="1" className="control-panel-page__meta-label">
+                  保存状态
+                </Text>
+                <div className="control-panel-page__meta-value">{saveStateValue}</div>
+              </div>
+
+              <div className="control-panel-page__meta-item">
+                <Text as="p" size="1" className="control-panel-page__meta-label">
+                  最近恢复点
+                </Text>
+                <Text as="p" size="2" className="control-panel-page__meta-text">
+                  {latestRestorePoint}
+                </Text>
+              </div>
+            </div>
+
+            <div className="control-panel-page__window-actions">
+              <button
+                type="button"
+                className="control-panel-page__frame-button control-panel-page__frame-button--drag"
+                aria-label="拖动控制面板窗口"
+                onPointerDown={handleWindowDragPointerDown}
+              >
+                <GripHorizontal className="control-panel-page__frame-button-icon" />
+                <span>拖动窗口</span>
+              </button>
+
+              <button
+                type="button"
+                className="control-panel-page__frame-button control-panel-page__frame-button--close"
+                aria-label="关闭控制面板"
+                onClick={handleWindowCloseClick}
+                onPointerDown={handleWindowClosePointerDown}
+              >
+                <X className="control-panel-page__frame-button-icon" />
+              </button>
+            </div>
+          </div>
+        </section>
         <div className="control-panel-page__columns" aria-label="控制面板设置分组">
           <div className="control-panel-page__column">
             <section className="control-panel-page__panel control-panel-page__tone-surface--blush" aria-labelledby="control-panel-general-title">

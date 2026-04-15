@@ -1141,6 +1141,19 @@ test("dashboard and control-panel entrypoints install hide-on-close handling", (
   assert.match(controlPanelMainSource, /void installHideOnCloseRequest\(\)/);
 });
 
+test("control-panel entrypoint and view keep frameless window close and drag controls wired", () => {
+  const controlPanelMainSource = readFileSync(resolve(desktopRoot, "src/app/control-panel/main.tsx"), "utf8");
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelMainSource, /installDesktopEscapeClose/);
+  assert.match(controlPanelMainSource, /installDesktopEscapeClose\(\)/);
+  assert.match(controlPanelAppSource, /startCurrentDesktopWindowDragging/);
+  assert.match(controlPanelAppSource, /requestCurrentDesktopWindowClose/);
+  assert.match(controlPanelAppSource, /control-panel-page__topbar/);
+  assert.match(controlPanelAppSource, /拖动控制面板窗口/);
+  assert.match(controlPanelAppSource, /关闭控制面板/);
+});
+
 test("tray controller opens the control panel through the desktop window API", async () => {
   await withTrayControllerRuntime(async () => "control-panel", async ({ openControlPanelFromTray, calls }) => {
     await openControlPanelFromTray();
