@@ -159,6 +159,7 @@ export interface AgentInputSubmitParams {
 export interface AgentInputSubmitResult {
   task: Task;
   bubble_message: BubbleMessage | null;
+  delivery_result: DeliveryResult | null;
 }
 
 // AgentTaskStartParams 定义当前模块的接口约束。

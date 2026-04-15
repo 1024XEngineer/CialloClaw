@@ -547,9 +547,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **系统处理**：
   - 统一承接语音转写文本和轻量输入文本
   - 结合当前页面、选中文本、附带文件做上下文识别
-  - 创建 `task`，并进入意图确认或直接执行
+  - 创建 `task`，并进入意图确认或直接执行；若本轮已直接执行，则返回正式 `delivery_result`
 - **入参**：会话信息、触发来源、输入内容、上下文、语音元信息、执行偏好
-- **出参**：任务对象、气泡消息
+- **出参**：任务对象、气泡消息，按需附带 `delivery_result`
 
 ### agent.input.submit 入参说明
 
@@ -626,6 +626,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.task.intent`       | 当前推测意图   |
 | `data.task.current_step` | 当前步骤       |
 | `data.bubble_message`    | 气泡承接内容   |
+| `data.delivery_result`   | 直接执行时的正式交付结果，可为空 |
 | `meta.server_time`       | 服务端响应时间 |
 
 ### agent.input.submit 出参示例
@@ -654,7 +655,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_001",
         "type": "intent_confirm",
         "text": "你是想总结这段内容吗？"
-      }
+      },
+      "delivery_result": null
     },
     "meta": {
       "server_time": "2026-04-07T10:20:01+08:00"
