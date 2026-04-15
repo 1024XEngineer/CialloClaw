@@ -177,8 +177,9 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		}
 
 		return map[string]any{
-			"task":           taskMap(task),
-			"bubble_message": bubble,
+			"task":            taskMap(task),
+			"bubble_message":  bubble,
+			"delivery_result": nil,
 		}, nil
 	}
 
