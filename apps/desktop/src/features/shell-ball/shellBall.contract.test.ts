@@ -2157,6 +2157,24 @@ test("shell-ball mascot supports passive rendering outside the floating ball hos
   assert.match(markup, /data-state="processing"/);
 });
 
+test("shell-ball mascot surfaces a microphone marker while voice capture is active", () => {
+  const voiceMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "voice_listening",
+      motionConfig: getShellBallMotionConfig("voice_listening"),
+    }),
+  );
+  const idleMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+
+  assert.match(voiceMarkup, /shell-ball-mascot__voice-marker/);
+  assert.doesNotMatch(idleMarkup, /shell-ball-mascot__voice-marker/);
+});
+
 test("shell-ball release preview recomputes from the final pointer position", () => {
   assert.equal(
     getShellBallVoicePreviewFromEvent({
@@ -2308,6 +2326,33 @@ test("shell-ball input bar removes keyboard focus stops outside interactive mode
 
   assert.match(readonlyMarkup, /tabindex="-1"/i);
   assert.match(voiceMarkup, /tabindex="-1"/i);
+});
+
+test("shell-ball input bar uses a resizable textarea for focused draft editing", () => {
+  const interactiveMarkup = renderToStaticMarkup(
+    createElement(ShellBallInputBar, {
+      mode: "interactive",
+      voicePreview: null,
+      value: "Draft",
+      onValueChange: () => {},
+      onAttachFile: () => {},
+      onSubmit: () => {},
+      onFocusChange: () => {},
+    }),
+  );
+  const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
+  const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
+
+  assert.match(interactiveMarkup, /<textarea/);
+  assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \.shell-ball-input-bar__field \{[\s\S]*resize:\s*both;/);
+});
+
+test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
+  const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
+
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0;/);
 });
 
 test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {

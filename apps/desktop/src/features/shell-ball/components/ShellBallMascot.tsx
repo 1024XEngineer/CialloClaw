@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent } from "react";
-import { ArrowDown, ArrowUp, AudioLines, Lock, ShieldAlert, X } from "lucide-react";
+import { ArrowDown, ArrowUp, AudioLines, Lock, Mic, ShieldAlert, X } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
@@ -143,6 +143,7 @@ export function ShellBallMascot({
   const holdRingDashOffset = holdRingCircumference * (1 - voiceHoldProgress);
   const showVoiceHoldRing = voiceHoldProgress > 0 && visualState !== "voice_listening" && visualState !== "voice_locked";
   const shouldRenderVoiceHints = showVoiceHints && (visualState === "voice_listening" || visualState === "voice_locked");
+  const showVoiceMarker = visualState === "voice_listening" || visualState === "voice_locked";
 
   function resetPointerSequence() {
     activeSequenceRef.current = false;
@@ -383,6 +384,12 @@ export function ShellBallMascot({
               </div>
             </div>
           </div>
+
+          {showVoiceMarker ? (
+            <div className={cn("shell-ball-mascot__voice-marker", visualState === "voice_locked" && "is-locked")} aria-hidden="true">
+              <Mic className="shell-ball-mascot__voice-marker-icon" />
+            </div>
+          ) : null}
 
           {motionConfig.showAuthMarker ? (
             <div className="shell-ball-mascot__auth-marker" aria-hidden="true">

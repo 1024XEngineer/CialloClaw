@@ -20,6 +20,7 @@
 
 .shell-ball-window--input {
   gap: 0.42rem;
+  width: fit-content;
 }
 
 .shell-ball-surface[data-file-drop-active="true"] {
@@ -257,11 +258,13 @@
 
 .shell-ball-bubble-message--agent {
   background: linear-gradient(180deg, rgba(255, 253, 249, 0.84), rgba(245, 238, 228, 0.7));
+  border-bottom-left-radius: 0;
   color: #333;
 }
 
 .shell-ball-bubble-message--user {
   background: linear-gradient(180deg, rgba(125, 157, 200, 0.92), rgba(92, 123, 167, 0.86));
+  border-bottom-right-radius: 0;
   color: #f8fbff;
 }
 
@@ -524,7 +527,8 @@
 
 .shell-ball-input-bar,
 .shell-ball-input-bar--hidden {
-  width: var(--shell-ball-helper-width);
+  min-width: var(--shell-ball-helper-width);
+  width: fit-content;
 }
 
 .shell-ball-surface__file-drop-overlay {
@@ -685,7 +689,7 @@
 
 .shell-ball-input-bar {
   --shell-ball-input-accent: rgba(106, 145, 200, 0.34);
-  align-items: center;
+  align-items: end;
   background: transparent;
   border: 0;
   border-bottom: 2px solid rgba(91, 103, 118, 0.34);
@@ -693,7 +697,7 @@
   box-shadow: none;
   display: grid;
   gap: 0.5rem;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto auto;
   min-height: 2rem;
   padding: 0.05rem 0.12rem 0.22rem 0.2rem;
   position: relative;
@@ -730,14 +734,26 @@
   border: 0;
   caret-color: rgba(24, 24, 24, 0.9);
   color: rgba(24, 24, 24, 0.88);
+  display: block;
   font: inherit;
-  min-width: 0;
+  line-height: 1.42;
+  max-width: min(32rem, calc(100vw - 6rem));
+  min-height: 1.28rem;
+  min-width: 11rem;
   outline: 0;
+  overflow: auto;
   padding: 0 0.18rem;
+  resize: none;
+  white-space: pre-wrap;
+  width: clamp(12rem, calc(var(--shell-ball-helper-width) - 4.8rem), 23rem);
 }
 
 .shell-ball-input-bar__field::placeholder {
   color: rgba(24, 24, 24, 0.28);
+}
+
+.shell-ball-input-bar__field::-webkit-resizer {
+  background: linear-gradient(135deg, transparent 0 48%, rgba(91, 103, 118, 0.42) 48% 56%, transparent 56% 100%);
 }
 
 .shell-ball-input-bar__action {
@@ -824,6 +840,8 @@
 .shell-ball-input-bar--interactive:focus-within .shell-ball-input-bar__field {
   caret-color: rgba(18, 18, 18, 0.94);
   color: rgba(18, 18, 18, 0.94);
+  min-height: 2.56rem;
+  resize: both;
   text-shadow: none;
 }
 
@@ -1447,6 +1465,34 @@
   top: 1.26rem;
   width: 2.16rem;
   z-index: 4;
+}
+
+.shell-ball-mascot__voice-marker {
+  align-items: center;
+  background: rgba(235, 248, 250, 0.96);
+  border: 1px solid rgba(79, 157, 167, 0.28);
+  border-radius: 999px;
+  box-shadow: 0 14px 22px -18px rgba(64, 126, 128, 0.38);
+  color: #3d8b93;
+  display: inline-flex;
+  height: 2.16rem;
+  justify-content: center;
+  left: -0.72rem;
+  position: absolute;
+  top: 1.26rem;
+  width: 2.16rem;
+  z-index: 4;
+}
+
+.shell-ball-mascot__voice-marker.is-locked {
+  background: rgba(222, 247, 245, 0.98);
+  border-color: rgba(57, 145, 138, 0.34);
+  color: #2f7f79;
+}
+
+.shell-ball-mascot__voice-marker-icon {
+  height: 0.92rem;
+  width: 0.92rem;
 }
 
 .shell-ball-mascot__auth-icon {

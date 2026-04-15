@@ -32,7 +32,7 @@ export function ShellBallInputBar({
   onCompositionStateChange = () => {},
   onTransientInputActivity = () => {},
 }: ShellBallInputBarProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const compositionActiveRef = useRef(false);
   const trimmedValue = value.trim();
   const isHidden = mode === "hidden";
@@ -66,7 +66,7 @@ export function ShellBallInputBar({
     inputRef.current.select();
   }, [focusToken, isInteractive]);
 
-  function handleChange(event: ChangeEvent<HTMLInputElement>) {
+  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
     if (!isInteractive) {
       return;
     }
@@ -74,12 +74,12 @@ export function ShellBallInputBar({
     onValueChange(event.target.value);
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key.length === 1 || event.key === "Enter")) {
       onTransientInputActivity();
     }
 
-    if (event.key !== "Enter" || submitDisabled) {
+    if (event.key !== "Enter" || event.shiftKey || submitDisabled) {
       return;
     }
 
@@ -87,13 +87,13 @@ export function ShellBallInputBar({
     onSubmit();
   }
 
-  function handleCompositionStart(_event: CompositionEvent<HTMLInputElement>) {
+  function handleCompositionStart(_event: CompositionEvent<HTMLTextAreaElement>) {
     compositionActiveRef.current = true;
     onTransientInputActivity();
     onCompositionStateChange(true);
   }
 
-  function handleCompositionEnd(_event: CompositionEvent<HTMLInputElement>) {
+  function handleCompositionEnd(_event: CompositionEvent<HTMLTextAreaElement>) {
     compositionActiveRef.current = false;
     onCompositionStateChange(false);
   }
@@ -108,9 +108,8 @@ export function ShellBallInputBar({
       data-mode={mode}
       data-voice-preview={voicePreview ?? undefined}
     >
-      <input
+      <textarea
         ref={inputRef}
-        type="text"
         className="shell-ball-input-bar__field"
         value={value}
         onChange={handleChange}
@@ -130,6 +129,7 @@ export function ShellBallInputBar({
         tabIndex={isHidden || isVoice ? -1 : 0}
         aria-label="Shell-ball input"
         placeholder={isVoice ? "Voice capture is active" : ""}
+        rows={1}
       />
       <button
         type="button"
