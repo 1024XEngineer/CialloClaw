@@ -236,9 +236,13 @@ type ExecutionCapability interface {
 
 // CommandExecutionResult 描述一次受控命令执行的最小输出。
 type CommandExecutionResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
+	Stdout           string
+	Stderr           string
+	ExitCode         int
+	ExecutionBackend string
+	SandboxContainer string
+	SandboxImage     string
+	Interrupted      bool
 }
 
 // BrowserPageReadResult 描述浏览器页面读取的最小结果。

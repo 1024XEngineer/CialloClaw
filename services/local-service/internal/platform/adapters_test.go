@@ -2,6 +2,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"path/filepath"
@@ -132,5 +133,87 @@ func TestLocalOSCapabilityAdapterNamedPipeState(t *testing.T) {
 	}
 	if adapter.HasNamedPipe("pipe_demo") {
 		t.Fatal("expected pipe to be removed")
+	}
+}
+
+func TestLocalPlatformAdaptersCoverUtilityMethods(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	policy, err := NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	adapter := NewLocalFileSystemAdapter(policy)
+	if adapter.Join("notes", "demo.md") != filepath.Join("notes", "demo.md") {
+		t.Fatalf("unexpected join result")
+	}
+	if adapter.Clean(filepath.Join("notes", "..", "notes", "demo.md")) != filepath.Join("notes", "demo.md") {
+		t.Fatalf("unexpected clean result")
+	}
+	absPath, err := adapter.Abs("notes")
+	if err != nil {
+		t.Fatalf("Abs returned error: %v", err)
+	}
+	if absPath == "" {
+		t.Fatal("expected absolute path")
+	}
+	relPath, err := adapter.Rel(workspaceRoot, filepath.Join(workspaceRoot, "notes", "demo.md"))
+	if err != nil {
+		t.Fatalf("Rel returned error: %v", err)
+	}
+	if relPath != filepath.Join("notes", "demo.md") {
+		t.Fatalf("unexpected relative path: %q", relPath)
+	}
+	if adapter.Normalize(filepath.Join("notes", "..", "notes", "demo.md")) != "notes/demo.md" {
+		t.Fatalf("unexpected normalized path")
+	}
+	if _, err := adapter.EnsureWithinWorkspace(filepath.Join(workspaceRoot, "notes", "demo.md")); err != nil {
+		t.Fatalf("EnsureWithinWorkspace returned error: %v", err)
+	}
+	if err := adapter.MkdirAll(filepath.Join(workspaceRoot, "notes")); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := adapter.WriteFile(filepath.Join(workspaceRoot, "notes", "demo.md"), []byte("demo")); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	openedFile, err := adapter.Open("notes/demo.md")
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	if err := openedFile.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if _, err := adapter.Stat(filepath.Join(workspaceRoot, "notes", "demo.md")); err != nil {
+		t.Fatalf("Stat returned error: %v", err)
+	}
+	if err := adapter.Remove(filepath.Join(workspaceRoot, "notes", "demo.md")); err != nil {
+		t.Fatalf("Remove returned error: %v", err)
+	}
+	osAdapter := NewLocalOSCapabilityAdapter()
+	if err := osAdapter.Notify("title", "body"); err != nil {
+		t.Fatalf("Notify returned error: %v", err)
+	}
+	if err := osAdapter.OpenExternal("https://example.com"); err != nil {
+		t.Fatalf("OpenExternal returned error: %v", err)
+	}
+	if err := osAdapter.OpenExternal(""); err == nil {
+		t.Fatal("expected empty target rejection")
+	}
+	legacyBackend := LocalExecutionBackend{}
+	if legacyBackend.Name() != "docker" {
+		t.Fatalf("unexpected legacy backend name: %q", legacyBackend.Name())
+	}
+	result, err := legacyBackend.RunCommand(context.Background(), "go", []string{"env", "GOROOT"}, workspaceRoot)
+	if err != nil {
+		t.Fatalf("RunCommand returned error: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected zero exit code, got %+v", result)
+	}
+}
+
+func TestLocalStorageAdapterReturnsDatabasePath(t *testing.T) {
+	adapter := NewLocalStorageAdapter(filepath.Join("data", "cialloclaw.db"))
+	if adapter.DatabasePath() != filepath.Join("data", "cialloclaw.db") {
+		t.Fatalf("unexpected database path: %q", adapter.DatabasePath())
 	}
 }

@@ -46,7 +46,7 @@ func New(cfg config.Config) (*App, error) {
 	auditService := audit.NewService(storageService.AuditWriter())
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executionBackend := platform.LocalExecutionBackend{}
+	executionBackend := platform.NewDockerSandboxExecutionBackend(cfg.WorkspaceRoot)
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
 	if err != nil {

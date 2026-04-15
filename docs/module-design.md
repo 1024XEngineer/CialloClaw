@@ -1898,6 +1898,8 @@ sequenceDiagram
 **异常分支**：执行失败或用户中断时，必须显式回滚或保留可恢复信息。  
 **实现说明**：此链路是治理链的最小闭环，凡是跨工作区、命令执行、联网下载、删除/覆盖等动作，都必须从这里经过。
 
+补充说明：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；失败时不能静默回退到宿主直接执行。
+
 ```mermaid
 sequenceDiagram
     participant User as 用户
