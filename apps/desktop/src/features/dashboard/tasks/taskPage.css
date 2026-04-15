@@ -639,8 +639,10 @@
   border: 1px solid color-mix(in srgb, var(--task-line, rgba(156, 133, 113, 0.18)) 76%, var(--task-accent, #9fb7d8) 24%);
   border-radius: 999px;
   color: var(--task-ink, #5f544b);
+  cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
+  font: inherit;
   gap: 0.45rem;
   padding: 0.5rem 0.85rem;
 }
@@ -782,6 +784,17 @@
 
 .task-detail-context-item {
   padding: 0.9rem 1rem;
+}
+
+.task-detail-context-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.task-detail-context-item__action {
+  justify-self: start;
 }
 
 .task-detail-context-item__text,

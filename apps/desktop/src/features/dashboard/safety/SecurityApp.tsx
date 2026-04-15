@@ -59,6 +59,7 @@ import {
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
 import "./securityPage.css";
+import "./securityBoard.css";
 
 type SecurityCardKey = "status" | "restore" | "budget" | "governance" | `approval:${string}`;
 type CardPosition = { x: number; y: number };
@@ -992,6 +993,18 @@ export function SecurityApp() {
     };
   }, [activeDetailKey]);
 
+  const openTaskDetail = useCallback(
+    (taskId: string) => {
+      navigate(resolveDashboardModuleRoutePath("tasks"), {
+        state: {
+          focusTaskId: taskId,
+          openDetail: true,
+        },
+      });
+    },
+    [navigate],
+  );
+
   if (!moduleData) {
     return (
       <main className="app-shell security-page">
@@ -1006,18 +1019,6 @@ export function SecurityApp() {
   }
 
   const resolvedSourceCopy = sourceCopy ?? getSourceCopy(moduleData);
-
-  const openTaskDetail = useCallback(
-    (taskId: string) => {
-      navigate(resolveDashboardModuleRoutePath("tasks"), {
-        state: {
-          focusTaskId: taskId,
-          openDetail: true,
-        },
-      });
-    },
-    [navigate],
-  );
 
   const handleRespond = async (approval: ApprovalRequest, decision: ApprovalDecision, rememberRule: boolean) => {
     setActiveApprovalId(approval.approval_id);

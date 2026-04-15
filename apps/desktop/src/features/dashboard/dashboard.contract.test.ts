@@ -496,6 +496,45 @@ test("task page no longer exposes edit guidance and uses 安全总览 without an
   assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
+test("security board styles stay scoped to the safety feature stylesheet", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const securityBoardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityBoard.css"), "utf8");
+  const globalsSource = readFileSync(resolve(desktopRoot, "src/styles/globals.css"), "utf8");
+
+  assert.match(securityAppSource, /import "\.\/securityBoard\.css";/);
+  assert.match(securityBoardSource, /\.security-page__canvas\s*\{/);
+  assert.match(securityBoardSource, /@media \(max-width: 980px\)[\s\S]*\.security-page__detail-grid\s*\{/);
+  assert.doesNotMatch(globalsSource, /\.security-page__canvas\s*\{/);
+  assert.doesNotMatch(globalsSource, /\.security-page__draggable\s*\{/);
+});
+
+test("SecurityApp keeps task-detail navigation hooks above the module-data early return", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const earlyReturnIndex = securityAppSource.search(/if \(!moduleData\) \{\s*return \(\s*<main className="app-shell security-page">/);
+  const openTaskDetailHookIndex = securityAppSource.indexOf("const openTaskDetail = useCallback");
+
+  assert.notEqual(earlyReturnIndex, -1);
+  assert.notEqual(openTaskDetailHookIndex, -1);
+  assert.ok(openTaskDetailHookIndex < earlyReturnIndex);
+});
+
+test("task context links back into mirror detail state instead of plain text dead ends", () => {
+  const taskContextSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskContextBlock.tsx"), "utf8");
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+  const mirrorDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorDetailContent.tsx"), "utf8");
+
+  assert.match(taskContextSource, /resolveDashboardModuleRoutePath\("memory"\)/);
+  assert.match(taskContextSource, /activeDetailKey: "memory"/);
+  assert.match(taskContextSource, /focusMemoryId: memoryId/);
+  assert.match(taskContextSource, /activeDetailKey: "history"/);
+  assert.match(mirrorAppSource, /readMirrorRouteState/);
+  assert.match(mirrorAppSource, /focusMemoryId=\{focusedMemoryId\}/);
+  assert.match(mirrorAppSource, /navigate\(location\.pathname, \{ replace: true, state: null \}\)/);
+  assert.match(mirrorDetailSource, /focusMemoryId: string \| null/);
+  assert.match(mirrorDetailSource, /highlightedMemoryId/);
+  assert.match(mirrorDetailSource, /当前任务引用/);
+});
+
 test("task page keeps waiting-auth anchors and waiting-input escape hatches", () => {
   const { getTaskPrimaryActions } = loadTaskPageMapperModule();
   const waitingAuthTask = createTask({ status: "waiting_auth" });

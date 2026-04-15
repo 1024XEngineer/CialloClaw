@@ -31,6 +31,7 @@ type MirrorDetailContentProps = {
   conversations: MirrorConversationRecord[];
   conversationSummary: MirrorConversationSummary;
   dailyDigest: MirrorDailyDigest;
+  focusMemoryId: string | null;
   profileView: MirrorProfileView;
 };
 
@@ -388,12 +389,20 @@ function MirrorMemoryDetail({
   overview,
   rpcContext,
   conversations,
+  focusMemoryId,
   onOpenTaskDetail,
-}: Pick<MirrorDetailContentProps, "overview" | "rpcContext" | "conversations"> & {
+}: Pick<MirrorDetailContentProps, "overview" | "rpcContext" | "conversations" | "focusMemoryId"> & {
   onOpenTaskDetail: (taskId: string) => void;
 }) {
   const conversationSummary = buildMirrorConversationSummary(conversations);
   const latestTaskLinkedConversation = conversations.find((record) => record.task_id) ?? null;
+  const highlightedMemoryId = useMemo(() => {
+    if (focusMemoryId && overview.memory_references.some((reference) => reference.memory_id === focusMemoryId)) {
+      return focusMemoryId;
+    }
+
+    return overview.memory_references[0]?.memory_id ?? null;
+  }, [focusMemoryId, overview.memory_references]);
 
   return (
     <Tabs className="mirror-page__detail-tabs" defaultValue="references">
@@ -412,7 +421,7 @@ function MirrorMemoryDetail({
         ) : (
           <div className="mirror-page__memory-list mirror-page__memory-list--expanded">
             {overview.memory_references.map((reference, index) => (
-              <article key={reference.memory_id} className="mirror-page__memory-card">
+              <article key={reference.memory_id} className={`mirror-page__memory-card${reference.memory_id === highlightedMemoryId ? " is-active" : ""}`}>
                 <div className="mirror-page__memory-header">
                   <div className="mirror-page__memory-meta">
                     <p className="mirror-page__memory-index">记录 {index + 1}</p>
@@ -421,7 +430,9 @@ function MirrorMemoryDetail({
                       <h3 className="mirror-page__memory-title">{reference.memory_id}</h3>
                     </div>
                   </div>
-                  <StatusBadge tone="processing">引用记录</StatusBadge>
+                  <StatusBadge tone={reference.memory_id === highlightedMemoryId ? "green" : "processing"}>
+                    {reference.memory_id === highlightedMemoryId ? "当前任务引用" : "引用记录"}
+                  </StatusBadge>
                 </div>
 
                 <p className="mirror-page__memory-reason">{reference.reason}</p>
@@ -516,5 +527,5 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
     return <MirrorProfileDetail profileView={props.profileView} />;
   }
 
-  return <MirrorMemoryDetail conversations={props.conversations} onOpenTaskDetail={openTaskDetail} overview={props.overview} rpcContext={props.rpcContext} />;
+  return <MirrorMemoryDetail conversations={props.conversations} focusMemoryId={props.focusMemoryId} onOpenTaskDetail={openTaskDetail} overview={props.overview} rpcContext={props.rpcContext} />;
 }

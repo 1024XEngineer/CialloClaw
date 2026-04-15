@@ -1,3 +1,6 @@
+import { useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import type { TaskDetailData } from "../taskPage.types";
 
 type TaskContextBlockProps = {
@@ -5,7 +8,26 @@ type TaskContextBlockProps = {
 };
 
 export function TaskContextBlock({ detailData }: TaskContextBlockProps) {
+  const navigate = useNavigate();
   const { detail, experience } = detailData;
+  const openMirrorReference = useCallback(
+    (memoryId: string) => {
+      navigate(resolveDashboardModuleRoutePath("memory"), {
+        state: {
+          activeDetailKey: "memory",
+          focusMemoryId: memoryId,
+        },
+      });
+    },
+    [navigate],
+  );
+  const openMirrorHistory = useCallback(() => {
+    navigate(resolveDashboardModuleRoutePath("memory"), {
+      state: {
+        activeDetailKey: "history",
+      },
+    });
+  }, [navigate]);
 
   return (
     <div className="task-detail-context-grid">
@@ -21,6 +43,11 @@ export function TaskContextBlock({ detailData }: TaskContextBlockProps) {
                   <p className="task-detail-context-item__label">{reference.memory_id}</p>
                   <p className="task-detail-context-item__text">{reference.reason}</p>
                   <p className="task-detail-context-item__meta">{reference.summary}</p>
+                  <div className="task-detail-context-item__actions">
+                    <button className="task-detail-card__action task-detail-context-item__action" onClick={() => openMirrorReference(reference.memory_id)} type="button">
+                      在镜子中查看
+                    </button>
+                  </div>
                 </article>
               ))
             : null}
@@ -35,9 +62,16 @@ export function TaskContextBlock({ detailData }: TaskContextBlockProps) {
       </section>
 
       <section className="task-detail-card">
-        <div className="task-detail-card__header">
-          <p className="task-detail-card__eyebrow">最近对话</p>
-          <h3 className="task-detail-card__title">这次任务正在继承的上下文</h3>
+        <div className={`task-detail-card__header${experience.recentConversation.length > 0 ? " task-detail-card__header--actionable" : ""}`}>
+          <div>
+            <p className="task-detail-card__eyebrow">最近对话</p>
+            <h3 className="task-detail-card__title">这次任务正在继承的上下文</h3>
+          </div>
+          {experience.recentConversation.length > 0 ? (
+            <button className="task-detail-card__action" onClick={openMirrorHistory} type="button">
+              打开镜子记录
+            </button>
+          ) : null}
         </div>
         <ul className="task-detail-conversation-list">
           {experience.recentConversation.length > 0 ? experience.recentConversation.map((item) => <li key={item}>{item}</li>) : <li className="task-detail-card__empty">无</li>}

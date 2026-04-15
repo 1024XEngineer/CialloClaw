@@ -1429,11 +1429,20 @@
   gap: 0.9rem;
 }
 
+.mirror-page__memory-card.is-active {
+  border-top-color: rgba(110, 148, 118, 0.34);
+}
+
 .mirror-page__memory-summary {
   background: rgba(255, 255, 255, 0.46);
   border: 1px solid rgba(143, 111, 77, 0.12);
   border-radius: var(--mirror-radius-sm);
   padding: 0.95rem 1rem;
+}
+
+.mirror-page__memory-card.is-active .mirror-page__memory-summary {
+  background: rgba(244, 250, 246, 0.92);
+  border-color: rgba(110, 148, 118, 0.24);
 }
 
 .mirror-page__close-button:focus-visible,
