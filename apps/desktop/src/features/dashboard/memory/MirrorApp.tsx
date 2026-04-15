@@ -1051,6 +1051,7 @@ export function MirrorApp() {
                 conversations={mirrorData.conversations}
                 dailyDigest={mirrorData.dailyDigest}
                 focusMemoryId={focusedMemoryId}
+                latestRestorePoint={mirrorData.latestRestorePoint}
                 overview={overview}
                 onUpdateSettings={handleSettingsUpdate}
                 profileView={profileView}

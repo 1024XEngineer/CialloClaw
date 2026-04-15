@@ -2,9 +2,10 @@ import type { AgentTaskDetailGetResult, ApprovalRequest, RecoveryPoint } from "@
 import { isApprovalRequest, isRecoveryPoint } from "./dashboardContractValidators";
 
 const dashboardSafetySnapshotFeedback = "实时安全数据已变化，当前展示的是路由携带的快照。";
+type DashboardSafetyNavigationSource = "task-detail" | "mirror-detail";
 
 export type DashboardSafetyNavigationState = {
-  source: "task-detail";
+  source: DashboardSafetyNavigationSource;
   taskId: string;
   approvalRequest?: ApprovalRequest;
   restorePoint?: RecoveryPoint;
@@ -48,6 +49,16 @@ export function buildDashboardSafetyNavigationState(detail: AgentTaskDetailGetRe
   };
 }
 
+// Mirror restore cards only need to open the existing safety restore detail.
+// Reusing the same route contract keeps restore-point deep links consistent.
+export function buildDashboardSafetyRestorePointNavigationState(restorePoint: RecoveryPoint): DashboardSafetyNavigationState {
+  return {
+    restorePoint,
+    source: "mirror-detail",
+    taskId: restorePoint.task_id,
+  };
+}
+
 export function readDashboardSafetyNavigationState(value: unknown): DashboardSafetyNavigationState | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -63,7 +74,7 @@ export function readDashboardSafetyNavigationState(value: unknown): DashboardSaf
     }
   }
 
-  if (candidate.source !== "task-detail") {
+  if (candidate.source !== "task-detail" && candidate.source !== "mirror-detail") {
     return null;
   }
 

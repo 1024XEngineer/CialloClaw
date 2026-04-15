@@ -27,6 +27,7 @@ function loadDashboardSafetyNavigationModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSafetyNavigation.js")) as {
       buildDashboardSafetyNavigationState: (detail: AgentTaskDetailGetResult) => unknown;
+      buildDashboardSafetyRestorePointNavigationState: (restorePoint: RecoveryPoint) => unknown;
       readDashboardSafetyNavigationState: (value: unknown) => unknown;
       resolveDashboardSafetyNavigationRoute: (input: {
         locationState: unknown;
@@ -317,6 +318,18 @@ test("buildDashboardSafetyNavigationState follows the approved task-detail route
   );
 });
 
+test("buildDashboardSafetyRestorePointNavigationState keeps mirror restore deep links within the safety route contract", () => {
+  const { buildDashboardSafetyRestorePointNavigationState, readDashboardSafetyNavigationState } = loadDashboardSafetyNavigationModule();
+  const state = buildDashboardSafetyRestorePointNavigationState(createRecoveryPoint());
+
+  assert.deepEqual(state, {
+    restorePoint: createRecoveryPoint(),
+    source: "mirror-detail",
+    taskId: "task_dashboard_001",
+  });
+  assert.deepEqual(readDashboardSafetyNavigationState(state), state);
+});
+
 test("readDashboardSafetyNavigationState accepts valid routed state and rejects malformed values", () => {
   const { buildDashboardSafetyNavigationState, readDashboardSafetyNavigationState } = loadDashboardSafetyNavigationModule();
   const state = buildDashboardSafetyNavigationState(createDetail({ approval_request: null }));
@@ -574,10 +587,14 @@ test("task context links back into mirror detail state instead of plain text dea
   assert.match(taskContextSource, /activeDetailKey: "history"/);
   assert.match(mirrorAppSource, /readMirrorRouteState/);
   assert.match(mirrorAppSource, /focusMemoryId=\{focusedMemoryId\}/);
+  assert.match(mirrorAppSource, /latestRestorePoint=\{mirrorData\.latestRestorePoint\}/);
   assert.match(mirrorAppSource, /navigate\(location\.pathname, \{ replace: true, state: null \}\)/);
   assert.match(mirrorDetailSource, /focusMemoryId: string \| null/);
   assert.match(mirrorDetailSource, /highlightedMemoryId/);
   assert.match(mirrorDetailSource, /当前任务引用/);
+  assert.match(mirrorDetailSource, /resolveDashboardModuleRoutePath\("safety"\)/);
+  assert.match(mirrorDetailSource, /buildDashboardSafetyRestorePointNavigationState/);
+  assert.match(mirrorDetailSource, /前往恢复点/);
 });
 
 test("task page keeps waiting-auth anchors and waiting-input escape hatches", () => {

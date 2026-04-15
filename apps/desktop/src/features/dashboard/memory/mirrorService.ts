@@ -3,6 +3,7 @@ import type {
   AgentMirrorOverviewGetResult,
   ApprovalRequest,
   MirrorReference,
+  RecoveryPoint,
   RequestMeta,
   Task,
   TokenCostSummary,
@@ -40,6 +41,7 @@ export type MirrorInsightPreview = {
 export type MirrorOverviewData = {
   overview: AgentMirrorOverviewGetResult;
   insight: MirrorInsightPreview;
+  latestRestorePoint: RecoveryPoint | null;
   rpcContext: {
     serverTime: string | null;
     warnings: string[];
@@ -55,6 +57,7 @@ export type MirrorOverviewData = {
 type MirrorSupportContext = {
   finishedTasks: Task[];
   unfinishedTasks: Task[];
+  latestRestorePoint: RecoveryPoint | null;
   pendingApprovals: ApprovalRequest[];
   latestRestorePointSummary: string | null;
   securityStatus: string | null;
@@ -102,6 +105,7 @@ function getEmptyMirrorSupportContext(): MirrorSupportContext {
   return {
     finishedTasks: [],
     unfinishedTasks: [],
+    latestRestorePoint: null,
     pendingApprovals: [],
     latestRestorePointSummary: null,
     securityStatus: null,
@@ -130,6 +134,10 @@ async function loadMirrorSupportContext(source: MirrorOverviewSource): Promise<M
   return {
     finishedTasks: taskBuckets?.finished.items.map((item) => item.task) ?? [],
     unfinishedTasks: taskBuckets?.unfinished.items.map((item) => item.task) ?? [],
+    latestRestorePoint:
+      securityModule?.summary.latest_restore_point && typeof securityModule.summary.latest_restore_point !== "string"
+        ? securityModule.summary.latest_restore_point
+        : null,
     pendingApprovals: securityModule?.pending ?? [],
     latestRestorePointSummary:
       securityModule?.summary.latest_restore_point && typeof securityModule.summary.latest_restore_point !== "string"
@@ -189,6 +197,7 @@ function buildMirrorOverviewData(
   return {
     overview,
     insight: buildMirrorInsightPreview(overview, dailyDigest, conversationSummary),
+    latestRestorePoint: supportContext.latestRestorePoint,
     rpcContext: {
       ...rpcContext,
       warnings: [...rpcContext.warnings, ...supportContext.warnings],

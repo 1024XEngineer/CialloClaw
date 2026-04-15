@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentMirrorOverviewGetResult } from "@cialloclaw/protocol";
+import type { AgentMirrorOverviewGetResult, RecoveryPoint } from "@cialloclaw/protocol";
 import { BookMarked, BrainCircuit, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { StatusBadge } from "@cialloclaw/ui";
 import { Button, SegmentedControl, Switch } from "@radix-ui/themes";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { buildDashboardSafetyRestorePointNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import type { DashboardSettingsPatch } from "@/features/dashboard/shared/dashboardSettingsMutation";
 import {
@@ -48,6 +49,7 @@ import {
 type MirrorDetailContentProps = {
   activeDetailKey: MirrorDirectionKey;
   overview: AgentMirrorOverviewGetResult;
+  latestRestorePoint: RecoveryPoint | null;
   onUpdateSettings: (subject: string, patch: DashboardSettingsPatch) => Promise<string>;
   settingsSnapshot: DashboardSettingsSnapshotData;
   rpcContext: {
@@ -337,8 +339,11 @@ function MirrorHistoryDetail({
 
 function MirrorDailyDetail({
   dailyDigest,
+  latestRestorePoint,
+  onOpenRestorePoint,
   onOpenTaskDetail,
-}: Pick<MirrorDetailContentProps, "dailyDigest"> & {
+}: Pick<MirrorDetailContentProps, "dailyDigest" | "latestRestorePoint"> & {
+  onOpenRestorePoint: (restorePoint: RecoveryPoint) => void;
   onOpenTaskDetail: (taskId: string) => void;
 }) {
   return (
@@ -430,6 +435,13 @@ function MirrorDailyDetail({
                 <StatusBadge tone={note.tone}>{note.label}</StatusBadge>
               </div>
               <p className="mirror-page__summary-copy">{note.detail}</p>
+              {note.id === "restore-point" && latestRestorePoint ? (
+                <div className="mirror-page__conversation-actions">
+                  <button type="button" className="mirror-page__task-link" onClick={() => onOpenRestorePoint(latestRestorePoint)}>
+                    前往恢复点
+                  </button>
+                </div>
+              ) : null}
             </article>
           ))}
         </div>
@@ -984,6 +996,14 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
     },
     [navigate],
   );
+  const openSafetyRestorePoint = useMemo(
+    () => (restorePoint: RecoveryPoint) => {
+      navigate(resolveDashboardModuleRoutePath("safety"), {
+        state: buildDashboardSafetyRestorePointNavigationState(restorePoint),
+      });
+    },
+    [navigate],
+  );
   const updateGovernanceDrafts = useMemo(
     () => (updater: (current: MirrorGovernanceDraftSnapshot) => MirrorGovernanceDraftSnapshot) => {
       // Governance drafts intentionally stay local until the planned mirror
@@ -1085,7 +1105,7 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
   }
 
   if (props.activeDetailKey === "dailyStage") {
-    return <MirrorDailyDetail dailyDigest={props.dailyDigest} onOpenTaskDetail={openTaskDetail} />;
+    return <MirrorDailyDetail dailyDigest={props.dailyDigest} latestRestorePoint={props.latestRestorePoint} onOpenRestorePoint={openSafetyRestorePoint} onOpenTaskDetail={openTaskDetail} />;
   }
 
   if (props.activeDetailKey === "profile") {
