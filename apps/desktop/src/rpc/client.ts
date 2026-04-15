@@ -162,6 +162,20 @@ function createRequestId() {
   return `rpc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function logJsonRpcResponse(method: string, envelope: JsonRpcEnvelope<unknown>) {
+  console.log("[json-rpc response]", {
+    method,
+    envelope,
+  });
+}
+
+function logJsonRpcRequest(method: string, payload: JsonRpcRequest) {
+  console.log("[json-rpc request sent]", {
+    method,
+    payload,
+  });
+}
+
 // JsonRpcClient 定义当前模块的数据结构。
 export class JsonRpcClient {
   constructor(private readonly transport: JsonRpcTransport = createTransport()) {}
@@ -175,6 +189,8 @@ export class JsonRpcClient {
     };
 
     const body = await this.transport.send<T>(payload);
+    logJsonRpcRequest(method, payload);
+    logJsonRpcResponse(method, body);
 
     if (body.error) {
       throw new JsonRpcClientError(body.error);

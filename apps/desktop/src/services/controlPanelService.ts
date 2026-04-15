@@ -1,6 +1,5 @@
 import type {
   AgentSecuritySummaryGetResult,
-  AgentSettingsUpdateResult,
   AgentTaskInspectorConfigGetResult,
   AgentTaskInspectorRunResult,
   ApplyMode,
@@ -24,6 +23,7 @@ export type ControlPanelData = {
   settings: SettingsSnapshot["settings"];
   inspector: AgentTaskInspectorConfigGetResult;
   securitySummary: AgentSecuritySummaryGetResult["summary"];
+  providerApiKeyInput: string;
   source: ControlPanelSource;
 };
 
@@ -51,6 +51,39 @@ function projectInspectorToTaskAutomation(
       remind_before_deadline: inspector.remind_before_deadline,
       remind_when_stale: inspector.remind_when_stale,
     },
+  };
+}
+
+function normalizeSettingsSnapshot(settings: SettingsSnapshot["settings"]): SettingsSnapshot["settings"] {
+  return {
+    ...settings,
+    data_log: {
+      ...settings.data_log,
+      provider_api_key_configured: settings.data_log.provider_api_key_configured ?? false,
+    },
+  };
+}
+
+function buildSettingsWithProviderApiKeyConfigured(
+  settings: SettingsSnapshot["settings"],
+  providerApiKeyConfigured: boolean,
+): SettingsSnapshot["settings"] {
+  return {
+    ...settings,
+    data_log: {
+      ...settings.data_log,
+      provider_api_key_configured: providerApiKeyConfigured,
+    },
+  };
+}
+
+function buildDataLogUpdatePayload(input: ControlPanelData) {
+  const apiKey = input.providerApiKeyInput.trim();
+
+  return {
+    provider: input.settings.data_log.provider,
+    budget_auto_downgrade: input.settings.data_log.budget_auto_downgrade,
+    ...(apiKey === "" ? {} : { api_key: apiKey }),
   };
 }
 
@@ -98,9 +131,11 @@ function buildMockInspector(settings: DesktopSettings): AgentTaskInspectorConfig
 function getInitialControlPanelData(): ControlPanelData {
   const settings = loadSettings();
   const inspector = buildMockInspector(settings);
+  const normalizedSettings = normalizeSettingsSnapshot(projectInspectorToTaskAutomation(settings.settings, inspector));
   return {
-    settings: projectInspectorToTaskAutomation(settings.settings, inspector),
+    settings: normalizedSettings,
     inspector,
+    providerApiKeyInput: "",
     securitySummary: buildMockSecuritySummary(),
     source: "mock",
   };
@@ -116,8 +151,9 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
     ]);
 
     return {
-      settings: projectInspectorToTaskAutomation(settingsResult.settings, inspectorResult),
+      settings: normalizeSettingsSnapshot(projectInspectorToTaskAutomation(settingsResult.settings, inspectorResult)),
       inspector: inspectorResult,
+      providerApiKeyInput: "",
       securitySummary: securityResult.summary,
       source: "rpc",
     };
@@ -129,15 +165,19 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
 
 export async function saveControlPanelData(data: ControlPanelData): Promise<ControlPanelSaveResult> {
   if (data.source === "mock") {
-    const nextSettings: DesktopSettings = {
-      settings: projectInspectorToTaskAutomation(data.settings, data.inspector),
+    const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
+      projectInspectorToTaskAutomation(data.settings, data.inspector),
+      data.settings.data_log.provider_api_key_configured,
+    );
+    const nextDesktopSettings: DesktopSettings = {
+      settings: nextSettingsSnapshot,
     };
-    saveSettings(nextSettings);
+    saveSettings(nextDesktopSettings);
     return {
       applyMode: "immediate",
       needRestart: false,
       updatedKeys: ["general", "floating_ball", "memory", "task_automation", "data_log"],
-      effectiveSettings: nextSettings.settings,
+      effectiveSettings: nextDesktopSettings.settings,
       effectiveInspector: data.inspector,
       source: "mock",
     };
@@ -150,7 +190,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
         general: data.settings.general,
         floating_ball: data.settings.floating_ball,
         memory: data.settings.memory,
-        data_log: data.settings.data_log,
+        data_log: buildDataLogUpdatePayload(data),
       }),
       updateTaskInspectorConfig({
         request_meta: createRequestMeta(),
@@ -163,11 +203,18 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       }),
     ]);
 
+    const effectiveSettings = normalizeSettingsSnapshot(
+      projectInspectorToTaskAutomation(
+        settingsResult.effective_settings as SettingsSnapshot["settings"],
+        inspectorResult.effective_config,
+      ),
+    );
+
     return {
       applyMode: settingsResult.apply_mode,
       needRestart: settingsResult.need_restart,
       updatedKeys: settingsResult.updated_keys,
-      effectiveSettings: projectInspectorToTaskAutomation(settingsResult.effective_settings as SettingsSnapshot["settings"], inspectorResult.effective_config),
+      effectiveSettings,
       effectiveInspector: inspectorResult.effective_config,
       source: "rpc",
     };
@@ -177,15 +224,19 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
     }
 
     logRpcMockFallback("control panel save", error);
-    const nextSettings: DesktopSettings = {
-      settings: projectInspectorToTaskAutomation(data.settings, data.inspector),
+    const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
+      projectInspectorToTaskAutomation(data.settings, data.inspector),
+      data.settings.data_log.provider_api_key_configured,
+    );
+    const nextDesktopSettings: DesktopSettings = {
+      settings: nextSettingsSnapshot,
     };
-    saveSettings(nextSettings);
+    saveSettings(nextDesktopSettings);
     return {
       applyMode: "immediate",
       needRestart: false,
       updatedKeys: ["general", "floating_ball", "memory", "task_automation", "data_log"],
-      effectiveSettings: nextSettings.settings,
+      effectiveSettings: nextDesktopSettings.settings,
       effectiveInspector: data.inspector,
       source: "mock",
     };
