@@ -28,6 +28,7 @@ use windows::Win32::{
 type JsonChannel = Channel<Value>;
 
 const NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
+const CONTROL_PANEL_WINDOW_LABEL: &str = "control-panel";
 const DASHBOARD_WINDOW_LABEL: &str = "dashboard";
 const SHELL_BALL_WINDOW_LABEL: &str = "shell-ball";
 const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
@@ -38,6 +39,7 @@ const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
 const TRAY_ICON_ID: &str = "main-tray";
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
+const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
 
 #[cfg(windows)]
@@ -388,9 +390,19 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
         MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球").build(app)?;
     let hide_shell_ball =
         MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "隐藏悬浮球").build(app)?;
+    let open_control_panel = MenuItemBuilder::with_id(
+        TRAY_MENU_OPEN_CONTROL_PANEL_ID,
+        "打开控制面板",
+    )
+    .build(app)?;
     let quit_app = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "关闭程序").build(app)?;
     let tray_menu = MenuBuilder::new(app)
-        .items(&[&show_shell_ball_menu_item, &hide_shell_ball, &quit_app])
+        .items(&[
+            &show_shell_ball_menu_item,
+            &hide_shell_ball,
+            &open_control_panel,
+            &quit_app,
+        ])
         .build()?;
 
     let tray_builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
@@ -406,6 +418,11 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
             TRAY_MENU_HIDE_SHELL_BALL_ID => {
                 if let Err(error) = hide_shell_ball_cluster(app) {
                     eprintln!("failed to hide shell-ball from tray: {error}");
+                }
+            }
+            TRAY_MENU_OPEN_CONTROL_PANEL_ID => {
+                if let Err(error) = focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL) {
+                    eprintln!("failed to open control panel from tray: {error}");
                 }
             }
             TRAY_MENU_QUIT_ID => {

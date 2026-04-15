@@ -8,10 +8,23 @@ const SETTINGS_KEY = "cialloclaw.settings";
 // DesktopSettings 定义当前模块的数据结构。
 export type DesktopSettings = SettingsSnapshot;
 
+function normalizeDesktopSettings(settings: DesktopSettings): DesktopSettings {
+  return {
+    settings: {
+      ...settings.settings,
+      data_log: {
+        ...settings.settings.data_log,
+        provider_api_key_configured: settings.settings.data_log.provider_api_key_configured ?? false,
+      },
+    },
+  };
+}
+
 // loadSettings 处理当前模块的相关逻辑。
 export function loadSettings(): DesktopSettings {
   return (
-    loadStoredValue<DesktopSettings>(SETTINGS_KEY) ?? {
+    normalizeDesktopSettings(
+      loadStoredValue<DesktopSettings>(SETTINGS_KEY) ?? {
       settings: {
         general: {
           language: "zh-CN",
@@ -56,13 +69,15 @@ export function loadSettings(): DesktopSettings {
         data_log: {
           provider: "openai",
           budget_auto_downgrade: true,
+          provider_api_key_configured: false,
         },
       },
-    }
+    },
+    )
   );
 }
 
 // saveSettings 处理当前模块的相关逻辑。
 export function saveSettings(settings: DesktopSettings) {
-  saveStoredValue(SETTINGS_KEY, settings);
+  saveStoredValue(SETTINGS_KEY, normalizeDesktopSettings(settings));
 }
