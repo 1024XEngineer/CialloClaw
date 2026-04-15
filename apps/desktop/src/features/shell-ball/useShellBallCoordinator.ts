@@ -218,7 +218,10 @@ function syncShellBallVisualStateFromTaskStatus(status: Parameters<typeof getShe
   useShellBallStore.getState().setVisualState(nextState);
 }
 
-function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fallbackCreatedAt: string) {
+function createShellBallAgentBubbleItem(
+  result: Pick<ShellBallInputSubmitResult, "task" | "bubble_message" | "delivery_result">,
+  fallbackCreatedAt: string,
+) {
   const deliveryPreview = result.delivery_result?.type === "bubble" ? result.delivery_result.preview_text?.trim() ?? "" : "";
   const bubbleMessage = result.bubble_message;
 

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
-import { ShellBallSurface } from "./ShellBallSurface";
+import { extractShellBallDroppedText, resolveShellBallTextDropEffect, ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
+import type { ShellBallVisualState } from "./shellBall.types";
 import { emitShellBallInputRequestFocus, useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import { shellBallWindowSyncEvents, type ShellBallGlobalDragStatePayload } from "./shellBall.windowSync";
@@ -31,6 +32,40 @@ type ShellBallWindowAnchor = {
 };
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
+
+export function shouldShowShellBallFileDropOverlay(input: {
+  fileDropActive: boolean;
+  globalDragActive: boolean;
+  shellBallWindowDragActive: boolean;
+  visualState: ShellBallVisualState;
+}) {
+  if (input.fileDropActive) {
+    return true;
+  }
+
+  if (input.visualState === "voice_listening" || input.visualState === "voice_locked") {
+    return false;
+  }
+
+  return input.globalDragActive && !input.shellBallWindowDragActive;
+}
+
+export function shouldArmShellBallTextDropTarget(input: {
+  fileDropActive: boolean;
+  globalDragActive: boolean;
+  shellBallWindowDragActive: boolean;
+  visualState: ShellBallVisualState;
+}) {
+  if (input.fileDropActive || input.shellBallWindowDragActive) {
+    return false;
+  }
+
+  if (input.visualState === "voice_listening" || input.visualState === "voice_locked") {
+    return false;
+  }
+
+  return input.globalDragActive;
+}
 
 function waitForAnimationFrame() {
   return new Promise<void>((resolve) => {
@@ -142,6 +177,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleSubmitText,
     handleAttachFile,
     handleDroppedFiles: handleAppendPendingFiles,
+    handleDroppedText,
     handleRemovePendingFile,
     handleInputFocusChange,
     handleInputFocusRequest,
@@ -373,6 +409,57 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     void openOrFocusDesktopWindow("dashboard");
   }
 
+  const handleSurfaceTextDrop = useCallback((text: string) => {
+    handleDroppedText(text);
+    window.requestAnimationFrame(() => {
+      void emitShellBallInputRequestFocus(Date.now());
+    });
+  }, [handleDroppedText]);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    function handleWindowTextDragOver(event: DragEvent) {
+      if (!shouldAcceptShellBallTextDrop(event.dataTransfer)) {
+        return;
+      }
+
+      event.preventDefault();
+      const dropEffect = resolveShellBallTextDropEffect(event.dataTransfer.effectAllowed);
+      if (dropEffect !== null) {
+        event.dataTransfer.dropEffect = dropEffect;
+      }
+    }
+
+    function handleWindowTextDrop(event: DragEvent) {
+      if (!shouldAcceptShellBallTextDrop(event.dataTransfer)) {
+        return;
+      }
+
+      event.preventDefault();
+      const droppedText = extractShellBallDroppedText(event.dataTransfer);
+      if (droppedText === "") {
+        return;
+      }
+
+      handleSurfaceTextDrop(droppedText);
+    }
+
+    window.addEventListener("dragenter", handleWindowTextDragOver);
+    window.addEventListener("dragover", handleWindowTextDragOver);
+    window.addEventListener("drop", handleWindowTextDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleWindowTextDragOver);
+      window.removeEventListener("dragover", handleWindowTextDragOver);
+      window.removeEventListener("drop", handleWindowTextDrop);
+    };
+  }, [handleSurfaceTextDrop]);
+
   const { handleDroppedFiles: handleCoordinatorDroppedFiles } = useShellBallCoordinator({
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
@@ -397,7 +484,18 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
-      fileDropActive={fileDropActive || (globalDragActive && !shellBallWindowDragActive)}
+      fileDropActive={shouldShowShellBallFileDropOverlay({
+        fileDropActive,
+        globalDragActive,
+        shellBallWindowDragActive,
+        visualState,
+      })}
+      textDropActive={shouldArmShellBallTextDropTarget({
+        fileDropActive,
+        globalDragActive,
+        shellBallWindowDragActive,
+        visualState,
+      })}
       visualState={visualState}
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}
@@ -410,6 +508,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onDoubleClick={handleDoubleClick}
       onRegionEnter={handleRegionEnter}
       onRegionLeave={handleRegionLeave}
+      onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
       onInputProxyClick={() => {
         handleInputFocusRequest();

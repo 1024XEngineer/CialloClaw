@@ -88,6 +88,31 @@ function mergeShellBallPendingFiles(currentPaths: string[], incomingPaths: strin
   return normalizeShellBallPendingFiles([...currentPaths, ...incomingPaths]);
 }
 
+export function normalizeShellBallDroppedText(text: string) {
+  return text.replace(/\r\n/g, "\n").trim();
+}
+
+export function appendShellBallDroppedText(input: {
+  currentValue: string;
+  droppedText: string;
+}) {
+  const normalizedDroppedText = normalizeShellBallDroppedText(input.droppedText);
+
+  if (normalizedDroppedText === "") {
+    return input.currentValue;
+  }
+
+  if (input.currentValue.trim() === "") {
+    return normalizedDroppedText;
+  }
+
+  if (/\s$/.test(input.currentValue)) {
+    return `${input.currentValue}${normalizedDroppedText}`;
+  }
+
+  return `${input.currentValue}\n${normalizedDroppedText}`;
+}
+
 export function createShellBallInputSubmitParams(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
@@ -222,6 +247,22 @@ export function getShellBallVoicePreviewFromEvent(input: {
 
 export function shouldKeepShellBallVoicePreviewOnRegionLeave(state: ShellBallVisualState) {
   return state === "voice_listening";
+}
+
+export function shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(state: ShellBallVisualState) {
+  return state === "voice_listening" || state === "voice_locked";
+}
+
+export function getShellBallVoiceRecognitionUnexpectedEndFallbackState(input: {
+  currentState: ShellBallVisualState;
+  startState: ShellBallVisualState;
+  committedDraft: string;
+}) {
+  if (input.currentState === "voice_listening" || input.currentState === "voice_locked") {
+    return "hover_input" as const;
+  }
+
+  return input.startState === "hover_input" || input.committedDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const);
 }
 
 export function getShellBallPostSubmitInputReset(inputValue: string) {
@@ -406,6 +447,14 @@ export function useShellBallInteraction() {
     setInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
   }
 
+  function preserveUnexpectedVoiceTranscriptDraft() {
+    const committedDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, voiceTranscriptRef.current);
+    voiceBaseDraftRef.current = committedDraft;
+    voiceTranscriptRef.current = "";
+    setInputValue(committedDraft);
+    return committedDraft;
+  }
+
   async function finalizeVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
     const resolution = resolveShellBallVoiceRecognitionFinalState({
       reason,
@@ -520,12 +569,11 @@ export function useShellBallInteraction() {
         return;
       }
 
-      if (recognitionStopReasonRef.current === "cancel" && event.error === "aborted") {
+      if (recognitionStopReasonRef.current !== "none") {
         return;
       }
 
       console.warn("shell-ball speech recognition error", event.error);
-      recognitionStopReasonRef.current = "cancel";
     };
 
     recognition.onend = () => {
@@ -537,6 +585,28 @@ export function useShellBallInteraction() {
 
       if (stopReason === "finish" || stopReason === "cancel") {
         void finalizeVoiceRecognition(stopReason);
+        return;
+      }
+
+      const currentState = controllerRef.current?.getState() ?? visualState;
+
+      if (shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(currentState)) {
+        const committedDraft = preserveUnexpectedVoiceTranscriptDraft();
+
+        if (startVoiceRecognition()) {
+          return;
+        }
+
+        setCurrentVoicePreview(null);
+        controllerRef.current?.forceState(
+          getShellBallVoiceRecognitionUnexpectedEndFallbackState({
+            currentState,
+            startState: voiceStartStateRef.current,
+            committedDraft,
+          }),
+          { regionActive: regionActiveRef.current, hoverRetained: false },
+        );
+        syncVisualState();
         return;
       }
 
@@ -824,6 +894,20 @@ export function useShellBallInteraction() {
     syncVisualState();
   }
 
+  function handleDroppedText(text: string) {
+    const nextInputValue = appendShellBallDroppedText({
+      currentValue: inputValueRef.current,
+      droppedText: text,
+    });
+
+    if (nextInputValue === inputValueRef.current) {
+      return;
+    }
+
+    setInputValue(nextInputValue);
+    handleInputFocusRequest();
+  }
+
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
     disposeVoiceRecognition();
@@ -884,6 +968,7 @@ export function useShellBallInteraction() {
     handleAttachFile,
     handleDroppedFiles,
     handleRemovePendingFile,
+    handleDroppedText,
     handlePressStart,
     handlePressMove,
     handlePressEnd,
