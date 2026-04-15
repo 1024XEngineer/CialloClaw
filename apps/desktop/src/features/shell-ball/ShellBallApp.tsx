@@ -7,6 +7,7 @@ import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { emitShellBallInputRequestFocus, useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
+import { shellBallWindowSyncEvents, type ShellBallGlobalDragStatePayload } from "./shellBall.windowSync";
 import type { ShellBallDashboardTransitionRequest } from "../../platform/dashboardWindowTransition";
 import { shellBallDashboardTransitionEvents } from "../../platform/dashboardWindowTransition";
 import {
@@ -152,6 +153,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const showDemoSwitcher = shouldShowShellBallDemoSwitcher(isDev);
   const { rootRef, windowFrame } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
+  const [globalDragActive, setGlobalDragActive] = useState(false);
   const [fileDropActive, setFileDropActive] = useState(false);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
@@ -274,6 +276,36 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     let cleanup: (() => void) | null = null;
     let disposed = false;
 
+    void currentWindow.listen<ShellBallGlobalDragStatePayload>(
+      shellBallWindowSyncEvents.globalDragState,
+      ({ payload }) => {
+        setGlobalDragActive(payload.active);
+      },
+    ).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+
+      cleanup = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
     void currentWindow.onDragDropEvent((event) => {
       switch (event.payload.type) {
         case "enter":
@@ -339,7 +371,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
-      fileDropActive={fileDropActive}
+      fileDropActive={globalDragActive || fileDropActive}
       visualState={visualState}
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}

@@ -33,6 +33,7 @@ const SHELL_BALL_WINDOW_LABEL: &str = "shell-ball";
 const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
 const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
+const SHELL_BALL_GLOBAL_DRAG_STATE_EVENT: &str = "desktop-shell-ball:global-drag-state";
 const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
 const TRAY_ICON_ID: &str = "main-tray";
@@ -451,10 +452,122 @@ struct CursorPosition {
 }
 
 #[cfg(windows)]
+#[derive(Clone, serde::Serialize)]
+struct ShellBallGlobalDragStatePayload {
+    active: bool,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+struct ShellBallGlobalDragState {
+    start_point: Option<POINT>,
+    button_pressed: bool,
+    active: bool,
+}
+
+#[cfg(windows)]
 static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
 static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[cfg(windows)]
+static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> =
+    Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_GLOBAL_DRAG: Lazy<Mutex<ShellBallGlobalDragState>> =
+    Lazy::new(|| Mutex::new(ShellBallGlobalDragState::default()));
+
+#[cfg(windows)]
+const SHELL_BALL_GLOBAL_DRAG_THRESHOLD_PX: i32 = 14;
+
+#[cfg(windows)]
+fn store_shell_ball_app_handle(app_handle: tauri::AppHandle) {
+    if let Ok(mut slot) = SHELL_BALL_APP_HANDLE.lock() {
+        *slot = Some(app_handle);
+    }
+}
+
+#[cfg(windows)]
+fn emit_shell_ball_global_drag_state(active: bool) {
+    let app_handle = SHELL_BALL_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+
+    if let Some(app_handle) = app_handle {
+        let _ = app_handle.emit_to(
+            SHELL_BALL_WINDOW_LABEL,
+            SHELL_BALL_GLOBAL_DRAG_STATE_EVENT,
+            ShellBallGlobalDragStatePayload { active },
+        );
+    }
+}
+
+#[cfg(windows)]
+fn update_shell_ball_global_drag_state(message: u32, point: POINT) {
+    let mut drag_state = match SHELL_BALL_GLOBAL_DRAG.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+
+    match message {
+        WM_LBUTTONDOWN => {
+            drag_state.start_point = Some(point);
+            drag_state.button_pressed = true;
+            if drag_state.active {
+                drag_state.active = false;
+                emit_shell_ball_global_drag_state(false);
+            }
+        }
+        WM_MOUSEMOVE => {
+            if !drag_state.button_pressed || drag_state.active {
+                return;
+            }
+
+            let Some(start_point) = drag_state.start_point else {
+                return;
+            };
+
+            let delta_x = point.x - start_point.x;
+            let delta_y = point.y - start_point.y;
+            let threshold = SHELL_BALL_GLOBAL_DRAG_THRESHOLD_PX;
+
+            if delta_x.abs() >= threshold || delta_y.abs() >= threshold {
+                drag_state.active = true;
+                emit_shell_ball_global_drag_state(true);
+            }
+        }
+        WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP => {
+            let should_emit = drag_state.active;
+            drag_state.start_point = None;
+            drag_state.button_pressed = false;
+            drag_state.active = false;
+            if should_emit {
+                emit_shell_ball_global_drag_state(false);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(windows)]
+fn ensure_shell_ball_mouse_hook() -> Result<(), String> {
+    let mut mouse_hook = SHELL_BALL_MOUSE_HOOK
+        .lock()
+        .map_err(|_| "shell-ball mouse hook lock poisoned".to_string())?;
+
+    if mouse_hook.is_none() {
+        *mouse_hook = Some(
+            unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mousemove_forward), None, 0) }
+                .map_err(|error| format!("failed to install shell-ball mouse hook: {error}"))?
+                .0 as isize,
+        );
+    }
+
+    Ok(())
+}
 
 #[cfg(windows)]
 unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
@@ -475,29 +588,10 @@ unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
         Err(_) => return,
     };
 
-    let mut mouse_hook = match SHELL_BALL_MOUSE_HOOK.lock() {
-        Ok(guard) => guard,
-        Err(_) => return,
-    };
-
     if forward {
         forwarding_windows.insert(browser_hwnd.0 as isize);
-
-        if mouse_hook.is_none() {
-            *mouse_hook = Some(
-                SetWindowsHookExW(WH_MOUSE_LL, Some(mousemove_forward), None, 0)
-                    .expect("failed to install shell-ball mouse hook")
-                    .0 as isize,
-            );
-        }
     } else {
         forwarding_windows.remove(&(browser_hwnd.0 as isize));
-
-        if forwarding_windows.is_empty() {
-            if let Some(hook) = mouse_hook.take() {
-                let _ = UnhookWindowsHookEx(HHOOK(hook as _));
-            }
-        }
     }
 }
 
@@ -511,9 +605,10 @@ unsafe extern "system" fn mousemove_forward(
         return CallNextHookEx(None, n_code, w_param, l_param);
     }
 
-    if w_param.0 as u32 == WM_MOUSEMOVE {
-        let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+    let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+    update_shell_ball_global_drag_state(w_param.0 as u32, point);
 
+    if w_param.0 as u32 == WM_MOUSEMOVE {
         let forwarding_windows = match FORWARDING_WINDOWS.lock() {
             Ok(guard) => guard,
             Err(_) => return CallNextHookEx(None, n_code, w_param, l_param),
@@ -625,7 +720,16 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
-        .setup(|app| Ok(install_system_tray(app)?))
+        .setup(|app| {
+            install_system_tray(app)?;
+            #[cfg(windows)]
+            {
+                store_shell_ball_app_handle(app.handle().clone());
+                ensure_shell_ball_mouse_hook()
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             named_pipe_request,
             named_pipe_subscribe,
