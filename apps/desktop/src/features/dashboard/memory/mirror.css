@@ -1057,8 +1057,8 @@
 }
 
 .mirror-page__detail-panel > section > .cc-panel-surface__header {
-  margin-bottom: var(--mirror-space-3);
-  padding-bottom: 0.95rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.7rem;
   position: relative;
 }
 
@@ -1074,6 +1074,7 @@
 
 .mirror-page__detail-panel > section > .cc-panel-surface__header .cc-panel-surface__eyebrow {
   color: rgba(92, 72, 53, 0.5);
+  margin-bottom: 0.18rem;
 }
 
 .mirror-page__detail-panel > section > .cc-panel-surface__header .cc-panel-surface__title-row {
@@ -1102,10 +1103,10 @@
   color: var(--mirror-accent);
   cursor: pointer;
   display: inline-flex;
-  height: 2.3rem;
+  height: 2rem;
   justify-content: center;
   transition: background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
-  width: 2.3rem;
+  width: 2rem;
 }
 
 .mirror-page__close-button:hover {
@@ -1135,6 +1136,14 @@
 .mirror-page__stage-task-list {
   display: grid;
   gap: var(--mirror-space-3);
+}
+
+.mirror-page__detail-topbar {
+  margin-bottom: 0.1rem;
+}
+
+.mirror-page__detail-meta {
+  gap: 0;
 }
 
 .mirror-page__detail-tab-list {
@@ -1268,18 +1277,39 @@
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
+  gap: 0.45rem;
 }
 
 .mirror-page__conversation-date-shell,
 .mirror-page__conversation-date-control,
 .mirror-page__conversation-date-meta {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.4rem;
+}
+
+.mirror-page__conversation-filter-shell {
+  gap: 0.7rem;
+}
+
+.mirror-page__conversation-date-shell {
+  align-items: end;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
 }
 
 .mirror-page__conversation-date-control {
-  max-width: 18rem;
+  gap: 0.28rem;
+  max-width: none;
+}
+
+.mirror-page__conversation-date-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mirror-page__conversation-date-meta .mirror-page__summary-copy {
+  flex: 1 1 18rem;
 }
 
 .mirror-page__conversation-date-input {
@@ -1288,8 +1318,8 @@
   border-radius: 0.95rem;
   color: var(--mirror-ink);
   font: inherit;
-  min-height: 2.5rem;
-  padding: 0.55rem 0.82rem;
+  min-height: 2.2rem;
+  padding: 0.42rem 0.76rem;
 }
 
 .mirror-page__conversation-filter {
@@ -1299,7 +1329,8 @@
   color: var(--mirror-copy);
   cursor: pointer;
   font: inherit;
-  padding: 0.4rem 0.82rem;
+  line-height: 1.2;
+  padding: 0.3rem 0.72rem;
   transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
@@ -1318,7 +1349,9 @@
   color: var(--mirror-copy);
   cursor: pointer;
   font: inherit;
-  padding: 0.38rem 0.78rem;
+  line-height: 1.2;
+  padding: 0.3rem 0.72rem;
+  width: max-content;
 }
 
 .mirror-page__task-link:hover {
@@ -1596,6 +1629,10 @@
   }
 
   .mirror-page__summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mirror-page__conversation-date-shell {
     grid-template-columns: 1fr;
   }
 
