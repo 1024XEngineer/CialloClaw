@@ -14,6 +14,11 @@ import { loadMirrorConversationRecords, type MirrorConversationRecord } from "@/
 import { loadSecurityModuleData } from "@/features/dashboard/safety/securityService";
 import { loadTaskBuckets } from "@/features/dashboard/tasks/taskPage.service";
 import {
+  getInitialDashboardSettingsSnapshot,
+  loadDashboardSettingsSnapshot,
+  type DashboardSettingsSnapshotData,
+} from "@/features/dashboard/shared/dashboardSettingsSnapshot";
+import {
   buildMirrorConversationSummary,
   buildMirrorDailyDigest,
   buildMirrorProfileBaseItems,
@@ -39,6 +44,7 @@ export type MirrorOverviewData = {
     serverTime: string | null;
     warnings: string[];
   };
+  settingsSnapshot: DashboardSettingsSnapshotData;
   source: MirrorOverviewSource;
   conversations: MirrorConversationRecord[];
   conversationSummary: MirrorConversationSummary;
@@ -159,7 +165,10 @@ function buildMirrorOverviewData(
   source: MirrorOverviewSource,
   rpcContext: MirrorOverviewData["rpcContext"],
   supportContext: MirrorSupportContext,
+  settingsSnapshot: DashboardSettingsSnapshotData,
 ): MirrorOverviewData {
+  // Mirror detail cards mix protocol-backed overview data with frontend support
+  // context so the page can explain related tasks, safety state, and settings policy.
   const conversations = loadMirrorConversationRecords(source);
   const conversationSummary = buildMirrorConversationSummary(conversations);
   const dailyDigest = buildMirrorDailyDigest({
@@ -184,6 +193,7 @@ function buildMirrorOverviewData(
       ...rpcContext,
       warnings: [...rpcContext.warnings, ...supportContext.warnings],
     },
+    settingsSnapshot,
     source,
     conversations,
     conversationSummary,
@@ -203,13 +213,17 @@ export function getInitialMirrorOverviewData(): MirrorOverviewData {
       warnings: [],
     },
     getEmptyMirrorSupportContext(),
+    getInitialDashboardSettingsSnapshot(),
   );
 }
 
 export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc"): Promise<MirrorOverviewData> {
   if (source === "mock") {
     const overview = buildFallbackOverview();
-    const supportContext = await loadMirrorSupportContext("mock");
+    const [supportContext, settingsSnapshot] = await Promise.all([
+      loadMirrorSupportContext("mock"),
+      loadDashboardSettingsSnapshot("mock"),
+    ]);
 
     return buildMirrorOverviewData(
       overview,
@@ -219,6 +233,7 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
         warnings: [],
       },
       supportContext,
+      settingsSnapshot,
     );
   }
 
@@ -228,9 +243,12 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
       include: ["history_summary", "daily_summary", "profile", "memory_references"],
     };
 
-    const [response, supportContext] = await Promise.all([
+    // Support context and settings are independent read paths, so load them in
+    // parallel with the main mirror overview request to keep refreshes responsive.
+    const [response, supportContext, settingsSnapshot] = await Promise.all([
       requestMirrorOverview(params),
       loadMirrorSupportContext("rpc"),
+      loadDashboardSettingsSnapshot("rpc"),
     ]);
     const overview = response.data;
 
@@ -242,12 +260,16 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
         warnings: response.warnings,
       },
       supportContext,
+      settingsSnapshot,
     );
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       logRpcMockFallback("mirror overview", error);
       const overview = buildFallbackOverview();
-      const supportContext = await loadMirrorSupportContext("mock");
+      const [supportContext, settingsSnapshot] = await Promise.all([
+        loadMirrorSupportContext("mock"),
+        loadDashboardSettingsSnapshot("mock"),
+      ]);
 
       return buildMirrorOverviewData(
         overview,
@@ -257,6 +279,7 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
           warnings: [],
         },
         supportContext,
+        settingsSnapshot,
       );
     }
 

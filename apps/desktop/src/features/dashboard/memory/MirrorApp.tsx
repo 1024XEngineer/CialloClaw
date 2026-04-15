@@ -1035,6 +1035,7 @@ export function MirrorApp() {
                 overview={overview}
                 profileView={profileView}
                 rpcContext={mirrorData.rpcContext}
+                settingsSnapshot={mirrorData.settingsSnapshot}
               />
             </div>
           </PanelSurface>

@@ -43,6 +43,10 @@ import {
   shouldRetainDashboardSafetyActiveDetail,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import {
+  getInitialDashboardSettingsSnapshot,
+  loadDashboardSettingsSnapshot,
+} from "@/features/dashboard/shared/dashboardSettingsSnapshot";
+import {
   getInitialSecurityModuleData,
   loadSecurityPendingApprovals,
   applySecurityRestorePoint,
@@ -633,6 +637,7 @@ export function SecurityApp() {
   const queryClient = useQueryClient();
   const [dataMode, setDataMode] = useState<"rpc" | "mock">(() => loadDashboardDataMode("safety"));
   const [moduleData, setModuleData] = useState<SecurityModuleData | null>(null);
+  const [settingsSnapshot, setSettingsSnapshot] = useState(() => getInitialDashboardSettingsSnapshot());
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -779,6 +784,29 @@ export function SecurityApp() {
 
   useEffect(() => {
     saveDashboardDataMode("safety", dataMode);
+  }, [dataMode]);
+
+  useEffect(() => {
+    // The safety board needs a stable settings snapshot even before the detailed
+    // governance panel opens, so load the same shared snapshot used by mirror.
+    let disposed = false;
+
+    if (dataMode === "mock") {
+      setSettingsSnapshot(getInitialDashboardSettingsSnapshot());
+      return () => {
+        disposed = true;
+      };
+    }
+
+    void loadDashboardSettingsSnapshot("rpc").then((nextSnapshot) => {
+      if (!disposed) {
+        setSettingsSnapshot(nextSnapshot);
+      }
+    });
+
+    return () => {
+      disposed = true;
+    };
   }, [dataMode]);
 
   useEffect(() => {
@@ -1712,6 +1740,9 @@ export function SecurityApp() {
     const auditGroups = groupAuditRecordsByType(filteredAuditRecords);
     const auditPageWindow = activeAuditRecordsData ? formatPageWindow(activeAuditRecordsData.page, activeAuditRecordsData.items.length) : null;
     const auditPageStep = activeAuditRecordsData?.page.limit ?? SECURITY_DETAIL_PAGE_SIZE;
+    const downloadSettings = settingsSnapshot.settings.general.download;
+    const dataLogSettings = settingsSnapshot.settings.data_log;
+    const settingsWarnings = settingsSnapshot.rpcContext.warnings;
 
     return (
       <div className="security-page__detail-stack">
@@ -1721,6 +1752,50 @@ export function SecurityApp() {
 
         <div className="security-page__detail-note">
           approval.pending 的实时行为没有移除：新授权会先进入画布，再以顺序保护的方式拉取最新 summary 与 pending，避免界面回退到旧状态。
+        </div>
+
+        <div className="security-page__detail-note">
+          这里只展示已经登记到设置快照里的治理信号，例如工作区下载路径、逐文件确认和预算降级；不会伪造尚未进入真源的命令白名单或工作区外写入开关。
+        </div>
+
+        <div className="security-page__detail-grid">
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">工作区下载路径</p>
+            <p className="security-page__detail-value security-page__detail-value--mono">{downloadSettings.workspace_path}</p>
+            <p className="security-page__detail-copy">当前展示的是 `settings.general.download.workspace_path`，用于说明下载类产物默认落盘到哪里。</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">逐文件保存确认</p>
+            <p className="security-page__detail-value">{formatBooleanLabel(downloadSettings.ask_before_save_each_file)}</p>
+            <p className="security-page__detail-copy">该开关来自 `settings.general.download.ask_before_save_each_file`，用于说明保存文件前是否逐个确认。</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">数据日志提供商</p>
+            <p className="security-page__detail-value">{dataLogSettings.provider}</p>
+            <p className="security-page__detail-copy">这里只展示 `settings.data_log.provider`，不额外扩展未登记的提供商策略对象。</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">预算自动降级</p>
+            <p className="security-page__detail-value">{formatBooleanLabel(dataLogSettings.budget_auto_downgrade)}</p>
+            <p className="security-page__detail-copy">该卡片只说明 `settings.data_log.budget_auto_downgrade` 的当前状态，不伪装成已经完成的后端执行策略。</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">提供商密钥状态</p>
+            <p className="security-page__detail-value">{formatBooleanLabel(dataLogSettings.provider_api_key_configured)}</p>
+            <p className="security-page__detail-copy">设置真源只回传是否已配置，不会在这里泄露任何真实 secret。</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">设置快照来源</p>
+            <p className="security-page__detail-value">{settingsSnapshot.source === "rpc" ? "settings.get" : "local fallback"}</p>
+            <p className="security-page__detail-copy">
+              {settingsSnapshot.rpcContext.serverTime
+                ? `服务端快照时间：${settingsSnapshot.rpcContext.serverTime}`
+                : "当前展示的是本地设置回退快照。"}
+            </p>
+            {settingsWarnings.length > 0 ? (
+              <p className="security-page__detail-copy">warnings：{settingsWarnings.join("；")}</p>
+            ) : null}
+          </article>
         </div>
 
         <div className="security-page__detail-section">

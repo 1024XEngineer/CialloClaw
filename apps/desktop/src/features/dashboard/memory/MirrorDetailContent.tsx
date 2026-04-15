@@ -8,6 +8,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import {
+  formatDashboardMemoryLifecycle,
+  formatDashboardTimeInterval,
+  type DashboardSettingsSnapshotData,
+} from "@/features/dashboard/shared/dashboardSettingsSnapshot";
+import {
   buildMirrorConversationSummary,
   buildMirrorConversationTaskOptions,
   filterMirrorConversationRecords,
@@ -42,6 +47,7 @@ import {
 type MirrorDetailContentProps = {
   activeDetailKey: MirrorDirectionKey;
   overview: AgentMirrorOverviewGetResult;
+  settingsSnapshot: DashboardSettingsSnapshotData;
   rpcContext: {
     serverTime: string | null;
     warnings: string[];
@@ -620,6 +626,7 @@ function MirrorProfileDetail({
 
 function MirrorMemoryDetail({
   overview,
+  settingsSnapshot,
   rpcContext,
   conversations,
   focusMemoryId,
@@ -628,7 +635,7 @@ function MirrorMemoryDetail({
   onHideReference,
   onRestoreReference,
   onOpenTaskDetail,
-}: Pick<MirrorDetailContentProps, "overview" | "rpcContext" | "conversations" | "focusMemoryId"> & {
+}: Pick<MirrorDetailContentProps, "overview" | "settingsSnapshot" | "rpcContext" | "conversations" | "focusMemoryId"> & {
   visibleReferences: MirrorGovernedMemoryReference[];
   hiddenReferences: MirrorGovernedMemoryReference[];
   onHideReference: (memoryId: string) => void;
@@ -636,6 +643,9 @@ function MirrorMemoryDetail({
   onOpenTaskDetail: (taskId: string) => void;
 }) {
   const conversationSummary = buildMirrorConversationSummary(conversations);
+  const memorySettings = settingsSnapshot.settings.memory;
+  // Current mirror references do not carry task identifiers, so local conversation
+  // history is the only honest source for task back-links inside this detail view.
   const recentTaskLinkedConversations = useMemo(() => {
     const seenTaskIds = new Set<string>();
 
@@ -655,15 +665,19 @@ function MirrorMemoryDetail({
 
     return visibleReferences[0]?.memory_id ?? hiddenReferences[0]?.memory_id ?? null;
   }, [focusMemoryId, hiddenReferences, overview.memory_references, visibleReferences]);
+  const defaultTab = visibleReferences.length > 0 ? "references" : "policy";
 
   return (
-    <Tabs className="mirror-page__detail-tabs" defaultValue="references">
+    <Tabs className="mirror-page__detail-tabs" defaultValue={defaultTab}>
       <TabsList className="mirror-page__detail-tab-list" variant="line">
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="references">
           记忆引用
         </TabsTrigger>
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="context">
           数据上下文
+        </TabsTrigger>
+        <TabsTrigger className="mirror-page__detail-tab-trigger" value="policy">
+          记忆策略
         </TabsTrigger>
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="drafts">
           本地治理草稿
@@ -776,6 +790,85 @@ function MirrorMemoryDetail({
         </div>
       </TabsContent>
 
+      <TabsContent className="mirror-page__detail-tab-panel" value="policy">
+        <div className="mirror-page__profile-local-note">
+          <BookMarked className="mirror-page__memory-icon" />
+          <p className="mirror-page__summary-copy">
+            这里展示 `agent.settings.get` 或本地设置回退快照中的镜子记忆策略，只用于可视化，不会在镜子页直接修改正式设置。
+          </p>
+        </div>
+
+        <div className="mirror-page__risk-list">
+          <article className="mirror-page__risk-card">
+            <div className="mirror-page__stage-card-top">
+              <div>
+                <p className="mirror-page__micro-label">记忆开关</p>
+                <p className="mirror-page__stage-headline">{memorySettings.enabled ? "已开启" : "已关闭"}</p>
+              </div>
+              <StatusBadge tone={memorySettings.enabled ? "green" : "yellow"}>{memorySettings.enabled ? "enabled" : "disabled"}</StatusBadge>
+            </div>
+            <p className="mirror-page__summary-copy">当前卡片只负责说明 `settings.memory.enabled` 的状态，用来解释镜子是否应继续沉淀长期记忆。</p>
+          </article>
+
+          <article className="mirror-page__risk-card">
+            <div className="mirror-page__stage-card-top">
+              <div>
+                <p className="mirror-page__micro-label">保留周期</p>
+                <p className="mirror-page__stage-headline">{formatDashboardMemoryLifecycle(memorySettings.lifecycle)}</p>
+              </div>
+              <StatusBadge tone="processing">lifecycle</StatusBadge>
+            </div>
+            <p className="mirror-page__summary-copy">这里直接读取 `settings.memory.lifecycle`，用于说明镜子记忆当前按什么周期保留。</p>
+          </article>
+
+          <article className="mirror-page__risk-card">
+            <div className="mirror-page__stage-card-top">
+              <div>
+                <p className="mirror-page__micro-label">工作总结刷新</p>
+                <p className="mirror-page__stage-headline">{formatDashboardTimeInterval(memorySettings.work_summary_interval)}</p>
+              </div>
+              <StatusBadge tone="processing">summary</StatusBadge>
+            </div>
+            <p className="mirror-page__summary-copy">这里展示 `settings.memory.work_summary_interval`，用于解释工作总结类镜像的刷新节奏。</p>
+          </article>
+
+          <article className="mirror-page__risk-card">
+            <div className="mirror-page__stage-card-top">
+              <div>
+                <p className="mirror-page__micro-label">画像刷新</p>
+                <p className="mirror-page__stage-headline">{formatDashboardTimeInterval(memorySettings.profile_refresh_interval)}</p>
+              </div>
+              <StatusBadge tone="processing">profile</StatusBadge>
+            </div>
+            <p className="mirror-page__summary-copy">这里展示 `settings.memory.profile_refresh_interval`，用于解释画像字段多久刷新一次。</p>
+          </article>
+
+          <article className="mirror-page__risk-card">
+            <div className="mirror-page__stage-card-top">
+              <div>
+                <p className="mirror-page__micro-label">设置来源</p>
+                <p className="mirror-page__stage-headline">{settingsSnapshot.source === "rpc" ? "settings.get" : "local fallback"}</p>
+              </div>
+              <StatusBadge tone={settingsSnapshot.source === "rpc" ? "green" : "yellow"}>{settingsSnapshot.source}</StatusBadge>
+            </div>
+            <p className="mirror-page__summary-copy">
+              {settingsSnapshot.rpcContext.serverTime
+                ? `服务端快照时间：${settingsSnapshot.rpcContext.serverTime}`
+                : "当前展示的是本地设置回退快照。"}
+            </p>
+            {settingsSnapshot.rpcContext.warnings.length > 0 ? (
+              <div className="mirror-page__conversation-actions">
+                {settingsSnapshot.rpcContext.warnings.map((warning) => (
+                  <span key={warning} className="mirror-page__task-link">
+                    {warning}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        </div>
+      </TabsContent>
+
       <TabsContent className="mirror-page__detail-tab-panel" value="drafts">
         <div className="mirror-page__profile-local-note">
           <BookMarked className="mirror-page__memory-icon" />
@@ -833,6 +926,8 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
   );
   const updateGovernanceDrafts = useMemo(
     () => (updater: (current: MirrorGovernanceDraftSnapshot) => MirrorGovernanceDraftSnapshot) => {
+      // Governance drafts intentionally stay local until the planned mirror
+      // management RPC becomes stable, so every mutation is persisted locally only.
       setGovernanceDrafts((current) => {
         const nextSnapshot = updater(current);
         saveMirrorGovernanceDraftSnapshot(nextSnapshot);
@@ -964,6 +1059,7 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
       onRestoreReference={restoreMemoryReference}
       overview={props.overview}
       rpcContext={props.rpcContext}
+      settingsSnapshot={props.settingsSnapshot}
       visibleReferences={governedMemoryReferences.visible_references}
     />
   );
