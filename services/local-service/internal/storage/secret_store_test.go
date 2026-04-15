@@ -67,12 +67,37 @@ func TestSQLiteSecretStoreRoundTrip(t *testing.T) {
 	if resolved.Value != "rotated-key" {
 		t.Fatalf("expected rotated value, got %+v", resolved)
 	}
+	if err := store.DeleteSecret(context.Background(), record.Namespace, record.Key); err != nil {
+		t.Fatalf("DeleteSecret returned error: %v", err)
+	}
+	if _, err := store.GetSecret(context.Background(), record.Namespace, record.Key); err != ErrSecretNotFound {
+		t.Fatalf("expected ErrSecretNotFound after delete, got %v", err)
+	}
 }
 
 func TestValidateSecretRecordRejectsMissingFields(t *testing.T) {
-	record := SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
-	record.Namespace = ""
-	if err := validateSecretRecord(record); err == nil {
-		t.Fatal("expected namespace validation error")
+	valid := SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+	tests := []struct {
+		name   string
+		mutate func(*SecretRecord)
+	}{
+		{name: "missing namespace", mutate: func(record *SecretRecord) { record.Namespace = "" }},
+		{name: "missing key", mutate: func(record *SecretRecord) { record.Key = "" }},
+		{name: "missing value", mutate: func(record *SecretRecord) { record.Value = "" }},
+		{name: "missing time", mutate: func(record *SecretRecord) { record.UpdatedAt = "" }},
+		{name: "invalid time", mutate: func(record *SecretRecord) { record.UpdatedAt = "bad-time" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := valid
+			test.mutate(&record)
+			if err := validateSecretRecord(record); err == nil {
+				t.Fatalf("expected validation error for %s", test.name)
+			}
+		})
+	}
+	valid.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := validateSecretRecord(valid); err != nil {
+		t.Fatalf("expected RFC3339Nano timestamp to be accepted, got %v", err)
 	}
 }

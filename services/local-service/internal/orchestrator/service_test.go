@@ -3823,6 +3823,19 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	}
 }
 
+func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
+	service := newTestService()
+	_, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider": "openai",
+			"api_key":  "sk-test",
+		},
+	})
+	if !errors.Is(err, ErrStrongholdAccessFailed) {
+		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
 func TestServiceTaskControlRequiresTaskID(t *testing.T) {
 	service := newTestService()
 

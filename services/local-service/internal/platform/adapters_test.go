@@ -141,3 +141,13 @@ func TestLocalStorageAdapterBuildsDedicatedStrongholdPath(t *testing.T) {
 		t.Fatalf("unexpected stronghold path: %q", adapter.SecretStorePath())
 	}
 }
+
+func TestLocalStorageAdapterReturnsDatabaseAndExtensionlessStrongholdPaths(t *testing.T) {
+	adapter := NewLocalStorageAdapter(filepath.Join("data", "cialloclaw"))
+	if adapter.DatabasePath() != filepath.Join("data", "cialloclaw") {
+		t.Fatalf("unexpected database path: %q", adapter.DatabasePath())
+	}
+	if adapter.SecretStorePath() != filepath.Join("data", "cialloclaw.stronghold.db") {
+		t.Fatalf("unexpected extensionless stronghold path: %q", adapter.SecretStorePath())
+	}
+}

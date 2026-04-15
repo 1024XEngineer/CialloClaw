@@ -447,6 +447,37 @@ func TestSecretStoreReturnsWorkingImplementation(t *testing.T) {
 	}
 }
 
+func TestResolveModelAPIKeyReturnsNotFoundWhenSecretMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-secret.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	_, err := service.ResolveModelAPIKey("openai_responses")
+	if !errors.Is(err, ErrSecretNotFound) {
+		t.Fatalf("expected ErrSecretNotFound, got %v", err)
+	}
+}
+
+func TestResolveModelAPIKeyReturnsAccessFailureWhenStoreClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "closed-secret.db")
+	service := NewService(stubAdapter{databasePath: path})
+	record := SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "secret-key",
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), record); err != nil {
+		t.Fatalf("PutSecret returned error: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	_, err := service.ResolveModelAPIKey("openai_responses")
+	if !errors.Is(err, ErrSecretStoreAccessFailed) {
+		t.Fatalf("expected ErrSecretStoreAccessFailed, got %v", err)
+	}
+}
+
 func assertToolCallCount(t *testing.T, db *sql.DB, expected int) {
 	t.Helper()
 

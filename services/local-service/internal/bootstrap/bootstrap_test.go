@@ -2,12 +2,14 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
@@ -141,5 +143,29 @@ func TestNewAllowsFirstRunWithoutSeededSecret(t *testing.T) {
 	}()
 	if app.storage == nil || app.storage.SecretStore() == nil {
 		t.Fatal("expected secret store to remain wired on first run")
+	}
+}
+
+func TestNewFailsFastWhenModelConfigIsInvalid(t *testing.T) {
+	cfg := config.Config{
+		RPC: config.RPCConfig{
+			Transport:        "named_pipe",
+			NamedPipeName:    `\\.\pipe\cialloclaw-rpc-test`,
+			DebugHTTPAddress: ":0",
+		},
+		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
+		DatabasePath:  filepath.Join(t.TempDir(), "data", "local.db"),
+		Model: config.ModelConfig{
+			Provider:            "unsupported",
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+	}
+	_, err := New(cfg)
+	if !errors.Is(err, model.ErrModelProviderUnsupported) {
+		t.Fatalf("expected ErrModelProviderUnsupported, got %v", err)
 	}
 }

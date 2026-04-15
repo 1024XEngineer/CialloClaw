@@ -333,3 +333,19 @@ func TestStaticSecretSourceFailsWithoutStore(t *testing.T) {
 		t.Fatalf("expected ErrSecretSourceFailed, got %v", err)
 	}
 }
+
+func TestNewServiceFromConfigReturnsMissingSecretWhenNoAPIKeyProvided(t *testing.T) {
+	_, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+	})
+	if !errors.Is(err, ErrSecretSourceFailed) || !errors.Is(err, ErrSecretNotFound) {
+		t.Fatalf("expected missing secret error chain, got %v", err)
+	}
+}
