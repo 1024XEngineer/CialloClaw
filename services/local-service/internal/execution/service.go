@@ -878,7 +878,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 
 		observations := make([]string, 0, len(plan.ToolCalls))
 		for _, call := range plan.ToolCalls {
-			observation, record := s.executeAgentLoopTool(ctx, request, call)
+			observation, record := s.executeAgentLoopTool(ctx, request, call, turn+1)
 			if record.ToolName != "" {
 				allToolCalls = append(allToolCalls, record)
 			}
@@ -1430,10 +1430,21 @@ func singleLineSummary(value string) string {
 	return strings.Join(lines, " ")
 }
 
+func annotateLoopRound(record tools.ToolCallRecord, loopRound int) tools.ToolCallRecord {
+	if loopRound <= 0 {
+		return record
+	}
+	if record.Output == nil {
+		record.Output = map[string]any{}
+	}
+	record.Output["loop_round"] = loopRound
+	return record
+}
+
 // executeAgentLoopTool executes one model-selected tool and converts the result
 // into a compact textual observation that can be fed back into the next model
 // turn. The returned tool record is also preserved for audit and task history.
-func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, call model.ToolInvocation) (string, tools.ToolCallRecord) {
+func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 	toolName := strings.TrimSpace(call.Name)
 	if !s.isAllowedAgentLoopTool(toolName) {
 		return fmt.Sprintf("Tool %s is not allowed in the current agent loop.", toolName), tools.ToolCallRecord{}
@@ -1454,9 +1465,9 @@ func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, cal
 	}
 	summaryJSON, marshalErr := json.Marshal(summary)
 	if marshalErr != nil {
-		return fmt.Sprintf("Tool %s succeeded, but its summary could not be serialized.", toolName), toolResult.ToolCall
+		return fmt.Sprintf("Tool %s succeeded, but its summary could not be serialized.", toolName), annotateLoopRound(toolResult.ToolCall, loopRound)
 	}
-	return fmt.Sprintf("Tool %s succeeded. Summary: %s", toolName, string(summaryJSON)), toolResult.ToolCall
+	return fmt.Sprintf("Tool %s succeeded. Summary: %s", toolName, string(summaryJSON)), annotateLoopRound(toolResult.ToolCall, loopRound)
 }
 
 // isAllowedAgentLoopTool guards the first loop implementation so only

@@ -289,6 +289,9 @@ func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
 	if result.ToolCalls[0].ToolName != "read_file" {
 		t.Fatalf("expected read_file tool call, got %+v", result.ToolCalls[0])
 	}
+	if result.ToolCalls[0].Output["loop_round"] != 1 {
+		t.Fatalf("expected first tool call to be annotated with loop round, got %+v", result.ToolCalls[0].Output)
+	}
 	if result.ModelInvocation["request_id"] != "req_loop_2" {
 		t.Fatalf("expected final planning turn metadata, got %+v", result.ModelInvocation)
 	}

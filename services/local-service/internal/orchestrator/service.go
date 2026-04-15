@@ -188,9 +188,9 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		Intent:            suggestion.Intent,
 		PreferredDelivery: preferredDelivery,
 		FallbackDelivery:  fallbackDelivery,
-		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm),
+		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent),
 		RiskLevel:         s.risk.DefaultLevel(),
-		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
+		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
@@ -248,9 +248,9 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		Intent:            suggestion.Intent,
 		PreferredDelivery: preferredDelivery,
 		FallbackDelivery:  fallbackDelivery,
-		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm),
+		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent),
 		RiskLevel:         s.risk.DefaultLevel(),
-		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
+		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
@@ -1619,9 +1619,12 @@ func taskStatusForSuggestion(requiresConfirm bool) string {
 }
 
 // currentStepForSuggestion 处理当前模块的相关逻辑。
-func currentStepForSuggestion(requiresConfirm bool) string {
+func currentStepForSuggestion(requiresConfirm bool, taskIntent map[string]any) string {
 	if requiresConfirm {
 		return "intent_confirmation"
+	}
+	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
 	}
 	return "generate_output"
 }
@@ -3434,7 +3437,7 @@ func truncateText(value string, maxLength int) string {
 
 // dateTimeLayout 定义当前模块的基础变量。
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, "generate_output", "开始生成正式结果")
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, executionStepName(taskIntent), "开始生成正式结果")
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
@@ -3518,6 +3521,13 @@ func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls 
 		}
 	}
 	return task
+}
+
+func executionStepName(taskIntent map[string]any) string {
+	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
+	}
+	return "generate_output"
 }
 
 func approvedExecutionFromTask(task runengine.TaskRecord) (string, string) {
