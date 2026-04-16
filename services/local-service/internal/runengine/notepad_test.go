@@ -3,6 +3,8 @@ package runengine
 import (
 	"testing"
 	"time"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 func TestEngineNotepadListProjectsProtocolShapeOnly(t *testing.T) {
@@ -78,7 +80,7 @@ func TestEngineRecurringNotepadFoundationFieldsAreDerived(t *testing.T) {
 	if detail["repeat_rule_text"] != "每周重复一次" {
 		t.Fatalf("expected recurring rule fallback text, got %+v", detail["repeat_rule_text"])
 	}
-	if detail["next_occurrence_at"] != now.Add(7*24*time.Hour).Format(time.RFC3339) {
+	if detail["next_occurrence_at"] != now.Add(14*24*time.Hour).Format(time.RFC3339) {
 		t.Fatalf("expected next occurrence to follow due_at, got %+v", detail["next_occurrence_at"])
 	}
 	resources, ok := detail["related_resources"].([]map[string]any)
@@ -162,5 +164,60 @@ func TestEngineNotepadActionMutationsPreserveFoundationState(t *testing.T) {
 	}
 	if _, ok := engine.NotepadItem("todo_rule"); ok {
 		t.Fatal("expected deleted recurring item to disappear")
+	}
+}
+
+func TestEngineTodoStorePersistsAndReloadsNotepadState(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	engine, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine with store failed: %v", err)
+	}
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	if err := engine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":            "todo_persisted_rule",
+		"title":              "每周项目复盘",
+		"bucket":             notepadBucketRecurringRule,
+		"status":             "normal",
+		"type":               "recurring",
+		"source_path":        "workspace/todos/weekly.md",
+		"source_line":        2,
+		"note_text":          "从真实任务源解析出来的说明。",
+		"repeat_rule_text":   "每两周一次",
+		"next_occurrence_at": now.Add(14 * 24 * time.Hour).Format(time.RFC3339),
+		"related_resources": []map[string]any{{
+			"id":          "res_persisted",
+			"label":       "模板",
+			"path":        "workspace/templates/retro.md",
+			"type":        "file",
+			"target_kind": "file",
+		}},
+	}}); err != nil {
+		t.Fatalf("sync notepad items failed: %v", err)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine reload failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+
+	detail, ok := reloaded.NotepadItem("todo_persisted_rule")
+	if !ok {
+		t.Fatal("expected persisted note to reload from todo store")
+	}
+	if detail["repeat_rule_text"] != "每两周一次" || detail["source_path"] != "workspace/todos/weekly.md" {
+		t.Fatalf("expected recurring note metadata to reload, got %+v", detail)
+	}
+	resources, ok := detail["related_resources"].([]map[string]any)
+	if !ok || len(resources) != 1 {
+		t.Fatalf("expected related resources to reload, got %+v", detail["related_resources"])
 	}
 }

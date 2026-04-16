@@ -132,6 +132,7 @@ type Engine struct {
 	nextID       uint64
 	now          func() time.Time
 	taskStore    storage.TaskRunStore
+	todoStore    storage.TodoStore
 	tasks        map[string]*TaskRecord
 	taskOrder    []string
 	sessionOrder []string
@@ -151,6 +152,28 @@ func NewEngine() *Engine {
 // NewEngineWithStore 创建带有 task/run 持久化存储的引擎实例。
 func NewEngineWithStore(taskStore storage.TaskRunStore) (*Engine, error) {
 	return newEngine(taskStore)
+}
+
+// WithTodoStore attaches todo persistence and hydrates notes state from storage
+// when durable records are available.
+func (e *Engine) WithTodoStore(todoStore storage.TodoStore) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.todoStore = todoStore
+	if todoStore == nil {
+		return nil
+	}
+
+	items, rules, err := todoStore.LoadTodoState(context.Background())
+	if err != nil {
+		return err
+	}
+	loaded := restoreNotepadItemsFromStore(items, rules)
+	if len(loaded) > 0 {
+		e.notepadItems = loaded
+	}
+	return nil
 }
 
 func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
@@ -1181,7 +1204,7 @@ func (e *Engine) ReplaceNotepadItems(items []map[string]any) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.notepadItems = cloneMapSlice(items)
+	_ = e.replaceNotepadItemsLocked(items)
 }
 
 func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {

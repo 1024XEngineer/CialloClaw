@@ -86,6 +86,51 @@ type ArtifactStore interface {
 	ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error)
 }
 
+// TodoItemRecord describes one persisted notes/todo snapshot.
+type TodoItemRecord struct {
+	ItemID               string
+	Title                string
+	Bucket               string
+	Status               string
+	SourcePath           string
+	SourceLine           int
+	DueAt                string
+	TagsJSON             string
+	AgentSuggestion      string
+	NoteText             string
+	Prerequisite         string
+	PlannedAt            string
+	EndedAt              string
+	RelatedResourcesJSON string
+	LinkedTaskID         string
+	CreatedAt            string
+	UpdatedAt            string
+}
+
+// RecurringRuleRecord describes one persisted recurring-rule snapshot.
+type RecurringRuleRecord struct {
+	RuleID               string
+	ItemID               string
+	RuleType             string
+	CronExpr             string
+	IntervalValue        int
+	IntervalUnit         string
+	ReminderStrategy     string
+	Enabled              bool
+	RepeatRuleText       string
+	NextOccurrenceAt     string
+	RecentInstanceStatus string
+	EffectiveScope       string
+	CreatedAt            string
+	UpdatedAt            string
+}
+
+// TodoStore defines persistence for notes/todo items and recurring rules.
+type TodoStore interface {
+	ReplaceTodoState(ctx context.Context, items []TodoItemRecord, rules []RecurringRuleRecord) error
+	LoadTodoState(ctx context.Context) ([]TodoItemRecord, []RecurringRuleRecord, error)
+}
+
 // SecretRecord captures one secret value persisted outside the normal settings path.
 type SecretRecord struct {
 	Namespace string

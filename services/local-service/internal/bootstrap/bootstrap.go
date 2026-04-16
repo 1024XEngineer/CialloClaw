@@ -118,6 +118,10 @@ func New(cfg config.Config) (*App, error) {
 		_ = storageService.Close()
 		return nil, err
 	}
+	if err := runEngine.WithTodoStore(storageService.TodoStore()); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 
 	orchestratorService := orchestrator.NewService(
 		contextsvc.NewService(),
