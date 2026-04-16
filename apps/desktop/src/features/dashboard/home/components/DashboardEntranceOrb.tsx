@@ -1,4 +1,9 @@
+/**
+ * Dashboard entrance orbs provide draggable module shortcuts around the center
+ * dashboard scene without changing the underlying module routing contract.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useEventListener, useUnmount } from "ahooks";
 import { motion } from "motion/react";
 import type { CSSProperties } from "react";
 import { BadgeCheck, FileText, NotebookPen, ShieldCheck } from "lucide-react";
@@ -20,6 +25,13 @@ const entranceIcons = {
   safety: ShieldCheck,
 } as const;
 
+/**
+ * Renders a draggable dashboard entrance orb that can still behave like a
+ * button when users click without moving it.
+ *
+ * @param props Orb configuration, pointer state, and navigation callbacks.
+ * @returns The animated entrance orb button.
+ */
 export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClick, onHoverChange }: DashboardEntranceOrbProps) {
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -30,6 +42,7 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClic
   const movedRef = useRef(false);
   const draggingRef = useRef(false);
   const snapTimerRef = useRef<number | null>(null);
+  const windowTarget = typeof window === "undefined" ? undefined : window;
   const Icon = entranceIcons[config.module];
 
   useEffect(() => {
@@ -66,70 +79,72 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClic
     dragStartRef.current = { mouseX: event.clientX, mouseY: event.clientY };
   }, []);
 
-  useEffect(() => {
-    const handleMove = (event: MouseEvent) => {
-      if (!draggingRef.current) {
-        return;
-      }
+  const handleMove = useCallback((event: MouseEvent) => {
+    if (!draggingRef.current) {
+      return;
+    }
 
-      const dx = event.clientX - dragStartRef.current.mouseX;
-      const dy = event.clientY - dragStartRef.current.mouseY;
+    const dx = event.clientX - dragStartRef.current.mouseX;
+    const dy = event.clientY - dragStartRef.current.mouseY;
 
-      if (!movedRef.current && Math.hypot(dx, dy) > 6) {
-        movedRef.current = true;
-        setIsDragging(true);
-      }
+    if (!movedRef.current && Math.hypot(dx, dy) > 6) {
+      movedRef.current = true;
+      setIsDragging(true);
+    }
 
-      if (movedRef.current) {
-        setDragPos({ x: event.clientX - window.innerWidth / 2, y: event.clientY - window.innerHeight / 2 });
-      }
-    };
+    if (movedRef.current) {
+      setDragPos({ x: event.clientX - window.innerWidth / 2, y: event.clientY - window.innerHeight / 2 });
+    }
+  }, []);
 
-    const handleUp = (event: MouseEvent) => {
-      if (!draggingRef.current) {
-        return;
-      }
+  const handleUp = useCallback((event: MouseEvent) => {
+    if (!draggingRef.current) {
+      return;
+    }
 
-      draggingRef.current = false;
+    draggingRef.current = false;
 
-      if (!movedRef.current) {
-        setIsDragging(false);
-        setDragPos(null);
-        clickHandledRef.current = true;
-        window.setTimeout(() => {
-          onClick();
-          clickHandledRef.current = false;
-        }, 0);
-        return;
-      }
-
+    if (!movedRef.current) {
       setIsDragging(false);
-      const orbitCenterX = window.innerWidth / 2 + offset.x * 0.16;
-      const orbitCenterY = window.innerHeight / 2 + offset.y * 0.16;
-      const relX = event.clientX - orbitCenterX;
-      const relY = event.clientY - orbitCenterY;
-      const dropAngle = (Math.atan2(relY, relX) * 180) / Math.PI;
-      const normalizedAngle = ((dropAngle % 360) + 360) % 360;
       setDragPos(null);
-      setIsSnapping(true);
-      setRotationAngle(normalizedAngle);
-      if (snapTimerRef.current) {
-        window.clearTimeout(snapTimerRef.current);
-      }
-      snapTimerRef.current = window.setTimeout(() => setIsSnapping(false), 420);
-    };
+      clickHandledRef.current = true;
+      window.setTimeout(() => {
+        onClick();
+        clickHandledRef.current = false;
+      }, 0);
+      return;
+    }
 
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-
-    return () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-      if (snapTimerRef.current) {
-        window.clearTimeout(snapTimerRef.current);
-      }
-    };
+    setIsDragging(false);
+    const orbitCenterX = window.innerWidth / 2 + offset.x * 0.16;
+    const orbitCenterY = window.innerHeight / 2 + offset.y * 0.16;
+    const relX = event.clientX - orbitCenterX;
+    const relY = event.clientY - orbitCenterY;
+    const dropAngle = (Math.atan2(relY, relX) * 180) / Math.PI;
+    const normalizedAngle = ((dropAngle % 360) + 360) % 360;
+    setDragPos(null);
+    setIsSnapping(true);
+    setRotationAngle(normalizedAngle);
+    if (snapTimerRef.current) {
+      window.clearTimeout(snapTimerRef.current);
+    }
+    snapTimerRef.current = window.setTimeout(() => setIsSnapping(false), 420);
   }, [offset.x, offset.y, onClick]);
+
+  useEventListener("mousemove", handleMove, {
+    target: windowTarget,
+    enable: windowTarget !== undefined,
+  });
+  useEventListener("mouseup", handleUp, {
+    target: windowTarget,
+    enable: windowTarget !== undefined,
+  });
+
+  useUnmount(() => {
+    if (snapTimerRef.current) {
+      window.clearTimeout(snapTimerRef.current);
+    }
+  });
   const style = {
     left: `calc(50% + ${x}px)`,
     top: `calc(50% + ${y}px)`,

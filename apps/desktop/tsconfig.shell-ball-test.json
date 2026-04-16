@@ -7,7 +7,7 @@
     "outDir": "./.cache/shell-ball-tests",
     "rootDir": "./src",
     "strict": false,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "paths": {
       "@/*": ["./src/*"],
       "@/rpc/methods": ["./src/features/shell-ball/test-stubs/rpcMethods.ts"],

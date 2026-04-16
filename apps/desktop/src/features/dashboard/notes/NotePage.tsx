@@ -1,4 +1,9 @@
+/**
+ * Note dashboard page keeps nearby notes, future arrangements, and recurring
+ * reminders grouped for quick conversion into formal tasks.
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useUnmount } from "ahooks";
 import type { CSSProperties } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries } from "@tanstack/react-query";
@@ -17,6 +22,12 @@ import { NotePreviewCard } from "./components/NotePreviewCard";
 import { NotePreviewSection } from "./components/NotePreviewSection";
 import "./notePage.css";
 
+/**
+ * Renders the note dashboard page and coordinates note selection, feedback, and
+ * lightweight conversion actions.
+ *
+ * @returns The note dashboard route content.
+ */
 export function NotePage() {
   const navigate = useNavigate();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -93,6 +104,11 @@ export function NotePage() {
     "--note-copy": "rgba(95, 84, 75, 0.68)",
   } as CSSProperties;
 
+  /**
+   * Shows short-lived feedback after placeholder actions and conversion flows.
+   *
+   * @param message User-facing feedback copy to render in the page chrome.
+   */
   function showFeedback(message: string) {
     setFeedback(message);
     if (feedbackTimeoutRef.current) {
@@ -155,13 +171,11 @@ export function NotePage() {
     }
   }, [allItems, closedItems, laterItems, recurringItems, selectedItemId, upcomingItems]);
 
-  useEffect(() => {
-    return () => {
-      if (feedbackTimeoutRef.current) {
-        window.clearTimeout(feedbackTimeoutRef.current);
-      }
-    };
-  }, []);
+  useUnmount(() => {
+    if (feedbackTimeoutRef.current) {
+      window.clearTimeout(feedbackTimeoutRef.current);
+    }
+  });
 
   const queryErrors = [
     { label: "近期要做", error: upcomingQuery.error },
