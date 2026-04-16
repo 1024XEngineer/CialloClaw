@@ -10,6 +10,8 @@ export const shellBallVisualStates = [
 
 export type ShellBallVisualState = (typeof shellBallVisualStates)[number];
 
+export type ShellBallVoiceHintMode = "hidden" | "lock" | "cancel";
+
 export type ShellBallInteractionEvent =
   | "pointer_enter_hotspot"
   | "pointer_leave_region"

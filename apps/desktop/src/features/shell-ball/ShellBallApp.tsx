@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
-import { ShellBallDevLayer } from "./ShellBallDevLayer";
-import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import type { ShellBallVisualState } from "./shellBall.types";
 import { emitShellBallInputRequestFocus, useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
+import { shellBallWindowSyncEvents, type ShellBallTextSelectionStatePayload } from "./shellBall.windowSync";
 import type { ShellBallDashboardTransitionRequest } from "../../platform/dashboardWindowTransition";
 import { shellBallDashboardTransitionEvents } from "../../platform/dashboardWindowTransition";
 import {
@@ -58,6 +57,13 @@ function waitForAnimationFrame() {
   return new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => resolve());
   });
+}
+
+export function shouldShowShellBallSelectionIndicator(input: {
+  available: boolean;
+  visualState: ShellBallVisualState;
+}) {
+  return input.available && (input.visualState === "idle" || input.visualState === "hover_input");
 }
 
 function easeShellBallDashboardTransition(progress: number) {
@@ -145,12 +151,14 @@ async function animateShellBallDashboardWindow(input: {
 }
 
 export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
+  void isDev;
   const {
     visualState,
     inputValue,
     pendingFiles,
     finalizedSpeechPayload,
     voicePreview,
+    voiceHintMode,
     voiceHoldProgress,
     inputFocused,
     handlePrimaryClick,
@@ -173,11 +181,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
-  const showDemoSwitcher = shouldShowShellBallDemoSwitcher(isDev);
   const { rootRef, windowFrame } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
+  const [selectionPromptActive, setSelectionPromptActive] = useState(false);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const transitionQueueRef = useRef(Promise.resolve());
@@ -399,13 +407,49 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     setTextDragActive(false);
   }, [fileDropActive, visualState]);
 
-  const { handleDroppedFiles: handleCoordinatorDroppedFiles } = useShellBallCoordinator({
+  useEffect(() => {
+    if (visualState !== "idle" && visualState !== "hover_input") {
+      setSelectionPromptActive(false);
+    }
+  }, [visualState]);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
+    void currentWindow
+      .listen<ShellBallTextSelectionStatePayload>(shellBallWindowSyncEvents.textSelectionState, ({ payload }) => {
+        setSelectionPromptActive(payload.available);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        cleanup = unlisten;
+      });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, []);
+
+  const { handleDroppedFiles: handleCoordinatorDroppedFiles, handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt } = useShellBallCoordinator({
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
     inputValue,
     pendingFiles,
     finalizedSpeechPayload,
     voicePreview,
+    voiceHintMode,
     setInputValue,
     onAppendPendingFiles: handleAppendPendingFiles,
     onRemovePendingFile: handleRemovePendingFile,
@@ -418,6 +462,18 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onPrimaryClick: handlePrimaryClick,
   });
   dragDropHandlersRef.current = { handleDroppedFiles: handleCoordinatorDroppedFiles };
+
+  const handleMascotPrimaryAction = useCallback(() => {
+    if (selectionPromptActive) {
+      setSelectionPromptActive(false);
+      handleInputFocusRequest();
+      handleCoordinatorSelectedTextPrompt();
+      void emitShellBallInputRequestFocus(Date.now());
+      return;
+    }
+
+    handlePrimaryClick();
+  }, [handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPromptActive]);
 
   return (
     <ShellBallSurface
@@ -432,13 +488,17 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         visualState,
       })}
       visualState={visualState}
+      selectionIndicatorVisible={shouldShowShellBallSelectionIndicator({
+        available: selectionPromptActive,
+        visualState,
+      })}
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}
       motionConfig={motionConfig}
       onDragStart={() => {
         void startShellBallWindowDragging();
       }}
-      onPrimaryClick={handlePrimaryClick}
+      onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}
       onRegionEnter={handleRegionEnter}
       onRegionLeave={handleRegionLeave}

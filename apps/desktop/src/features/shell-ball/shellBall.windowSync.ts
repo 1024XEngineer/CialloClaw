@@ -2,12 +2,13 @@ import { cloneShellBallBubbleItems } from "./shellBall.bubble";
 import type { ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import { getShellBallInputBarMode } from "./shellBall.interaction";
-import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 
 export const shellBallWindowSyncEvents = Object.freeze({
   snapshot: "desktop-shell-ball:snapshot",
   geometry: "desktop-shell-ball:geometry",
   helperReady: "desktop-shell-ball:helper-ready",
+  textSelectionState: "desktop-shell-ball:text-selection-state",
   pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
   bubbleHover: "desktop-shell-ball:bubble-hover",
@@ -21,7 +22,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   bubbleAction: "desktop-shell-ball:bubble-action",
 });
 
-export type ShellBallHelperWindowRole = "bubble" | "input" | "pinned";
+export type ShellBallHelperWindowRole = "bubble" | "input" | "voice" | "pinned";
 
 export type ShellBallPrimaryAction = "attach_file" | "submit" | "primary_click";
 
@@ -36,6 +37,7 @@ export type ShellBallBubbleActionSource = "bubble" | "pinned_window";
 export type ShellBallHelperWindowVisibility = {
   bubble: boolean;
   input: boolean;
+  voice: boolean;
 };
 
 export type ShellBallBubbleVisibilityPhase = "visible" | "fading" | "hidden";
@@ -49,6 +51,7 @@ export type ShellBallBubbleRegionState = {
 
 export type ShellBallWindowSnapshot = {
   visualState: ShellBallVisualState;
+  voiceHintMode: ShellBallVoiceHintMode;
   inputBarMode: ShellBallInputBarMode;
   inputValue: string;
   pendingFiles: string[];
@@ -107,6 +110,10 @@ export type ShellBallInputRequestFocusPayload = {
   token: number;
 };
 
+export type ShellBallTextSelectionStatePayload = {
+  available: boolean;
+};
+
 export type ShellBallPrimaryActionPayload = {
   source: ShellBallHelperWindowRole;
   action: ShellBallPrimaryAction;
@@ -138,17 +145,20 @@ export function getShellBallHelperWindowVisibility(
   visualState: ShellBallVisualState,
   helpersVisible = true,
   bubbleVisibilityPhase: ShellBallBubbleVisibilityPhase = "hidden",
+  voiceHintMode: ShellBallVoiceHintMode = "hidden",
 ): ShellBallHelperWindowVisibility {
   if (!helpersVisible) {
     return {
       bubble: false,
       input: false,
+      voice: false,
     };
   }
 
   return {
     bubble: bubbleVisibilityPhase !== "hidden",
     input: getShellBallInputBarMode(visualState) !== "hidden",
+    voice: voiceHintMode !== "hidden",
   };
 }
 
@@ -172,6 +182,7 @@ export function getShellBallBubbleRegionState(
 
 export function createShellBallWindowSnapshot(input: {
   visualState: ShellBallVisualState;
+  voiceHintMode?: ShellBallVoiceHintMode;
   inputValue: string;
   pendingFiles?: string[];
   voicePreview: ShellBallVoicePreview;
@@ -185,19 +196,26 @@ export function createShellBallWindowSnapshot(input: {
 
   return {
     visualState: input.visualState,
+    voiceHintMode: input.voiceHintMode ?? "hidden",
     inputBarMode: getShellBallInputBarMode(input.visualState),
     inputValue: input.inputValue,
     pendingFiles,
     voicePreview: input.voicePreview,
     bubbleItems,
     bubbleRegion: getShellBallBubbleRegionState(bubbleItems, bubbleVisibilityPhase),
-    visibility: getShellBallHelperWindowVisibility(input.visualState, input.helpersVisible, bubbleVisibilityPhase),
+    visibility: getShellBallHelperWindowVisibility(
+      input.visualState,
+      input.helpersVisible,
+      bubbleVisibilityPhase,
+      input.voiceHintMode ?? "hidden",
+    ),
   };
 }
 
 export function createDefaultShellBallWindowSnapshot(): ShellBallWindowSnapshot {
   return createShellBallWindowSnapshot({
     visualState: "idle",
+    voiceHintMode: "hidden",
     inputValue: "",
     pendingFiles: [],
     voicePreview: null,

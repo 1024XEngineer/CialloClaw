@@ -107,6 +107,16 @@ export function getShellBallInputAnchor(input: {
   };
 }
 
+export function getShellBallVoiceAnchor(input: {
+  ballFrame: ShellBallWindowFrame;
+  helperFrame: ShellBallWindowSize;
+}) {
+  return {
+    x: Math.round(input.ballFrame.x + input.ballFrame.width / 2 - input.helperFrame.width / 2),
+    y: Math.round(input.ballFrame.y + input.ballFrame.height / 2 - input.helperFrame.height / 2),
+  };
+}
+
 export function clampShellBallFrameToBounds(
   frame: ShellBallWindowFrame,
   bounds: ShellBallWindowBounds,
@@ -135,8 +145,15 @@ export function getShellBallHelperWindowInteractionMode(input: {
 
   if (input.role === "input") {
     return {
-      focusable: !input.clickThrough,
+      focusable: input.visible && !input.clickThrough,
       ignoreCursorEvents: input.clickThrough || input.visible === false,
+    };
+  }
+
+  if (input.role === "voice") {
+    return {
+      focusable: false,
+      ignoreCursorEvents: true,
     };
   }
 
@@ -255,6 +272,7 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
       await Promise.all([
         currentWindow.emitTo(shellBallWindowLabels.bubble, shellBallWindowSyncEvents.geometry, geometry),
         currentWindow.emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.geometry, geometry),
+        currentWindow.emitTo(shellBallWindowLabels.voice, shellBallWindowSyncEvents.geometry, geometry),
       ]);
     }
 
@@ -300,16 +318,14 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     }
     const helperFrame = windowFrame;
 
-    if (role === "bubble") {
-      const interactionMode = getShellBallHelperWindowInteractionMode({
-        role,
-        visible,
-        clickThrough,
-      });
+    const interactionMode = getShellBallHelperWindowInteractionMode({
+      role,
+      visible,
+      clickThrough,
+    });
 
-      void setShellBallWindowFocusable(role, interactionMode.focusable);
-      void setShellBallWindowIgnoreCursorEvents(role, interactionMode.ignoreCursorEvents);
-    }
+    void setShellBallWindowFocusable(role, interactionMode.focusable);
+    void setShellBallWindowIgnoreCursorEvents(role, interactionMode.ignoreCursorEvents);
 
     let cleanup: (() => void) | null = null;
     let disposed = false;
@@ -323,7 +339,12 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
               ballFrame: geometry.ballFrame,
               helperFrame,
             })
-          : getShellBallInputAnchor({
+          : role === "input"
+            ? getShellBallInputAnchor({
+                ballFrame: geometry.ballFrame,
+                helperFrame,
+              })
+            : getShellBallVoiceAnchor({
               ballFrame: geometry.ballFrame,
               helperFrame,
             });
@@ -394,7 +415,12 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
             ballFrame: geometryRef.current.ballFrame,
             helperFrame,
           })
-        : getShellBallInputAnchor({
+        : role === "input"
+          ? getShellBallInputAnchor({
+              ballFrame: geometryRef.current.ballFrame,
+              helperFrame,
+            })
+          : getShellBallVoiceAnchor({
             ballFrame: geometryRef.current.ballFrame,
             helperFrame,
           });

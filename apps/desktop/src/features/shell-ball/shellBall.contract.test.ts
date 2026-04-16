@@ -13,11 +13,13 @@ import {
   getShellBallProcessingReturnState,
   shouldPreviewShellBallVoiceGesture,
   getShellBallVoicePreview,
+  getShellBallVoicePreviewForHintMode,
   resolveShellBallTransition,
   shouldRetainShellBallHoverInput,
   SHELL_BALL_CANCEL_DELTA_PX,
   SHELL_BALL_CONFIRMING_MS,
   SHELL_BALL_HOVER_INTENT_MS,
+  SHELL_BALL_LOCKED_CANCEL_HOLD_MS,
   SHELL_BALL_LEAVE_GRACE_MS,
   SHELL_BALL_LOCK_DELTA_PX,
   SHELL_BALL_LONG_PRESS_MS,
@@ -27,10 +29,11 @@ import {
 } from "./shellBall.interaction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
-import { ShellBallApp, shouldArmShellBallTextDropTarget, shouldShowShellBallFileDropOverlay } from "./ShellBallApp";
+import { ShellBallApp, shouldArmShellBallTextDropTarget, shouldShowShellBallFileDropOverlay, shouldShowShellBallSelectionIndicator } from "./ShellBallApp";
 import { ShellBallBubbleWindow } from "./ShellBallBubbleWindow";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallInputWindow } from "./ShellBallInputWindow";
+import { ShellBallVoiceWindow } from "./ShellBallVoiceWindow";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
@@ -67,6 +70,7 @@ import {
   getShellBallHelperWindowInteractionMode,
   getShellBallBubbleAnchor,
   getShellBallInputAnchor,
+  getShellBallVoiceAnchor,
   measureShellBallContentSize,
 } from "./useShellBallWindowMetrics";
 import { applyShellBallBubbleAction, createShellBallAgentBubbleItem } from "./useShellBallCoordinator";
@@ -80,6 +84,7 @@ import {
   resolveShellBallVoiceRecognitionFinalState,
   getShellBallVoicePreviewFromEvent,
   mapShellBallInteractionConsumedEventToFlag,
+  shouldLogShellBallSpeechRecognitionError,
   shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd,
   shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -673,19 +678,24 @@ test("shell-ball demo fixtures preserve the frozen seven-state contract", () => 
   });
 });
 
-test("shell-ball desktop host declares bubble and input helper windows", () => {
+test("shell-ball desktop host declares bubble, input, and voice helper windows", () => {
   assert.equal(existsSync(resolve(desktopRoot, "shell-ball-bubble.html")), true);
   assert.equal(existsSync(resolve(desktopRoot, "shell-ball-input.html")), true);
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-voice.html")), true);
+  assert.equal(existsSync(resolve(desktopRoot, "src/app/shell-ball-voice/main.tsx")), true);
 
   const viteConfig = readFileSync(resolve(desktopRoot, "vite.config.ts"), "utf8");
   const tauriConfig = readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8");
 
   assert.match(viteConfig, /"shell-ball-bubble"/);
   assert.match(viteConfig, /"shell-ball-input"/);
+  assert.match(viteConfig, /"shell-ball-voice"/);
   assert.match(tauriConfig, /"label": "shell-ball-bubble"/);
   assert.match(tauriConfig, /"label": "shell-ball-input"/);
+  assert.match(tauriConfig, /"label": "shell-ball-voice"/);
   assert.match(tauriConfig, /"url": "shell-ball-bubble\.html"/);
   assert.match(tauriConfig, /"url": "shell-ball-input\.html"/);
+  assert.match(tauriConfig, /"url": "shell-ball-voice\.html"/);
 });
 
 test("shell-ball desktop host declares detached pinned bubble windows", () => {
@@ -707,6 +717,7 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
     ball: "shell-ball",
     bubble: "shell-ball-bubble",
     input: "shell-ball-input",
+    voice: "shell-ball-voice",
   });
 
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-position"), true);
@@ -727,6 +738,7 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
     "shell-ball",
     "shell-ball-bubble",
     "shell-ball-input",
+    "shell-ball-voice",
     "shell-ball-bubble-pinned-*",
     "dashboard",
     "control-panel",
@@ -1204,28 +1216,48 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
     snapshot: "desktop-shell-ball:snapshot",
     geometry: "desktop-shell-ball:geometry",
     helperReady: "desktop-shell-ball:helper-ready",
+    textSelectionState: "desktop-shell-ball:text-selection-state",
     pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
     pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
+    bubbleHover: "desktop-shell-ball:bubble-hover",
     inputHover: "desktop-shell-ball:input-hover",
     inputFocus: "desktop-shell-ball:input-focus",
+    inputRequestFocus: "desktop-shell-ball:input-request-focus",
     inputDraft: "desktop-shell-ball:input-draft",
     primaryAction: "desktop-shell-ball:primary-action",
+    pendingFileAction: "desktop-shell-ball:pending-file-action",
+    intentDecision: "desktop-shell-ball:intent-decision",
     bubbleAction: "desktop-shell-ball:bubble-action",
   });
 
   assert.deepEqual(getShellBallHelperWindowVisibility("idle"), {
-    bubble: true,
+    bubble: false,
     input: false,
+    voice: false,
   });
 
   assert.deepEqual(getShellBallHelperWindowVisibility("hover_input"), {
-    bubble: true,
+    bubble: false,
     input: true,
+    voice: false,
+  });
+
+  assert.deepEqual(getShellBallHelperWindowVisibility("voice_locked"), {
+    bubble: false,
+    input: false,
+    voice: false,
+  });
+
+  assert.deepEqual(getShellBallHelperWindowVisibility("voice_locked", true, "hidden", "cancel"), {
+    bubble: false,
+    input: false,
+    voice: true,
   });
 
   assert.deepEqual(
     createShellBallWindowSnapshot({
       visualState: "voice_locked",
+      voiceHintMode: "hidden",
       inputValue: "draft",
       voicePreview: "lock",
       bubbleItems: [
@@ -1250,7 +1282,8 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
     }),
     {
       visualState: "voice_locked",
-      inputBarMode: "voice",
+      voiceHintMode: "hidden",
+      inputBarMode: "hidden",
       inputValue: "draft",
       voicePreview: "lock",
       bubbleItems: [
@@ -1275,11 +1308,12 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
       bubbleRegion: {
         strategy: "persistent",
         hasVisibleItems: true,
-        clickThrough: false,
+        clickThrough: true,
       },
       visibility: {
-        bubble: true,
-        input: true,
+        bubble: false,
+        input: false,
+        voice: false,
       },
     },
   );
@@ -2171,6 +2205,41 @@ test("shell-ball voice preview helpers keep preview and release resolution pure"
 
 });
 
+test("shell-ball voice preview mode filters lock and cancel gestures by stage", () => {
+  assert.equal(
+    getShellBallVoicePreviewForHintMode({
+      hintMode: "lock",
+      deltaX: 0,
+      deltaY: -SHELL_BALL_LOCK_DELTA_PX,
+    }),
+    "lock",
+  );
+  assert.equal(
+    getShellBallVoicePreviewForHintMode({
+      hintMode: "lock",
+      deltaX: 0,
+      deltaY: SHELL_BALL_CANCEL_DELTA_PX,
+    }),
+    null,
+  );
+  assert.equal(
+    getShellBallVoicePreviewForHintMode({
+      hintMode: "cancel",
+      deltaX: 0,
+      deltaY: SHELL_BALL_CANCEL_DELTA_PX,
+    }),
+    "cancel",
+  );
+  assert.equal(
+    getShellBallVoicePreviewForHintMode({
+      hintMode: "cancel",
+      deltaX: 0,
+      deltaY: -SHELL_BALL_LOCK_DELTA_PX,
+    }),
+    null,
+  );
+});
+
 test("shell-ball gesture helpers classify vertical intent explicitly for drag-safe voice previews", () => {
   assert.equal(
     getShellBallGestureAxisIntent({
@@ -2253,9 +2322,41 @@ test("shell-ball mascot supports passive rendering outside the floating ball hos
   assert.match(markup, /data-state="processing"/);
 });
 
+test("shell-ball mascot surfaces a microphone marker while voice capture is active", () => {
+  const voiceMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "voice_listening",
+      motionConfig: getShellBallMotionConfig("voice_listening"),
+    }),
+  );
+  const idleMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+
+  assert.match(voiceMarkup, /shell-ball-mascot__voice-marker/);
+  assert.doesNotMatch(idleMarkup, /shell-ball-mascot__voice-marker/);
+});
+
+test("shell-ball mascot shows a selection marker above the ball when text selection is available", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      selectionIndicatorVisible: true,
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+
+  assert.match(markup, /shell-ball-mascot__selection-marker/);
+  assert.match(markup, /shell-ball-mascot__selection-marker-glyph/);
+});
+
 test("shell-ball release preview recomputes from the final pointer position", () => {
   assert.equal(
     getShellBallVoicePreviewFromEvent({
+      hintMode: "lock",
       startX: 100,
       startY: 100,
       clientX: 100,
@@ -2267,6 +2368,7 @@ test("shell-ball release preview recomputes from the final pointer position", ()
 
   assert.equal(
     getShellBallVoicePreviewFromEvent({
+      hintMode: "cancel",
       startX: 100,
       startY: 100,
       clientX: 100,
@@ -2280,7 +2382,7 @@ test("shell-ball release preview recomputes from the final pointer position", ()
 test("shell-ball keeps voice preview alive on leave while voice listening is active", () => {
   assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("voice_listening"), true);
   assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("hover_input"), false);
-  assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("voice_locked"), false);
+  assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("voice_locked"), true);
 });
 
 test("shell-ball voice recognition resumes after unexpected end while listening or locked", () => {
@@ -2350,6 +2452,38 @@ test("shell-ball window measurement expands to overflowing mascot visuals", () =
     {
       width: 148,
       height: 126,
+    },
+  );
+});
+
+test("shell-ball helper metrics keep the voice overlay centered and always click-through", () => {
+  assert.deepEqual(
+    getShellBallVoiceAnchor({
+      ballFrame: {
+        x: 120,
+        y: 240,
+        width: 144,
+        height: 156,
+      },
+      helperFrame: {
+        width: 220,
+        height: 280,
+      },
+    }),
+    {
+      x: 82,
+      y: 178,
+    },
+  );
+  assert.deepEqual(
+    getShellBallHelperWindowInteractionMode({
+      role: "voice",
+      visible: true,
+      clickThrough: true,
+    }),
+    {
+      focusable: false,
+      ignoreCursorEvents: true,
     },
   );
 });
@@ -2432,6 +2566,35 @@ test("shell-ball input bar removes keyboard focus stops outside interactive mode
   assert.match(voiceMarkup, /tabindex="-1"/i);
 });
 
+test("shell-ball input bar uses a resizable textarea for focused draft editing", () => {
+  const interactiveMarkup = renderToStaticMarkup(
+    createElement(ShellBallInputBar, {
+      mode: "interactive",
+      voicePreview: null,
+      value: "Draft",
+      onValueChange: () => {},
+      onAttachFile: () => {},
+      onSubmit: () => {},
+      onFocusChange: () => {},
+    }),
+  );
+  const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
+  const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
+
+  assert.match(interactiveMarkup, /<textarea/);
+  assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \.shell-ball-input-bar__field \{[\s\S]*resize:\s*both;/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \{[\s\S]*border-radius:\s*1rem;/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within::before \{[\s\S]*border-radius:\s*1rem;/);
+});
+
+test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
+  const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
+
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0;/);
+});
+
 test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {
   const markup = renderToStaticMarkup(createElement(ShellBallApp, { isDev: false }));
 
@@ -2487,6 +2650,7 @@ test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", 
     inputValue: "draft",
     finalizedSpeechPayload: null,
     voicePreview: null,
+    voiceHintMode: "hidden",
     setInputValue: () => {},
     onFinalizedSpeechHandled: () => {},
     onRegionEnter: () => {},
@@ -3098,6 +3262,7 @@ test("shell-ball detached bubble actions close pinned windows and delete detache
     inputValue: "",
     finalizedSpeechPayload: null,
     voicePreview: null,
+    voiceHintMode: "hidden",
     setInputValue: () => {},
     onFinalizedSpeechHandled: () => {},
     onRegionEnter: () => {},
@@ -3314,7 +3479,8 @@ test("shell-ball bubble window styles stay transparent, faded, and motion-ready"
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone\s*\{[\s\S]*width:\s*var\(--shell-ball-helper-width\);/);
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone\s*\{[\s\S]*gap:\s*0\.4rem;/);
   assert.match(shellBallStyles, /\.shell-ball-bubble-zone\s*\{[\s\S]*overflow:\s*hidden;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar,\s*\.shell-ball-input-bar--hidden\s*\{[\s\S]*width:\s*var\(--shell-ball-helper-width\);/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar,\s*\.shell-ball-input-bar--hidden\s*\{[\s\S]*min-width:\s*var\(--shell-ball-helper-width\);/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar,\s*\.shell-ball-input-bar--hidden\s*\{[\s\S]*width:\s*fit-content;/);
   assert.match(mobileBubbleZoneBlock, /min-height:\s*4\.6rem;/);
   assert.match(mobileBubbleZoneBlock, /padding-inline:\s*0;/);
   assert.doesNotMatch(mobileBubbleZoneBlock, /width:/);
@@ -3347,6 +3513,25 @@ test("shell-ball input window owns the input rendering", () => {
 
   assert.match(markup, /shell-ball-input-bar/);
   assert.doesNotMatch(markup, /shell-ball-bubble-zone/);
+});
+
+test("shell-ball voice window owns lock and cancel hint rendering", () => {
+  const voiceWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallVoiceWindow.tsx"), "utf8");
+  const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
+  const voiceHintsSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallVoiceHints.tsx"), "utf8");
+
+  assert.equal(typeof ShellBallVoiceWindow, "function");
+  assert.match(voiceWindowSource, /useShellBallHelperWindowSnapshot\(\{ role: "voice" \}\)/);
+  assert.match(voiceWindowSource, /role: "voice",\s*visible: snapshot\.visibility\.voice,\s*clickThrough: true/);
+  assert.match(voiceWindowSource, /hintMode=\{snapshot\.voiceHintMode\}/);
+  assert.doesNotMatch(mascotSource, /shell-ball-mascot__voice-hint--cancel/);
+  assert.doesNotMatch(voiceHintsSource, />锁定</);
+  assert.doesNotMatch(voiceHintsSource, />取消</);
+});
+
+test("shell-ball speech recognition treats no-speech as a silent retryable interruption", () => {
+  assert.equal(shouldLogShellBallSpeechRecognitionError("no-speech"), false);
+  assert.equal(shouldLogShellBallSpeechRecognitionError("network"), true);
 });
 
 test("shell-ball surface renders the mascot-only floating structure without the demo switcher", () => {
@@ -3399,14 +3584,14 @@ test("shell-ball surface keeps drag and click on the mascot hotspot only", () =>
   assert.match(markup, /shell-ball-surface__interaction-zone/);
 });
 
-test("shell-ball mascot hotspot policy keeps single click inert outside locked voice", () => {
+test("shell-ball mascot hotspot policy only opens primary click for selected-text prompts", () => {
   assert.equal(
     getShellBallMascotHotspotGestureAction({
       visualState: "voice_locked",
       gesture: "single_click",
       suppressed: false,
     }),
-    "primary_click",
+    "noop",
   );
 
   assert.equal(
@@ -3425,6 +3610,16 @@ test("shell-ball mascot hotspot policy keeps single click inert outside locked v
       suppressed: false,
     }),
     "noop",
+  );
+
+  assert.equal(
+    getShellBallMascotHotspotGestureAction({
+      visualState: "idle",
+      gesture: "single_click",
+      suppressed: false,
+      selectionIndicatorVisible: true,
+    }),
+    "primary_click",
   );
 });
 
@@ -3540,8 +3735,8 @@ test("shell-ball mascot drag policy lets the full hotspot start window dragging 
       visualState: "idle",
       startX: 100,
       startY: 100,
-      clientX: 118,
-      clientY: 114,
+      clientX: 134,
+      clientY: 124,
     }),
     true,
   );
@@ -3561,6 +3756,7 @@ test("shell-ball mascot drag policy lets the full hotspot start window dragging 
 test("shell-ball voice swipe contract keeps upward lock and downward cancel explicit", () => {
   assert.equal(
     getShellBallVoicePreviewFromEvent({
+      hintMode: "lock",
       startX: 100,
       startY: 100,
       clientX: 100,
@@ -3572,6 +3768,7 @@ test("shell-ball voice swipe contract keeps upward lock and downward cancel expl
 
   assert.equal(
     getShellBallVoicePreviewFromEvent({
+      hintMode: "cancel",
       startX: 100,
       startY: 100,
       clientX: 100,
@@ -3671,6 +3868,34 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   assert.match(surfaceSource, /className="shell-ball-surface__text-drop-target"/);
 });
 
+test("shell-ball selected-text prompt only surfaces in resting states", () => {
+  assert.equal(
+    shouldShowShellBallSelectionIndicator({
+      available: true,
+      visualState: "idle",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldShowShellBallSelectionIndicator({
+      available: true,
+      visualState: "processing",
+    }),
+    false,
+  );
+});
+
+test("shell-ball app routes selected-text prompts into input focus and a mock agent reply", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(appSource, /listen<ShellBallTextSelectionStatePayload>\(shellBallWindowSyncEvents\.textSelectionState/);
+  assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
+  assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
+  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(\) => \{/);
+  assert.match(coordinatorSource, /text: "识别到选中了文字"/);
+});
+
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
   assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "idle", interactionConsumed: false }),
@@ -3740,6 +3965,7 @@ test("shell-ball interaction timing constants stay frozen", () => {
   assert.equal(SHELL_BALL_HOVER_INTENT_MS, 360);
   assert.equal(SHELL_BALL_LEAVE_GRACE_MS, 180);
   assert.equal(SHELL_BALL_LONG_PRESS_MS, 1000);
+  assert.equal(SHELL_BALL_LOCKED_CANCEL_HOLD_MS, 200);
   assert.equal(SHELL_BALL_LOCK_DELTA_PX, 48);
   assert.equal(SHELL_BALL_CANCEL_DELTA_PX, 48);
   assert.equal(SHELL_BALL_VERTICAL_PRIORITY_RATIO, 1.25);

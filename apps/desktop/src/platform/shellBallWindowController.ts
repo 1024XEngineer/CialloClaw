@@ -5,6 +5,7 @@ export const shellBallWindowLabels = Object.freeze({
   ball: "shell-ball",
   bubble: "shell-ball-bubble",
   input: "shell-ball-input",
+  voice: "shell-ball-voice",
 });
 
 export const shellBallPinnedBubbleWindowLabelPrefix = "shell-ball-bubble-pinned-";

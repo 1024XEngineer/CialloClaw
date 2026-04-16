@@ -33,9 +33,11 @@ const DASHBOARD_WINDOW_LABEL: &str = "dashboard";
 const SHELL_BALL_WINDOW_LABEL: &str = "shell-ball";
 const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
 const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";
+const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
+const SHELL_BALL_TEXT_SELECTION_STATE_EVENT: &str = "desktop-shell-ball:text-selection-state";
 const TRAY_ICON_ID: &str = "main-tray";
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
@@ -338,11 +340,181 @@ fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Resul
     .map_err(|error| format!("failed to emit shell-ball dashboard transition request: {error}"))
 }
 
+#[cfg(windows)]
+fn emit_shell_ball_text_selection_state(app: &tauri::AppHandle, available: bool) {
+    let _ = app.emit_to(
+        SHELL_BALL_WINDOW_LABEL,
+        SHELL_BALL_TEXT_SELECTION_STATE_EVENT,
+        serde_json::json!({
+            "available": available,
+        }),
+    );
+}
+
+#[cfg(windows)]
+fn get_shell_ball_root_window_at_point(point: POINT) -> HWND {
+    unsafe {
+        let hit_window = WindowFromPoint(point);
+        if hit_window.0.is_null() {
+            return hit_window;
+        }
+
+        GetAncestor(hit_window, GA_ROOT)
+    }
+}
+
+#[cfg(windows)]
+fn is_shell_ball_cluster_window_at_point(app: &tauri::AppHandle, point: POINT) -> bool {
+    let hit_window = get_shell_ball_root_window_at_point(point);
+
+    if hit_window.0.is_null() {
+        return false;
+    }
+
+    let shell_ball_labels = [
+        SHELL_BALL_WINDOW_LABEL,
+        SHELL_BALL_BUBBLE_WINDOW_LABEL,
+        SHELL_BALL_INPUT_WINDOW_LABEL,
+        SHELL_BALL_VOICE_WINDOW_LABEL,
+    ];
+
+    for label in shell_ball_labels {
+        let Some(window) = app.get_webview_window(label) else {
+            continue;
+        };
+
+        let Ok(hwnd) = window.hwnd() else {
+            continue;
+        };
+
+        if hwnd == hit_window {
+            return true;
+        }
+    }
+
+    for window in app.webview_windows().values() {
+        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+            continue;
+        }
+
+        let Ok(hwnd) = window.hwnd() else {
+            continue;
+        };
+
+        if hwnd == hit_window {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn shell_ball_selection_observer(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code < 0 {
+        return CallNextHookEx(None, n_code, w_param, l_param);
+    }
+
+    let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+    let app_handle = SHELL_BALL_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned());
+
+    match w_param.0 as u32 {
+        WM_LBUTTONDOWN => {
+            if let Some(app) = app_handle.as_ref() {
+                if is_shell_ball_cluster_window_at_point(app, point) {
+                    if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
+                        *tracker = SelectionGestureTracker::default();
+                    }
+                    return CallNextHookEx(None, n_code, w_param, l_param);
+                }
+            }
+
+            if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
+                tracker.pointer_active = true;
+                tracker.drag_candidate = false;
+                tracker.start_point = point;
+            }
+        }
+        WM_MOUSEMOVE => {
+            if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
+                let delta_x = (point.x - tracker.start_point.x).abs();
+                let delta_y = (point.y - tracker.start_point.y).abs();
+
+                if tracker.pointer_active
+                    && !tracker.drag_candidate
+                    && (delta_x >= SHELL_BALL_SELECTION_DRAG_THRESHOLD_PX
+                        || delta_y >= SHELL_BALL_SELECTION_DRAG_THRESHOLD_PX)
+                {
+                    tracker.drag_candidate = true;
+                }
+            }
+        }
+        WM_LBUTTONUP => {
+            let mut should_emit = None;
+
+            if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
+                if tracker.pointer_active {
+                    should_emit = Some(tracker.drag_candidate);
+                }
+
+                *tracker = SelectionGestureTracker::default();
+            }
+
+            if let (Some(app), Some(available)) = (app_handle.as_ref(), should_emit) {
+                if !is_shell_ball_cluster_window_at_point(app, point) {
+                    emit_shell_ball_text_selection_state(app, available);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+fn install_shell_ball_selection_hook(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Ok(mut app_handle) = SHELL_BALL_APP_HANDLE.lock() {
+        *app_handle = Some(app.clone());
+    }
+
+    let mut hook = SHELL_BALL_SELECTION_HOOK
+        .lock()
+        .map_err(|_| "shell-ball selection hook lock poisoned".to_string())?;
+
+    if hook.is_some() {
+        return Ok(());
+    }
+
+    unsafe {
+        *hook = Some(
+            SetWindowsHookExW(WH_MOUSE_LL, Some(shell_ball_selection_observer), None, 0)
+                .map_err(|error| format!("failed to install shell-ball selection hook: {error}"))?
+                .0 as isize,
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_shell_ball_selection_hook(_app: &tauri::AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
     let shell_ball_labels = [
         SHELL_BALL_WINDOW_LABEL,
         SHELL_BALL_BUBBLE_WINDOW_LABEL,
         SHELL_BALL_INPUT_WINDOW_LABEL,
+        SHELL_BALL_VOICE_WINDOW_LABEL,
     ];
 
     for label in shell_ball_labels {
@@ -472,6 +644,37 @@ static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::n
 
 #[cfg(windows)]
 static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[cfg(windows)]
+static SHELL_BALL_SELECTION_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_SELECTION_TRACKER: Lazy<Mutex<SelectionGestureTracker>> =
+    Lazy::new(|| Mutex::new(SelectionGestureTracker::default()));
+
+#[cfg(windows)]
+const SHELL_BALL_SELECTION_DRAG_THRESHOLD_PX: i32 = 16;
+
+#[cfg(windows)]
+struct SelectionGestureTracker {
+    pointer_active: bool,
+    drag_candidate: bool,
+    start_point: POINT,
+}
+
+#[cfg(windows)]
+impl Default for SelectionGestureTracker {
+    fn default() -> Self {
+        Self {
+            pointer_active: false,
+            drag_candidate: false,
+            start_point: POINT { x: 0, y: 0 },
+        }
+    }
+}
 
 #[cfg(windows)]
 unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
@@ -642,7 +845,12 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
-        .setup(|app| Ok(install_system_tray(app)?))
+        .setup(|app| {
+            install_shell_ball_selection_hook(app.handle())
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+
+            Ok(install_system_tray(app)?)
+        })
         .invoke_handler(tauri::generate_handler![
             named_pipe_request,
             named_pipe_subscribe,

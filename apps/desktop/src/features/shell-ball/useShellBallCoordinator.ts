@@ -15,7 +15,7 @@ import {
 } from "../../platform/shellBallWindowController";
 import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
-import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { startTaskFromFiles } from "@/services/taskService";
@@ -53,6 +53,7 @@ type ShellBallCoordinatorInput = {
   pendingFiles?: string[];
   finalizedSpeechPayload: string | null;
   voicePreview: ShellBallVoicePreview;
+  voiceHintMode: ShellBallVoiceHintMode;
   setInputValue: (value: string) => void;
   onAppendPendingFiles?: (paths: string[]) => void;
   onRemovePendingFile?: (path: string) => void;
@@ -296,10 +297,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         inputValue: input.inputValue,
         pendingFiles: input.pendingFiles ?? [],
         voicePreview: input.voicePreview,
+        voiceHintMode: input.voiceHintMode,
         bubbleItems,
         bubbleVisibilityPhase,
       }),
-    [bubbleItems, bubbleVisibilityPhase, helpersVisible, input.inputValue, input.pendingFiles, input.visualState, input.voicePreview],
+    [bubbleItems, bubbleVisibilityPhase, helpersVisible, input.inputValue, input.pendingFiles, input.visualState, input.voiceHintMode, input.voicePreview],
   );
   const snapshotRef = useRef(snapshot);
   const bubbleItemsRef = useRef(bubbleItems);
@@ -469,6 +471,21 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
   }, [revealBubbleRegion]);
 
+  const handleSelectedTextPrompt = useCallback(() => {
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallTextBubbleItem({
+          role: "agent",
+          text: "识别到选中了文字",
+          bubbleType: "status",
+          createdAt: new Date().toISOString(),
+        }),
+      ]),
+    );
+    revealBubbleRegion();
+  }, [revealBubbleRegion]);
+
   useEffect(() => {
     const visibleBubbleCount = getShellBallVisibleBubbleItems(bubbleItems).length;
     const previousVisibleBubbleCount = previousVisibleBubbleCountRef.current;
@@ -625,6 +642,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     void Promise.all([
       emitSnapshotToLabel(shellBallWindowLabels.bubble),
       emitSnapshotToLabel(shellBallWindowLabels.input),
+      emitSnapshotToLabel(shellBallWindowLabels.voice),
       ...pinnedBubbleLabels.map((label) => emitSnapshotToLabel(label)),
       ...latestSnapshot.bubbleItems
         .filter((item) => item.bubble.pinned)
@@ -947,7 +965,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     };
   }, [revealBubbleRegion, scheduleBubbleRegionHide]);
 
-  return { snapshot, handleDroppedFiles };
+  return { snapshot, handleDroppedFiles, handleSelectedTextPrompt };
 }
 
 export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {

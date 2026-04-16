@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent } from "react";
-import { ArrowDown, ArrowUp, AudioLines, Lock, ShieldAlert, X } from "lucide-react";
+import { AudioLines, Mic, ShieldAlert } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
@@ -9,6 +9,7 @@ type ShellBallMascotProps = {
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
+  selectionIndicatorVisible?: boolean;
   voiceHoldProgress?: number;
   motionConfig: ShellBallMotionConfig;
   onPrimaryClick?: () => void;
@@ -30,19 +31,20 @@ type ShellBallMascotPointerPhase = "pointer_down" | "pointer_up" | "pointer_canc
 
 type ShellBallMascotPointerPhaseAction = "noop" | "start_press" | "finish_press" | "suppress_gestures" | "cleanup_only";
 
-const SHELL_BALL_MASCOT_DRAG_THRESHOLD_PX = 10;
+const SHELL_BALL_MASCOT_DRAG_THRESHOLD_PX = 28;
 
 export function getShellBallMascotHotspotGestureAction(input: {
   visualState: ShellBallVisualState;
   gesture: ShellBallMascotHotspotGesture;
   suppressed: boolean;
+  selectionIndicatorVisible?: boolean;
 }): ShellBallMascotHotspotGestureAction {
   if (input.suppressed) {
     return "noop";
   }
 
   if (input.gesture === "single_click") {
-    return input.visualState === "voice_locked" ? "primary_click" : "noop";
+    return input.selectionIndicatorVisible ? "primary_click" : "noop";
   }
 
   if (input.visualState === "idle" || input.visualState === "hover_input") {
@@ -97,6 +99,7 @@ export function ShellBallMascot({
   visualState,
   voicePreview = null,
   showVoiceHints = true,
+  selectionIndicatorVisible = false,
   voiceHoldProgress = 0,
   motionConfig,
   onPrimaryClick = () => {},
@@ -143,6 +146,8 @@ export function ShellBallMascot({
   const holdRingDashOffset = holdRingCircumference * (1 - voiceHoldProgress);
   const showVoiceHoldRing = voiceHoldProgress > 0 && visualState !== "voice_listening" && visualState !== "voice_locked";
   const shouldRenderVoiceHints = showVoiceHints && (visualState === "voice_listening" || visualState === "voice_locked");
+  const showVoiceMarker = visualState === "voice_listening" || visualState === "voice_locked";
+  const showSelectionMarker = selectionIndicatorVisible && !showVoiceMarker;
 
   function resetPointerSequence() {
     activeSequenceRef.current = false;
@@ -267,6 +272,7 @@ export function ShellBallMascot({
       visualState,
       gesture: "single_click",
       suppressed: suppressGestureRef.current,
+      selectionIndicatorVisible,
     });
 
     if (action !== "primary_click") {
@@ -329,26 +335,6 @@ export function ShellBallMascot({
         </div>
       )}
 
-      {shouldRenderVoiceHints ? (
-        <>
-          <div className={cn("shell-ball-mascot__voice-hint shell-ball-mascot__voice-hint--lock", voicePreview === "lock" && "is-active", visualState === "voice_locked" && "is-locked")}
-          >
-            <ArrowUp className="shell-ball-mascot__voice-arrow" />
-            <Lock className="shell-ball-mascot__voice-icon" />
-            <span>锁定</span>
-          </div>
-
-          <div className={cn("shell-ball-mascot__voice-hint shell-ball-mascot__voice-hint--cancel", voicePreview === "cancel" && "is-active")}
-          >
-            <ArrowDown className="shell-ball-mascot__voice-arrow" />
-            <X className="shell-ball-mascot__voice-icon" />
-            <span>取消</span>
-          </div>
-        </>
-      ) : null}
-
-
-
       <div className="shell-ball-mascot__float" style={floatStyle}>
         <div className="shell-ball-mascot__attitude" style={attitudeStyle}>
           <div className="shell-ball-mascot__tail-shell" style={tailStyle}>
@@ -383,6 +369,18 @@ export function ShellBallMascot({
               </div>
             </div>
           </div>
+
+          {showSelectionMarker ? (
+            <div className="shell-ball-mascot__selection-marker" aria-hidden="true">
+              <span className="shell-ball-mascot__selection-marker-glyph">!</span>
+            </div>
+          ) : null}
+
+          {showVoiceMarker ? (
+            <div className={cn("shell-ball-mascot__voice-marker", visualState === "voice_locked" && "is-locked")} aria-hidden="true">
+              <Mic className="shell-ball-mascot__voice-marker-icon" />
+            </div>
+          ) : null}
 
           {motionConfig.showAuthMarker ? (
             <div className="shell-ball-mascot__auth-marker" aria-hidden="true">

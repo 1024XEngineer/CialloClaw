@@ -3,12 +3,14 @@ import type {
   ShellBallInteractionEvent,
   ShellBallTransitionResult,
   ShellBallVisualState,
+  ShellBallVoiceHintMode,
 } from "./shellBall.types";
 import type { TaskStatus } from "@cialloclaw/protocol";
 
 export const SHELL_BALL_HOVER_INTENT_MS = 360;
 export const SHELL_BALL_LEAVE_GRACE_MS = 180;
 export const SHELL_BALL_LONG_PRESS_MS = 1000;
+export const SHELL_BALL_LOCKED_CANCEL_HOLD_MS = 200;
 export const SHELL_BALL_LOCK_DELTA_PX = 48;
 export const SHELL_BALL_CANCEL_DELTA_PX = 48;
 export const SHELL_BALL_VERTICAL_PRIORITY_RATIO = 1.25;
@@ -122,6 +124,20 @@ export function getShellBallVoicePreview(input: { deltaX: number; deltaY: number
   }
 
   return null;
+}
+
+export function getShellBallVoicePreviewForHintMode(input: {
+  hintMode: Exclude<ShellBallVoiceHintMode, "hidden">;
+  deltaX: number;
+  deltaY: number;
+}): ShellBallVoicePreview {
+  const preview = getShellBallVoicePreview({ deltaX: input.deltaX, deltaY: input.deltaY });
+
+  if (input.hintMode === "lock") {
+    return preview === "lock" ? "lock" : null;
+  }
+
+  return preview === "cancel" ? "cancel" : null;
 }
 
 export function resolveShellBallVoiceReleaseEvent(preview: Exclude<ShellBallVoicePreview, "lock">): Extract<ShellBallInteractionEvent, "voice_cancel" | "voice_finish"> {

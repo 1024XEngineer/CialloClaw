@@ -5,8 +5,9 @@ import { submitTextInput, createTextInputSubmitParams } from "../../services/age
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
-  getShellBallVoicePreview,
+  getShellBallVoicePreviewForHintMode,
   getShellBallVisualStateForTaskStatus,
+  SHELL_BALL_LOCKED_CANCEL_HOLD_MS,
   SHELL_BALL_LONG_PRESS_MS,
   resolveShellBallVoiceReleaseEvent,
   shouldRetainShellBallHoverInput,
@@ -20,7 +21,7 @@ import {
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
 import { startTaskFromFiles } from "@/services/taskService";
-import type { ShellBallInteractionEvent, ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
 type TimeoutHandle = ReturnType<typeof globalThis.setTimeout>;
@@ -222,6 +223,7 @@ export function getShellBallDashboardOpenGesturePolicy(input: {
 }
 
 export function getShellBallVoicePreviewFromEvent(input: {
+  hintMode: Exclude<ShellBallVoiceHintMode, "hidden">;
   startX: number | null;
   startY: number | null;
   clientX: number;
@@ -232,14 +234,15 @@ export function getShellBallVoicePreviewFromEvent(input: {
     return input.fallbackPreview;
   }
 
-  return getShellBallVoicePreview({
+  return getShellBallVoicePreviewForHintMode({
+    hintMode: input.hintMode,
     deltaX: input.clientX - input.startX,
     deltaY: input.clientY - input.startY,
   });
 }
 
 export function shouldKeepShellBallVoicePreviewOnRegionLeave(state: ShellBallVisualState) {
-  return state === "voice_listening";
+  return state === "voice_listening" || state === "voice_locked";
 }
 
 export function shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(state: ShellBallVisualState) {
@@ -248,6 +251,10 @@ export function shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(state: S
 
 export function shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd(error: string | null) {
   return error === null || !SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS.has(error);
+}
+
+export function shouldLogShellBallSpeechRecognitionError(error: string) {
+  return error !== "no-speech";
 }
 
 export function getShellBallVoiceRecognitionUnexpectedEndFallbackState(input: {
@@ -337,6 +344,7 @@ export function useShellBallInteraction() {
   const [finalizedSpeechPayload, setFinalizedSpeechPayload] = useState<string | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
   const [voicePreview, setVoicePreview] = useState<ShellBallVoicePreview>(null);
+  const [voiceHintMode, setVoiceHintMode] = useState<ShellBallVoiceHintMode>("hidden");
   const [voiceHoldProgress, setVoiceHoldProgress] = useState(0);
   const [interactionConsumed, setInteractionConsumed] = useState(false);
   const regionActiveRef = useRef(false);
@@ -344,6 +352,7 @@ export function useShellBallInteraction() {
   const pressStartXRef = useRef<number | null>(null);
   const pressStartYRef = useRef<number | null>(null);
   const voicePreviewRef = useRef<ShellBallVoicePreview>(null);
+  const voiceHintModeRef = useRef<ShellBallVoiceHintMode>("hidden");
   const longPressHandleRef = useRef<TimeoutHandle | null>(null);
   const longPressProgressHandleRef = useRef<number | null>(null);
   const longPressStartAtRef = useRef<number | null>(null);
@@ -421,6 +430,11 @@ export function useShellBallInteraction() {
     setVoicePreview(preview);
   }
 
+  const setCurrentVoiceHintMode = useCallback((mode: ShellBallVoiceHintMode) => {
+    voiceHintModeRef.current = mode;
+    setVoiceHintMode(mode);
+  }, []);
+
   function getHoverRetained() {
     return shouldRetainShellBallHoverInput({
       regionActive: regionActiveRef.current,
@@ -445,6 +459,27 @@ export function useShellBallInteraction() {
     setInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
   }
 
+  function getVoicePreviewForPointer(input: {
+    clientX: number;
+    clientY: number;
+    fallbackPreview: ShellBallVoicePreview;
+  }) {
+    const hintMode = voiceHintModeRef.current;
+
+    if (hintMode === "hidden") {
+      return input.fallbackPreview;
+    }
+
+    return getShellBallVoicePreviewFromEvent({
+      hintMode,
+      startX: pressStartXRef.current,
+      startY: pressStartYRef.current,
+      clientX: input.clientX,
+      clientY: input.clientY,
+      fallbackPreview: input.fallbackPreview,
+    });
+  }
+
   function preserveUnexpectedVoiceTranscriptDraft() {
     const committedDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, voiceTranscriptRef.current);
     voiceBaseDraftRef.current = committedDraft;
@@ -465,6 +500,8 @@ export function useShellBallInteraction() {
     recognitionSessionIdRef.current += 1;
 
     setInputValue(resolution.nextInputValue);
+    setCurrentVoiceHintMode("hidden");
+    setCurrentVoicePreview(null);
     controllerRef.current?.forceState(resolution.nextVisualState, {
       regionActive: resolution.nextVisualState === "hover_input",
     });
@@ -574,7 +611,9 @@ export function useShellBallInteraction() {
       }
 
       recognitionErrorRef.current = event.error;
-      console.warn("shell-ball speech recognition error", event.error);
+      if (shouldLogShellBallSpeechRecognitionError(event.error)) {
+        console.warn("shell-ball speech recognition error", event.error);
+      }
     };
 
     recognition.onend = () => {
@@ -644,12 +683,7 @@ export function useShellBallInteraction() {
   }
 
   function handlePrimaryClick() {
-    if (controllerRef.current?.getState() !== "voice_locked") {
-      return;
-    }
-
-    stopVoiceRecognition("finish");
-    consumeInteraction();
+    return;
   }
 
   function handleRegionEnter() {
@@ -744,6 +778,34 @@ export function useShellBallInteraction() {
     clearLongPressTimer();
 
     const currentState = controllerRef.current?.getState();
+    if (currentState === "voice_locked") {
+      longPressStartAtRef.current = performance.now();
+      const tickProgress = () => {
+        if (longPressStartAtRef.current === null) {
+          return;
+        }
+
+        const elapsed = performance.now() - longPressStartAtRef.current;
+        setVoiceHoldProgress(Math.min(elapsed / SHELL_BALL_LOCKED_CANCEL_HOLD_MS, 1));
+        longPressProgressHandleRef.current = requestAnimationFrame(tickProgress);
+      };
+      longPressProgressHandleRef.current = requestAnimationFrame(tickProgress);
+
+      longPressHandleRef.current = globalThis.setTimeout(() => {
+        longPressHandleRef.current = null;
+        if (longPressProgressHandleRef.current !== null) {
+          cancelAnimationFrame(longPressProgressHandleRef.current);
+          longPressProgressHandleRef.current = null;
+        }
+        longPressStartAtRef.current = null;
+        setVoiceHoldProgress(0);
+        setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("long_press_voice_entry"));
+        setCurrentVoiceHintMode("cancel");
+        setCurrentVoicePreview(null);
+      }, SHELL_BALL_LOCKED_CANCEL_HOLD_MS);
+      return;
+    }
+
     if (currentState !== "idle" && currentState !== "hover_input") {
       return;
     }
@@ -774,10 +836,12 @@ export function useShellBallInteraction() {
       longPressStartAtRef.current = null;
       setVoiceHoldProgress(0);
       setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("long_press_voice_entry"));
+      setCurrentVoiceHintMode("lock");
       dispatch("press_start");
 
       if (!startVoiceRecognition()) {
         setInputValue(voiceBaseDraftRef.current);
+        setCurrentVoiceHintMode("hidden");
         controllerRef.current?.forceState(
           voiceStartStateRef.current === "hover_input" || voiceBaseDraftRef.current.trim() !== "" ? "hover_input" : "idle",
           { regionActive: regionActiveRef.current },
@@ -793,19 +857,15 @@ export function useShellBallInteraction() {
     }
 
     const currentState = controllerRef.current?.getState();
-    if (currentState !== "voice_listening") {
+    if (currentState !== "voice_listening" && !(currentState === "voice_locked" && voiceHintModeRef.current === "cancel")) {
       return;
     }
 
-    setCurrentVoicePreview(
-      getShellBallVoicePreviewFromEvent({
-        startX: pressStartXRef.current,
-        startY: pressStartYRef.current,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        fallbackPreview: voicePreviewRef.current,
-      }),
-    );
+    setCurrentVoicePreview(getVoicePreviewForPointer({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      fallbackPreview: voicePreviewRef.current,
+    }));
   }
 
   function handlePressEnd(event: PointerEvent<HTMLButtonElement>) {
@@ -813,9 +873,7 @@ export function useShellBallInteraction() {
 
     if (controllerRef.current?.getState() === "voice_listening") {
       consumeInteraction();
-      const finalPreview = getShellBallVoicePreviewFromEvent({
-        startX: pressStartXRef.current,
-        startY: pressStartYRef.current,
+      const finalPreview = getVoicePreviewForPointer({
         clientX: event.clientX,
         clientY: event.clientY,
         fallbackPreview: voicePreviewRef.current,
@@ -825,11 +883,13 @@ export function useShellBallInteraction() {
         dispatch("voice_lock");
         pressStartXRef.current = null;
         pressStartYRef.current = null;
+        setCurrentVoiceHintMode("hidden");
         setCurrentVoicePreview(null);
         return true;
       }
 
-      stopVoiceRecognition(finalPreview === "cancel" ? "cancel" : "finish");
+      setCurrentVoiceHintMode("hidden");
+      stopVoiceRecognition("finish");
       dispatch(resolveShellBallVoiceReleaseEvent(finalPreview));
       inputFocusedRef.current = false;
       setInputFocused(false);
@@ -839,12 +899,19 @@ export function useShellBallInteraction() {
       return true;
     }
 
-    if (controllerRef.current?.getState() === "voice_locked") {
-      stopVoiceRecognition("finish");
+    if (controllerRef.current?.getState() === "voice_locked" && voiceHintModeRef.current === "cancel") {
       consumeInteraction();
-      dispatch("primary_click_locked_voice_end");
-      inputFocusedRef.current = false;
-      setInputFocused(false);
+      const finalPreview = getVoicePreviewForPointer({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        fallbackPreview: voicePreviewRef.current,
+      });
+
+      if (finalPreview === "cancel") {
+        stopVoiceRecognition("cancel");
+      }
+
+      setCurrentVoiceHintMode("hidden");
       pressStartXRef.current = null;
       pressStartYRef.current = null;
       setCurrentVoicePreview(null);
@@ -865,6 +932,7 @@ export function useShellBallInteraction() {
     pressStartYRef.current = null;
     inputFocusedRef.current = false;
     setInputFocused(false);
+    setCurrentVoiceHintMode("hidden");
     setCurrentVoicePreview(null);
 
     if (cancelEvent !== null) {
@@ -919,6 +987,7 @@ export function useShellBallInteraction() {
     pressStartYRef.current = null;
     inputFocusedRef.current = false;
     setInputFocused(false);
+    setCurrentVoiceHintMode("hidden");
     setCurrentVoicePreview(null);
     controllerRef.current?.forceState(state, { regionActive: regionActiveRef.current });
     syncVisualState();
@@ -937,12 +1006,23 @@ export function useShellBallInteraction() {
   }, [visualState]);
 
   useEffect(() => {
+    if (visualState === "voice_listening" || visualState === "voice_locked") {
+      return;
+    }
+
+    if (voiceHintModeRef.current !== "hidden") {
+      setCurrentVoiceHintMode("hidden");
+    }
+  }, [setCurrentVoiceHintMode, visualState]);
+
+  useEffect(() => {
     return () => {
       clearLongPressTimer();
       disposeVoiceRecognition();
       pressStartXRef.current = null;
       pressStartYRef.current = null;
       voicePreviewRef.current = null;
+      voiceHintModeRef.current = "hidden";
       controllerRef.current?.dispose();
     };
   }, [clearLongPressTimer, disposeVoiceRecognition]);
@@ -955,6 +1035,7 @@ export function useShellBallInteraction() {
     finalizedSpeechPayload,
     acknowledgeFinalizedSpeechPayload,
     voicePreview,
+    voiceHintMode,
     voiceHoldProgress,
     inputFocused,
     inputBarMode: getShellBallInputBarMode(visualState),
