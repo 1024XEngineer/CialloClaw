@@ -867,6 +867,9 @@ func TestExecutionWorkerHelpersCoverArtifactsRecoveryAndTrace(t *testing.T) {
 	if len(artifacts) != 1 || artifacts[0]["path"] != "clips/demo.mp4" {
 		t.Fatalf("unexpected tool artifacts: %+v", artifacts)
 	}
+	if artifacts[0]["artifact_id"] == "" {
+		t.Fatalf("expected runtime tool artifact to receive a stable artifact_id, got %+v", artifacts)
+	}
 	if workspacePathFromDeliveryResult(nil) != "workspace" {
 		t.Fatalf("expected default workspace path")
 	}

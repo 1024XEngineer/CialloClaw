@@ -598,7 +598,7 @@ func toolArtifactsFromResult(taskID string, result *tools.ToolExecutionResult) [
 			"mime_type":     artifact.MimeType,
 		})
 	}
-	return artifacts
+	return delivery.EnsureArtifactIdentifiers(taskID, artifacts)
 }
 
 func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
@@ -650,6 +650,9 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 				"url":  nil,
 			},
 			"created_at": time.Now().UTC().Format(time.RFC3339),
+		}
+		if normalized := delivery.EnsureArtifactIdentifiers(taskID, []map[string]any{artifact}); len(normalized) == 1 {
+			artifact = normalized[0]
 		}
 	}
 

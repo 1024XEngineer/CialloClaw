@@ -3594,12 +3594,6 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 			"type": "text",
 			"text": "collect detail view payload",
 		},
-		"intent": map[string]any{
-			"name": "summarize",
-			"arguments": map[string]any{
-				"style": "key_points",
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
@@ -3619,6 +3613,89 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	}
 	if detailResult["task"].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("expected task detail task_id to match request, got %+v", detailResult["task"])
+	}
+	artifacts, ok := detailResult["artifacts"].([]map[string]any)
+	if !ok || len(artifacts) != 0 {
+		t.Fatalf("expected empty artifact collection array, got %+v", detailResult["artifacts"])
+	}
+	mirrorReferences, ok := detailResult["mirror_references"].([]map[string]any)
+	if !ok || len(mirrorReferences) != 0 {
+		t.Fatalf("expected empty mirror reference collection array, got %+v", detailResult["mirror_references"])
+	}
+	if _, ok := detailResult["timeline"].([]map[string]any); !ok {
+		t.Fatalf("expected timeline to stay an array, got %+v", detailResult["timeline"])
+	}
+}
+
+func TestServiceTaskDetailGetNormalizesProtocolCollections(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail protocol collections")
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_protocol",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "collect normalized detail payload",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	if _, ok := service.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, []map[string]any{{
+		"artifact_id":      "art_detail_protocol_001",
+		"task_id":          taskID,
+		"artifact_type":    "generated_doc",
+		"title":            "detail-protocol.md",
+		"path":             "workspace/detail-protocol.md",
+		"mime_type":        "text/markdown",
+		"delivery_type":    "workspace_document",
+		"delivery_payload": map[string]any{"path": "workspace/detail-protocol.md", "task_id": taskID},
+		"created_at":       "2026-04-15T10:00:00Z",
+	}}); !ok {
+		t.Fatal("expected task presentation update to succeed")
+	}
+	if _, ok := service.runEngine.SetMirrorReferences(taskID, []map[string]any{{
+		"memory_id": "mem_protocol_001",
+		"reason":    "detail normalization",
+		"summary":   "normalized reference",
+		"source":    "runtime",
+	}}); !ok {
+		t.Fatal("expected mirror reference update to succeed")
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected one normalized artifact, got %+v", artifacts)
+	}
+	artifact := artifacts[0]
+	if artifact["artifact_id"] != "art_detail_protocol_001" || artifact["mime_type"] != "text/markdown" {
+		t.Fatalf("expected formal artifact fields to survive normalization, got %+v", artifact)
+	}
+	if _, ok := artifact["delivery_type"]; ok {
+		t.Fatalf("expected detail artifact to omit undeclared delivery_type, got %+v", artifact)
+	}
+	if _, ok := artifact["delivery_payload"]; ok {
+		t.Fatalf("expected detail artifact to omit undeclared delivery_payload, got %+v", artifact)
+	}
+
+	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 {
+		t.Fatalf("expected one normalized mirror reference, got %+v", mirrorReferences)
+	}
+	if _, ok := mirrorReferences[0]["source"]; ok {
+		t.Fatalf("expected mirror reference to omit undeclared source field, got %+v", mirrorReferences[0])
 	}
 }
 
@@ -3725,6 +3802,9 @@ func TestServiceTaskArtifactListReturnsStoredArtifacts(t *testing.T) {
 	if len(items) != 1 || items[0]["artifact_id"] != "art_list_001" {
 		t.Fatalf("expected stored artifact list item, got %+v", items)
 	}
+	if _, ok := items[0]["delivery_type"]; ok {
+		t.Fatalf("expected artifact list item to omit undeclared delivery_type, got %+v", items[0])
+	}
 }
 
 func TestServiceTaskArtifactListUsesStorePaginationBeyondHundred(t *testing.T) {
@@ -3827,6 +3907,10 @@ func TestServiceTaskArtifactOpenReturnsStableOpenPayload(t *testing.T) {
 	payload := result["resolved_payload"].(map[string]any)
 	if payload["path"] != "workspace/artifact-open.md" {
 		t.Fatalf("expected resolved payload path, got %+v", payload)
+	}
+	artifact := result["artifact"].(map[string]any)
+	if _, ok := artifact["delivery_type"]; ok {
+		t.Fatalf("expected opened artifact to omit undeclared delivery_type, got %+v", artifact)
 	}
 }
 
@@ -3956,6 +4040,9 @@ func TestServiceDeliveryOpenReturnsArtifactDeliveryResult(t *testing.T) {
 	if result["artifact"].(map[string]any)["artifact_id"] != "art_delivery_open_001" {
 		t.Fatalf("expected artifact payload, got %+v", result)
 	}
+	if _, ok := result["artifact"].(map[string]any)["delivery_type"]; ok {
+		t.Fatalf("expected delivery-open artifact to omit undeclared delivery_type, got %+v", result["artifact"])
+	}
 }
 
 func TestTaskArtifactHelpersCoverFallbackBranches(t *testing.T) {
@@ -4013,6 +4100,70 @@ func TestServiceTaskArtifactListFallsBackToRuntimeArtifactsWhenStoreEmpty(t *tes
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["artifact_id"] != "art_runtime_001" {
 		t.Fatalf("expected runtime artifact fallback to return item, got %+v", items)
+	}
+	if _, ok := items[0]["delivery_type"]; ok {
+		t.Fatalf("expected runtime artifact fallback item to omit undeclared delivery_type, got %+v", items[0])
+	}
+}
+
+func TestServiceRuntimeArtifactsBackfillStableArtifactIdentifiersWhenMissing(t *testing.T) {
+	service := newTestService()
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_runtime_missing_artifact_id",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "只检查运行态 artifact id",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	_, _ = service.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, []map[string]any{{
+		"artifact_id":      "",
+		"task_id":          taskID,
+		"artifact_type":    "generated_file",
+		"title":            "runtime-output.txt",
+		"path":             "workspace/runtime-output.txt",
+		"mime_type":        "text/plain",
+		"delivery_type":    "open_file",
+		"delivery_payload": map[string]any{"path": "workspace/runtime-output.txt", "task_id": taskID},
+	}})
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	detailArtifacts := detailResult["artifacts"].([]map[string]any)
+	if len(detailArtifacts) != 1 {
+		t.Fatalf("expected one runtime detail artifact, got %+v", detailArtifacts)
+	}
+	artifactID, ok := detailArtifacts[0]["artifact_id"].(string)
+	if !ok || artifactID == "" {
+		t.Fatalf("expected runtime detail artifact to receive a stable id, got %+v", detailArtifacts[0])
+	}
+
+	listResult, err := service.TaskArtifactList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["artifact_id"] != artifactID {
+		t.Fatalf("expected runtime artifact list to reuse generated id, got %+v", items)
+	}
+
+	openResult, err := service.TaskArtifactOpen(map[string]any{"task_id": taskID, "artifact_id": artifactID})
+	if err != nil {
+		t.Fatalf("task artifact open failed: %v", err)
+	}
+	if openResult["artifact"].(map[string]any)["artifact_id"] != artifactID {
+		t.Fatalf("expected artifact open to resolve generated runtime id, got %+v", openResult)
 	}
 }
 
