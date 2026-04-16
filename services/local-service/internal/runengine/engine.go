@@ -1331,12 +1331,53 @@ func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
+func notepadClaimToken(itemID string) string {
+	return "__claim__:" + strings.TrimSpace(itemID)
+}
+
+func isNotepadClaimed(linkedTaskID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(linkedTaskID), "__claim__:")
+}
+
+func (e *Engine) ClaimNotepadItemTask(itemID string) (map[string]any, bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	item, index, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, false, nil
+	}
+
+	status := stringValue(item, "status", "normal")
+	if status == "completed" || status == "cancelled" {
+		return nil, true, fmt.Errorf("notepad item is already closed: %s", itemID)
+	}
+
+	linkedTaskID := stringValue(item, "linked_task_id", "")
+	if linkedTaskID != "" {
+		if isNotepadClaimed(linkedTaskID) {
+			return nil, true, fmt.Errorf("notepad item is already being converted: %s", itemID)
+		}
+		return nil, true, fmt.Errorf("notepad item is already linked to task: %s", linkedTaskID)
+	}
+
+	updated := cloneMap(item)
+	updated["linked_task_id"] = notepadClaimToken(itemID)
+	e.notepadItems[index] = updated
+	return normalizeNotepadItem(updated, e.now()), true, nil
+}
+
 func (e *Engine) LinkNotepadItemTask(itemID, taskID string) (map[string]any, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	item, index, ok := e.findNotepadItem(itemID)
 	if !ok {
+		return nil, false
+	}
+
+	linkedTaskID := stringValue(item, "linked_task_id", "")
+	if linkedTaskID != "" && linkedTaskID != notepadClaimToken(itemID) && linkedTaskID != strings.TrimSpace(taskID) {
 		return nil, false
 	}
 

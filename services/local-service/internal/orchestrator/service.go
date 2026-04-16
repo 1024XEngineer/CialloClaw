@@ -812,16 +812,12 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		return nil, fmt.Errorf("confirmed must be true to convert notepad item")
 	}
 
-	item, ok := s.runEngine.NotepadItem(itemID)
-	if !ok {
+	item, handled, claimErr := s.runEngine.ClaimNotepadItemTask(itemID)
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if !handled {
 		return nil, fmt.Errorf("notepad item not found: %s", itemID)
-	}
-
-	if status := stringValue(item, "status", "normal"); status == "completed" || status == "cancelled" {
-		return nil, fmt.Errorf("notepad item is already closed: %s", itemID)
-	}
-	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
-		return nil, fmt.Errorf("notepad item is already linked to task: %s", linkedTaskID)
 	}
 
 	itemTitle := stringValue(item, "title", "待办事项")

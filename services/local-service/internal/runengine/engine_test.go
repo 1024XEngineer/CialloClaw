@@ -666,6 +666,33 @@ func TestEngineLinkNotepadItemTaskPersistsReference(t *testing.T) {
 	}
 }
 
+func TestEngineClaimNotepadItemTaskRejectsSecondClaim(t *testing.T) {
+	engine := NewEngine()
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_claim",
+		"title":   "claim me",
+		"bucket":  "upcoming",
+		"status":  "normal",
+		"type":    "todo_item",
+	}})
+
+	claimed, handled, err := engine.ClaimNotepadItemTask("todo_claim")
+	if err != nil || !handled {
+		t.Fatalf("expected first claim to succeed, handled=%v err=%v", handled, err)
+	}
+	if claimed["linked_task_id"] != "__claim__:todo_claim" {
+		t.Fatalf("expected claim marker on item, got %+v", claimed)
+	}
+
+	_, handled, err = engine.ClaimNotepadItemTask("todo_claim")
+	if !handled {
+		t.Fatal("expected second claim to hit existing item")
+	}
+	if err == nil || err.Error() != "notepad item is already being converted: todo_claim" {
+		t.Fatalf("expected in-flight conversion error, got %v", err)
+	}
+}
+
 func TestEngineListTasksSupportsSorting(t *testing.T) {
 	engine := NewEngine()
 	currentTime := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)

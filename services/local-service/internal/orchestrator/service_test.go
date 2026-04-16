@@ -1161,6 +1161,29 @@ func TestServiceNotepadConvertToTaskRejectsAlreadyLinkedItem(t *testing.T) {
 	}
 }
 
+func TestServiceNotepadConvertToTaskRejectsInFlightClaim(t *testing.T) {
+	service := newTestService()
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":        "todo_claimed",
+		"title":          "claimed note",
+		"bucket":         "upcoming",
+		"status":         "normal",
+		"type":           "todo_item",
+		"linked_task_id": "__claim__:todo_claimed",
+	}})
+
+	_, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_claimed",
+		"confirmed": true,
+	})
+	if err == nil {
+		t.Fatal("expected convert_to_task to reject in-flight claim")
+	}
+	if err.Error() != "notepad item is already being converted: todo_claimed" {
+		t.Fatalf("expected in-flight conversion error, got %v", err)
+	}
+}
+
 func TestServiceExecutionAuditIDsStayUniqueAcrossToolAndTaskRecords(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime output")
 
