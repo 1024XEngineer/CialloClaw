@@ -355,7 +355,7 @@ export interface AgentInputSubmitParams {
 export interface AgentInputSubmitResult {
   task: Task;
   bubble_message: BubbleMessage | null;
-  delivery_result?: DeliveryResult | null;
+  delivery_result: DeliveryResult | null;
 }
 
 export interface AgentTaskStartParams {
