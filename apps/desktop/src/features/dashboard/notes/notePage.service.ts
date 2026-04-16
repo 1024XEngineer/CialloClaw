@@ -8,7 +8,7 @@ import type {
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { convertNotepadToTask, listNotepad } from "@/rpc/methods";
 import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask } from "./notePage.mock";
-import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem } from "./notePage.types";
+import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 export type NotePageDataMode = "rpc" | "mock";
@@ -136,8 +136,17 @@ function getTypeLabel(item: TodoItem) {
 }
 
 function createResourceHints(item: TodoItem) {
+  if (item.related_resources && item.related_resources.length > 0) {
+    return item.related_resources.map<NoteResource>((resource) => ({
+      id: resource.resource_id,
+      label: resource.label,
+      path: resource.path,
+      type: resource.resource_type,
+    }));
+  }
+
   const normalizedTitle = item.title.toLowerCase();
-  const resources = [];
+  const resources: NoteResource[] = [];
 
   if (normalizedTitle.includes("模板")) {
     resources.push({
@@ -178,23 +187,23 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
       detail: item.agent_suggestion ?? "当前拿到的是协议中的基础便签数据，建议补一条更明确的上下文后再决定是否转交给 Agent。",
       label: "下一步建议",
     },
-    canConvertToTask: item.bucket !== "closed",
+    canConvertToTask: item.bucket !== "closed" && !item.linked_task_id,
     detailStatus,
     detailStatusTone: item.status === "overdue" ? "overdue" : item.status === "completed" || item.status === "cancelled" ? "done" : "normal",
-    effectiveScope: item.bucket === "recurring_rule" ? "规则持续生效，直到手动暂停或取消。" : null,
-    endedAt: item.status === "completed" || item.status === "cancelled" ? item.due_at : null,
+    effectiveScope: item.effective_scope ?? (item.bucket === "recurring_rule" ? "规则持续生效，直到手动暂停或取消。" : null),
+    endedAt: item.ended_at ?? (item.status === "completed" || item.status === "cancelled" ? item.due_at : null),
     isRecurringEnabled: item.bucket === "recurring_rule",
-    nextOccurrenceAt: item.bucket === "recurring_rule" ? item.due_at : null,
-    noteText: item.agent_suggestion
+    nextOccurrenceAt: item.next_occurrence_at ?? (item.bucket === "recurring_rule" ? item.due_at : null),
+    noteText: item.note_text ?? (item.agent_suggestion
       ? `${item.title}。当前已同步到便签页，建议先按提示整理上下文，再视情况转成正式任务。`
-      : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`,
+      : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`),
     noteType: item.bucket === "recurring_rule" ? "recurring" : item.bucket === "closed" ? "archive" : "reminder",
     plannedAt: item.due_at,
     previewStatus,
-    prerequisite: item.bucket === "later" ? "当前还没进入处理窗口，先保留上下文即可。" : item.bucket === "recurring_rule" ? "确认这条规则仍然需要继续生效。" : null,
-    recentInstanceStatus: null,
+    prerequisite: item.prerequisite ?? (item.bucket === "later" ? "当前还没进入处理窗口，先保留上下文即可。" : item.bucket === "recurring_rule" ? "确认这条规则仍然需要继续生效。" : null),
+    recentInstanceStatus: item.recent_instance_status ?? null,
     relatedResources: createResourceHints(item),
-    repeatRule: item.bucket === "recurring_rule" ? "协议暂未返回具体重复规则，当前只展示规则条目。" : null,
+    repeatRule: item.repeat_rule ?? (item.bucket === "recurring_rule" ? "协议暂未返回具体重复规则，当前只展示规则条目。" : null),
     summaryLabel: getSummaryLabel(item),
     timeHint: getTimeHint(item),
     title: item.title,

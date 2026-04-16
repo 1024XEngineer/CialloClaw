@@ -382,6 +382,11 @@ export function runMockConvertNoteToTask(itemId: string): NoteConvertOutcome {
         title: item.title,
         updated_at: new Date().toISOString(),
       },
+      notepad_item: {
+        ...item,
+        linked_task_id: `task_from_${item.item_id}`,
+      },
+      refresh_groups: [item.bucket],
     },
     source: "mock",
   };
