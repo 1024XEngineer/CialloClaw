@@ -800,6 +800,40 @@ func (s *Service) NotepadList(params map[string]any) (map[string]any, error) {
 	}, nil
 }
 
+// NotepadUpdate 处理 agent.notepad.update。
+func (s *Service) NotepadUpdate(params map[string]any) (map[string]any, error) {
+	itemID := stringValue(params, "item_id", "")
+	if itemID == "" {
+		return nil, fmt.Errorf("item_id is required")
+	}
+
+	action := stringValue(params, "action", "")
+	if action == "" {
+		return nil, fmt.Errorf("action is required")
+	}
+
+	updatedItem, refreshGroups, deletedItemID, handled, err := s.runEngine.UpdateNotepadItem(itemID, action)
+	if err != nil {
+		return nil, err
+	}
+	if !handled {
+		return nil, fmt.Errorf("notepad item not found: %s", itemID)
+	}
+
+	response := map[string]any{
+		"notepad_item":    any(nil),
+		"refresh_groups":  refreshGroups,
+		"deleted_item_id": nil,
+	}
+	if updatedItem != nil {
+		response["notepad_item"] = updatedItem
+	}
+	if deletedItemID != "" {
+		response["deleted_item_id"] = deletedItemID
+	}
+	return response, nil
+}
+
 // NotepadConvertToTask 处理当前模块的相关逻辑。
 
 // NotepadConvertToTask 处理 agent.notepad.convert_to_task。

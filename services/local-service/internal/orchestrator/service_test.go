@@ -1184,6 +1184,61 @@ func TestServiceNotepadConvertToTaskRejectsInFlightClaim(t *testing.T) {
 	}
 }
 
+func TestServiceNotepadUpdateReturnsUpdatedItemAndRefreshGroups(t *testing.T) {
+	service := newTestService()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_later_update",
+		"title":   "move later note",
+		"bucket":  "later",
+		"status":  "normal",
+		"type":    "todo_item",
+		"due_at":  now.Add(48 * time.Hour).Format(time.RFC3339),
+	}})
+
+	result, err := service.NotepadUpdate(map[string]any{
+		"item_id": "todo_later_update",
+		"action":  "move_upcoming",
+	})
+	if err != nil {
+		t.Fatalf("notepad update failed: %v", err)
+	}
+
+	updatedItem := result["notepad_item"].(map[string]any)
+	if updatedItem["bucket"] != "upcoming" {
+		t.Fatalf("expected updated item bucket upcoming, got %+v", updatedItem)
+	}
+	refreshGroups := result["refresh_groups"].([]string)
+	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
+		t.Fatalf("expected refresh_groups to include source and target buckets, got %+v", refreshGroups)
+	}
+}
+
+func TestServiceNotepadUpdateReturnsDeletedItemID(t *testing.T) {
+	service := newTestService()
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_delete_rpc",
+		"title":   "delete me",
+		"bucket":  "closed",
+		"status":  "completed",
+		"type":    "todo_item",
+	}})
+
+	result, err := service.NotepadUpdate(map[string]any{
+		"item_id": "todo_delete_rpc",
+		"action":  "delete",
+	})
+	if err != nil {
+		t.Fatalf("notepad delete failed: %v", err)
+	}
+	if result["notepad_item"] != nil {
+		t.Fatalf("expected deleted item payload to be nil, got %+v", result["notepad_item"])
+	}
+	if result["deleted_item_id"] != "todo_delete_rpc" {
+		t.Fatalf("expected deleted_item_id in response, got %+v", result["deleted_item_id"])
+	}
+}
+
 func TestServiceExecutionAuditIDsStayUniqueAcrossToolAndTaskRecords(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime output")
 

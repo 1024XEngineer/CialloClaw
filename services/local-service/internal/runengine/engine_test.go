@@ -693,6 +693,122 @@ func TestEngineClaimNotepadItemTaskRejectsSecondClaim(t *testing.T) {
 	}
 }
 
+func TestEngineUpdateNotepadItemMovesLaterItemToUpcoming(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_move",
+		"title":   "move me",
+		"bucket":  "later",
+		"status":  "normal",
+		"type":    "todo_item",
+		"due_at":  now.Add(48 * time.Hour).Format(time.RFC3339),
+	}})
+
+	updated, refreshGroups, deletedItemID, handled, err := engine.UpdateNotepadItem("todo_move", "move_upcoming")
+	if err != nil || !handled {
+		t.Fatalf("expected move_upcoming to succeed, handled=%v err=%v", handled, err)
+	}
+	if deletedItemID != "" {
+		t.Fatalf("expected no deleted item id, got %q", deletedItemID)
+	}
+	if updated["bucket"] != "upcoming" {
+		t.Fatalf("expected moved item to be in upcoming bucket, got %+v", updated)
+	}
+	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
+		t.Fatalf("expected refresh groups for source and target buckets, got %+v", refreshGroups)
+	}
+}
+
+func TestEngineUpdateNotepadItemTogglesRecurringRule(t *testing.T) {
+	engine := NewEngine()
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":           "todo_recurring",
+		"title":             "recurring note",
+		"bucket":            "recurring_rule",
+		"status":            "normal",
+		"type":              "recurring",
+		"recurring_enabled": true,
+	}})
+
+	updated, _, _, handled, err := engine.UpdateNotepadItem("todo_recurring", "toggle_recurring")
+	if err != nil || !handled {
+		t.Fatalf("expected toggle_recurring to succeed, handled=%v err=%v", handled, err)
+	}
+	if updated["recurring_enabled"] != false || updated["status"] != "cancelled" {
+		t.Fatalf("expected recurring rule to pause, got %+v", updated)
+	}
+
+	updated, _, _, handled, err = engine.UpdateNotepadItem("todo_recurring", "toggle_recurring")
+	if err != nil || !handled {
+		t.Fatalf("expected second toggle_recurring to succeed, handled=%v err=%v", handled, err)
+	}
+	if updated["recurring_enabled"] != true || updated["status"] != "normal" {
+		t.Fatalf("expected recurring rule to resume, got %+v", updated)
+	}
+}
+
+func TestEngineUpdateNotepadItemRestoresClosedItem(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":         "todo_restore",
+		"title":           "restore me",
+		"bucket":          "closed",
+		"status":          "cancelled",
+		"type":            "todo_item",
+		"previous_bucket": "later",
+		"previous_due_at": now.Add(24 * time.Hour).Format(time.RFC3339),
+		"previous_status": "normal",
+		"ended_at":        now.Format(time.RFC3339),
+	}})
+
+	updated, refreshGroups, deletedItemID, handled, err := engine.UpdateNotepadItem("todo_restore", "restore")
+	if err != nil || !handled {
+		t.Fatalf("expected restore to succeed, handled=%v err=%v", handled, err)
+	}
+	if deletedItemID != "" {
+		t.Fatalf("expected restore not to delete item, got %q", deletedItemID)
+	}
+	if updated["bucket"] != "later" || updated["ended_at"] != nil {
+		t.Fatalf("expected restored item to return to previous bucket, got %+v", updated)
+	}
+	if len(refreshGroups) != 2 || refreshGroups[0] != "closed" || refreshGroups[1] != "later" {
+		t.Fatalf("expected restore refresh groups, got %+v", refreshGroups)
+	}
+}
+
+func TestEngineUpdateNotepadItemDeletesClosedItem(t *testing.T) {
+	engine := NewEngine()
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_delete",
+		"title":   "delete me",
+		"bucket":  "closed",
+		"status":  "completed",
+		"type":    "todo_item",
+	}})
+
+	updated, refreshGroups, deletedItemID, handled, err := engine.UpdateNotepadItem("todo_delete", "delete")
+	if err != nil || !handled {
+		t.Fatalf("expected delete to succeed, handled=%v err=%v", handled, err)
+	}
+	if updated != nil {
+		t.Fatalf("expected deleted item payload to be nil, got %+v", updated)
+	}
+	if deletedItemID != "todo_delete" {
+		t.Fatalf("expected deleted item id, got %q", deletedItemID)
+	}
+	if len(refreshGroups) != 1 || refreshGroups[0] != "closed" {
+		t.Fatalf("expected closed refresh group, got %+v", refreshGroups)
+	}
+	items, total := engine.NotepadItems("closed", 10, 0)
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("expected deleted item to disappear from closed bucket, total=%d len=%d", total, len(items))
+	}
+}
+
 func TestEngineListTasksSupportsSorting(t *testing.T) {
 	engine := NewEngine()
 	currentTime := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)

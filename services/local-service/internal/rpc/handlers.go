@@ -28,6 +28,7 @@ func (s *Server) registerHandlers() {
 		"agent.task_inspector.config.update":   s.handleAgentTaskInspectorConfigUpdate,
 		"agent.task_inspector.run":             s.handleAgentTaskInspectorRun,
 		"agent.notepad.list":                   s.handleAgentNotepadList,
+		"agent.notepad.update":                 s.handleAgentNotepadUpdate,
 		"agent.notepad.convert_to_task":        s.handleAgentNotepadConvertToTask,
 		"agent.dashboard.overview.get":         s.handleAgentDashboardOverviewGet,
 		"agent.dashboard.module.get":           s.handleAgentDashboardModuleGet,
@@ -159,6 +160,12 @@ func (s *Server) handleAgentNotepadList(params map[string]any) (any, *rpcError) 
 }
 
 // handleAgentNotepadConvertToTask 处理当前模块的相关逻辑。
+
+// handleAgentNotepadUpdate 处理 agent.notepad.update。
+func (s *Server) handleAgentNotepadUpdate(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.NotepadUpdate(params)
+	return wrapOrchestratorResult(data, err)
+}
 
 // handleAgentNotepadConvertToTask 处理 agent.notepad.convert_to_task。
 func (s *Server) handleAgentNotepadConvertToTask(params map[string]any) (any, *rpcError) {

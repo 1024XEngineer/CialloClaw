@@ -1387,6 +1387,93 @@ func (e *Engine) LinkNotepadItemTask(itemID, taskID string) (map[string]any, boo
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
+func (e *Engine) UpdateNotepadItem(itemID, action string) (map[string]any, []string, string, bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	item, index, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, nil, "", false, nil
+	}
+
+	now := e.now()
+	currentBucket := stringValue(item, "bucket", "upcoming")
+	refreshGroups := []string{currentBucket}
+	updated := cloneMap(item)
+
+	switch strings.TrimSpace(action) {
+	case "complete":
+		if currentBucket == "closed" {
+			return nil, nil, "", true, fmt.Errorf("notepad item is already closed: %s", itemID)
+		}
+		markNotepadClosed(updated, currentBucket, "completed", now)
+		refreshGroups = append(refreshGroups, "closed")
+	case "cancel":
+		if currentBucket == "closed" {
+			return nil, nil, "", true, fmt.Errorf("notepad item is already closed: %s", itemID)
+		}
+		markNotepadClosed(updated, currentBucket, "cancelled", now)
+		refreshGroups = append(refreshGroups, "closed")
+	case "move_upcoming":
+		if currentBucket != "later" {
+			return nil, nil, "", true, fmt.Errorf("notepad action move_upcoming requires later bucket: %s", itemID)
+		}
+		updated["bucket"] = "upcoming"
+		updated["status"] = "normal"
+		refreshGroups = append(refreshGroups, "upcoming")
+	case "toggle_recurring":
+		if currentBucket != "recurring_rule" {
+			return nil, nil, "", true, fmt.Errorf("notepad action toggle_recurring requires recurring_rule bucket: %s", itemID)
+		}
+		currentEnabled := boolValue(updated["recurring_enabled"], true)
+		nextEnabled := !currentEnabled
+		updated["recurring_enabled"] = nextEnabled
+		if nextEnabled {
+			updated["status"] = "normal"
+			updated["recent_instance_status"] = "重复规则已恢复"
+		} else {
+			updated["status"] = "cancelled"
+			updated["recent_instance_status"] = "重复规则已暂停"
+		}
+	case "cancel_recurring":
+		if currentBucket != "recurring_rule" {
+			return nil, nil, "", true, fmt.Errorf("notepad action cancel_recurring requires recurring_rule bucket: %s", itemID)
+		}
+		updated["recurring_enabled"] = false
+		markNotepadClosed(updated, currentBucket, "cancelled", now)
+		refreshGroups = append(refreshGroups, "closed")
+	case "restore":
+		if currentBucket != "closed" {
+			return nil, nil, "", true, fmt.Errorf("notepad action restore requires closed bucket: %s", itemID)
+		}
+		restoreBucket := firstNonEmpty(
+			stringValue(updated, "previous_bucket", ""),
+			inferRestoreBucket(updated),
+		)
+		updated["bucket"] = restoreBucket
+		updated["status"] = firstNonEmpty(stringValue(updated, "previous_status", ""), "normal")
+		if dueAt, ok := updated["previous_due_at"]; ok {
+			updated["due_at"] = dueAt
+		}
+		updated["ended_at"] = nil
+		if restoreBucket == "recurring_rule" && updated["recurring_enabled"] == nil {
+			updated["recurring_enabled"] = true
+		}
+		refreshGroups = append(refreshGroups, restoreBucket)
+	case "delete":
+		if currentBucket != "closed" {
+			return nil, nil, "", true, fmt.Errorf("notepad action delete requires closed bucket: %s", itemID)
+		}
+		e.notepadItems = append(e.notepadItems[:index], e.notepadItems[index+1:]...)
+		return nil, dedupeStrings(refreshGroups), itemID, true, nil
+	default:
+		return nil, nil, "", true, fmt.Errorf("unsupported notepad action: %s", action)
+	}
+
+	e.notepadItems[index] = updated
+	return normalizeNotepadItem(updated, now), dedupeStrings(refreshGroups), "", true, nil
+}
+
 func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, tokenUsage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1891,6 +1978,7 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":                 "one_time",
 			"due_at":               dueToday.Format(time.RFC3339),
 			"agent_suggestion":     "先生成一个结构化摘要",
+			"recurring_enabled":    nil,
 			"note_text":            "把这周会议里的共识、待确认事项和风险点整理成一页结构化纪要，方便后续同步给项目组。",
 			"prerequisite":         "先确认会议录音、群聊结论和白板截图都已经归档。",
 			"repeat_rule":          nil,
@@ -1921,6 +2009,7 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":                 "one_time",
 			"due_at":               later.Format(time.RFC3339),
 			"agent_suggestion":     "可以先整理提纲再扩写成文档",
+			"recurring_enabled":    nil,
 			"note_text":            "这份材料暂时不急着执行，但需要提前把背景、目标和评审关注点补齐，否则下周会上无法直接过稿。",
 			"prerequisite":         "等本周结论稳定后再整理，避免材料重复返工。",
 			"repeat_rule":          nil,
@@ -1951,6 +2040,7 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":                   "recurring",
 			"due_at":                 recurring.Format(time.RFC3339),
 			"agent_suggestion":       "建议生成固定模板后重复复用",
+			"recurring_enabled":      true,
 			"note_text":              "每周固定回看目标完成情况、风险变化和下周重点，持续沉淀团队可复用的复盘节奏。",
 			"prerequisite":           "先把本周新增任务和已完成交付汇总齐全。",
 			"repeat_rule":            "每周五 18:00",
@@ -1981,6 +2071,7 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":                   "one_time",
 			"due_at":                 completedAt.Format(time.RFC3339),
 			"agent_suggestion":       nil,
+			"recurring_enabled":      nil,
 			"note_text":              "这条事项已经处理完成并归档，用来保留来源记录和后续追溯入口。",
 			"prerequisite":           nil,
 			"repeat_rule":            nil,
@@ -2019,6 +2110,32 @@ func normalizeNotepadItem(item map[string]any, now time.Time) map[string]any {
 	normalized := cloneMap(item)
 	normalized["status"] = deriveNotepadStatus(item, now)
 	return normalized
+}
+
+func markNotepadClosed(item map[string]any, currentBucket, nextStatus string, now time.Time) {
+	if item == nil {
+		return
+	}
+	if _, ok := item["previous_bucket"]; !ok {
+		item["previous_bucket"] = currentBucket
+	}
+	if _, ok := item["previous_due_at"]; !ok {
+		item["previous_due_at"] = item["due_at"]
+	}
+	if _, ok := item["previous_status"]; !ok {
+		item["previous_status"] = stringValue(item, "status", "normal")
+	}
+	item["bucket"] = "closed"
+	item["status"] = nextStatus
+	item["due_at"] = nil
+	item["ended_at"] = now.Format(time.RFC3339)
+}
+
+func inferRestoreBucket(item map[string]any) string {
+	if boolValue(item["recurring_enabled"], false) || stringValue(item, "type", "") == "recurring" {
+		return "recurring_rule"
+	}
+	return "upcoming"
 }
 
 func deriveNotepadStatus(item map[string]any, now time.Time) string {
@@ -2094,6 +2211,40 @@ func todoBucketRank(bucket string) int {
 	default:
 		return 4
 	}
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func boolValue(rawValue any, fallback bool) bool {
+	if rawValue == nil {
+		return fallback
+	}
+	value, ok := rawValue.(bool)
+	if !ok {
+		return fallback
+	}
+	return value
 }
 
 func stringValue(values map[string]any, key, fallback string) string {
