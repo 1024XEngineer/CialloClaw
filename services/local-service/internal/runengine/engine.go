@@ -1134,16 +1134,15 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 	return effectiveSettings, updatedKeys, applyMode, needRestart
 }
 
-// NotepadItems 处理当前模块的相关逻辑。
-
-// NotepadItems 返回便签模块在当前内存态中的示例数据。
+// NotepadItems returns the current notepad bucket view using the frozen TodoItem
+// contract, even when the internal owner-5 foundation carries richer metadata.
 func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	filtered := make([]map[string]any, 0, len(e.notepadItems))
 	for _, item := range e.notepadItems {
-		normalized := normalizeNotepadItem(item, e.now())
+		normalized := protocolNotepadItemMap(item, e.now())
 		if group != "" {
 			if bucket, ok := normalized["bucket"].(string); !ok || bucket != group {
 				continue
@@ -1189,15 +1188,12 @@ func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	item, index, ok := e.findNotepadItem(itemID)
+	updated, index, ok := e.updatedNotepadItem(itemID)
 	if !ok {
 		return nil, false
 	}
 
-	updated := cloneMap(item)
-	updated["bucket"] = "closed"
-	updated["status"] = "completed"
-	updated["due_at"] = nil
+	closeNotepadItem(updated, "completed", e.now())
 	e.notepadItems[index] = updated
 	return normalizeNotepadItem(updated, e.now()), true
 }
@@ -1681,6 +1677,14 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":             "one_time",
 			"due_at":           dueToday.Format(time.RFC3339),
 			"agent_suggestion": "先生成一个结构化摘要",
+			"note_text":        "汇总会议结论、待办人和风险项，整理成一页纪要。",
+			"related_resources": []map[string]any{{
+				"id":          "todo_001_minutes",
+				"label":       "会议资料目录",
+				"path":        "workspace/meetings",
+				"type":        "directory",
+				"target_kind": "folder",
+			}},
 		},
 		{
 			"item_id":          "todo_002",
@@ -1690,15 +1694,38 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":             "one_time",
 			"due_at":           later.Format(time.RFC3339),
 			"agent_suggestion": "可以先整理提纲再扩写成文档",
+			"note_text":        "先确认评审范围和负责人，再补齐材料。",
+			"prerequisite":     "等本周评审结论收齐后再开始整理。",
+			"related_resources": []map[string]any{{
+				"id":          "todo_002_review",
+				"label":       "评审草稿区",
+				"path":        "workspace/drafts/reviews",
+				"type":        "directory",
+				"target_kind": "folder",
+			}},
 		},
 		{
-			"item_id":          "todo_003",
-			"title":            "每周项目复盘",
-			"bucket":           "recurring_rule",
-			"status":           "normal",
-			"type":             "recurring",
-			"due_at":           recurring.Format(time.RFC3339),
-			"agent_suggestion": "建议生成固定模板后重复复用",
+			"item_id":                "todo_003",
+			"title":                  "每周项目复盘",
+			"bucket":                 "recurring_rule",
+			"status":                 "normal",
+			"type":                   "recurring",
+			"due_at":                 recurring.Format(time.RFC3339),
+			"agent_suggestion":       "建议生成固定模板后重复复用",
+			"note_text":              "按固定模板回顾进展、阻塞项和下周计划。",
+			"prerequisite":           "确认本周任务状态和风险变更已经同步。",
+			"repeat_rule_text":       "每周五 18:00 生成复盘提醒",
+			"next_occurrence_at":     recurring.Format(time.RFC3339),
+			"recent_instance_status": "completed",
+			"effective_scope":        "默认工作区内所有项目复盘笔记",
+			"recurring_enabled":      true,
+			"related_resources": []map[string]any{{
+				"id":          "todo_003_retro",
+				"label":       "复盘模板",
+				"path":        "workspace/templates/retro.md",
+				"type":        "file",
+				"target_kind": "file",
+			}},
 		},
 		{
 			"item_id":          "todo_004",
@@ -1708,6 +1735,15 @@ func buildDefaultNotepadItems(now time.Time) []map[string]any {
 			"type":             "one_time",
 			"due_at":           completedAt.Format(time.RFC3339),
 			"agent_suggestion": nil,
+			"note_text":        "日报已整理完成，仅保留归档记录与相关资料入口。",
+			"ended_at":         completedAt.Format(time.RFC3339),
+			"related_resources": []map[string]any{{
+				"id":          "todo_004_archive",
+				"label":       "日报归档",
+				"path":        "workspace/archive/daily",
+				"type":        "directory",
+				"target_kind": "folder",
+			}},
 		},
 	}
 }
@@ -1719,12 +1755,6 @@ func (e *Engine) findNotepadItem(itemID string) (map[string]any, int, bool) {
 		}
 	}
 	return nil, -1, false
-}
-
-func normalizeNotepadItem(item map[string]any, now time.Time) map[string]any {
-	normalized := cloneMap(item)
-	normalized["status"] = deriveNotepadStatus(item, now)
-	return normalized
 }
 
 func deriveNotepadStatus(item map[string]any, now time.Time) string {
