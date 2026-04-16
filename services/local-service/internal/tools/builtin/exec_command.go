@@ -81,11 +81,21 @@ func (t *ExecCommandTool) Execute(ctx context.Context, execCtx *tools.ToolExecut
 			"result":  commandAuditResult(result.ExitCode),
 		},
 	}
+	if backendName := executionBackendName(result); backendName != "" {
+		rawOutput["execution_backend"] = backendName
+	}
+	if sandboxInfo := sandboxResultInfo(result); len(sandboxInfo) > 0 {
+		rawOutput["sandbox"] = sandboxInfo
+	}
+	summaryOutput := buildExecCommandSummary(command, args, workingDir, result)
+	if backendName := executionBackendName(result); backendName != "" {
+		summaryOutput["execution_backend"] = backendName
+	}
 
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: buildExecCommandSummary(command, args, workingDir, result),
+		SummaryOutput: summaryOutput,
 	}, nil
 }
 
@@ -193,4 +203,24 @@ func previewText(input string, limit int) string {
 		return trimmed
 	}
 	return trimmed[:limit]
+}
+
+func executionBackendName(result tools.CommandExecutionResult) string {
+	return strings.TrimSpace(result.ExecutionBackend)
+}
+
+func sandboxResultInfo(result tools.CommandExecutionResult) map[string]any {
+	if strings.TrimSpace(result.SandboxContainer) == "" && strings.TrimSpace(result.SandboxImage) == "" && !result.Interrupted {
+		return nil
+	}
+	info := map[string]any{
+		"interrupted": result.Interrupted,
+	}
+	if strings.TrimSpace(result.SandboxContainer) != "" {
+		info["container_name"] = strings.TrimSpace(result.SandboxContainer)
+	}
+	if strings.TrimSpace(result.SandboxImage) != "" {
+		info["image"] = strings.TrimSpace(result.SandboxImage)
+	}
+	return info
 }

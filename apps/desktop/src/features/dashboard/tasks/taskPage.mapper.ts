@@ -1,4 +1,4 @@
-import type { Task, TaskStep } from "@cialloclaw/protocol";
+import type { AgentTaskDetailGetResult, Task, TaskStep } from "@cialloclaw/protocol";
 import { formatStatusLabel, formatTimestamp } from "@/utils/formatters";
 import type {
   FinishedTaskGroup,
@@ -147,13 +147,24 @@ export function getFinishedTaskGroups(items: TaskListItem[], expanded: boolean):
   return groups.filter((group) => group.items.length > 0);
 }
 
-export function getTaskPrimaryActions(task: Task): TaskPrimaryAction[] {
+function buildTaskSafetyAction(task: Task, detail: AgentTaskDetailGetResult): TaskPrimaryAction {
+  const hasAnchor = task.status === "waiting_auth" || detail.approval_request !== null || detail.security_summary.latest_restore_point !== null;
+
+  return {
+    action: "open-safety",
+    label: hasAnchor ? "安全详情" : "安全总览",
+    tooltip: hasAnchor ? "查看当前任务的风险与授权摘要。" : "查看当前任务相关的安全总览。",
+  };
+}
+
+export function getTaskPrimaryActions(task: Task, detail: AgentTaskDetailGetResult): TaskPrimaryAction[] {
+  const safetyAction = buildTaskSafetyAction(task, detail);
+
   if (task.status === "processing") {
     return [
       { action: "pause", label: "暂停", tooltip: "先把当前执行暂停在这里。" },
       { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
-      { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
-      { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
+      safetyAction,
     ];
   }
 
@@ -161,38 +172,47 @@ export function getTaskPrimaryActions(task: Task): TaskPrimaryAction[] {
     return [
       { action: "resume", label: "继续", tooltip: "恢复当前任务并继续推进。" },
       { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
-      { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
-      { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
+      safetyAction,
     ];
   }
 
-  if (task.status === "waiting_auth" || task.status === "waiting_input") {
+  if (task.status === "waiting_auth") {
     return [
       { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
-      { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
-      { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
+      safetyAction,
+    ];
+  }
+
+  if (task.status === "waiting_input") {
+    return [
+      { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
+      safetyAction,
     ];
   }
 
   if (task.status === "blocked") {
     return [
       { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
-      { action: "open-safety", label: "安全详情", tooltip: "查看当前任务的风险与授权摘要。" },
-      { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
+      safetyAction,
     ];
   }
 
   if (task.status === "failed") {
     return [
       { action: "restart", label: "重新启动", tooltip: "从当前任务生成一条新的执行路径。" },
-      { action: "open-safety", label: "安全详情", tooltip: "查看失败前后的风险和恢复点摘要。" },
-      { action: "edit", label: "修改任务", tooltip: "任务修改能力将在后续开放。" },
+      {
+        ...safetyAction,
+        tooltip: safetyAction.label === "安全详情" ? "查看失败前后的风险和恢复点摘要。" : safetyAction.tooltip,
+      },
     ];
   }
 
   return [
     { action: "restart", label: "重启任务", tooltip: "以当前任务为蓝本重新开始一轮。" },
-    { action: "open-safety", label: "安全详情", tooltip: "查看任务收束后的风险摘要与恢复点。" },
+    {
+      ...safetyAction,
+      tooltip: safetyAction.label === "安全详情" ? "查看任务收束后的风险摘要与恢复点。" : safetyAction.tooltip,
+    },
   ];
 }
 

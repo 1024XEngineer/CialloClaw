@@ -1,4 +1,4 @@
-import { ArrowUpRight, Pause, Play, RotateCcw, SquarePen, XCircle } from "lucide-react";
+import { ArrowUpRight, Pause, Play, RotateCcw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getTaskPrimaryActions } from "../taskPage.mapper";
@@ -6,12 +6,11 @@ import type { TaskDetailData } from "../taskPage.types";
 
 type TaskActionBarProps = {
   detailData: TaskDetailData;
-  onAction: (action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") => void;
+  onAction: (action: "pause" | "resume" | "cancel" | "restart" | "open-safety") => void;
 };
 
 const actionIcons = {
   cancel: XCircle,
-  edit: SquarePen,
   "open-safety": ArrowUpRight,
   pause: Pause,
   restart: RotateCcw,
@@ -19,19 +18,16 @@ const actionIcons = {
 } as const;
 
 export function TaskActionBar({ detailData, onAction }: TaskActionBarProps) {
-  const actions = getTaskPrimaryActions(detailData.task);
+  const actions = getTaskPrimaryActions(detailData.task, detailData.detail);
 
   return (
     <div className="task-detail-actions">
       {actions.map((action) => {
         const Icon = actionIcons[action.action];
-        const isEdit = action.action === "edit";
 
         return (
           <Tooltip key={action.label}>
-            <TooltipTrigger
-              render={<Button className="task-detail-actions__button" disabled={isEdit} onClick={() => onAction(action.action)} variant="ghost" />}
-            >
+            <TooltipTrigger render={<Button className="task-detail-actions__button" onClick={() => onAction(action.action)} variant="ghost" />}>
               <Icon className="h-4 w-4" />
               {action.label}
             </TooltipTrigger>

@@ -7,10 +7,18 @@ import { AnimatePresence, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTask } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { describeCurrentStep, getFinishedTaskGroups, isTaskEnded, sortTasksByLatest } from "./taskPage.mapper";
+import {
+  buildDashboardTaskBucketQueryKey,
+  buildDashboardTaskDetailQueryKey,
+  getDashboardTaskSecurityRefreshPlan,
+  resolveDashboardTaskSafetyOpenPlan,
+  shouldEnableDashboardTaskDetailQuery,
+} from "./taskPage.query";
 import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
@@ -32,22 +40,23 @@ export function TaskPage() {
   const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
   const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
   const feedbackTimeoutRef = useRef<number | null>(null);
+  const securityRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
 
   const unfinishedQuery = useQuery({
-    queryKey: ["dashboard", "tasks", "bucket", dataMode, "unfinished", unfinishedLimit],
+    queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit),
     queryFn: () => loadTaskBucketPage("unfinished", { limit: unfinishedLimit, source: dataMode }),
     placeholderData: (previousData) => previousData,
-    refetchOnMount: false,
+    refetchOnMount: securityRefreshPlan.refetchOnMount,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     retry: false,
   });
 
   const finishedQuery = useQuery({
-    queryKey: ["dashboard", "tasks", "bucket", dataMode, "finished", finishedLimit],
+    queryKey: buildDashboardTaskBucketQueryKey(dataMode, "finished", finishedLimit),
     queryFn: () => loadTaskBucketPage("finished", { limit: finishedLimit, source: dataMode }),
     placeholderData: (previousData) => previousData,
-    refetchOnMount: false,
+    refetchOnMount: securityRefreshPlan.refetchOnMount,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -101,10 +110,10 @@ export function TaskPage() {
   }, [allTasks, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
-    enabled: Boolean(selectedTaskId && detailOpen && selectedTaskItem),
-    queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId],
+    enabled: shouldEnableDashboardTaskDetailQuery(selectedTaskId, detailOpen),
+    queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId ?? ""),
     queryFn: () => loadTaskDetailData(selectedTaskId!, dataMode),
-    refetchOnMount: false,
+    refetchOnMount: securityRefreshPlan.refetchOnMount,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -134,18 +143,19 @@ export function TaskPage() {
       return;
     }
 
-    const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
-
-      if (payload.task_id === selectedTaskId) {
-        void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
+    function invalidateTaskQueries() {
+      for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
+        void queryClient.invalidateQueries({ queryKey });
       }
+    }
+
+    const clearDeliverySubscription = subscribeDeliveryReady(() => {
+      invalidateTaskQueries();
     });
 
     const clearTaskSubscription = selectedTaskId
       ? subscribeTask(selectedTaskId, () => {
-          void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
-          void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
+          invalidateTaskQueries();
         })
       : () => {};
 
@@ -153,7 +163,7 @@ export function TaskPage() {
       clearDeliverySubscription();
       clearTaskSubscription();
     };
-  }, [dataMode, queryClient, selectedTaskId]);
+  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
 
   useEffect(() => {
     return () => {
@@ -175,26 +185,50 @@ export function TaskPage() {
     mutationFn: ({ action, taskId }: { action: "pause" | "resume" | "cancel" | "restart"; taskId: string }) => controlTaskByAction(taskId, action, dataMode),
     onSuccess: (outcome) => {
       showFeedback(outcome.result.bubble_message?.text ?? "任务操作已执行。");
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
+      for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
     },
     onError: () => {
       showFeedback("任务操作暂时没有成功返回，请稍后再试。");
     },
   });
 
-  function handlePrimaryAction(action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") {
+  async function handleOpenSafety() {
     if (!detailData) {
       return;
     }
 
-    if (action === "edit") {
-      showFeedback("修改任务能力即将支持，当前先保持这条任务轨迹稳定。");
+    let resolvedDetailData = detailData;
+    const safetyOpenPlan = resolveDashboardTaskSafetyOpenPlan(detailData.source);
+
+    if (safetyOpenPlan.shouldRefetchDetail) {
+      const refetchResult = await taskDetailQuery.refetch();
+
+      if (!refetchResult.data || refetchResult.isError) {
+        showFeedback("任务详情还在同步，先打开安全总览。");
+        navigate(resolveDashboardRoutePath("safety"), {
+          state: {
+            source: "task-detail",
+            taskId: detailData.task.task_id,
+          },
+        });
+        return;
+      }
+
+      resolvedDetailData = refetchResult.data;
+    }
+
+    navigate(resolveDashboardRoutePath("safety"), { state: buildDashboardSafetyNavigationState(resolvedDetailData.detail) });
+  }
+
+  function handlePrimaryAction(action: "pause" | "resume" | "cancel" | "restart" | "open-safety") {
+    if (!detailData) {
       return;
     }
 
     if (action === "open-safety") {
-      navigate(resolveDashboardRoutePath("safety"));
+      void handleOpenSafety();
       return;
     }
 
@@ -359,6 +393,7 @@ export function TaskPage() {
             <li>未完成任务会直接展示当前执行步骤，方便判断是否需要立即介入。</li>
             <li>等待授权、暂停、失败等任务会保留停住原因，避免只有一个“失败”状态。</li>
             <li>更多的上下文、成果区与操作按钮，都放在点击任务后的详情弹窗中。</li>
+            <li>如需修改或补充当前任务，请到悬浮球继续处理。</li>
           </ul>
         </article>
       </section>

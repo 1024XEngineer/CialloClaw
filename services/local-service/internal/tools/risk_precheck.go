@@ -161,7 +161,7 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 		ImpactScope:         impactScope,
 	}
 
-	if input.ToolName == "write_file" {
+	if isWorkspaceWriteOperation(input.ToolName) {
 		exists := input.Workspace.Exists != nil && *input.Workspace.Exists
 		assessment.ImpactScope.OverwriteOrDeleteRisk = workspaceKnown && !outOfWorkspace && exists
 	}
@@ -180,13 +180,33 @@ func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 			return value, true
 		}
 	}
-	for _, key := range []string{"path", "target_path", "file_path"} {
+	for _, key := range targetKeysForTool(toolName) {
 		value, ok := input[key].(string)
 		if ok && strings.TrimSpace(value) != "" {
 			return value, true
 		}
 	}
 	return "", false
+}
+
+func targetKeysForTool(toolName string) []string {
+	switch strings.TrimSpace(toolName) {
+	case "transcode_media", "normalize_recording":
+		return []string{"output_path", "path", "target_path", "file_path"}
+	case "extract_frames":
+		return []string{"output_dir", "path", "target_path", "file_path"}
+	default:
+		return []string{"path", "target_path", "file_path"}
+	}
+}
+
+func isWorkspaceWriteOperation(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "write_file", "transcode_media", "normalize_recording", "extract_frames":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstNonEmptyTarget(primary, fallback string) string {
@@ -241,7 +261,7 @@ func webpagesFromTarget(target string) []string {
 
 func isWebpageTool(toolName string) bool {
 	switch toolName {
-	case "page_read", "page_search":
+	case "page_read", "page_search", "page_interact", "structured_dom":
 		return true
 	default:
 		return false

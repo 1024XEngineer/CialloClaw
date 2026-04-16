@@ -13,6 +13,8 @@ const (
 	ToolErrorCodeCapabilityDenied      = 1004005
 	ToolErrorCodeWorkerNotAvailable    = 1006001
 	ToolErrorCodePlaywrightSidecarFail = 1006002
+	ToolErrorCodeOCRWorkerFailed       = 1006003
+	ToolErrorCodeMediaWorkerFailed     = 1006004
 )
 
 // ToolErrorMapper maps normalized tool errors to protocol error codes.
@@ -46,6 +48,10 @@ func (DefaultToolErrorMapper) Map(err error) (int, bool) {
 		return ToolErrorCodeWorkerNotAvailable, true
 	case errors.Is(err, ErrPlaywrightSidecarFailed):
 		return ToolErrorCodePlaywrightSidecarFail, true
+	case errors.Is(err, ErrOCRWorkerFailed):
+		return ToolErrorCodeOCRWorkerFailed, true
+	case errors.Is(err, ErrMediaWorkerFailed):
+		return ToolErrorCodeMediaWorkerFailed, true
 	case errors.Is(err, ErrToolExecutionFailed):
 		return ToolErrorCodeExecutionFailed, true
 	default:

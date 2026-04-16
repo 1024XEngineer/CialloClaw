@@ -19,6 +19,8 @@ func TestDefaultToolErrorMapper(t *testing.T) {
 		{name: "output_invalid", err: fmt.Errorf("wrap: %w", ErrToolOutputInvalid), code: ToolErrorCodeOutputInvalid, ok: true},
 		{name: "worker_unavailable", err: fmt.Errorf("wrap: %w", ErrWorkerNotAvailable), code: ToolErrorCodeWorkerNotAvailable, ok: true},
 		{name: "sidecar_failed", err: fmt.Errorf("wrap: %w", ErrPlaywrightSidecarFailed), code: ToolErrorCodePlaywrightSidecarFail, ok: true},
+		{name: "ocr_worker_failed", err: fmt.Errorf("wrap: %w", ErrOCRWorkerFailed), code: ToolErrorCodeOCRWorkerFailed, ok: true},
+		{name: "media_worker_failed", err: fmt.Errorf("wrap: %w", ErrMediaWorkerFailed), code: ToolErrorCodeMediaWorkerFailed, ok: true},
 		{name: "unknown", err: fmt.Errorf("no mapping"), code: 0, ok: false},
 	}
 

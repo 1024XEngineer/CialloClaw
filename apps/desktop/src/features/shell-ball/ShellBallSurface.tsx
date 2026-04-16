@@ -1,4 +1,4 @@
-import type { PointerEvent, ReactNode, RefObject } from "react";
+import type { DragEvent, PointerEvent, ReactNode, RefObject } from "react";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "./shellBall.types";
 import { ShellBallMascot } from "./components/ShellBallMascot";
@@ -8,6 +8,7 @@ type ShellBallSurfaceProps = {
   containerRef?: RefObject<HTMLDivElement>;
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
   fileDropActive?: boolean;
+  textDropActive?: boolean;
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
   voiceHoldProgress?: number;
@@ -18,6 +19,7 @@ type ShellBallSurfaceProps = {
   onDoubleClick: () => void;
   onRegionEnter: () => void;
   onRegionLeave: () => void;
+  onTextDrop?: (text: string) => void | Promise<void>;
   onInputProxyClick?: () => void;
   onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -25,11 +27,49 @@ type ShellBallSurfaceProps = {
   onPressCancel: (event: PointerEvent<HTMLButtonElement>) => void;
 };
 
+type ShellBallDropDataTransfer = Pick<DataTransfer, "effectAllowed" | "files" | "getData">;
+
+export function shouldAcceptShellBallTextDrop(dataTransfer: Pick<DataTransfer, "files"> | null) {
+  return dataTransfer !== null && dataTransfer.files.length === 0;
+}
+
+export function resolveShellBallTextDropEffect(effectAllowed: DataTransfer["effectAllowed"]) {
+  if (effectAllowed === "copy" || effectAllowed === "copyLink" || effectAllowed === "copyMove" || effectAllowed === "all" || effectAllowed === "uninitialized") {
+    return "copy" as const;
+  }
+
+  if (effectAllowed === "move" || effectAllowed === "linkMove") {
+    return "move" as const;
+  }
+
+  if (effectAllowed === "link") {
+    return "link" as const;
+  }
+
+  return null;
+}
+
+export function extractShellBallDroppedText(dataTransfer: ShellBallDropDataTransfer | null) {
+  if (!shouldAcceptShellBallTextDrop(dataTransfer)) {
+    return "";
+  }
+
+  for (const type of ["text/plain", "text", "Text", "text/uri-list"]) {
+    const value = dataTransfer.getData(type).replace(/\r\n/g, "\n").trim();
+    if (value !== "") {
+      return value;
+    }
+  }
+
+  return "";
+}
+
 export function ShellBallSurface({
   children,
   containerRef,
   dashboardTransitionPhase = "idle",
   fileDropActive = false,
+  textDropActive = false,
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
@@ -40,6 +80,7 @@ export function ShellBallSurface({
   onDoubleClick,
   onRegionEnter,
   onRegionLeave,
+  onTextDrop = () => {},
   onInputProxyClick = () => {},
   onPressStart,
   onPressMove,
@@ -48,16 +89,47 @@ export function ShellBallSurface({
 }: ShellBallSurfaceProps) {
   const showInputProxy = visualState === "hover_input" && !inputFocused;
 
+  // Only the armed text target is allowed to consume drag events.
+  function handleDragOver(event: DragEvent<HTMLElement>) {
+    if (!textDropActive || !shouldAcceptShellBallTextDrop(event.dataTransfer)) {
+      return;
+    }
+
+    event.preventDefault();
+    const dropEffect = resolveShellBallTextDropEffect(event.dataTransfer.effectAllowed);
+    if (dropEffect !== null) {
+      event.dataTransfer.dropEffect = dropEffect;
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    if (!textDropActive || !shouldAcceptShellBallTextDrop(event.dataTransfer)) {
+      return;
+    }
+
+    event.preventDefault();
+    const droppedText = extractShellBallDroppedText(event.dataTransfer);
+    if (droppedText === "") {
+      return;
+    }
+
+    void onTextDrop(droppedText);
+  }
+
   return (
     <div
       ref={containerRef}
       className="shell-ball-surface"
       data-dashboard-transition-phase={dashboardTransitionPhase}
       data-file-drop-active={fileDropActive ? "true" : "false"}
+      onDragEnterCapture={handleDragOver}
+      onDragOverCapture={handleDragOver}
+      onDropCapture={handleDrop}
     >
       <div className="shell-ball-surface__core">
         <div className="shell-ball-surface__interaction-shell">
-          <div
+          <section
+            aria-label="Shell-ball interaction zone"
             className="shell-ball-surface__interaction-zone"
             data-shell-ball-zone="interaction"
             onPointerEnter={onRegionEnter}
@@ -72,6 +144,14 @@ export function ShellBallSurface({
                   <span className="shell-ball-surface__file-drop-plus shell-ball-surface__file-drop-plus--horizontal" />
                   <span className="shell-ball-surface__file-drop-plus shell-ball-surface__file-drop-plus--vertical" />
                 </div>
+                <textarea
+                  aria-hidden={!textDropActive}
+                  className="shell-ball-surface__text-drop-target"
+                  data-visible={textDropActive ? "true" : "false"}
+                  tabIndex={-1}
+                  value=""
+                  onChange={() => {}}
+                />
                 <div className="shell-ball-surface__mascot-shell">
                   <ShellBallMascot
                     visualState={visualState}
@@ -96,7 +176,7 @@ export function ShellBallSurface({
                   type="button"
                 />
               </div>
-          </div>
+          </section>
         </div>
       </div>
       {children}

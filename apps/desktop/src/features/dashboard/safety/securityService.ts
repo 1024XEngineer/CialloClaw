@@ -12,7 +12,7 @@ import type {
 } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getSecuritySummaryDetailed, listSecurityPendingDetailed, respondSecurityDetailed } from "@/rpc/methods";
-import { securityPendingMock, securitySummaryMock } from "./securityModuleMock";
+import { buildMockRespondResult, securityPendingMock, securitySummaryMock } from "./securityModuleMock";
 
 export type SecurityModuleSource = "rpc" | "mock";
 

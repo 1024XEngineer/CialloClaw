@@ -18,7 +18,7 @@ type TaskMainPanelProps = {
   onHighlightAssistantCard: (card: AssistantCardKey) => void;
   onNoteDraftChange: (value: string) => void;
   onOpenFiles: () => void;
-  onPrimaryAction: (action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") => void;
+  onPrimaryAction: (action: "pause" | "resume" | "cancel" | "restart" | "open-safety") => void;
   onSelectTask: (taskId: string) => void;
   onTabChange: (value: TaskTabsValue) => void;
   onToggleFinished: () => void;
@@ -44,7 +44,7 @@ export function TaskMainPanel({
 }: TaskMainPanelProps) {
   const { detail, experience, task } = detailData;
   const finishedGroups = getFinishedTaskGroups(sortTasksByLatest(finishedTasks), showMoreFinished);
-  const primaryActions = getTaskPrimaryActions(task);
+  const primaryActions = getTaskPrimaryActions(task, detail);
 
   return (
     <motion.section animate={{ scale: [1, 1.004, 1] }} className="task-capsule-main flex min-h-0 flex-col gap-4" transition={{ duration: 8, ease: "easeInOut", repeat: Infinity }}>
@@ -156,7 +156,6 @@ export function TaskMainPanel({
           <div className="task-capsule-action-zone flex flex-wrap items-center gap-3 rounded-[28px] border border-white/70 bg-white/58 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.68)]">
             {primaryActions.map((item) => {
               const isSafety = item.action === "open-safety";
-              const isEdit = item.action === "edit";
 
               if (isSafety) {
                 return (
@@ -177,7 +176,6 @@ export function TaskMainPanel({
                   <TooltipTrigger>
                     <Button
                       className="task-capsule-soft-button h-10 rounded-full px-4 text-sm"
-                      disabled={isEdit}
                       onClick={() => onPrimaryAction(item.action)}
                       variant="ghost"
                     >

@@ -177,6 +177,7 @@ export function ControlPanelApp() {
   const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
   const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
+  const providerApiKeyStatus = draft.settings.data_log.provider_api_key_configured ? "已配置" : "未配置";
   const sourceValue = (
     <span className="control-panel-page__value-cluster">
       <span
@@ -212,6 +213,7 @@ export function ControlPanelApp() {
       const nextData: ControlPanelData = {
         ...draft,
         inspector: result.effectiveInspector,
+        providerApiKeyInput: "",
         settings: {
           ...draft.settings,
           ...result.effectiveSettings,
@@ -576,6 +578,26 @@ export function ControlPanelApp() {
                   />
                 </ControlLine>
 
+                <ControlLine
+                  label="API Key"
+                  hint="通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
+                  tone="warm"
+                >
+                  <TextField.Root
+                    className="control-panel-page__input"
+                    type="password"
+                    value={draft.providerApiKeyInput}
+                    placeholder={draft.settings.data_log.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
+                    autoComplete="off"
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        providerApiKeyInput: event.target.value,
+                      }))
+                    }
+                  />
+                </ControlLine>
+
                 <ToggleLine
                   label="预算自动降级"
                   checked={draft.settings.data_log.budget_auto_downgrade}
@@ -592,6 +614,7 @@ export function ControlPanelApp() {
                 />
 
                 <div className="control-panel-page__info-list">
+                  <InfoRow label="API Key 状态" value={providerApiKeyStatus} tone="warm" />
                   <InfoRow label="安全状态" value={draft.securitySummary.security_status} tone="warm" />
                   <InfoRow label="待确认授权" value={draft.securitySummary.pending_authorizations} tone="warm" />
                   <InfoRow

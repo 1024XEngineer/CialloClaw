@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test:dashboard": "node -e \"require('node:fs').rmSync('.cache/dashboard-tests', { recursive: true, force: true });\" && tsc -p tsconfig.dashboard-test.json && node -e \"require('node:fs').mkdirSync('.cache/dashboard-tests', { recursive: true }); require('node:fs').writeFileSync('.cache/dashboard-tests/package.json', '{\\\"type\\\":\\\"commonjs\\\"}');\" && node --test .cache/dashboard-tests/features/dashboard/dashboard.contract.test.js",
     "test:shell-ball": "node -e \"require('node:fs').rmSync('.cache/shell-ball-tests', { recursive: true, force: true });\" && tsc -p tsconfig.shell-ball-test.json && node -e \"require('node:fs').mkdirSync('.cache/shell-ball-tests', { recursive: true }); require('node:fs').writeFileSync('.cache/shell-ball-tests/package.json', '{\\\"type\\\":\\\"commonjs\\\"}');\" && node --test .cache/shell-ball-tests/features/shell-ball/shellBall.contract.test.js",
     "test:memory": "node -e \"require('node:fs').rmSync('.cache/memory-tests', { recursive: true, force: true });\" && tsc -p tsconfig.memory-test.json && node -e \"require('node:fs').mkdirSync('.cache/memory-tests', { recursive: true }); require('node:fs').writeFileSync('.cache/memory-tests/package.json', '{\\\"type\\\":\\\"commonjs\\\"}');\" && node --test .cache/memory-tests/apps/desktop/src/features/dashboard/memory/mirror.contract.test.js"
   },

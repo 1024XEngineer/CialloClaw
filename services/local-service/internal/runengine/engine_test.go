@@ -129,6 +129,31 @@ func TestEngineExecutionProgressAndToolCall(t *testing.T) {
 	if recorded.LatestEvent["type"] != "tool_call.completed" {
 		t.Fatalf("expected latest event to reflect tool_call.completed, got %v", recorded.LatestEvent["type"])
 	}
+	payload, ok := recorded.LatestEvent["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest event payload map, got %+v", recorded.LatestEvent)
+	}
+	if payload["tool_name"] != "write_file" || payload["path"] != "workspace/result.md" {
+		t.Fatalf("expected tool event payload to carry output metadata, got %+v", payload)
+	}
+	notifications, ok := engine.PendingNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected notifications to be available for task")
+	}
+	foundToolCallNotification := false
+	for _, notification := range notifications {
+		if notification.Method != "tool_call.completed" {
+			continue
+		}
+		params := notification.Params
+		if params["tool_name"] != "write_file" {
+			t.Fatalf("expected tool_call.completed notification to carry tool name, got %+v", params)
+		}
+		foundToolCallNotification = true
+	}
+	if !foundToolCallNotification {
+		t.Fatal("expected tool_call.completed notification to be queued")
+	}
 }
 
 // TestEngineAuthorizationAndHandoffState 验证EngineAuthorizationAndHandoffState。

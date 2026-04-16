@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "./.cache/dashboard-tests",
+    "rootDir": "./src",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/rpc/methods": ["./src/features/shell-ball/test-stubs/rpcMethods.ts"],
+      "@/rpc/fallback": ["./src/features/shell-ball/test-stubs/rpcFallback.ts"]
+    }
+  },
+  "include": [
+    "src/features/dashboard/dashboard.contract.test.ts",
+    "src/features/dashboard/shared/dashboardContractValidators.ts",
+    "src/features/dashboard/shared/dashboardSafetyNavigation.ts",
+    "src/features/dashboard/tasks/taskPage.mapper.ts",
+    "src/features/dashboard/tasks/taskPage.query.ts",
+    "src/features/dashboard/tasks/taskPage.service.ts",
+    "src/features/dashboard/tasks/taskPage.mock.ts",
+    "src/features/dashboard/tasks/taskPage.types.ts",
+    "src/services/settingsService.ts",
+    "src/features/shell-ball/test-stubs/rpcFallback.ts",
+    "src/features/shell-ball/test-stubs/rpcMethods.ts",
+    "src/services/settingsService.ts"
+  ]
+}

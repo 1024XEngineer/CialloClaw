@@ -73,6 +73,56 @@ func TestBuildArtifactPersistPlansBackfillsDeliveryPayloadAndCreatedAt(t *testin
 	}
 }
 
+func TestBuildArtifactPersistPlansAssignsIdentifiersWhenMissing(t *testing.T) {
+	service := NewService()
+	plans := service.BuildArtifactPersistPlans("task_001", []map[string]any{{
+		"artifact_type": "generated_file",
+		"title":         "result.txt",
+		"path":          "workspace/result.txt",
+		"mime_type":     "text/plain",
+		"delivery_type": "open_file",
+	}})
+	if len(plans) != 1 {
+		t.Fatalf("expected one artifact persist plan, got %d", len(plans))
+	}
+	if plans[0]["artifact_id"] == "" {
+		t.Fatalf("expected missing artifact_id to be backfilled, got %+v", plans[0])
+	}
+	if plans[0]["task_id"] != "task_001" {
+		t.Fatalf("expected task_id to be preserved during identifier backfill, got %+v", plans[0])
+	}
+}
+
+func TestEnsureArtifactIdentifiersStayStableAcrossOrdering(t *testing.T) {
+	artifacts := []map[string]any{
+		{
+			"artifact_type": "generated_file",
+			"title":         "result.txt",
+			"path":          "workspace/result.txt",
+			"mime_type":     "text/plain",
+		},
+		{
+			"artifact_type": "generated_file",
+			"title":         "other.txt",
+			"path":          "workspace/other.txt",
+			"mime_type":     "text/plain",
+		},
+	}
+
+	forward := EnsureArtifactIdentifiers("task_001", artifacts)
+	reversed := EnsureArtifactIdentifiers("task_001", []map[string]any{artifacts[1], artifacts[0]})
+
+	if forward[0]["artifact_id"] == "" || forward[1]["artifact_id"] == "" {
+		t.Fatalf("expected runtime artifact identifiers to be backfilled, got %+v", forward)
+	}
+	if forward[0]["artifact_id"] != reversed[1]["artifact_id"] {
+		t.Fatalf("expected first artifact id to stay stable across ordering, got forward=%+v reversed=%+v", forward, reversed)
+	}
+	if forward[1]["artifact_id"] != reversed[0]["artifact_id"] {
+		t.Fatalf("expected second artifact id to stay stable across ordering, got forward=%+v reversed=%+v", forward, reversed)
+	}
+}
+
 func TestBuildArtifactReturnsNilWithoutUsablePayload(t *testing.T) {
 	service := NewService()
 	if artifacts := service.BuildArtifact("task_001", "title", map[string]any{"payload": "invalid"}); artifacts != nil {

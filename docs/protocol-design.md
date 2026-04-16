@@ -1149,9 +1149,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入任务详情页时
-- **系统处理**：返回任务头部、时间线、成果、记忆引用、安全摘要
+- **系统处理**：返回任务头部、时间线、成果、记忆引用、安全摘要与单个正式安全锚点
 - **入参**：任务 ID
 - **出参**：任务详情对象
+
+补充约束：
+
+- `approval_request` 是任务详情里的单个安全锚点，只在当前任务处于 `waiting_auth` 且仍持有活跃正式授权对象时返回；否则返回 `null`。
+- 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
+- `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
+- `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
 
 ### agent.task.detail.get 入参说明
 
@@ -1184,6 +1191,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.timeline`          | 步骤时间线     |
 | `data.artifacts`         | 产出物列表     |
 | `data.mirror_references` | 命中的镜子记忆 |
+| `data.approval_request`  | 当前任务的正式安全锚点 |
 | `data.security_summary`  | 安全摘要       |
 
 其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
@@ -1242,11 +1250,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "summary": "偏好简洁三点式摘要"
         }
       ],
+      "approval_request": null,
       "security_summary": {
         "security_status": "normal",
         "risk_level": "green",
         "pending_authorizations": 0,
-        "latest_restore_point": "rp_001"
+        "latest_restore_point": {
+          "recovery_point_id": "rp_001",
+          "task_id": "task_201",
+          "summary": "生成摘要前的工作区快照",
+          "created_at": "2026-04-07T10:39:58+08:00",
+          "objects": ["workspace/Q3复盘.md"]
+        }
       }
     },
     "meta": {

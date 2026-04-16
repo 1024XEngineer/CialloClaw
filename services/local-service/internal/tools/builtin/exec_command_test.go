@@ -180,3 +180,36 @@ func TestExecCommandToolTruncatesLargeOutputs(t *testing.T) {
 		t.Fatalf("expected original byte counts, got %+v", result.RawOutput)
 	}
 }
+
+func TestExecCommandToolIncludesSandboxMetadata(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubExecCommandPlatform(workspace)
+	execution := &stubExecutionCapability{result: tools.CommandExecutionResult{
+		Stdout:           "ok",
+		ExitCode:         0,
+		ExecutionBackend: "docker_sandbox",
+		SandboxContainer: "sandbox-test-1",
+		SandboxImage:     "docker.io/library/golang:1.26-bookworm",
+	}}
+	tool := NewExecCommandTool()
+	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{Execution: execution, Platform: platform, WorkspacePath: workspace}, map[string]any{
+		"command": "go",
+		"args":    []any{"test", "./..."},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.RawOutput["execution_backend"] != "docker_sandbox" {
+		t.Fatalf("expected execution backend metadata, got %+v", result.RawOutput)
+	}
+	sandbox, ok := result.RawOutput["sandbox"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected sandbox metadata map, got %+v", result.RawOutput)
+	}
+	if sandbox["container_name"] != "sandbox-test-1" || sandbox["image"] != "docker.io/library/golang:1.26-bookworm" {
+		t.Fatalf("unexpected sandbox metadata: %+v", sandbox)
+	}
+	if result.SummaryOutput["execution_backend"] != "docker_sandbox" {
+		t.Fatalf("expected summary output to carry backend metadata, got %+v", result.SummaryOutput)
+	}
+}

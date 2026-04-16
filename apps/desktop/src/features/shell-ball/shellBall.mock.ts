@@ -1,4 +1,5 @@
-import type { BubbleMessage, DeliveryResult, Task, TaskStatus } from "@cialloclaw/protocol";
+import type { BubbleMessage, DeliveryResult, Task } from "@cialloclaw/protocol";
+import { createMockAgentInputSubmitResult } from "@/services/agentInputMock";
 
 type ShellBallMockResult = {
   task: Task;
@@ -20,7 +21,7 @@ function buildTask(input: {
   taskId: string;
   title: string;
   sourceType: Task["source_type"];
-  status: TaskStatus;
+  status: Task["status"];
   riskLevel: Task["risk_level"];
   intentName: string;
 }) {
@@ -73,68 +74,11 @@ function buildDeliveryResult(taskId: string, previewText: string): DeliveryResul
   };
 }
 
-function normalizeTitle(text: string) {
-  const trimmed = text.trim();
-  if (trimmed.length <= 18) {
-    return trimmed;
-  }
-
-  return `${trimmed.slice(0, 18)}...`;
-}
-
-function requiresIntentConfirmation(text: string) {
-  return /(删除|覆盖|安装|执行|发送|提交|改|写入|移动|重命名|替换)/.test(text);
-}
-
 export function createMockShellBallSubmitResult(input: {
   text: string;
   inputMode: "voice" | "text";
 }): ShellBallMockResult {
-  const normalizedText = input.text.trim();
-  const taskId = createTaskId();
-  const sourceType = input.inputMode === "voice" ? "voice" : "hover_input";
-
-  if (requiresIntentConfirmation(normalizedText)) {
-    const task = buildTask({
-      taskId,
-      title: normalizeTitle(normalizedText),
-      sourceType,
-      status: "confirming_intent",
-      riskLevel: "yellow",
-      intentName: "offline_mock_confirm",
-    });
-    const bubbleText = "JSON-RPC 当前未连通，已切到 mock 模式。这条请求先模拟成待确认任务，你可以继续点确认或取消。";
-
-    return {
-      task,
-      bubble_message: buildBubble({
-        taskId,
-        text: bubbleText,
-        type: "intent_confirm",
-      }),
-      delivery_result: null,
-    };
-  }
-
-  const previewText = `JSON-RPC 当前未连通，已使用 mock 结果承接：${normalizedText}`;
-  const task = buildTask({
-    taskId,
-    title: normalizeTitle(normalizedText),
-    sourceType,
-    status: "completed",
-    riskLevel: "green",
-    intentName: "offline_mock_result",
-  });
-
-  return {
-    task,
-    bubble_message: buildBubble({
-      taskId,
-      text: previewText,
-      type: "result",
-    }),
-    delivery_result: buildDeliveryResult(taskId, previewText),
-  };
+  return createMockAgentInputSubmitResult(input);
 }
 
 export function createMockShellBallConfirmResult(input: {

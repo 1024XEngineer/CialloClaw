@@ -9,7 +9,8 @@ import {
   type PointerEvent,
 } from "react";
 import { Badge, Box, Button, Flex, Heading, Text } from "@radix-ui/themes";
-import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowUpRight,
   History,
@@ -24,14 +25,22 @@ import type {
   ApprovalDecision,
   ApprovalPendingNotification,
   ApprovalRequest,
+  RecoveryPoint,
   RiskLevel,
   SecurityStatus,
   Task,
 } from "@cialloclaw/protocol";
 import { JsonRpcClientError } from "@/rpc/client";
-import { subscribeApprovalPending } from "@/rpc/subscriptions";
+import { subscribeApprovalPending, subscribeTask } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import {
+  isDashboardSafetyApprovalSnapshotOnly,
+  resolveDashboardSafetyNavigationRoute,
+  resolveDashboardSafetyFocusTarget,
+  resolveDashboardSafetySnapshotLifecycle,
+  shouldRetainDashboardSafetyActiveDetail,
+} from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import {
   getInitialSecurityModuleData,
   loadSecurityModuleData,
@@ -41,6 +50,7 @@ import {
   type SecurityRespondOutcome,
 } from "./securityService";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
 import "./securityPage.css";
 
 type SecurityCardKey = "status" | "restore" | "budget" | "governance" | `approval:${string}`;
@@ -408,6 +418,49 @@ function normalizeCardPositions(keys: SecurityCardKey[], targets: Record<string,
   return nextPositions;
 }
 
+function resolveActiveSafetyDetail(args: {
+  activeDetailKey: SecurityCardKey | null;
+  approvalLookup: Map<string, ApprovalRequest>;
+  approvalSnapshot: ApprovalRequest | null;
+  restorePointSnapshot: RecoveryPoint | null;
+  moduleData: SecurityModuleData;
+}) {
+  const { activeDetailKey, approvalLookup, approvalSnapshot, restorePointSnapshot, moduleData } = args;
+
+  if (activeDetailKey === "restore") {
+    const liveRestorePoint = moduleData.summary.latest_restore_point;
+    const resolvedRestorePoint =
+      restorePointSnapshot
+        ? liveRestorePoint && liveRestorePoint.recovery_point_id === restorePointSnapshot.recovery_point_id
+          ? liveRestorePoint
+          : restorePointSnapshot
+        : liveRestorePoint;
+
+    return {
+      approval: null,
+      restorePoint: resolvedRestorePoint,
+    };
+  }
+
+  if (!activeDetailKey?.startsWith("approval:")) {
+    return {
+      approval: null,
+      restorePoint: null,
+    };
+  }
+
+  const liveApproval = approvalLookup.get(activeDetailKey) ?? null;
+  const resolvedApproval =
+    liveApproval && approvalSnapshot && liveApproval.approval_id === approvalSnapshot.approval_id
+      ? liveApproval
+      : liveApproval ?? approvalSnapshot;
+
+  return {
+    approval: resolvedApproval,
+    restorePoint: null,
+  };
+}
+
 function getCardPreview(
   key: SecurityCardKey,
   moduleData: SecurityModuleData,
@@ -415,6 +468,8 @@ function getCardPreview(
   sourceCopy: ReturnType<typeof getSourceCopy>,
   feedback: string | null,
   lastResolvedApproval: SecurityRespondOutcome | null,
+  activeApprovalOverride?: ApprovalRequest | null,
+  activeRestorePointOverride?: RecoveryPoint | null,
 ): SecurityCardPreview {
   if (key === "status") {
     return {
@@ -433,7 +488,7 @@ function getCardPreview(
   }
 
   if (key === "restore") {
-    const restorePoint = moduleData.summary.latest_restore_point;
+    const restorePoint = activeRestorePointOverride ?? moduleData.summary.latest_restore_point;
 
     return {
       eyebrow: "restore point",
@@ -479,7 +534,7 @@ function getCardPreview(
     };
   }
 
-  const approval = approvalLookup.get(key);
+  const approval = activeApprovalOverride ?? approvalLookup.get(key);
 
   if (!approval) {
     return {
@@ -507,12 +562,18 @@ function getCardPreview(
 }
 
 export function SecurityApp() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [dataMode, setDataMode] = useState<"rpc" | "mock">(() => loadDashboardDataMode("safety"));
   const [moduleData, setModuleData] = useState<SecurityModuleData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [approvalSnapshot, setApprovalSnapshot] = useState<ApprovalRequest | null>(null);
+  const [restorePointSnapshot, setRestorePointSnapshot] = useState<RecoveryPoint | null>(null);
+  const [routeDrivenDetailKey, setRouteDrivenDetailKey] = useState<SecurityCardKey | null>(null);
+  const [subscribedTaskId, setSubscribedTaskId] = useState<string | null>(null);
   const [lastResolvedApproval, setLastResolvedApproval] = useState<SecurityRespondOutcome | null>(null);
   const [rememberRuleByApprovalId, setRememberRuleByApprovalId] = useState<Record<string, boolean>>({});
   const [titleMotionTick, setTitleMotionTick] = useState(0);
@@ -535,6 +596,18 @@ export function SecurityApp() {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const refreshSequenceRef = useRef(0);
+  const taskRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
+  const activeSnapshotState = useMemo(
+    () =>
+      resolveDashboardSafetySnapshotLifecycle({
+        activeDetailKey,
+        approvalSnapshot,
+        restorePointSnapshot,
+        routeDrivenDetailKey,
+        subscribedTaskId,
+      }),
+    [activeDetailKey, approvalSnapshot, restorePointSnapshot, routeDrivenDetailKey, subscribedTaskId],
+  );
 
   const queueRpcRefresh = useCallback(() => {
     if (dataMode !== "rpc") {
@@ -616,14 +689,79 @@ export function SecurityApp() {
   }, [moduleData]);
 
   useEffect(() => {
-    if (activeDetailKey && !cardKeys.includes(activeDetailKey)) {
+    if (
+      routeDrivenDetailKey !== activeSnapshotState.routeDrivenDetailKey ||
+      approvalSnapshot !== activeSnapshotState.approvalSnapshot ||
+      restorePointSnapshot !== activeSnapshotState.restorePointSnapshot ||
+      subscribedTaskId !== activeSnapshotState.subscribedTaskId
+    ) {
+      setRouteDrivenDetailKey(activeSnapshotState.routeDrivenDetailKey as SecurityCardKey | null);
+      setApprovalSnapshot(activeSnapshotState.approvalSnapshot);
+      setRestorePointSnapshot(activeSnapshotState.restorePointSnapshot);
+      setSubscribedTaskId(activeSnapshotState.subscribedTaskId);
+    }
+  }, [activeSnapshotState, approvalSnapshot, restorePointSnapshot, routeDrivenDetailKey, subscribedTaskId]);
+
+  useEffect(() => {
+    if (
+      activeDetailKey &&
+      !shouldRetainDashboardSafetyActiveDetail({
+        activeDetailKey,
+        approvalSnapshot: activeSnapshotState.approvalSnapshot,
+        cardKeys,
+      })
+    ) {
       setActiveDetailKey(null);
     }
-  }, [activeDetailKey, cardKeys]);
+  }, [activeDetailKey, activeSnapshotState.approvalSnapshot, cardKeys]);
 
   const bringCardToFront = useCallback((key: SecurityCardKey) => {
     setCardStack((currentStack) => [...currentStack.filter((item) => item !== key), key]);
   }, []);
+
+  useEffect(() => {
+    if (!moduleData) {
+      return;
+    }
+
+    const routeResolution = resolveDashboardSafetyNavigationRoute({
+      locationState: location.state,
+      livePending: moduleData.pending,
+      liveRestorePoint: moduleData.summary.latest_restore_point,
+    });
+
+    if (!routeResolution.shouldClearRouteState) {
+      return;
+    }
+
+    setApprovalSnapshot(routeResolution.approvalSnapshot);
+    setRestorePointSnapshot(routeResolution.restorePointSnapshot);
+    setRouteDrivenDetailKey(routeResolution.activeDetailKey);
+    setSubscribedTaskId(routeResolution.routedTaskId);
+
+    if (routeResolution.activeDetailKey) {
+      setActiveDetailKey(routeResolution.activeDetailKey);
+      bringCardToFront(routeResolution.activeDetailKey);
+    } else {
+      setActiveDetailKey(null);
+    }
+
+    if (routeResolution.feedback) {
+      setFeedback((current) => current ?? routeResolution.feedback);
+    }
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [bringCardToFront, location.pathname, location.state, moduleData, navigate]);
+
+  useEffect(() => {
+    if (dataMode !== "rpc" || !subscribedTaskId) {
+      return;
+    }
+
+    return subscribeTask(subscribedTaskId, () => {
+      queueRpcRefresh();
+    });
+  }, [dataMode, queueRpcRefresh, subscribedTaskId]);
 
   const handleTitleClick = useCallback(() => {
     setTitleMotionTick((currentTick) => currentTick + 1);
@@ -728,6 +866,7 @@ export function SecurityApp() {
 
     try {
       const result = await respondToApproval(approval, decision, rememberRule, moduleData.source);
+      const approvalRouteKey = `approval:${approval.approval_id}` as const;
 
       setModuleData((current) => {
         if (!current) {
@@ -762,10 +901,17 @@ export function SecurityApp() {
         delete nextState[approval.approval_id];
         return nextState;
       });
+      if (routeDrivenDetailKey === approvalRouteKey) {
+        setApprovalSnapshot(null);
+        setRouteDrivenDetailKey(null);
+      }
       setLastResolvedApproval(result);
       setFeedback(
         `${result.response.bubble_message?.text ?? "已更新安全审批状态。"} · ${result.response.authorization_record.decision} · remember_rule ${result.response.authorization_record.remember_rule ? "on" : "off"} · task ${result.response.task.task_id} / ${result.response.task.status} · ${formatImpactScopeSummary(result.response.impact_scope)}`,
       );
+      for (const queryKey of taskRefreshPlan.invalidatePrefixes) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
 
       if (moduleData.source === "rpc") {
         queueRpcRefresh();
@@ -910,9 +1056,7 @@ export function SecurityApp() {
     </div>
   );
 
-  const renderRestoreDetail = () => {
-    const restorePoint = moduleData.summary.latest_restore_point;
-
+  const renderRestoreDetail = (restorePoint: RecoveryPoint | null) => {
     if (!restorePoint) {
       return <p className="security-page__empty-state">当前没有可展示的恢复点。</p>;
     }
@@ -1114,7 +1258,7 @@ export function SecurityApp() {
     );
   };
   
-  const renderApprovalDetail = (approval: ApprovalRequest | undefined) => {
+  const renderApprovalDetail = (approval: ApprovalRequest | undefined, snapshotOnly = false) => {
     if (!approval) {
       return <p className="security-page__empty-state">该待确认授权已经从当前列表中移除。</p>;
     }
@@ -1152,12 +1296,15 @@ export function SecurityApp() {
         </article>
 
         <div className="security-page__detail-callout">
+          {snapshotOnly ? (
+            <div className="security-page__detail-copy">该审批已不在当前实时待处理列表中，详情仅保留快照展示，不能继续提交授权决策。</div>
+          ) : null}
           <label className="security-page__approval-remember">
             <input
               className="security-page__approval-remember-checkbox"
               type="checkbox"
               checked={rememberRule}
-              disabled={activeApprovalId === approval.approval_id}
+              disabled={snapshotOnly || activeApprovalId === approval.approval_id}
               onChange={(event) => {
                 const checked = event.currentTarget.checked;
                 setRememberRuleByApprovalId((current) => ({
@@ -1177,7 +1324,7 @@ export function SecurityApp() {
           <Button
             color="gray"
             variant="soft"
-            disabled={activeApprovalId === approval.approval_id}
+            disabled={snapshotOnly || activeApprovalId === approval.approval_id}
             onClick={() => void handleRespond(approval, "deny_once", rememberRule)}
           >
             拒绝
@@ -1185,7 +1332,7 @@ export function SecurityApp() {
           <Button
             color="amber"
             variant="solid"
-            disabled={activeApprovalId === approval.approval_id}
+            disabled={snapshotOnly || activeApprovalId === approval.approval_id}
             onClick={() => void handleRespond(approval, "allow_once", rememberRule)}
           >
             允许一次
@@ -1195,13 +1342,18 @@ export function SecurityApp() {
     );
   };
 
-  const renderDetailBody = (key: SecurityCardKey) => {
+  const renderDetailBody = (
+    key: SecurityCardKey,
+    resolvedApproval: ApprovalRequest | null,
+    resolvedRestorePoint: RecoveryPoint | null,
+    snapshotOnlyApproval: boolean,
+  ) => {
     if (key === "status") {
       return renderStatusDetail();
     }
 
     if (key === "restore") {
-      return renderRestoreDetail();
+      return renderRestoreDetail(resolvedRestorePoint);
     }
 
     if (key === "budget") {
@@ -1212,7 +1364,7 @@ export function SecurityApp() {
       return renderGovernanceDetail();
     }
 
-    return renderApprovalDetail(approvalLookup.get(key));
+    return renderApprovalDetail(resolvedApproval ?? approvalLookup.get(key) ?? undefined, snapshotOnlyApproval);
   };
 
   const renderDetailOverlay = () => {
@@ -1220,7 +1372,28 @@ export function SecurityApp() {
       return null;
     }
 
-    const preview = getCardPreview(activeDetailKey, moduleData, approvalLookup, resolvedSourceCopy, feedback, lastResolvedApproval);
+    const resolvedDetail = resolveActiveSafetyDetail({
+      activeDetailKey,
+      approvalLookup,
+      approvalSnapshot: activeSnapshotState.approvalSnapshot,
+      moduleData,
+      restorePointSnapshot: activeSnapshotState.restorePointSnapshot,
+    });
+    const snapshotOnlyApproval = isDashboardSafetyApprovalSnapshotOnly({
+      activeDetailKey,
+      approvalSnapshot: activeSnapshotState.approvalSnapshot,
+      cardKeys,
+    });
+    const preview = getCardPreview(
+      activeDetailKey,
+      moduleData,
+      approvalLookup,
+      resolvedSourceCopy,
+      feedback,
+      lastResolvedApproval,
+      resolvedDetail.approval,
+      resolvedDetail.restorePoint,
+    );
 
     return (
       <div className="security-page__detail-layer" onClick={closeDetail}>
@@ -1252,7 +1425,7 @@ export function SecurityApp() {
               </div>
             </div>
 
-            <div className="security-page__detail-body">{renderDetailBody(activeDetailKey)}</div>
+            <div className="security-page__detail-body">{renderDetailBody(activeDetailKey, resolvedDetail.approval, resolvedDetail.restorePoint, snapshotOnlyApproval)}</div>
           </section>
         </div>
       </div>

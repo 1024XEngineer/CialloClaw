@@ -1,6 +1,7 @@
-import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup, TaskStep } from "@cialloclaw/protocol";
+import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
+import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
 import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
@@ -76,13 +77,14 @@ function getTaskListSortBy(group: TaskListGroup) {
 
 function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
   return {
+    approval_request: null,
     artifacts: [],
     mirror_references: [],
     security_summary: {
       latest_restore_point: null,
-      pending_authorizations: task.status === "waiting_auth" ? 1 : 0,
+      pending_authorizations: 0,
       risk_level: task.risk_level,
-      security_status: task.status === "waiting_auth" ? "pending_confirmation" : "normal",
+      security_status: "normal",
     },
     task,
     timeline: [],
@@ -93,29 +95,11 @@ const riskLevels = new Set<string>(RISK_LEVELS);
 const securityStatuses = new Set<string>(SECURITY_STATUSES);
 const taskStepStatuses = new Set<string>(TASK_STEP_STATUSES);
 
-function isTaskStep(step: unknown): step is TaskStep {
-  if (!step || typeof step !== "object") {
-    return false;
-  }
-
-  const candidate = step as Partial<TaskStep>;
-  return (
-    typeof candidate.step_id === "string" &&
-    typeof candidate.task_id === "string" &&
-    typeof candidate.name === "string" &&
-    typeof candidate.order_index === "number" &&
-    typeof candidate.input_summary === "string" &&
-    typeof candidate.output_summary === "string" &&
-    typeof candidate.status === "string" &&
-    taskStepStatuses.has(candidate.status)
-  );
-}
-
 function hasValidSecuritySummary(detail: AgentTaskDetailGetResult): boolean {
   const summary = detail.security_summary as Partial<AgentTaskDetailGetResult["security_summary"]> | null | undefined;
   return Boolean(
     summary &&
-      typeof summary.pending_authorizations === "number" &&
+      isBinaryPendingAuthorizations(summary.pending_authorizations) &&
       typeof summary.risk_level === "string" &&
       typeof summary.security_status === "string" &&
       riskLevels.has(summary.risk_level) &&
@@ -124,21 +108,57 @@ function hasValidSecuritySummary(detail: AgentTaskDetailGetResult): boolean {
   );
 }
 
-function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): AgentTaskDetailGetResult {
-  if (!detail || !detail.task || !detail.task.task_id) {
+export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): AgentTaskDetailGetResult {
+  if (!detail || !isTask(detail.task)) {
     throw new Error("task detail payload is missing task information");
   }
+
+  const taskId = detail.task.task_id;
 
   if (!hasValidSecuritySummary(detail)) {
     throw new Error("task detail payload is missing security summary");
   }
 
+  const approvalRequest = normalizeNullable(detail.approval_request, isApprovalRequest, "task detail payload approval_request");
+  const latestRestorePoint = normalizeNullable(detail.security_summary.latest_restore_point, isRecoveryPoint, "task detail payload restore point");
+  const artifacts = normalizeArray(detail.artifacts, isArtifact, "task detail payload artifacts");
+  const mirrorReferences = normalizeArray(detail.mirror_references, isMirrorReference, "task detail payload mirror_references");
+  const timeline = normalizeArray(detail.timeline, (value): value is (typeof detail.timeline)[number] => isTaskStep(value, taskStepStatuses), "task detail payload timeline");
+
+  if (approvalRequest === null && detail.security_summary.pending_authorizations !== 0) {
+    throw new Error("task detail payload pending authorization summary does not match approval_request");
+  }
+
+  if (approvalRequest !== null && detail.security_summary.pending_authorizations !== 1) {
+    throw new Error("task detail payload pending authorization summary does not match approval_request");
+  }
+
+  if (approvalRequest !== null && detail.task.status !== "waiting_auth") {
+    throw new Error("task detail payload approval_request requires task.status waiting_auth");
+  }
+
+  if (approvalRequest !== null && !isActiveApprovalRequest(approvalRequest)) {
+    throw new Error("task detail payload approval_request is not active pending");
+  }
+
+  if (approvalRequest !== null && approvalRequest.task_id !== taskId) {
+    throw new Error("task detail payload approval_request task_id does not match task.task_id");
+  }
+
+  if (latestRestorePoint !== null && latestRestorePoint.task_id !== taskId) {
+    throw new Error("task detail payload restore point task_id does not match task.task_id");
+  }
+
   return {
-    artifacts: Array.isArray(detail.artifacts) ? detail.artifacts : [],
-    mirror_references: Array.isArray(detail.mirror_references) ? detail.mirror_references : [],
-    security_summary: detail.security_summary,
+    approval_request: approvalRequest,
+    artifacts,
+    mirror_references: mirrorReferences,
+    security_summary: {
+      ...detail.security_summary,
+      latest_restore_point: latestRestorePoint,
+    },
     task: detail.task,
-    timeline: Array.isArray(detail.timeline) ? detail.timeline.filter(isTaskStep) : [],
+    timeline,
   };
 }
 

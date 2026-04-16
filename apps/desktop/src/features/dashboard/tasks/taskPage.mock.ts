@@ -1,4 +1,4 @@
-import type { AgentTaskDetailGetResult, Task, TaskStep } from "@cialloclaw/protocol";
+import type { AgentTaskDetailGetResult, ApprovalRequest, RecoveryPoint, Task, TaskStep } from "@cialloclaw/protocol";
 import type { TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
 
 const HOUR = 1000 * 60 * 60;
@@ -11,6 +11,29 @@ function iso(offset: number) {
 
 function clone<T>(value: T) {
   return structuredClone(value);
+}
+
+function createRecoveryPoint(taskId: string, recoveryPointId: string, summary: string, createdAt: string, objects: string[]): RecoveryPoint {
+  return {
+    created_at: createdAt,
+    objects,
+    recovery_point_id: recoveryPointId,
+    summary,
+    task_id: taskId,
+  };
+}
+
+function createApprovalRequest(taskId: string, approvalId: string, riskLevel: ApprovalRequest["risk_level"], operationName: string, targetObject: string, reason: string, createdAt: string): ApprovalRequest {
+  return {
+    approval_id: approvalId,
+    created_at: createdAt,
+    operation_name: operationName,
+    reason,
+    risk_level: riskLevel,
+    status: "pending",
+    target_object: targetObject,
+    task_id: taskId,
+  };
 }
 
 const baseTasks: Task[] = [
@@ -492,8 +515,16 @@ const taskExperiences: Record<string, TaskExperience> = {
   },
 };
 
-function createDetail(task: Task, timeline: TaskStep[], artifacts: AgentTaskDetailGetResult["artifacts"], securitySummary: AgentTaskDetailGetResult["security_summary"], mirrorReferences: AgentTaskDetailGetResult["mirror_references"]) {
+function createDetail(
+  task: Task,
+  timeline: TaskStep[],
+  artifacts: AgentTaskDetailGetResult["artifacts"],
+  securitySummary: AgentTaskDetailGetResult["security_summary"],
+  mirrorReferences: AgentTaskDetailGetResult["mirror_references"],
+  approvalRequest: AgentTaskDetailGetResult["approval_request"] = null,
+) {
   return {
+    approval_request: approvalRequest,
     artifacts,
     mirror_references: mirrorReferences,
     security_summary: securitySummary,
@@ -536,11 +567,31 @@ const baseDetails: Record<string, AgentTaskDetailGetResult> = {
       { artifact_id: "artifact_wait_001", task_id: "task_focus_002", artifact_type: "workspace_document", title: "SecurityApp.tsx", path: "apps/desktop/src/features/dashboard/safety/SecurityApp.tsx", mime_type: "text/tsx" },
       { artifact_id: "artifact_wait_002", task_id: "task_focus_002", artifact_type: "workspace_document", title: "securityService.ts", path: "apps/desktop/src/features/dashboard/safety/securityService.ts", mime_type: "text/ts" },
     ],
-    { security_status: "pending_confirmation", risk_level: "yellow", pending_authorizations: 1, latest_restore_point: "rp_task_focus_002" },
+    {
+      security_status: "pending_confirmation",
+      risk_level: "yellow",
+      pending_authorizations: 1,
+      latest_restore_point: createRecoveryPoint(
+        "task_focus_002",
+        "rp_task_focus_002",
+        "授权前已保存安全详情回滚锚点。",
+        iso(-50 * 60 * 1000),
+        ["apps/desktop/src/features/dashboard/safety/securityService.ts"],
+      ),
+    },
     [
       { memory_id: "mem_security_authorization_first", reason: "等待授权态需要优先解释停顿原因。", summary: "先写明原因，再展示次要信息。" },
       { memory_id: "mem_security_restore_point", reason: "恢复点应与任务 ID 保持可追踪映射。", summary: "恢复点和任务摘要应出现在同一视野。" },
     ],
+    createApprovalRequest(
+      "task_focus_002",
+      "approval_task_focus_002",
+      "yellow",
+      "read_security_context",
+      "security detail context",
+      "需要继续读取当前任务的安全详情与恢复点说明。",
+      iso(-42 * 60 * 1000),
+    ),
   ),
   task_focus_003: createDetail(
     baseTasks[2],
@@ -571,7 +622,18 @@ const baseDetails: Record<string, AgentTaskDetailGetResult> = {
       { artifact_id: "artifact_done_002", task_id: "task_done_001", artifact_type: "workspace_document", title: "dashboard.css", path: "apps/desktop/src/app/dashboard/dashboard.css", mime_type: "text/css" },
       { artifact_id: "artifact_done_003", task_id: "task_done_001", artifact_type: "reveal_in_folder", title: "铃兰素材目录", path: "apps/desktop/src/assets/lily-of-the-valley", mime_type: "inode/directory" },
     ],
-    { security_status: "recovered", risk_level: "green", pending_authorizations: 0, latest_restore_point: "rp_lily_home_001" },
+    {
+      security_status: "recovered",
+      risk_level: "green",
+      pending_authorizations: 0,
+      latest_restore_point: createRecoveryPoint(
+        "task_done_001",
+        "rp_lily_home_001",
+        "首页构图定版前的布局恢复点。",
+        iso(-27 * HOUR),
+        ["apps/desktop/src/app/dashboard/DashboardHome.tsx", "apps/desktop/src/app/dashboard/dashboard.css"],
+      ),
+    },
     [
       { memory_id: "mem_lily_entry_consistency", reason: "首页风格应与任务页保持同一气质。", summary: "自然、轻柔、留白、低打扰。" },
     ],
@@ -600,7 +662,18 @@ const baseDetails: Record<string, AgentTaskDetailGetResult> = {
       { artifact_id: "artifact_security_001", task_id: "task_done_003", artifact_type: "workspace_document", title: "securityModuleMock.ts", path: "apps/desktop/src/features/dashboard/safety/securityModuleMock.ts", mime_type: "text/ts" },
       { artifact_id: "artifact_security_002", task_id: "task_done_003", artifact_type: "workspace_document", title: "securityService.ts", path: "apps/desktop/src/features/dashboard/safety/securityService.ts", mime_type: "text/ts" },
     ],
-    { security_status: "normal", risk_level: "green", pending_authorizations: 0, latest_restore_point: "rp_security_mock_001" },
+    {
+      security_status: "normal",
+      risk_level: "green",
+      pending_authorizations: 0,
+      latest_restore_point: createRecoveryPoint(
+        "task_done_003",
+        "rp_security_mock_001",
+        "安全 mock 数据接入前的协议对齐快照。",
+        iso(-5 * DAY + 2 * HOUR),
+        ["apps/desktop/src/features/dashboard/safety/securityModuleMock.ts"],
+      ),
+    },
     [],
   ),
   task_done_004: createDetail(

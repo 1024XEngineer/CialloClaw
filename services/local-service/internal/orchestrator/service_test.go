@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -53,9 +56,22 @@ type successfulExecutionBackend struct {
 }
 
 type stubPlaywrightClient struct {
-	readResult   tools.BrowserPageReadResult
-	searchResult tools.BrowserPageSearchResult
-	err          error
+	readResult       tools.BrowserPageReadResult
+	searchResult     tools.BrowserPageSearchResult
+	interactResult   tools.BrowserPageInteractResult
+	structuredResult tools.BrowserStructuredDOMResult
+	err              error
+}
+
+type stubOCRWorkerClient struct {
+	result tools.OCRTextResult
+	err    error
+}
+
+type stubMediaWorkerClient struct {
+	transcodeResult tools.MediaTranscodeResult
+	framesResult    tools.MediaFrameExtractResult
+	err             error
 }
 
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
@@ -92,6 +108,70 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 		result.MatchCount = len(result.Matches)
 	}
 	return result, nil
+}
+
+func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	result := s.interactResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
+	if s.err != nil {
+		return tools.BrowserStructuredDOMResult{}, s.err
+	}
+	result := s.structuredResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
+func (s stubOCRWorkerClient) ExtractText(_ context.Context, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubOCRWorkerClient) OCRImage(_ context.Context, _ string, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubOCRWorkerClient) OCRPDF(_ context.Context, _ string, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubMediaWorkerClient) TranscodeMedia(_ context.Context, _, _, _ string) (tools.MediaTranscodeResult, error) {
+	if s.err != nil {
+		return tools.MediaTranscodeResult{}, s.err
+	}
+	return s.transcodeResult, nil
+}
+
+func (s stubMediaWorkerClient) NormalizeRecording(_ context.Context, _, _ string) (tools.MediaTranscodeResult, error) {
+	if s.err != nil {
+		return tools.MediaTranscodeResult{}, s.err
+	}
+	return s.transcodeResult, nil
+}
+
+func (s stubMediaWorkerClient) ExtractFrames(_ context.Context, _, _ string, _ float64, _ int) (tools.MediaFrameExtractResult, error) {
+	if s.err != nil {
+		return tools.MediaFrameExtractResult{}, s.err
+	}
+	return s.framesResult, nil
 }
 
 type failingCheckpointWriter struct {
@@ -146,6 +226,10 @@ func newTestServiceWithExecutionOptions(t *testing.T, modelOutput string, execut
 }
 
 func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient) (*Service, string) {
+	return newTestServiceWithExecutionWorkers(t, modelOutput, executionBackend, checkpointWriter, playwrightClient, sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
+}
+
+func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -168,10 +252,16 @@ func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, 
 	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
 		t.Fatalf("register playwright tools: %v", err)
 	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -209,6 +299,25 @@ func newTestService() *Service {
 		tools.NewRegistry(),
 		plugin.NewService(),
 	)
+}
+
+func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mutate func(record *runengine.TaskRecord)) {
+	t.Helper()
+
+	engineValue := reflect.ValueOf(engine).Elem()
+	muField := engineValue.FieldByName("mu")
+	mu := (*sync.RWMutex)(unsafe.Pointer(muField.UnsafeAddr()))
+	mu.Lock()
+	defer mu.Unlock()
+
+	tasksField := engineValue.FieldByName("tasks")
+	tasks := reflect.NewAt(tasksField.Type(), unsafe.Pointer(tasksField.UnsafeAddr())).Elem()
+	recordValue := tasks.MapIndex(reflect.ValueOf(taskID))
+	if !recordValue.IsValid() || recordValue.IsNil() {
+		t.Fatalf("expected runtime task %s to exist", taskID)
+	}
+	record := recordValue.Interface().(*runengine.TaskRecord)
+	mutate(record)
 }
 
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
@@ -2072,6 +2181,180 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetExposesActiveApprovalAnchor(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task detail should expose waiting approval anchor",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+
+	approvalRequest, ok := detailResult["approval_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected approval_request anchor, got %+v", detailResult["approval_request"])
+	}
+	if approvalRequest["task_id"] != taskID {
+		t.Fatalf("expected approval_request to stay anchored to task %s, got %+v", taskID, approvalRequest)
+	}
+
+	securitySummary, ok := detailResult["security_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected security_summary payload, got %+v", detailResult["security_summary"])
+	}
+	if securitySummary["pending_authorizations"] != 1 {
+		t.Fatalf("expected pending_authorizations to collapse to 1, got %+v", securitySummary["pending_authorizations"])
+	}
+	if securitySummary["latest_restore_point"] != nil {
+		t.Fatalf("expected latest_restore_point to stay nil without restore anchor, got %+v", securitySummary["latest_restore_point"])
+	}
+}
+
+func TestServiceTaskDetailGetDropsStaleApprovalAnchorOutsideWaitingAuth(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_stale",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "stale approval anchors must not leak into task detail",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := service.runEngine.GetTask(taskID); !ok {
+		t.Fatal("expected task to remain available in runtime")
+	}
+	mutateRuntimeTask(t, service.runEngine, taskID, func(runtimeRecord *runengine.TaskRecord) {
+		runtimeRecord.ApprovalRequest = map[string]any{
+			"approval_id": "appr_stale",
+			"task_id":     taskID,
+			"risk_level":  "red",
+		}
+		runtimeRecord.SecuritySummary["pending_authorizations"] = 1
+	})
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["approval_request"] != nil {
+		t.Fatalf("expected stale approval_request to be dropped, got %+v", detailResult["approval_request"])
+	}
+
+	securitySummary := detailResult["security_summary"].(map[string]any)
+	if securitySummary["pending_authorizations"] != 0 {
+		t.Fatalf("expected stale pending_authorizations to collapse to 0, got %+v", securitySummary["pending_authorizations"])
+	}
+}
+
+func TestServiceTaskDetailGetDropsApprovalAnchorWithMismatchedTaskID(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_bad_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "mismatched approval anchors must not leak into task detail",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	mutateRuntimeTask(t, service.runEngine, taskID, func(runtimeRecord *runengine.TaskRecord) {
+		runtimeRecord.ApprovalRequest["task_id"] = "task_other"
+	})
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["approval_request"] != nil {
+		t.Fatalf("expected mismatched approval_request to be dropped, got %+v", detailResult["approval_request"])
+	}
+
+	securitySummary := detailResult["security_summary"].(map[string]any)
+	if securitySummary["pending_authorizations"] != 0 {
+		t.Fatalf("expected mismatched pending_authorizations to collapse to 0, got %+v", securitySummary["pending_authorizations"])
+	}
+}
+
+func TestServiceTaskDetailGetDropsApprovalAnchorWhenStatusIsNotPending(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_bad_status",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "non-pending approval anchors must not leak into task detail",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	mutateRuntimeTask(t, service.runEngine, taskID, func(runtimeRecord *runengine.TaskRecord) {
+		runtimeRecord.ApprovalRequest["status"] = "approved"
+	})
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["approval_request"] != nil {
+		t.Fatalf("expected non-pending approval_request to be dropped, got %+v", detailResult["approval_request"])
+	}
+}
+
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 	service := newTestService()
 
@@ -2991,6 +3274,55 @@ func TestServiceTaskDetailGetFallsBackToStoredRecoveryPointForTask(t *testing.T)
 	}
 }
 
+func TestServiceTaskDetailGetDropsMismatchedSummaryRecoveryPointBeforeStorageFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary mismatch")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec_mismatch",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "task detail restore point mismatch fallback",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	mutateRuntimeTask(t, service.runEngine, taskID, func(runtimeRecord *runengine.TaskRecord) {
+		runtimeRecord.SecuritySummary["latest_restore_point"] = map[string]any{
+			"recovery_point_id": "rp_wrong_task",
+			"task_id":           "task_other",
+			"summary":           "wrong task restore point",
+			"created_at":        "2026-04-08T10:01:00Z",
+			"objects":           []string{"workspace/wrong.md"},
+		}
+	})
+	if err := service.storage.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_task_detail_fallback",
+		TaskID:          taskID,
+		Summary:         "stored recovery point for fallback",
+		CreatedAt:       "2026-04-08T10:02:00Z",
+		Objects:         []string{"workspace/result.md"},
+	}); err != nil {
+		t.Fatalf("write recovery point failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	securitySummary := result["security_summary"].(map[string]any)
+	latestRestorePoint := securitySummary["latest_restore_point"].(map[string]any)
+	if latestRestorePoint["recovery_point_id"] != "rp_task_detail_fallback" {
+		t.Fatalf("expected storage fallback after mismatched summary restore point, got %+v", latestRestorePoint)
+	}
+}
+
 func TestServiceSecurityRestoreApplyRestoresWorkspaceAndReturnsFormalResult(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "新的内容")
 	originalPath := filepath.Join(workspaceRoot, "notes", "output.md")
@@ -3262,12 +3594,6 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 			"type": "text",
 			"text": "collect detail view payload",
 		},
-		"intent": map[string]any{
-			"name": "summarize",
-			"arguments": map[string]any{
-				"style": "key_points",
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
@@ -3287,6 +3613,89 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	}
 	if detailResult["task"].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("expected task detail task_id to match request, got %+v", detailResult["task"])
+	}
+	artifacts, ok := detailResult["artifacts"].([]map[string]any)
+	if !ok || len(artifacts) != 0 {
+		t.Fatalf("expected empty artifact collection array, got %+v", detailResult["artifacts"])
+	}
+	mirrorReferences, ok := detailResult["mirror_references"].([]map[string]any)
+	if !ok || len(mirrorReferences) != 0 {
+		t.Fatalf("expected empty mirror reference collection array, got %+v", detailResult["mirror_references"])
+	}
+	if _, ok := detailResult["timeline"].([]map[string]any); !ok {
+		t.Fatalf("expected timeline to stay an array, got %+v", detailResult["timeline"])
+	}
+}
+
+func TestServiceTaskDetailGetNormalizesProtocolCollections(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail protocol collections")
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_protocol",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "collect normalized detail payload",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	if _, ok := service.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, []map[string]any{{
+		"artifact_id":      "art_detail_protocol_001",
+		"task_id":          taskID,
+		"artifact_type":    "generated_doc",
+		"title":            "detail-protocol.md",
+		"path":             "workspace/detail-protocol.md",
+		"mime_type":        "text/markdown",
+		"delivery_type":    "workspace_document",
+		"delivery_payload": map[string]any{"path": "workspace/detail-protocol.md", "task_id": taskID},
+		"created_at":       "2026-04-15T10:00:00Z",
+	}}); !ok {
+		t.Fatal("expected task presentation update to succeed")
+	}
+	if _, ok := service.runEngine.SetMirrorReferences(taskID, []map[string]any{{
+		"memory_id": "mem_protocol_001",
+		"reason":    "detail normalization",
+		"summary":   "normalized reference",
+		"source":    "runtime",
+	}}); !ok {
+		t.Fatal("expected mirror reference update to succeed")
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected one normalized artifact, got %+v", artifacts)
+	}
+	artifact := artifacts[0]
+	if artifact["artifact_id"] != "art_detail_protocol_001" || artifact["mime_type"] != "text/markdown" {
+		t.Fatalf("expected formal artifact fields to survive normalization, got %+v", artifact)
+	}
+	if _, ok := artifact["delivery_type"]; ok {
+		t.Fatalf("expected detail artifact to omit undeclared delivery_type, got %+v", artifact)
+	}
+	if _, ok := artifact["delivery_payload"]; ok {
+		t.Fatalf("expected detail artifact to omit undeclared delivery_payload, got %+v", artifact)
+	}
+
+	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 {
+		t.Fatalf("expected one normalized mirror reference, got %+v", mirrorReferences)
+	}
+	if _, ok := mirrorReferences[0]["source"]; ok {
+		t.Fatalf("expected mirror reference to omit undeclared source field, got %+v", mirrorReferences[0])
 	}
 }
 
@@ -3393,6 +3802,9 @@ func TestServiceTaskArtifactListReturnsStoredArtifacts(t *testing.T) {
 	if len(items) != 1 || items[0]["artifact_id"] != "art_list_001" {
 		t.Fatalf("expected stored artifact list item, got %+v", items)
 	}
+	if _, ok := items[0]["delivery_type"]; ok {
+		t.Fatalf("expected artifact list item to omit undeclared delivery_type, got %+v", items[0])
+	}
 }
 
 func TestServiceTaskArtifactListUsesStorePaginationBeyondHundred(t *testing.T) {
@@ -3495,6 +3907,10 @@ func TestServiceTaskArtifactOpenReturnsStableOpenPayload(t *testing.T) {
 	payload := result["resolved_payload"].(map[string]any)
 	if payload["path"] != "workspace/artifact-open.md" {
 		t.Fatalf("expected resolved payload path, got %+v", payload)
+	}
+	artifact := result["artifact"].(map[string]any)
+	if _, ok := artifact["delivery_type"]; ok {
+		t.Fatalf("expected opened artifact to omit undeclared delivery_type, got %+v", artifact)
 	}
 }
 
@@ -3624,6 +4040,9 @@ func TestServiceDeliveryOpenReturnsArtifactDeliveryResult(t *testing.T) {
 	if result["artifact"].(map[string]any)["artifact_id"] != "art_delivery_open_001" {
 		t.Fatalf("expected artifact payload, got %+v", result)
 	}
+	if _, ok := result["artifact"].(map[string]any)["delivery_type"]; ok {
+		t.Fatalf("expected delivery-open artifact to omit undeclared delivery_type, got %+v", result["artifact"])
+	}
 }
 
 func TestTaskArtifactHelpersCoverFallbackBranches(t *testing.T) {
@@ -3681,6 +4100,70 @@ func TestServiceTaskArtifactListFallsBackToRuntimeArtifactsWhenStoreEmpty(t *tes
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["artifact_id"] != "art_runtime_001" {
 		t.Fatalf("expected runtime artifact fallback to return item, got %+v", items)
+	}
+	if _, ok := items[0]["delivery_type"]; ok {
+		t.Fatalf("expected runtime artifact fallback item to omit undeclared delivery_type, got %+v", items[0])
+	}
+}
+
+func TestServiceRuntimeArtifactsBackfillStableArtifactIdentifiersWhenMissing(t *testing.T) {
+	service := newTestService()
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_runtime_missing_artifact_id",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "只检查运行态 artifact id",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	_, _ = service.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, []map[string]any{{
+		"artifact_id":      "",
+		"task_id":          taskID,
+		"artifact_type":    "generated_file",
+		"title":            "runtime-output.txt",
+		"path":             "workspace/runtime-output.txt",
+		"mime_type":        "text/plain",
+		"delivery_type":    "open_file",
+		"delivery_payload": map[string]any{"path": "workspace/runtime-output.txt", "task_id": taskID},
+	}})
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	detailArtifacts := detailResult["artifacts"].([]map[string]any)
+	if len(detailArtifacts) != 1 {
+		t.Fatalf("expected one runtime detail artifact, got %+v", detailArtifacts)
+	}
+	artifactID, ok := detailArtifacts[0]["artifact_id"].(string)
+	if !ok || artifactID == "" {
+		t.Fatalf("expected runtime detail artifact to receive a stable id, got %+v", detailArtifacts[0])
+	}
+
+	listResult, err := service.TaskArtifactList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["artifact_id"] != artifactID {
+		t.Fatalf("expected runtime artifact list to reuse generated id, got %+v", items)
+	}
+
+	openResult, err := service.TaskArtifactOpen(map[string]any{"task_id": taskID, "artifact_id": artifactID})
+	if err != nil {
+		t.Fatalf("task artifact open failed: %v", err)
+	}
+	if openResult["artifact"].(map[string]any)["artifact_id"] != artifactID {
+		t.Fatalf("expected artifact open to resolve generated runtime id, got %+v", openResult)
 	}
 }
 
@@ -4137,6 +4620,109 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 	}
 	if record.LatestToolCall["tool_name"] != "page_search" {
 		t.Fatalf("expected runtime task to record page_search tool call, got %+v", record.LatestToolCall)
+	}
+}
+
+func TestServiceWorkerToolWritesToolCallEventNotification(t *testing.T) {
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), stubOCRWorkerClient{result: tools.OCRTextResult{Path: "notes/demo.txt", Text: "hello from ocr", Language: "plain_text", PageCount: 1, Source: "ocr_worker_text"}}, sidecarclient.NewNoopMediaWorkerClient())
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_ocr_extract",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请提取文本",
+		},
+		"intent": map[string]any{
+			"name": "extract_text",
+			"arguments": map[string]any{
+				"path": "notes/demo.txt",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "extract_text" {
+		t.Fatalf("expected extract_text latest tool call, got %+v", record.LatestToolCall)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected task notifications")
+	}
+	foundToolCallEvent := false
+	for _, notification := range notifications {
+		if notification.Method != "tool_call.completed" {
+			continue
+		}
+		toolCall, _ := notification.Params["tool_call"].(map[string]any)
+		eventPayload, _ := notification.Params["event"].(map[string]any)
+		payload, _ := eventPayload["payload"].(map[string]any)
+		if toolCall["tool_name"] == "extract_text" && payload["source"] == "ocr_worker_text" {
+			foundToolCallEvent = true
+		}
+	}
+	if !foundToolCallEvent {
+		t.Fatal("expected tool_call.completed notification to be queued for OCR worker")
+	}
+}
+
+func TestServiceMediaWorkerPropagatesArtifactsAndWorkerEventPayload(t *testing.T) {
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), stubMediaWorkerClient{transcodeResult: tools.MediaTranscodeResult{InputPath: "clips/demo.mov", OutputPath: "clips/demo.mp4", Format: "mp4", Source: "media_worker_ffmpeg"}})
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_media_transcode",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请转码视频",
+		},
+		"intent": map[string]any{
+			"name": "transcode_media",
+			"arguments": map[string]any{
+				"path":        "clips/demo.mov",
+				"output_path": "clips/demo.mp4",
+				"format":      "mp4",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "transcode_media" {
+		t.Fatalf("expected transcode_media latest tool call, got %+v", record.LatestToolCall)
+	}
+	toolOutput, _ := record.LatestToolCall["output"].(map[string]any)
+	if toolOutput["output_path"] != "clips/demo.mp4" {
+		t.Fatalf("expected media worker output path in tool call, got %+v", toolOutput)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected task notifications")
+	}
+	foundToolCallEvent := false
+	for _, notification := range notifications {
+		if notification.Method != "tool_call.completed" {
+			continue
+		}
+		eventPayload, _ := notification.Params["event"].(map[string]any)
+		payload, _ := eventPayload["payload"].(map[string]any)
+		if payload["source"] == "media_worker_ffmpeg" && payload["output_path"] == "clips/demo.mp4" {
+			foundToolCallEvent = true
+		}
+	}
+	if !foundToolCallEvent {
+		t.Fatalf("expected media worker tool_call.completed notification with output metadata, got %+v", notifications)
 	}
 }
 

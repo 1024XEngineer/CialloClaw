@@ -255,8 +255,8 @@ export interface AgentTaskListResult {
 export interface SecuritySummary {
   security_status: SecurityStatus;
   risk_level: RiskLevel;
-  pending_authorizations: number;
-  latest_restore_point: string | RecoveryPoint | null;
+  pending_authorizations: 0 | 1;
+  latest_restore_point: RecoveryPoint | null;
 }
 
 // AgentTaskDetailGetParams 定义当前模块的接口约束。
@@ -271,6 +271,7 @@ export interface AgentTaskDetailGetResult {
   timeline: TaskStep[];
   artifacts: Artifact[];
   mirror_references: MirrorReference[];
+  approval_request: ApprovalRequest | null;
   security_summary: SecuritySummary;
 }
 

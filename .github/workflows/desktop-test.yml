@@ -1,0 +1,57 @@
+name: Desktop Test
+
+on:
+  push:
+    paths:
+      - ".github/workflows/desktop-test.yml"
+      - "apps/desktop/**"
+      - "packages/config/**"
+      - "packages/protocol/**"
+      - "packages/ui/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-test.yml"
+      - "apps/desktop/**"
+      - "packages/config/**"
+      - "packages/protocol/**"
+      - "packages/ui/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-windows-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows Tauri app
+        working-directory: apps/desktop
+        run: pnpm exec tauri build --debug --no-bundle

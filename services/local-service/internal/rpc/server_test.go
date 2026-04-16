@@ -136,6 +136,110 @@ func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_detail_rpc",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "rpc task detail should expose active approval anchor",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-detail-anchor"`),
+		Method:  "agent.task.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	approvalRequest, ok := data["approval_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected approval_request in rpc result, got %+v", data["approval_request"])
+	}
+	if approvalRequest["task_id"] != taskID {
+		t.Fatalf("expected approval_request task_id %s, got %+v", taskID, approvalRequest)
+	}
+
+	securitySummary := data["security_summary"].(map[string]any)
+	if numericValue(t, securitySummary["pending_authorizations"]) != 1 {
+		t.Fatalf("expected pending_authorizations 1 in rpc result, got %+v", securitySummary["pending_authorizations"])
+	}
+	if securitySummary["latest_restore_point"] != nil {
+		t.Fatalf("expected latest_restore_point nil in rpc result, got %+v", securitySummary["latest_restore_point"])
+	}
+}
+
+func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_detail_rpc_done",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "rpc task detail should omit anchor for completed task",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-detail-no-anchor"`),
+		Method:  "agent.task.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["approval_request"] != nil {
+		t.Fatalf("expected approval_request to be nil for completed task, got %+v", data["approval_request"])
+	}
+
+	securitySummary := data["security_summary"].(map[string]any)
+	if numericValue(t, securitySummary["pending_authorizations"]) != 0 {
+		t.Fatalf("expected pending_authorizations 0 in rpc result, got %+v", securitySummary["pending_authorizations"])
+	}
+	if _, ok := securitySummary["latest_restore_point"].(map[string]any); !ok {
+		t.Fatalf("expected latest_restore_point object for completed task, got %+v", securitySummary["latest_restore_point"])
+	}
+}
+
 // newTestServer 处理当前模块的相关逻辑。
 func TestDispatchMapsTaskControlStatusErrors(t *testing.T) {
 	server := newTestServer()
@@ -685,4 +789,21 @@ func mustMarshal(t *testing.T, value any) json.RawMessage {
 		t.Fatalf("marshal request params: %v", err)
 	}
 	return encoded
+}
+
+func numericValue(t *testing.T, value any) int {
+	t.Helper()
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		t.Fatalf("expected numeric value, got %#v", value)
+		return 0
+	}
 }
