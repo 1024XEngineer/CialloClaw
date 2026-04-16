@@ -255,10 +255,10 @@ func (s *Server) handleAgentSettingsUpdate(params map[string]any) (any, *rpcErro
 	return wrapOrchestratorResult(data, err)
 }
 
-// wrapOrchestratorResult 处理当前模块的相关逻辑。
-
-// wrapOrchestratorResult 负责把 orchestrator 返回值映射成 RPC 层统一错误结构。
-// 这里不做业务纠正，只负责错误码和 trace 信息的协议收口。
+// wrapOrchestratorResult maps orchestrator return values into the shared RPC
+// success/error envelope.
+// It does not correct business logic; it only freezes protocol-facing error
+// codes, messages, and trace metadata.
 func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 	if err == nil {
 		return data, nil
@@ -314,8 +314,8 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 	}
 	if errors.Is(err, orchestrator.ErrRecoveryPointNotFound) {
 		return nil, &rpcError{
-			Code:    1005002,
-			Message: "ARTIFACT_NOT_FOUND",
+			Code:    1005006,
+			Message: "RECOVERY_POINT_NOT_FOUND",
 			Detail:  err.Error(),
 			TraceID: "trace_recovery_point_not_found",
 		}

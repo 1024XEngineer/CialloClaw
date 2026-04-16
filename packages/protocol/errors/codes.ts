@@ -1,4 +1,5 @@
-// 该文件集中维护全仓统一错误码。
+// ERROR_CODES keeps the canonical error-code registry shared by protocol,
+// backend mapping, and frontend handling.
 export const ERROR_CODES = {
   OK: 0,
   TASK_NOT_FOUND: 1001001,
@@ -26,6 +27,7 @@ export const ERROR_CODES = {
   CHECKPOINT_CREATE_FAILED: 1005003,
   STRONGHOLD_ACCESS_FAILED: 1005004,
   RAG_INDEX_UNAVAILABLE: 1005005,
+  RECOVERY_POINT_NOT_FOUND: 1005006,
   WORKER_NOT_AVAILABLE: 1006001,
   PLAYWRIGHT_SIDECAR_FAILED: 1006002,
   OCR_WORKER_FAILED: 1006003,
@@ -37,5 +39,5 @@ export const ERROR_CODES = {
   PATH_POLICY_VIOLATION: 1007005,
 } as const;
 
-// ErrorCodeName 定义当前模块的数据结构。
+// ErrorCodeName is the stable union of exported error-code names.
 export type ErrorCodeName = keyof typeof ERROR_CODES;

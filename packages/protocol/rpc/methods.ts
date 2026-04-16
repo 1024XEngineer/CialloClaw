@@ -34,7 +34,8 @@ import type {
   AuthorizationRecord,
 } from "../types/index";
 
-// RPC_METHODS_STABLE 定义共享常量。
+// RPC_METHODS_STABLE lists the frozen JSON-RPC methods that are already
+// implemented and safe for frontend/backend integration.
 export const RPC_METHODS_STABLE = {
   AGENT_INPUT_SUBMIT: "agent.input.submit",
   AGENT_TASK_START: "agent.task.start",
@@ -55,6 +56,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_DASHBOARD_MODULE_GET: "agent.dashboard.module.get",
   AGENT_MIRROR_OVERVIEW_GET: "agent.mirror.overview.get",
   AGENT_SECURITY_SUMMARY_GET: "agent.security.summary.get",
+  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_SECURITY_RESTORE_POINTS_LIST: "agent.security.restore_points.list",
   AGENT_SECURITY_RESTORE_APPLY: "agent.security.restore.apply",
   AGENT_SECURITY_PENDING_LIST: "agent.security.pending.list",
@@ -64,13 +66,13 @@ export const RPC_METHODS_STABLE = {
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
 } as const;
 
-// RPC_METHODS_PLANNED 定义共享常量。
+// RPC_METHODS_PLANNED reserves method names that are still documented as
+// planned and do not have a frozen implementation contract yet.
 export const RPC_METHODS_PLANNED = {
-  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
 } as const;
 
-// RPC_METHODS 定义共享常量。
+// RPC_METHODS combines stable and planned method names for typed reuse.
 export const RPC_METHODS = {
   ...RPC_METHODS_STABLE,
   ...RPC_METHODS_PLANNED,
@@ -509,7 +511,8 @@ export interface AgentSecurityPendingListResult {
   page: JsonRpcPage;
 }
 
-// AgentSecurityAuditListParams 定义当前模块的接口约束。
+// AgentSecurityAuditListParams defines the parameters for
+// `agent.security.audit.list`.
 export interface AgentSecurityAuditListParams {
   request_meta: RequestMeta;
   task_id: string;
@@ -517,7 +520,8 @@ export interface AgentSecurityAuditListParams {
   offset: number;
 }
 
-// AgentSecurityAuditListResult 定义当前模块的接口约束。
+// AgentSecurityAuditListResult defines the result for
+// `agent.security.audit.list`.
 export interface AgentSecurityAuditListResult {
   items: AuditRecord[];
   page: JsonRpcPage;

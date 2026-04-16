@@ -412,6 +412,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005003` `CHECKPOINT_CREATE_FAILED`
 - `1005004` `STRONGHOLD_ACCESS_FAILED`
 - `1005005` `RAG_INDEX_UNAVAILABLE`
+- `1005006` `RECOVERY_POINT_NOT_FOUND`
 
 #### Worker / Sidecar / Plugin
 
@@ -492,6 +493,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.dashboard.module.get`
 - `agent.mirror.overview.get`
 - `agent.security.summary.get`
+- `agent.security.audit.list`
 - `agent.security.restore_points.list`
 - `agent.security.restore.apply`
 - `agent.security.pending.list`
@@ -505,13 +507,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 7.2 planned
 
 - `agent.mirror.memory.manage`
-- `agent.plugin.list`
-- `agent.plugin.enable`
-- `agent.plugin.disable`
-- `agent.model.list`
-- `agent.model.activate`
-- `agent.skill.install`
-- `agent.skill.list`
+
+当前仓库尚未把 `agent.plugin.* / agent.model.* / agent.skill.*` 冻结进 `packages/protocol` 正式方法真源；这些扩展能力在当前阶段仍通过 `agent.settings.*` 与仪表盘模块承接，待对象、权限和来源字段冻结后再升级为独立正式方法。
 
 ### 7.3 原子功能与方法映射说明
 
@@ -2026,7 +2023,94 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.5 `agent.security.pending.list`
+### 8.3.5 `agent.security.audit.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户在安全卫士或任务详情中查看某个任务的审计记录时
+- **系统处理**：按任务范围返回已落盘的审计记录列表
+- **入参**：任务 ID、分页参数
+- **出参**：审计记录列表、分页信息
+
+### agent.security.audit.list 入参说明
+
+| 字段      | 中文说明      |
+| --------- | ------------- |
+| `task_id` | 目标任务 ID   |
+| `limit`   | 每页条数      |
+| `offset`  | 分页偏移      |
+
+### agent.security.audit.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_audit_001",
+  "method": "agent.security.audit.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_audit_001",
+      "client_time": "2026-04-07T11:02:30+08:00"
+    },
+    "task_id": "task_301",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.security.audit.list 出参说明
+
+| 字段                      | 中文说明       |
+| ------------------------- | -------------- |
+| `data.items`              | 审计记录列表   |
+| `data.items[].audit_id`   | 审计记录 ID    |
+| `data.items[].task_id`    | 关联任务 ID    |
+| `data.items[].type`       | 审计类型       |
+| `data.items[].action`     | 具体动作       |
+| `data.items[].summary`    | 审计摘要       |
+| `data.items[].target`     | 目标对象       |
+| `data.items[].result`     | 执行结果       |
+| `data.items[].created_at` | 创建时间       |
+| `data.page`               | 分页信息       |
+
+### agent.security.audit.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_audit_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "audit_id": "audit_001",
+          "task_id": "task_301",
+          "type": "recovery",
+          "action": "restore_apply",
+          "summary": "恢复点回滚已完成",
+          "target": "workspace/notes/output.md",
+          "result": "completed",
+          "created_at": "2026-04-07T11:06:30+08:00"
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:02:31+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.3.6 `agent.security.pending.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户查看待确认操作列表时
@@ -2107,7 +2191,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.6 `agent.security.respond`
+### 8.3.7 `agent.security.respond`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“允许本次”或“拒绝本次”时
@@ -2190,7 +2274,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.7 `agent.security.restore_points.list`
+### 8.3.8 `agent.security.restore_points.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在安全卫士或任务详情中查看恢复点列表时
@@ -2270,7 +2354,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.8 `agent.security.restore.apply`
+### 8.3.9 `agent.security.restore.apply`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户选定某个恢复点并发起回滚时
@@ -2324,7 +2408,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 错误码 | 错误名 | 中文说明 |
 | ------ | ------ | -------- |
 | `1005001` | `SQLITE_WRITE_FAILED` | 恢复点读取或持久化存储查询失败 |
-| `1005002` | `ARTIFACT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
+| `1005006` | `RECOVERY_POINT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
 
 ### agent.security.restore.apply 首次出参示例
 

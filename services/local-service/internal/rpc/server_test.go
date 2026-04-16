@@ -640,8 +640,8 @@ func TestDispatchMapsRecoveryPointNotFoundErrors(t *testing.T) {
 	if rpcErr == nil {
 		t.Fatal("expected rpc error")
 	}
-	if rpcErr.Code != 1005002 {
-		t.Fatalf("expected 1005002 mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	if rpcErr.Code != 1005006 || rpcErr.Message != "RECOVERY_POINT_NOT_FOUND" {
+		t.Fatalf("expected RECOVERY_POINT_NOT_FOUND mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
 	}
 }
 
