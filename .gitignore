@@ -3,6 +3,7 @@
 .idea/
 .vscode/
 .worktrees/
+.codex/
 
 node_modules/
 dist/
