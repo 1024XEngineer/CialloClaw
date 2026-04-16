@@ -28,10 +28,17 @@ type workerInvoker interface {
 }
 
 type sidecarRequest struct {
-	Action string `json:"action"`
-	URL    string `json:"url,omitempty"`
-	Query  string `json:"query,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
+	Action       string           `json:"action"`
+	URL          string           `json:"url,omitempty"`
+	Query        string           `json:"query,omitempty"`
+	Path         string           `json:"path,omitempty"`
+	Language     string           `json:"language,omitempty"`
+	OutputPath   string           `json:"output_path,omitempty"`
+	OutputDir    string           `json:"output_dir,omitempty"`
+	Format       string           `json:"format,omitempty"`
+	Limit        int              `json:"limit,omitempty"`
+	EverySeconds float64          `json:"every_seconds,omitempty"`
+	Actions      []map[string]any `json:"actions,omitempty"`
 }
 
 type sidecarResponse struct {
@@ -173,6 +180,54 @@ func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query stri
 		MatchCount: intValue(response.Result, "match_count"),
 		Matches:    stringSliceValue(response.Result, "matches"),
 		Source:     firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) InteractPage(ctx context.Context, url string, actions []map[string]any) (tools.BrowserPageInteractResult, error) {
+	if c.runtime == nil || !c.runtime.Available() {
+		return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	if !c.runtime.Ready() {
+		return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_interact", URL: url, Actions: cloneActionSlice(actions)})
+	if err != nil {
+		if shouldMarkRuntimeFailure(err) {
+			_ = c.runtime.markFailure()
+		}
+		return tools.BrowserPageInteractResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+	}
+	return tools.BrowserPageInteractResult{
+		URL:            stringValue(response.Result, "url"),
+		Title:          stringValue(response.Result, "title"),
+		TextContent:    stringValue(response.Result, "text_content"),
+		ActionsApplied: intValue(response.Result, "actions_applied"),
+		Source:         firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) StructuredDOM(ctx context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
+	if c.runtime == nil || !c.runtime.Available() {
+		return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	if !c.runtime.Ready() {
+		return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "structured_dom", URL: url})
+	if err != nil {
+		if shouldMarkRuntimeFailure(err) {
+			_ = c.runtime.markFailure()
+		}
+		return tools.BrowserStructuredDOMResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+	}
+	return tools.BrowserStructuredDOMResult{
+		URL:      stringValue(response.Result, "url"),
+		Title:    stringValue(response.Result, "title"),
+		Headings: stringSliceValue(response.Result, "headings"),
+		Links:    stringSliceValue(response.Result, "links"),
+		Buttons:  stringSliceValue(response.Result, "buttons"),
+		Inputs:   stringSliceValue(response.Result, "inputs"),
+		Source:   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 

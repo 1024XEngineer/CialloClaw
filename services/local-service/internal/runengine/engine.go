@@ -477,8 +477,11 @@ func (e *Engine) RecordToolCallLifecycle(taskID, toolName, status string, input,
 
 	record.UpdatedAt = e.now()
 	record.LatestToolCall = e.buildToolCallRecord(record, toolName, status, input, output, durationMS, errorCode)
-	record.LatestEvent = e.buildEventWithPayload(record, "tool_call.completed", map[string]any{
-		"status":      record.Status,
+	record.LatestEvent = e.buildEventWithPayload(record, "tool_call.completed", toolCallEventPayload(record, toolName, status, input, output, errorCode))
+	record.queueNotification("tool_call.completed", map[string]any{
+		"task_id":     record.TaskID,
+		"tool_call":   cloneMap(record.LatestToolCall),
+		"event":       cloneMap(record.LatestEvent),
 		"tool_name":   toolName,
 		"tool_status": firstNonEmpty(status, "succeeded"),
 	})
@@ -1263,6 +1266,34 @@ func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName, status string
 		"error_code":   errorCode,
 		"duration_ms":  durationMS,
 	}
+}
+
+func toolCallEventPayload(record *TaskRecord, toolName, status string, input, output map[string]any, errorCode any) map[string]any {
+	payload := map[string]any{
+		"status":      record.Status,
+		"tool_name":   toolName,
+		"tool_status": firstNonEmpty(status, "succeeded"),
+	}
+	if errorCode != nil {
+		payload["error_code"] = errorCode
+	}
+	for _, key := range []string{"source", "execution_backend", "path", "url", "output_path", "output_dir", "actions_applied", "page_count", "frame_count"} {
+		if value, ok := output[key]; ok {
+			payload[key] = value
+		}
+	}
+	for _, key := range []string{"path", "url", "output_path", "output_dir"} {
+		if _, exists := payload[key]; exists {
+			continue
+		}
+		if value, ok := input[key]; ok {
+			payload[key] = value
+		}
+	}
+	if summaryOutput, ok := output["summary_output"].(map[string]any); ok && len(summaryOutput) > 0 {
+		payload["summary_output"] = cloneMap(summaryOutput)
+	}
+	return payload
 }
 
 // nextIdentifier 处理当前模块的相关逻辑。

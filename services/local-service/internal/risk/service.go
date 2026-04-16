@@ -67,7 +67,7 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
-	if input.OperationName == "write_file" && (!input.WorkspaceKnown || strings.TrimSpace(input.TargetObject) == "") {
+	if isWorkspaceWriteOperation(input.OperationName) && (!input.WorkspaceKnown || strings.TrimSpace(input.TargetObject) == "") {
 		result.RiskLevel = RiskLevelYellow
 		result.ApprovalRequired = true
 		result.Reason = ReasonWorkspaceUnknown
@@ -149,7 +149,16 @@ func isApprovalCommand(commandPreview string) bool {
 
 func isWebpageOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search":
+	case "page_read", "page_search", "page_interact", "structured_dom":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWorkspaceWriteOperation(operationName string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "write_file", "transcode_media", "normalize_recording", "extract_frames":
 		return true
 	default:
 		return false

@@ -60,6 +60,8 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
 		audit.NewService(),
 		checkpoint.NewService(),
@@ -91,6 +93,47 @@ func newTestExecutionServiceWithPlaywright(t *testing.T, output string, playwrig
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
 		playwright,
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		toolExecutor,
+		plugin.NewService(),
+	), workspaceRoot
+}
+
+func newTestExecutionServiceWithWorkers(t *testing.T, output string, playwright tools.PlaywrightSidecarClient, ocr tools.OCRWorkerClient, media tools.MediaWorkerClient) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+
+	return NewService(
+		platform.NewLocalFileSystemAdapter(pathPolicy),
+		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
+		playwright,
+		ocr,
+		media,
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
 		audit.NewService(),
 		checkpoint.NewService(),
@@ -433,6 +476,108 @@ func TestExecuteDirectSidecarPageSearchUsesToolExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteDirectSidecarPageInteractUsesToolExecutor(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{interactResult: tools.BrowserPageInteractResult{
+		Title:          "Interactive Page",
+		TextContent:    "interaction complete",
+		ActionsApplied: 2,
+		Source:         "playwright_sidecar",
+	}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:               "task_006a",
+		RunID:                "run_006a",
+		Title:                "页面操作",
+		Intent:               map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请点击按钮"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "页面操作结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "page_interact",
+		ApprovedTargetObject: "https://example.com",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ToolName != "page_interact" {
+		t.Fatalf("expected page_interact tool, got %s", result.ToolName)
+	}
+	if result.ToolOutput["actions_applied"] != 2 {
+		t.Fatalf("expected action count in tool output, got %+v", result.ToolOutput)
+	}
+}
+
+func TestExecuteDirectSidecarStructuredDOMUsesToolExecutor(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{structuredResult: tools.BrowserStructuredDOMResult{
+		Title:    "Structured Page",
+		Headings: []string{"Heading A"},
+		Links:    []string{"Link A"},
+		Buttons:  []string{"Submit"},
+		Inputs:   []string{"email"},
+		Source:   "playwright_sidecar",
+	}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:               "task_006b",
+		RunID:                "run_006b",
+		Title:                "结构化页面",
+		Intent:               map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请提取页面结构"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "页面结构结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "structured_dom",
+		ApprovedTargetObject: "https://example.com",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ToolName != "structured_dom" {
+		t.Fatalf("expected structured_dom tool, got %s", result.ToolName)
+	}
+	if result.ToolOutput["summary_output"] == nil {
+		t.Fatalf("expected summary output, got %+v", result.ToolOutput)
+	}
+}
+
+func TestExecuteDirectOCRAndMediaToolsUseWorkerClients(t *testing.T) {
+	ocrPath := "notes/demo.txt"
+	framesDir := "frames"
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: ocrPath, Text: "hello from ocr", Language: "plain_text", PageCount: 1, Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "clips/demo.mp4", OutputDir: framesDir, FramePaths: []string{filepath.Join(framesDir, "frame-001.jpg")}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	ocrResult, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_006c",
+		RunID:        "run_006c",
+		Title:        "提取文本",
+		Intent:       map[string]any{"name": "extract_text", "arguments": map[string]any{"path": ocrPath}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请提取文本"},
+		DeliveryType: "bubble",
+		ResultTitle:  "提取结果",
+	})
+	if err != nil {
+		t.Fatalf("extract_text execute failed: %v", err)
+	}
+	if ocrResult.ToolName != "extract_text" || !strings.Contains(ocrResult.BubbleText, "hello from ocr") {
+		t.Fatalf("unexpected extract_text result: %+v", ocrResult)
+	}
+	mediaResult, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_006d",
+		RunID:        "run_006d",
+		Title:        "抽取视频帧",
+		Intent:       map[string]any{"name": "extract_frames", "arguments": map[string]any{"path": "clips/demo.mp4", "output_dir": framesDir, "limit": 1.0}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请抽取视频帧"},
+		DeliveryType: "bubble",
+		ResultTitle:  "抽帧结果",
+	})
+	if err != nil {
+		t.Fatalf("extract_frames execute failed: %v", err)
+	}
+	if mediaResult.ToolName != "extract_frames" || mediaResult.ToolOutput["frame_count"] != 1 {
+		t.Fatalf("unexpected extract_frames result: %+v", mediaResult)
+	}
+}
+
 func TestExecuteDirectSidecarPageReadFailureReturnsMappedToolTrace(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{err: tools.ErrPlaywrightSidecarFailed})
 
@@ -478,6 +623,8 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		stubExecutionCapability{err: errors.New("provider unavailable")},
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{err: errors.New("provider unavailable")}),
 		audit.NewService(),
 		checkpoint.NewService(),
@@ -657,15 +804,209 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 	}
 }
 
+func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
+	tests := []struct {
+		name     string
+		request  Request
+		wantTool string
+		wantKey  string
+	}{
+		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact", wantKey: "url"},
+		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom", wantKey: "url"},
+		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
+		{name: "transcode_media", request: Request{Intent: map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4", "format": "mp4"}}}, wantTool: "transcode_media", wantKey: "output_path"},
+		{name: "extract_frames", request: Request{Intent: map[string]any{"name": "extract_frames", "arguments": map[string]any{"path": "clips/demo.mov", "output_dir": "frames", "limit": 2.0}}}, wantTool: "extract_frames", wantKey: "output_dir"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			toolName, input, ok := service.resolveToolExecution(test.request, map[string]any{"payload": map[string]any{}}, "")
+			if !ok || toolName != test.wantTool {
+				t.Fatalf("expected %s tool resolution, got tool=%s ok=%v input=%+v", test.wantTool, toolName, ok, input)
+			}
+			if _, exists := input[test.wantKey]; !exists {
+				t.Fatalf("expected input key %s, got %+v", test.wantKey, input)
+			}
+		})
+	}
+}
+
+func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
+	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
+	tests := []struct {
+		name     string
+		request  Request
+		wantTool string
+	}{
+		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact"},
+		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom"},
+		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
+		{name: "normalize_recording", request: Request{TaskID: "task_004", RunID: "run_004", DeliveryType: "bubble", ResultTitle: "归一化结果", Intent: map[string]any{"name": "normalize_recording", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4"}}}, wantTool: "normalize_recording"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			toolName, input, execCtx, ok, err := service.resolveGovernanceToolExecution(test.request)
+			if err != nil {
+				t.Fatalf("resolveGovernanceToolExecution returned error: %v", err)
+			}
+			if !ok || toolName != test.wantTool || execCtx == nil {
+				t.Fatalf("expected governance tool %s, got tool=%s ok=%v ctx=%+v", test.wantTool, toolName, ok, execCtx)
+			}
+			if execCtx.WorkspacePath != workspaceRoot {
+				t.Fatalf("expected workspace root in tool context, got %q", execCtx.WorkspacePath)
+			}
+			if len(input) == 0 {
+				t.Fatalf("expected tool input, got %+v", input)
+			}
+		})
+	}
+}
+
+func TestExecutionWorkerHelpersCoverArtifactsRecoveryAndTrace(t *testing.T) {
+	artifacts := toolArtifactsFromResult("task_001", &tools.ToolExecutionResult{Artifacts: []tools.ArtifactRef{{ArtifactType: "generated_file", Title: "demo.mp4", Path: "clips/demo.mp4", MimeType: "video/mp4"}}})
+	if len(artifacts) != 1 || artifacts[0]["path"] != "clips/demo.mp4" {
+		t.Fatalf("unexpected tool artifacts: %+v", artifacts)
+	}
+	if artifacts[0]["artifact_id"] == "" {
+		t.Fatalf("expected runtime tool artifact to receive a stable artifact_id, got %+v", artifacts)
+	}
+	if workspacePathFromDeliveryResult(nil) != "workspace" {
+		t.Fatalf("expected default workspace path")
+	}
+	if workspacePathFromDeliveryResult(map[string]any{"payload": map[string]any{"path": "notes/demo.md"}}) != "notes/demo.md" {
+		t.Fatalf("expected workspace payload path to normalize")
+	}
+	if checkpointObjectPath("demo.txt") != "workspace/demo.txt" {
+		t.Fatalf("expected checkpoint object path to be workspace-relative")
+	}
+	if firstNonEmptyRecoveryPoint(map[string]any{"id": "primary"}, map[string]any{"id": "fallback"})["id"] != "primary" {
+		t.Fatalf("expected primary recovery point to win")
+	}
+	if firstNonEmptyRecoveryPoint(nil, map[string]any{"id": "fallback"})["id"] != "fallback" {
+		t.Fatalf("expected fallback recovery point")
+	}
+	result := &Result{ToolCalls: []tools.ToolCallRecord{{ToolName: "extract_text", Input: map[string]any{"path": "notes/demo.txt"}, Output: map[string]any{"text": "hello"}}}}
+	assignLatestToolTrace(result, latestToolCall(result.ToolCalls))
+	enrichToolTrace(result, map[string]any{"worker": "ocr_worker"})
+	enrichLatestToolCall(result, map[string]any{"worker": "ocr_worker"})
+	if result.ToolName != "extract_text" || result.ToolOutput["worker"] != "ocr_worker" {
+		t.Fatalf("unexpected enriched result: %+v", result)
+	}
+	if result.ToolCalls[0].Output["worker"] != "ocr_worker" {
+		t.Fatalf("expected latest tool call enrichment, got %+v", result.ToolCalls[0].Output)
+	}
+	cloned := cloneMap(map[string]any{"nested": map[string]any{"value": "demo"}, "items": []map[string]any{{"path": "notes/demo.txt"}}})
+	if cloned["nested"].(map[string]any)["value"] != "demo" || cloned["items"].([]map[string]any)[0]["path"] != "notes/demo.txt" {
+		t.Fatalf("unexpected cloned map: %+v", cloned)
+	}
+	if len(cloneMapSlice([]map[string]any{{"path": "notes/demo.txt"}})) != 1 {
+		t.Fatalf("expected cloneMapSlice to clone one item")
+	}
+}
+
+func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "demo.txt"), []byte("worker file content"), 0o644); err != nil {
+		t.Fatalf("write demo file: %v", err)
+	}
+	section := service.fileSection("notes/demo.txt")
+	if !strings.Contains(section, "worker file content") {
+		t.Fatalf("expected file content section, got %s", section)
+	}
+	missingSection := service.fileSection("notes/missing.txt")
+	if !strings.Contains(missingSection, "读取失败") {
+		t.Fatalf("expected missing file section, got %s", missingSection)
+	}
+	service.fileSystem = nil
+	if section := service.fileSection("notes/demo.txt"); section != "文件: notes/demo.txt" {
+		t.Fatalf("expected no-filesystem branch, got %s", section)
+	}
+	service, _ = newTestExecutionService(t, "unused")
+	inputText := service.buildExecutionInput(contextsvc.TaskContextSnapshot{SelectionText: "选中文本", Text: "输入文本", ErrorText: "错误信息", Files: []string{"notes/demo.txt"}, PageTitle: "Page", PageURL: "https://example.com", AppName: "Desktop"})
+	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文"} {
+		if !strings.Contains(inputText, fragment) {
+			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
+		}
+	}
+}
+
+func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
+	bubbleText := toolBubbleText("extract_text", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"content_preview": "hello ocr"}})
+	if bubbleText != "hello ocr" {
+		t.Fatalf("expected content preview bubble text, got %s", bubbleText)
+	}
+	searchBubble := toolBubbleText("page_search", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"query": "demo", "match_count": 3}})
+	if !strings.Contains(searchBubble, "关键词") {
+		t.Fatalf("expected search bubble text, got %s", searchBubble)
+	}
+	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
+		t.Fatalf("expected page_interact governance target url")
+	}
+	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
+		t.Fatalf("expected file-based governance target path")
+	}
+	if governanceTargetObject("transcode_media", map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "exports/demo.mp4" {
+		t.Fatalf("expected media governance target to follow output_path")
+	}
+	if governanceTargetObject("extract_frames", map[string]any{"path": "clips/demo.mov", "output_dir": "exports/frames"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "exports/frames" {
+		t.Fatalf("expected frame extraction governance target to follow output_dir")
+	}
+	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
+		t.Fatalf("expected webpage intent to preserve approved url target")
+	}
+	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
+		t.Fatalf("expected media intent approval target to follow output_path")
+	}
+}
+
+func TestPrepareWriteFileRecoveryPointAndWorkspaceHelpers(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "demo.txt"), []byte("demo content"), 0o644); err != nil {
+		t.Fatalf("write demo file: %v", err)
+	}
+	recoveryPoint, err := service.prepareWriteFileRecoveryPoint(context.Background(), Request{TaskID: "task_007"}, "write_file", map[string]any{"path": "notes/demo.txt"})
+	if err != nil {
+		t.Fatalf("prepareWriteFileRecoveryPoint returned error: %v", err)
+	}
+	if recoveryPoint["recovery_point_id"] == "" {
+		t.Fatalf("expected recovery point id, got %+v", recoveryPoint)
+	}
+	if result, err := service.prepareWriteFileRecoveryPoint(context.Background(), Request{TaskID: "task_007"}, "read_file", map[string]any{"path": "notes/demo.txt"}); err != nil || result != nil {
+		t.Fatalf("expected non write_file tool to skip recovery point, got result=%+v err=%v", result, err)
+	}
+	if resolveWorkspaceRoot(service.fileSystem) != workspaceRoot {
+		t.Fatalf("expected resolved workspace root %q, got %q", workspaceRoot, resolveWorkspaceRoot(service.fileSystem))
+	}
+}
+
 type stubExecutionCapability struct {
 	result tools.CommandExecutionResult
 	err    error
 }
 
 type stubPlaywrightClient struct {
-	readResult   tools.BrowserPageReadResult
-	searchResult tools.BrowserPageSearchResult
-	err          error
+	readResult       tools.BrowserPageReadResult
+	searchResult     tools.BrowserPageSearchResult
+	interactResult   tools.BrowserPageInteractResult
+	structuredResult tools.BrowserStructuredDOMResult
+	err              error
+}
+
+type stubOCRWorkerClient struct {
+	result tools.OCRTextResult
+	err    error
+}
+
+type stubMediaWorkerClient struct {
+	transcodeResult tools.MediaTranscodeResult
+	framesResult    tools.MediaFrameExtractResult
+	err             error
 }
 
 func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
@@ -695,6 +1036,70 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 		result.MatchCount = len(result.Matches)
 	}
 	return result, nil
+}
+
+func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	result := s.interactResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
+	if s.err != nil {
+		return tools.BrowserStructuredDOMResult{}, s.err
+	}
+	result := s.structuredResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
+func (s stubOCRWorkerClient) ExtractText(_ context.Context, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubOCRWorkerClient) OCRImage(_ context.Context, _ string, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubOCRWorkerClient) OCRPDF(_ context.Context, _ string, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s stubMediaWorkerClient) TranscodeMedia(_ context.Context, _, _, _ string) (tools.MediaTranscodeResult, error) {
+	if s.err != nil {
+		return tools.MediaTranscodeResult{}, s.err
+	}
+	return s.transcodeResult, nil
+}
+
+func (s stubMediaWorkerClient) NormalizeRecording(_ context.Context, _, _ string) (tools.MediaTranscodeResult, error) {
+	if s.err != nil {
+		return tools.MediaTranscodeResult{}, s.err
+	}
+	return s.transcodeResult, nil
+}
+
+func (s stubMediaWorkerClient) ExtractFrames(_ context.Context, _, _ string, _ float64, _ int) (tools.MediaFrameExtractResult, error) {
+	if s.err != nil {
+		return tools.MediaFrameExtractResult{}, s.err
+	}
+	return s.framesResult, nil
 }
 
 func (s stubExecutionCapability) RunCommand(_ context.Context, command string, args []string, workingDir string) (tools.CommandExecutionResult, error) {

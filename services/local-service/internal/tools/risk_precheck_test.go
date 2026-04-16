@@ -207,6 +207,61 @@ func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testin
 	}
 }
 
+func TestBuildRiskPrecheckInputUsesMediaOutputTarget(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "transcode_media", DisplayName: "Transcode", Source: ToolSourceWorker},
+		"transcode_media",
+		execCtx,
+		map[string]any{"path": "clips/demo.mov", "output_path": "/workspace/exports/demo.mp4"},
+	)
+	if input.Workspace.TargetPath != "/workspace/exports/demo.mp4" {
+		t.Fatalf("expected media precheck target to use output_path, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within == nil || !*input.Workspace.Within {
+		t.Fatalf("expected media output path to stay inside workspace, got %+v", input.Workspace)
+	}
+
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	files := result.ImpactScope["files"].([]string)
+	if len(files) != 1 || files[0] != "/workspace/exports/demo.mp4" {
+		t.Fatalf("expected media impact scope to include output target, got %+v", result.ImpactScope)
+	}
+}
+
+func TestBuildRiskPrecheckInputDeniesMediaOutputOutsideWorkspace(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "extract_frames", DisplayName: "Extract Frames", Source: ToolSourceWorker},
+		"extract_frames",
+		execCtx,
+		map[string]any{"path": "clips/demo.mov", "output_dir": "/outside/frames"},
+	)
+	if input.Workspace.TargetPath != "/outside/frames" {
+		t.Fatalf("expected frame extraction target to use output_dir, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within == nil || *input.Workspace.Within {
+		t.Fatalf("expected out-of-workspace frame extraction to be detected, got %+v", input.Workspace)
+	}
+
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelRed || !result.Deny {
+		t.Fatalf("expected out-of-workspace media write to be denied, got %+v", result)
+	}
+}
+
 func TestToolExecutorBlocksDeniedPrecheck(t *testing.T) {
 	sink := &InMemoryToolCallSink{}
 	tool := &stubTool{

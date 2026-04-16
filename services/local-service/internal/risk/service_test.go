@@ -149,6 +149,20 @@ func TestServiceAssess(t *testing.T) {
 			},
 		},
 		{
+			name: "transcode_media_unknown_workspace_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "transcode_media",
+				TargetObject:        "",
+				CapabilityAvailable: true,
+				WorkspaceKnown:      false,
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelYellow,
+				ApprovalRequired: true,
+				Reason:           ReasonWorkspaceUnknown,
+			},
+		},
+		{
 			name: "overwrite_requires_checkpoint",
 			input: AssessmentInput{
 				OperationName:       "write_file",
@@ -167,6 +181,29 @@ func TestServiceAssess(t *testing.T) {
 				Reason:             ReasonOverwriteOrDelete,
 				ImpactScope: ImpactScope{
 					Files:                 []string{"D:/workspace/report.md"},
+					OverwriteOrDeleteRisk: true,
+				},
+			},
+		},
+		{
+			name: "extract_frames_existing_output_requires_checkpoint",
+			input: AssessmentInput{
+				OperationName:       "extract_frames",
+				TargetObject:        "D:/workspace/frames",
+				CapabilityAvailable: true,
+				WorkspaceKnown:      true,
+				ImpactScope: ImpactScope{
+					Files:                 []string{"D:/workspace/frames"},
+					OverwriteOrDeleteRisk: true,
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel:          RiskLevelYellow,
+				ApprovalRequired:   true,
+				CheckpointRequired: true,
+				Reason:             ReasonOverwriteOrDelete,
+				ImpactScope: ImpactScope{
+					Files:                 []string{"D:/workspace/frames"},
 					OverwriteOrDeleteRisk: true,
 				},
 			},

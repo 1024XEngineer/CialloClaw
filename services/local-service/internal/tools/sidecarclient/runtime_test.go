@@ -150,6 +150,49 @@ func TestPlaywrightSidecarRuntimeClientExecutesRealReadAndSearch(t *testing.T) {
 	}
 }
 
+func TestPlaywrightSidecarRuntimeClientInteractsAndReadsStructuredDOM(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	invoker := &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
+	runtime.invoker = invoker
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"url":             "https://example.com",
+		"title":           "Interactive Page",
+		"text_content":    "interaction complete",
+		"actions_applied": 2,
+		"source":          "playwright_worker_browser",
+	}}
+	interactResult, err := runtime.Client().InteractPage(t.Context(), "https://example.com", []map[string]any{{"type": "click", "selector": "button"}})
+	if err != nil {
+		t.Fatalf("InteractPage returned error: %v", err)
+	}
+	if interactResult.ActionsApplied != 2 {
+		t.Fatalf("unexpected interaction result: %+v", interactResult)
+	}
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"url":      "https://example.com",
+		"title":    "Interactive Page",
+		"headings": []any{"Heading"},
+		"links":    []any{"Docs"},
+		"buttons":  []any{"Submit"},
+		"inputs":   []any{"email"},
+		"source":   "playwright_worker_browser",
+	}}
+	domResult, err := runtime.Client().StructuredDOM(t.Context(), "https://example.com")
+	if err != nil {
+		t.Fatalf("StructuredDOM returned error: %v", err)
+	}
+	if len(domResult.Headings) != 1 || len(domResult.Links) != 1 {
+		t.Fatalf("unexpected structured dom result: %+v", domResult)
+	}
+}
+
 func TestPlaywrightSidecarRuntimeStartFailsHealthCheck(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)

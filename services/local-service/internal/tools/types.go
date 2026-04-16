@@ -264,10 +264,72 @@ type BrowserPageSearchResult struct {
 	Source     string
 }
 
+// BrowserPageInteractResult describes one page interaction run.
+type BrowserPageInteractResult struct {
+	URL            string
+	Title          string
+	TextContent    string
+	ActionsApplied int
+	Source         string
+}
+
+// BrowserStructuredDOMResult describes a structured DOM snapshot.
+type BrowserStructuredDOMResult struct {
+	URL      string
+	Title    string
+	Headings []string
+	Links    []string
+	Buttons  []string
+	Inputs   []string
+	Source   string
+}
+
+// OCRTextResult describes OCR or plain text extraction output.
+type OCRTextResult struct {
+	Path      string
+	Text      string
+	Language  string
+	Source    string
+	PageCount int
+}
+
+// MediaTranscodeResult describes one media transcode or normalization result.
+type MediaTranscodeResult struct {
+	InputPath  string
+	OutputPath string
+	Format     string
+	Source     string
+}
+
+// MediaFrameExtractResult describes extracted frame metadata.
+type MediaFrameExtractResult struct {
+	InputPath  string
+	OutputDir  string
+	FramePaths []string
+	FrameCount int
+	Source     string
+}
+
 // PlaywrightSidecarClient 是 Playwright sidecar 的最小客户端边界。
 type PlaywrightSidecarClient interface {
 	ReadPage(ctx context.Context, url string) (BrowserPageReadResult, error)
 	SearchPage(ctx context.Context, url, query string, limit int) (BrowserPageSearchResult, error)
+	InteractPage(ctx context.Context, url string, actions []map[string]any) (BrowserPageInteractResult, error)
+	StructuredDOM(ctx context.Context, url string) (BrowserStructuredDOMResult, error)
+}
+
+// OCRWorkerClient is the minimal OCR worker client boundary.
+type OCRWorkerClient interface {
+	ExtractText(ctx context.Context, path string) (OCRTextResult, error)
+	OCRImage(ctx context.Context, path, language string) (OCRTextResult, error)
+	OCRPDF(ctx context.Context, path, language string) (OCRTextResult, error)
+}
+
+// MediaWorkerClient is the minimal media worker client boundary.
+type MediaWorkerClient interface {
+	TranscodeMedia(ctx context.Context, inputPath, outputPath, format string) (MediaTranscodeResult, error)
+	NormalizeRecording(ctx context.Context, inputPath, outputPath string) (MediaTranscodeResult, error)
+	ExtractFrames(ctx context.Context, inputPath, outputDir string, everySeconds float64, limit int) (MediaFrameExtractResult, error)
 }
 
 // CheckpointService 是 tools 模块所需的恢复点最小接口。
@@ -316,6 +378,8 @@ type ToolExecuteContext struct {
 	Platform   PlatformCapability
 	Execution  ExecutionCapability
 	Playwright PlaywrightSidecarClient
+	OCR        OCRWorkerClient
+	Media      MediaWorkerClient
 	Risk       RiskEvaluator
 	Audit      AuditWriter
 	Checkpoint CheckpointService
@@ -351,6 +415,10 @@ var (
 	ErrWorkerNotAvailable = errors.New("tools: worker not available")
 	// ErrPlaywrightSidecarFailed indicates the Playwright sidecar failed.
 	ErrPlaywrightSidecarFailed = errors.New("tools: playwright sidecar failed")
+	// ErrOCRWorkerFailed indicates the OCR worker failed.
+	ErrOCRWorkerFailed = errors.New("tools: ocr worker failed")
+	// ErrMediaWorkerFailed indicates the media worker failed.
+	ErrMediaWorkerFailed = errors.New("tools: media worker failed")
 	// ErrToolDryRunNotSupported 表示工具不支持预检查模式。
 	ErrToolDryRunNotSupported = errors.New("tools: tool dry run not supported")
 	// ErrToolDuplicateName 表示注册时发现同名工具已存在。

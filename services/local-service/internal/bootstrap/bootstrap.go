@@ -34,6 +34,8 @@ type App struct {
 	toolRegistry *tools.Registry
 	toolExecutor *tools.ToolExecutor
 	playwright   *sidecarclient.PlaywrightSidecarRuntime
+	ocr          *sidecarclient.OCRWorkerRuntime
+	media        *sidecarclient.MediaWorkerRuntime
 }
 
 // New 创建并返回当前能力。
@@ -58,11 +60,35 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 	playwrightClient := playwrightRuntime.Client()
+	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(osCapability)
+	if err != nil {
+		ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(osCapability)
+	} else {
+		if err := ocrRuntime.Start(); err != nil {
+			ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(osCapability)
+		}
+	}
+	ocrClient := ocrRuntime.Client()
+	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(osCapability)
+	if err != nil {
+		mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(osCapability)
+	} else {
+		if err := mediaRuntime.Start(); err != nil {
+			mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(osCapability)
+		}
+	}
+	mediaClient := mediaRuntime.Client()
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		return nil, err
 	}
 	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		return nil, err
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		return nil, err
 	}
 	toolExecutor := tools.NewToolExecutor(
@@ -85,7 +111,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
@@ -111,6 +137,8 @@ func New(cfg config.Config) (*App, error) {
 		toolRegistry: toolRegistry,
 		toolExecutor: toolExecutor,
 		playwright:   playwrightRuntime,
+		ocr:          ocrRuntime,
+		media:        mediaRuntime,
 	}, nil
 }
 
@@ -122,6 +150,12 @@ func (a *App) Start(ctx context.Context) error {
 func (a *App) Close() error {
 	if a.playwright != nil {
 		_ = a.playwright.Stop()
+	}
+	if a.ocr != nil {
+		_ = a.ocr.Stop()
+	}
+	if a.media != nil {
+		_ = a.media.Stop()
 	}
 	if a.storage == nil {
 		return nil

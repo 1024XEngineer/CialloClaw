@@ -432,9 +432,9 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	}, nil
 }
 
-// TaskDetailGet 处理当前模块的相关逻辑。
-
-// TaskDetailGet 处理 agent.task.detail.get，返回任务详情视图需要的完整数据。
+// TaskDetailGet returns the task detail payload for `agent.task.detail.get`.
+// It normalizes collection fields and protocol-facing objects before they cross
+// the JSON-RPC boundary.
 func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.TaskDetail(taskID)
@@ -467,15 +467,16 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 
 	return map[string]any{
 		"task":              taskMap(task),
-		"timeline":          timelineMap(task.Timeline),
-		"artifacts":         s.artifactsForTask(task.TaskID, task.Artifacts),
-		"mirror_references": cloneMapSlice(task.MirrorReferences),
+		"timeline":          protocolTaskStepList(timelineMap(task.Timeline)),
+		"artifacts":         protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
+		"mirror_references": protocolMirrorReferenceList(task.MirrorReferences),
 		"approval_request":  approvalRequestValue,
 		"security_summary":  securitySummary,
 	}, nil
 }
 
-// TaskArtifactList handles agent.task.artifact.list and returns persisted artifacts.
+// TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready
+// artifact items.
 func (s *Service) TaskArtifactList(params map[string]any) (map[string]any, error) {
 	limit := clampListLimit(intValue(params, "limit", 20))
 	offset := clampListOffset(intValue(params, "offset", 0))
@@ -488,12 +489,13 @@ func (s *Service) TaskArtifactList(params map[string]any) (map[string]any, error
 		return nil, err
 	}
 	return map[string]any{
-		"items": cloneMapSlice(items),
+		"items": protocolArtifactList(items),
 		"page":  pageMap(limit, offset, total),
 	}, nil
 }
 
-// TaskArtifactOpen handles agent.task.artifact.open and returns stable open metadata.
+// TaskArtifactOpen handles `agent.task.artifact.open` and keeps the open
+// resolution metadata while exposing a formal Artifact payload.
 func (s *Service) TaskArtifactOpen(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	artifactID := stringValue(params, "artifact_id", "")
@@ -508,11 +510,11 @@ func (s *Service) TaskArtifactOpen(params map[string]any) (map[string]any, error
 		return nil, err
 	}
 	openResult := buildDeliveryOpenResult(cloneMap(artifact), nil, taskID)
-	openResult["artifact"] = cloneMap(artifact)
+	openResult["artifact"] = protocolArtifactMap(artifact)
 	return openResult, nil
 }
 
-// DeliveryOpen handles agent.delivery.open and resolves the final open action.
+// DeliveryOpen handles `agent.delivery.open` and resolves the final open action.
 func (s *Service) DeliveryOpen(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	if strings.TrimSpace(taskID) == "" {
@@ -525,7 +527,7 @@ func (s *Service) DeliveryOpen(params map[string]any) (map[string]any, error) {
 			return nil, err
 		}
 		result := buildDeliveryOpenResult(cloneMap(artifact), nil, taskID)
-		result["artifact"] = cloneMap(artifact)
+		result["artifact"] = protocolArtifactMap(artifact)
 		return result, nil
 	}
 	task, ok := s.runEngine.GetTask(taskID)
@@ -546,6 +548,72 @@ func inferArtifactDeliveryType(artifact map[string]any) string {
 		return "open_file"
 	}
 	return "task_detail"
+}
+
+// protocolTaskStepList guarantees that task detail timeline stays an array.
+func protocolTaskStepList(steps []map[string]any) []map[string]any {
+	if len(steps) == 0 {
+		return []map[string]any{}
+	}
+	return cloneMapSlice(steps)
+}
+
+// protocolArtifactList trims artifact items to the declared protocol fields and
+// keeps the collection non-null for RPC consumers.
+func protocolArtifactList(artifacts []map[string]any) []map[string]any {
+	if len(artifacts) == 0 {
+		return []map[string]any{}
+	}
+	result := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		normalized := protocolArtifactMap(artifact)
+		if normalized == nil {
+			continue
+		}
+		result = append(result, normalized)
+	}
+	if len(result) == 0 {
+		return []map[string]any{}
+	}
+	return result
+}
+
+// protocolArtifactMap trims one artifact to the formal Artifact contract.
+func protocolArtifactMap(artifact map[string]any) map[string]any {
+	if len(artifact) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"artifact_id":   stringValue(artifact, "artifact_id", ""),
+		"task_id":       stringValue(artifact, "task_id", ""),
+		"artifact_type": stringValue(artifact, "artifact_type", ""),
+		"title":         stringValue(artifact, "title", ""),
+		"path":          stringValue(artifact, "path", ""),
+		"mime_type":     stringValue(artifact, "mime_type", ""),
+	}
+}
+
+// protocolMirrorReferenceList trims mirror references to the declared protocol
+// fields and keeps the collection non-null for RPC consumers.
+func protocolMirrorReferenceList(references []map[string]any) []map[string]any {
+	if len(references) == 0 {
+		return []map[string]any{}
+	}
+	result := make([]map[string]any, 0, len(references))
+	for _, reference := range references {
+		if len(reference) == 0 {
+			continue
+		}
+		result = append(result, map[string]any{
+			"memory_id": stringValue(reference, "memory_id", ""),
+			"reason":    stringValue(reference, "reason", ""),
+			"summary":   stringValue(reference, "summary", ""),
+		})
+	}
+	if len(result) == 0 {
+		return []map[string]any{}
+	}
+	return result
 }
 
 func buildDeliveryOpenResult(artifact map[string]any, deliveryResult map[string]any, taskID string) map[string]any {
@@ -2905,7 +2973,7 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 	s.syncTaskWriteMirrorReferences(taskID, references, err)
 
 	storageWritePlan := s.delivery.BuildStorageWritePlan(taskID, deliveryResult)
-	artifacts = attachDeliveryResultToArtifacts(deliveryResult, artifacts)
+	artifacts = delivery.EnsureArtifactIdentifiers(taskID, attachDeliveryResultToArtifacts(deliveryResult, artifacts))
 	artifactPlans := s.delivery.BuildArtifactPersistPlans(taskID, artifacts)
 	_, _ = s.runEngine.SetDeliveryPlans(taskID, storageWritePlan, artifactPlans)
 	s.persistArtifacts(taskID, artifactPlans)
@@ -3240,7 +3308,7 @@ func (s *Service) persistArtifacts(taskID string, artifactPlans []map[string]any
 }
 
 func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]any) []map[string]any {
-	return mergeArtifactsWithStored(runtimeArtifacts, s.loadArtifactsFromStorage(taskID, 0, 0))
+	return mergeArtifactsWithStored(delivery.EnsureArtifactIdentifiers(taskID, runtimeArtifacts), s.loadArtifactsFromStorage(taskID, 0, 0))
 }
 
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
@@ -3302,7 +3370,7 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 	exists := false
 	if task, ok := s.runEngine.GetTask(taskID); ok {
 		exists = true
-		for _, artifact := range task.Artifacts {
+		for _, artifact := range delivery.EnsureArtifactIdentifiers(taskID, task.Artifacts) {
 			if stringValue(artifact, "artifact_id", "") == artifactID {
 				return cloneMap(artifact), nil
 			}
@@ -3649,7 +3717,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 			previewTextForDeliveryType(deliveryType),
 			targetPathFromIntent(taskIntent),
 		)
-		artifacts := s.delivery.BuildArtifact(processingTask.TaskID, resultTitle, deliveryResult)
+		artifacts := delivery.EnsureArtifactIdentifiers(processingTask.TaskID, s.delivery.BuildArtifact(processingTask.TaskID, resultTitle, deliveryResult))
 		resultBubble := s.delivery.BuildBubbleMessage(processingTask.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
 		processingTask = s.appendAuditData(processingTask, compactAuditRecords(s.audit.BuildDeliveryAudit(processingTask.TaskID, processingTask.RunID, deliveryResult)), nil)
 		updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, deliveryResult, resultBubble, artifacts)
@@ -3691,12 +3759,13 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		firstNonEmptyString(executionResult.BubbleText, resultBubbleText),
 		processingTask.UpdatedAt.Format(dateTimeLayout),
 	)
-	updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, executionResult.DeliveryResult, resultBubble, executionResult.Artifacts, executionResult.RecoveryPoint)
+	executionArtifacts := delivery.EnsureArtifactIdentifiers(processingTask.TaskID, executionResult.Artifacts)
+	updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, executionResult.DeliveryResult, resultBubble, executionArtifacts, executionResult.RecoveryPoint)
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
-	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionResult.Artifacts)
-	return updatedTask, resultBubble, executionResult.DeliveryResult, executionResult.Artifacts, nil
+	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
+	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
 }
 
 func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord) runengine.TaskRecord {

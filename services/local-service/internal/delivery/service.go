@@ -4,6 +4,7 @@ package delivery
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"path"
 	"regexp"
 	"strings"
@@ -141,6 +142,36 @@ func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]
 	}
 }
 
+// EnsureArtifactIdentifiers backfills stable runtime artifact identifiers when
+// callers only provide the artifact body. It also backfills task_id so later
+// list/open/persist flows all resolve against the same formal artifact shape.
+func EnsureArtifactIdentifiers(taskID string, artifacts []map[string]any) []map[string]any {
+	if len(artifacts) == 0 {
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if len(artifact) == 0 {
+			continue
+		}
+		cloned := cloneArtifactMap(artifact)
+		resolvedTaskID := firstNonEmptyString(taskID, artifactStringValue(cloned, "task_id"))
+		if resolvedTaskID != "" {
+			cloned["task_id"] = resolvedTaskID
+		}
+		if artifactStringValue(cloned, "artifact_id") == "" {
+			cloned["artifact_id"] = runtimeArtifactID(resolvedTaskID, cloned)
+		}
+		result = append(result, cloned)
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // BuildStorageWritePlan 构建StorageWritePlan。
 
 // BuildStorageWritePlan 把 delivery_result 转成 runengine 保存的 workspace 写入计划。
@@ -168,6 +199,7 @@ func (s *Service) BuildStorageWritePlan(taskID string, deliveryResult map[string
 
 // BuildArtifactPersistPlans 把 artifact 列表转换成后续持久化计划。
 func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[string]any) []map[string]any {
+	artifacts = EnsureArtifactIdentifiers(taskID, artifacts)
 	if len(artifacts) == 0 {
 		return nil
 	}
@@ -210,6 +242,40 @@ func artifactStringValue(values map[string]any, key string) string {
 	}
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func cloneArtifactMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]any, len(values))
+	for key, value := range values {
+		if nested, ok := value.(map[string]any); ok {
+			result[key] = cloneArtifactMap(nested)
+			continue
+		}
+		result[key] = value
+	}
+	return result
+}
+
+func runtimeArtifactID(taskID string, artifact map[string]any) string {
+	resolvedTaskID := firstNonEmptyString(taskID, artifactStringValue(artifact, "task_id"), "runtime")
+	hasher := fnv.New32a()
+	artifactPath := strings.TrimSpace(strings.ReplaceAll(artifactStringValue(artifact, "path"), "\\", "/"))
+	if artifactPath != "" {
+		artifactPath = path.Clean(artifactPath)
+	}
+	_, _ = hasher.Write([]byte(resolvedTaskID))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(artifactStringValue(artifact, "artifact_type")))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(artifactStringValue(artifact, "title")))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(artifactPath))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(artifactStringValue(artifact, "mime_type")))
+	return fmt.Sprintf("art_%s_%08x", resolvedTaskID, hasher.Sum32())
 }
 
 func firstNonEmptyString(values ...string) string {
