@@ -40,6 +40,7 @@
 
 - 先读当前 `AGENTS.md`
 - 先判断任务属于哪个功能域、会碰哪些正式对象、是否涉及高风险动作
+- 先结合 `docs/work-priority-plan.md` 判断当前任务属于哪个优先级分组，以及是否已命中文档中的现有任务项
 - 再按任务范围读取对应真源或设计文档；只读与当前任务直接相关的部分
 
 ### 仅在以下情况补读通用文档
@@ -58,12 +59,13 @@
 
 | 任务类型 | 应读取的文档 |
 | --- | --- |
-| 新增 / 修改 JSON-RPC 方法、schema、事件、错误码、正式协议对象 | `docs/protocol-design.md`，必要时再核对 `packages/protocol` 真源 |
-| 新增 / 修改状态枚举、表结构、字段、索引、数据分层 | `docs/data-design.md` |
+| 新增 / 修改 JSON-RPC 方法、schema、事件、错误码、正式协议对象、正式状态枚举 | `docs/development-guidelines.md`、`docs/protocol-design.md`，必要时再核对 `packages/protocol` 真源 |
+| 新增 / 修改表结构、字段、索引、数据分层 | `docs/development-guidelines.md`、`docs/data-design.md` |
 | 调整模块职责、模块边界、状态机、时序、联调链路 | `docs/module-design.md` |
+| 常规后端 / service 实现变更（如 orchestrator、delivery、risk、memory、run engine），但不修改协议或数据真源 | `docs/module-design.md`；若触及主链路、统一边界或跨模块约束，再补读 `docs/architecture-overview.md`、`docs/development-guidelines.md` |
 | 调整系统分层、主链路、跨端边界、平台抽象 | `docs/architecture-overview.md` |
 | 调整前端交互、悬浮球、仪表盘、控制面板、设置体验 | `docs/product-interaction-design.md`、`docs/dashboard-design.md`、`docs/control-panel-settings.md` |
-| 判断阶段优先级、负责人分工、任务是否已完成或需要补排期 | `docs/work-priority-plan.md` |
+| 判断任务属于 P0 / P1 / P2 / P3、负责人分工、任务是否已完成或需要补排期 | `docs/work-priority-plan.md` |
 | 判断需求是否已有原子功能登记、该归入哪个功能域 | `docs/atomic-features.md` |
 
 如果仓库中的设计文档进行了英文重命名或后续版本替换，以 **`docs/` 目录中的最新英文命名文件** 为准。
@@ -72,6 +74,7 @@
 
 - 读取目标是解决当前任务需要确认的真源问题，而不是为了形式把所有文档都"打开一遍"
 - 若当前任务答案仍不确定，再继续向上补读相关上位文档，不得直接凭猜测实现
+- 若当前任务会新增或修改正式协议、正式状态、错误码、核心表结构或统一约束，不得只读单一领域文档，必须同时补读对应上位规范文档
 
 ### 禁止行为
 
@@ -390,7 +393,7 @@
 必须先做：
 
 - 按第 2 章路由阅读相关文档，不要机械性重读整套 `docs/`
-- 若任务会影响阶段优先级、负责人分工、验收勾选或当前排期，检查 `docs/work-priority-plan.md` 是否一致
+- 至少用 `docs/work-priority-plan.md` 判断当前任务属于哪个优先级分组，以及是否命中现有任务项；若任务会影响阶段优先级、负责人分工、验收勾选或当前排期，再进一步检查文档是否一致
 - 阅读相关目录现有实现
 - 找出现有真源位置
 - 给出最小改动方案
@@ -440,7 +443,8 @@
 
 此外，针对 `docs/work-priority-plan.md`，必须额外遵守以下规则：
 
-- 若当前工作会影响任务清单、负责人分工、阶段优先级或里程碑验收，则在开始实现、联调、评审、提交前检查当前本地代码进度与文档是否一致。
+- 开始实现、联调、评审、提交前，至少核对当前任务所属优先级分组，以及是否命中文档中的现有任务项。
+- 若当前工作会影响任务清单、负责人分工、阶段优先级或里程碑验收，则在开始实现、联调、评审、提交前进一步检查当前本地代码进度与文档是否一致。
 - 若代码已真实完成文档中某个任务，必须在同一次工作中把该任务勾选为已完成，不允许代码已完成但文档长期不更新。
 - 若当前优先级分组下的任务已全部完成，或某负责人的当前批次任务已全部完成，必须基于最新代码、上位文档和现有边界，继续补出下一批可执行任务，并同步更新负责人分工与优先级划分。
 - 更新下一批任务时，必须延续 `task-centric` 主链路、P0 优先规则和既有模块边界，不得擅自跳级、跳域或发明未登记任务体系。
@@ -521,7 +525,8 @@
 ### 15.1 检查现有文档
 
 - 先根据任务类型定位 `/docs` 下的对应文档，不默认通读整个 `/docs`
-- 改协议时对照 `docs/protocol-design.md`；改状态结构时对照 `docs/data-design.md`；改模块边界时对照 `docs/module-design.md`
+- 若是新需求或新功能，先检查 `docs/atomic-features.md`，确认是否已登记以及应归入哪个功能域
+- 改协议、正式状态、错误码时对照 `docs/development-guidelines.md` 与 `docs/protocol-design.md`；改表结构时对照 `docs/development-guidelines.md` 与 `docs/data-design.md`；改模块边界时对照 `docs/module-design.md`
 - 改前端交互时对照 `docs/product-interaction-design.md`、`docs/dashboard-design.md`、`docs/control-panel-settings.md`
 - 任务跨域、涉及主链路或统一边界时，再补读 `docs/architecture-overview.md`、`docs/development-guidelines.md`、`docs/work-priority-plan.md`
 
