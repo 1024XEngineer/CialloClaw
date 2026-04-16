@@ -1,10 +1,18 @@
+import path from "node:path";
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process";
-import { chromium } from "playwright";
+import { fileURLToPath } from "node:url";
 
-const manifest = {
+export const manifest = {
   worker_name: "playwright_worker",
   transport: ["stdio", "jsonrpc"],
   capabilities: ["page_read", "page_search", "page_interact", "structured_dom"],
+};
+
+const browserTimeoutMS = 15000;
+const workerUserAgent = "CialloClawPlaywrightWorker/0.1";
+
+const defaultDependencies = {
+  launchBrowser,
 };
 
 function readAllStdin() {
@@ -19,8 +27,10 @@ function readAllStdin() {
   });
 }
 
-function normalizeText(html) {
-  return html
+// normalizeText removes markup noise so page content is stable for summaries,
+// searching, and contract tests across worker/runtime boundaries.
+export function normalizeText(html) {
+  return String(html ?? "")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ")
@@ -33,7 +43,7 @@ function normalizeText(html) {
 }
 
 function extractTitle(html, url) {
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const titleMatch = String(html ?? "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (titleMatch?.[1]) {
     return normalizeText(titleMatch[1]);
   }
@@ -44,16 +54,34 @@ function extractTitle(html, url) {
   }
 }
 
-async function fetchPage(url) {
-  const browser = await chromium.launch({ headless: true });
+async function launchBrowser() {
+  const { chromium } = await import("playwright");
+  return chromium.launch({ headless: true });
+}
+
+async function closeIfPossible(target, methodName) {
+  if (target && typeof target[methodName] === "function") {
+    await target[methodName]();
+  }
+}
+
+async function closeResources(context, browser) {
   try {
-    const context = await browser.newContext({
-      userAgent: "CialloClawPlaywrightWorker/0.1",
-    });
+    await closeIfPossible(context, "close");
+  } finally {
+    await closeIfPossible(browser, "close");
+  }
+}
+
+async function openBrowserPage(url, deps, callback) {
+  const browser = await deps.launchBrowser();
+  let context;
+  try {
+    context = await browser.newContext({ userAgent: workerUserAgent });
     const page = await context.newPage();
     const response = await page.goto(url, {
       waitUntil: "networkidle",
-      timeout: 15000,
+      timeout: browserTimeoutMS,
     });
     if (!response) {
       throw new Error("navigation_failed");
@@ -61,6 +89,35 @@ async function fetchPage(url) {
     if (!response.ok()) {
       throw new Error(`http_${response.status()}`);
     }
+    return await callback(page, response);
+  } finally {
+    await closeResources(context, browser);
+  }
+}
+
+// healthResponse validates that the worker can load Playwright, start a browser,
+// and create a fresh page before the Go runtime marks the sidecar as ready.
+export async function healthResponse(deps = defaultDependencies) {
+  const browser = await deps.launchBrowser();
+  let context;
+  try {
+    context = await browser.newContext({ userAgent: workerUserAgent });
+    await context.newPage();
+    return {
+      ok: true,
+      result: {
+        status: "ok",
+        worker_name: manifest.worker_name,
+        capabilities: manifest.capabilities,
+      },
+    };
+  } finally {
+    await closeResources(context, browser);
+  }
+}
+
+async function fetchPage(url, deps) {
+  return openBrowserPage(url, deps, async (page, response) => {
     const html = await page.content();
     const bodyText = await page.locator("body").innerText().catch(() => html);
     const contentType = response.headers()["content-type"] ?? "text/html";
@@ -71,36 +128,11 @@ async function fetchPage(url) {
       textContent: normalizeText(bodyText),
       contentType,
     };
-  } finally {
-    await browser.close();
-  }
+  });
 }
 
-async function withPage(url, callback) {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext({
-      userAgent: "CialloClawPlaywrightWorker/0.1",
-    });
-    const page = await context.newPage();
-    const response = await page.goto(url, {
-      waitUntil: "networkidle",
-      timeout: 15000,
-    });
-    if (!response) {
-      throw new Error("navigation_failed");
-    }
-    if (!response.ok()) {
-      throw new Error(`http_${response.status()}`);
-    }
-    return await callback(page, response);
-  } finally {
-    await browser.close();
-  }
-}
-
-async function buildStructuredDOM(url) {
-  return withPage(url, async (page) => {
+async function buildStructuredDOM(url, deps) {
+  return openBrowserPage(url, deps, async (page) => {
     const snapshot = await page.evaluate(() => ({
       headings: Array.from(document.querySelectorAll("h1, h2, h3")).map((node) => node.textContent?.trim()).filter(Boolean).slice(0, 20),
       links: Array.from(document.querySelectorAll("a[href]")).map((node) => node.textContent?.trim() || node.getAttribute("href") || "").filter(Boolean).slice(0, 20),
@@ -116,36 +148,71 @@ async function buildStructuredDOM(url) {
   });
 }
 
-async function interactWithPage(url, actions) {
-  return withPage(url, async (page) => {
+function pageActionTarget(page, selector) {
+  return page.locator(selector).first();
+}
+
+function actionNeedsSelector(type) {
+  switch (type) {
+    case "click":
+    case "fill":
+    case "press":
+    case "check":
+    case "uncheck":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function validatePageActions(actions) {
+  for (const action of actions) {
+    const type = String(action?.type ?? "").trim().toLowerCase();
+    const selector = String(action?.selector ?? "").trim();
+    const missingSelector = actionNeedsSelector(type) || (type === "wait_for" && selector === "" && Object.prototype.hasOwnProperty.call(action ?? {}, "selector"));
+    if (missingSelector && selector === "") {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: `selector is required for page_interact action type '${type}'`,
+        },
+      };
+    }
+  }
+  return null;
+}
+
+async function interactWithPage(url, actions, deps) {
+  return openBrowserPage(url, deps, async (page) => {
     let applied = 0;
     for (const action of actions) {
       const type = String(action?.type ?? "").trim().toLowerCase();
       const selector = String(action?.selector ?? "").trim();
       switch (type) {
         case "click":
-          await page.locator(selector).first().click({ timeout: 10000 });
+          await pageActionTarget(page, selector).click({ timeout: 10000 });
           applied += 1;
           break;
         case "fill":
-          await page.locator(selector).first().fill(String(action?.value ?? ""), { timeout: 10000 });
+          await pageActionTarget(page, selector).fill(String(action?.value ?? ""), { timeout: 10000 });
           applied += 1;
           break;
         case "press":
-          await page.locator(selector).first().press(String(action?.key ?? "Enter"), { timeout: 10000 });
+          await pageActionTarget(page, selector).press(String(action?.key ?? "Enter"), { timeout: 10000 });
           applied += 1;
           break;
         case "check":
-          await page.locator(selector).first().check({ timeout: 10000 });
+          await pageActionTarget(page, selector).check({ timeout: 10000 });
           applied += 1;
           break;
         case "uncheck":
-          await page.locator(selector).first().uncheck({ timeout: 10000 });
+          await pageActionTarget(page, selector).uncheck({ timeout: 10000 });
           applied += 1;
           break;
         case "wait_for":
           if (selector) {
-            await page.locator(selector).first().waitFor({ timeout: 10000 });
+            await pageActionTarget(page, selector).waitFor({ timeout: 10000 });
           } else {
             await page.waitForTimeout(Number(action?.timeout_ms ?? 500));
           }
@@ -167,25 +234,14 @@ async function interactWithPage(url, actions) {
   });
 }
 
-async function verifyBrowserReady() {
-  const browser = await chromium.launch({ headless: true });
-  await browser.close();
-}
-
-async function handleRequest(request) {
+// handleRequest keeps the worker protocol stable for the Go sidecar runtime and
+// is exported so worker-level tests can exercise real request/response shapes.
+export async function handleRequest(request, deps = defaultDependencies) {
   switch (request.action) {
     case "health":
-      await verifyBrowserReady();
-      return {
-        ok: true,
-        result: {
-          status: "ok",
-          worker_name: manifest.worker_name,
-          capabilities: manifest.capabilities,
-        },
-      };
+      return healthResponse(deps);
     case "page_read": {
-      const page = await fetchPage(request.url);
+      const page = await fetchPage(String(request.url ?? ""), deps);
       return {
         ok: true,
         result: {
@@ -199,21 +255,21 @@ async function handleRequest(request) {
       };
     }
     case "page_search": {
-      const page = await fetchPage(request.url);
-      const normalizedQuery = request.query.trim().toLowerCase();
+      const page = await fetchPage(String(request.url ?? ""), deps);
+      const normalizedQuery = String(request.query ?? "").trim().toLowerCase();
       const rawLimit = Number(request.limit ?? 0);
       const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
       const segments = page.textContent
         .split(/[.!?。！？]\s*/)
         .map((segment) => segment.trim())
         .filter(Boolean);
-      const allMatches = segments.filter((segment) => segment.toLowerCase().includes(normalizedQuery));
+      const allMatches = normalizedQuery === "" ? [] : segments.filter((segment) => segment.toLowerCase().includes(normalizedQuery));
       const matches = allMatches.slice(0, limit);
       return {
         ok: true,
         result: {
           url: page.url,
-          query: request.query,
+          query: String(request.query ?? ""),
           match_count: allMatches.length,
           matches,
           source: "playwright_worker_browser",
@@ -223,13 +279,22 @@ async function handleRequest(request) {
     case "structured_dom": {
       return {
         ok: true,
-        result: await buildStructuredDOM(request.url),
+        result: await buildStructuredDOM(String(request.url ?? ""), deps),
       };
     }
     case "page_interact": {
+      const actions = Array.isArray(request.actions) ? request.actions : [];
+      const validationError = validatePageActions(actions);
+      if (validationError) {
+        return validationError;
+      }
       return {
         ok: true,
-        result: await interactWithPage(request.url, Array.isArray(request.actions) ? request.actions : []),
+        result: await interactWithPage(
+          String(request.url ?? ""),
+          actions,
+          deps,
+        ),
       };
     }
     default:
@@ -241,6 +306,10 @@ async function handleRequest(request) {
         },
       };
   }
+}
+
+function isMainModule() {
+  return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 }
 
 async function main() {
@@ -256,16 +325,18 @@ async function main() {
   output.write(`${JSON.stringify(response)}\n`);
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const response = {
-    ok: false,
-    error: {
-      code: "worker_failed",
-      message,
-    },
-  };
-  errorOutput.write(`${message}\n`);
-  output.write(`${JSON.stringify(response)}\n`);
-  process.exitCode = 1;
-});
+if (isMainModule()) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const response = {
+      ok: false,
+      error: {
+        code: "worker_failed",
+        message,
+      },
+    };
+    errorOutput.write(`${message}\n`);
+    output.write(`${JSON.stringify(response)}\n`);
+    process.exitCode = 1;
+  });
+}
