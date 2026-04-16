@@ -117,6 +117,9 @@ export async function openDelivery(_params?: unknown) {
     },
     open_action: "task_detail" as const,
     resolved_payload: { path: null, task_id: "task_stub", url: null },
+  };
+}
+
 export async function getSettingsDetailed(_params?: unknown) {
   // Dashboard contract tests only need a deterministic snapshot payload.
   return createDetailedResponse(loadSettings());
