@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock3, FolderOutput, RefreshCcw, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Clock3, FolderOutput, RefreshCcw, ShieldAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,16 +12,40 @@ import { TaskContextBlock } from "./TaskContextBlock";
 import { TaskProgressTimeline } from "./TaskProgressTimeline";
 
 type TaskDetailPanelProps = {
+  artifactActionPendingId: string | null;
+  artifactErrorMessage: string | null;
+  artifactItems: TaskDetailData["detail"]["artifacts"];
+  artifactLoading: boolean;
+  detailWarningMessage: string | null;
   detailData: TaskDetailData;
   detailErrorMessage: string | null;
   detailState: "loading" | "error" | "ready";
+  deliveryActionPending: boolean;
   feedback: string | null;
   onAction: (action: "pause" | "resume" | "cancel" | "restart" | "open-safety") => void;
   onClose: () => void;
+  onOpenArtifact: (artifactId: string) => void;
+  onOpenLatestDelivery: () => void;
   onRetryDetail: (() => void) | null;
 };
 
-export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, feedback, onAction, onClose, onRetryDetail }: TaskDetailPanelProps) {
+export function TaskDetailPanel({
+  artifactActionPendingId,
+  artifactErrorMessage,
+  artifactItems,
+  artifactLoading,
+  detailWarningMessage,
+  detailData,
+  detailErrorMessage,
+  detailState,
+  deliveryActionPending,
+  feedback,
+  onAction,
+  onClose,
+  onOpenArtifact,
+  onOpenLatestDelivery,
+  onRetryDetail,
+}: TaskDetailPanelProps) {
   const { detail, experience, task } = detailData;
   const progress = getTaskProgress(detail.timeline);
   const stateVoice = getTaskStateVoice(task, experience, detail.timeline);
@@ -101,6 +125,16 @@ export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, f
             </section>
           ) : null}
 
+          {detailWarningMessage ? (
+            <section className="task-detail-card task-detail-card--notice">
+              <div className="task-detail-card__header">
+                <p className="task-detail-card__eyebrow">详情提示</p>
+                <h3 className="task-detail-card__title">部分信息已降级展示</h3>
+              </div>
+              <p className="task-detail-ended-copy">{detailWarningMessage}</p>
+            </section>
+          ) : null}
+
           {!ended ? (
             <>
               {waitingCopy ? (
@@ -147,24 +181,41 @@ export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, f
               <TaskContextBlock detailData={detailData} />
 
               <section className="task-detail-card">
-                <div className="task-detail-card__header">
-                  <p className="task-detail-card__eyebrow">成果区</p>
-                  <h3 className="task-detail-card__title">已生成的文件与草稿</h3>
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">成果区</p>
+                    <h3 className="task-detail-card__title">已生成的文件与草稿</h3>
+                  </div>
+                  <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
+                    <ArrowUpRight className="h-4 w-4" />
+                    {deliveryActionPending ? "打开中..." : "打开最新结果"}
+                  </button>
                 </div>
                 <div className="task-detail-output-list">
-                  {detail.artifacts.length > 0 ? (
-                    detail.artifacts.map((artifact) => (
+                  {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
+                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {artifactItems.length > 0 ? (
+                    artifactItems.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
                         <FolderOutput className="h-4 w-4" />
                         <div>
                           <p className="task-detail-output-item__title">{artifact.title}</p>
                           <p className="task-detail-output-item__path">{artifact.path}</p>
                         </div>
+                        <button
+                          className="task-detail-card__action"
+                          disabled={artifactActionPendingId === artifact.artifact_id}
+                          onClick={() => onOpenArtifact(artifact.artifact_id)}
+                          type="button"
+                        >
+                          <ArrowUpRight className="h-4 w-4" />
+                          {artifactActionPendingId === artifact.artifact_id ? "打开中..." : "打开"}
+                        </button>
                       </article>
                     ))
-                  ) : (
+                  ) : !artifactLoading ? (
                     <p className="task-detail-card__empty">无</p>
-                  )}
+                  ) : null}
                 </div>
               </section>
 
@@ -222,33 +273,56 @@ export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, f
           ) : (
             <>
               <section className="task-detail-card task-detail-card--spotlight">
-                <div className="task-detail-card__header">
-                  <p className="task-detail-card__eyebrow">任务结果</p>
-                  <h3 className="task-detail-card__title">这条任务已经结束</h3>
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">任务结果</p>
+                    <h3 className="task-detail-card__title">这条任务已经结束</h3>
+                  </div>
+                  <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
+                    <ArrowUpRight className="h-4 w-4" />
+                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                  </button>
                 </div>
                 <p className="task-detail-ended-copy">{experience.endedSummary ?? stateVoice.body}</p>
                 <p className="task-detail-ended-time">结束时间：{formatTimestamp(task.finished_at)}</p>
               </section>
 
               <section className="task-detail-card">
-                <div className="task-detail-card__header">
-                  <p className="task-detail-card__eyebrow">产出内容</p>
-                  <h3 className="task-detail-card__title">已生成的结果</h3>
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">产出内容</p>
+                    <h3 className="task-detail-card__title">已生成的结果</h3>
+                  </div>
+                  <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
+                    <ArrowUpRight className="h-4 w-4" />
+                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                  </button>
                 </div>
                 <div className="task-detail-output-list">
-                  {detail.artifacts.length > 0 ? (
-                    detail.artifacts.map((artifact) => (
+                  {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
+                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {artifactItems.length > 0 ? (
+                    artifactItems.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
                         <FolderOutput className="h-4 w-4" />
                         <div>
                           <p className="task-detail-output-item__title">{artifact.title}</p>
                           <p className="task-detail-output-item__path">{artifact.path}</p>
                         </div>
+                        <button
+                          className="task-detail-card__action"
+                          disabled={artifactActionPendingId === artifact.artifact_id}
+                          onClick={() => onOpenArtifact(artifact.artifact_id)}
+                          type="button"
+                        >
+                          <ArrowUpRight className="h-4 w-4" />
+                          {artifactActionPendingId === artifact.artifact_id ? "打开中..." : "打开"}
+                        </button>
                       </article>
                     ))
-                  ) : (
+                  ) : !artifactLoading ? (
                     <p className="task-detail-card__empty">无</p>
-                  )}
+                  ) : null}
                 </div>
               </section>
             </>

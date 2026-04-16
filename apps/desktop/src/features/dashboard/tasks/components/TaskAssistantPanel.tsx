@@ -1,16 +1,13 @@
 import { Files, MessageCircleMore, Sparkles, WandSparkles } from "lucide-react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/utils/cn";
 import type { AssistantCardKey, TaskDetailData } from "../taskPage.types";
 
 type TaskAssistantPanelProps = {
   detailData: TaskDetailData;
   highlightedCard: AssistantCardKey | null;
-  onOpenFiles: () => void;
 };
 
 const assistantCards = [
@@ -19,7 +16,7 @@ const assistantCards = [
   { key: "context", label: "快速上下文", icon: MessageCircleMore },
 ] as const;
 
-export function TaskAssistantPanel({ detailData, highlightedCard, onOpenFiles }: TaskAssistantPanelProps) {
+export function TaskAssistantPanel({ detailData, highlightedCard }: TaskAssistantPanelProps) {
   const { detail, experience } = detailData;
 
   return (
@@ -69,14 +66,6 @@ export function TaskAssistantPanel({ detailData, highlightedCard, onOpenFiles }:
                         </div>
                       ))}
                     </div>
-                    <Tooltip>
-                      <TooltipTrigger render={<Button className="task-capsule-soft-button h-10 w-full rounded-full text-sm font-medium" onClick={onOpenFiles} variant="ghost" />}>
-                        查看全部文件
-                      </TooltipTrigger>
-                      <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">
-                        从右侧舱门查看全部关联文件与产出
-                      </TooltipContent>
-                    </Tooltip>
                   </>
                 ) : null}
 

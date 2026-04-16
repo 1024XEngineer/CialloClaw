@@ -141,7 +141,7 @@ const taskExperiences: Record<string, TaskExperience> = {
     dueAt: iso(DAY),
     goal: "把当前任务页整理成一个聚焦推进单任务的未来感任务舱，让人第一眼就知道正在做什么、下一步该怎么推进。",
     phase: "正在把详情、子任务、产出和笔记四个内容层整理成一组连贯舱室。",
-    nextAction: "先把主任务区的呼吸感和 tabs 内容面板定型，再回头收细底部操作键与文件舱门。",
+    nextAction: "先把主任务区的呼吸感和 tabs 内容面板定型，再回头收细底部操作键与成果区。",
     progressHint: "当前正在打磨主任务区，离可交付版本还差产出区与动作区收口。",
     background: "这页不是后台，也不是看板，而是给当前任务提供一个沉浸式推进舱。所有信息都应围绕“此刻这一个任务”组织。",
     constraints: [
@@ -203,7 +203,7 @@ const taskExperiences: Record<string, TaskExperience> = {
       {
         id: "output_001",
         label: "当前草稿",
-        content: "任务页目前已经建立顶部任务胶囊、中部主辅双区和底部动作条三层骨架，还在打磨 tabs 与文件舱门。",
+        content: "任务页目前已经建立顶部任务胶囊、中部主辅双区和底部动作条三层骨架，还在打磨 tabs 与成果区。",
         tone: "draft",
       },
       {

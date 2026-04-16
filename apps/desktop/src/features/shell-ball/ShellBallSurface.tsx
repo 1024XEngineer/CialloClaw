@@ -29,7 +29,7 @@ type ShellBallSurfaceProps = {
 
 type ShellBallDropDataTransfer = Pick<DataTransfer, "effectAllowed" | "files" | "getData">;
 
-export function shouldAcceptShellBallTextDrop(dataTransfer: Pick<DataTransfer, "files"> | null) {
+export function shouldAcceptShellBallTextDrop(dataTransfer: Pick<DataTransfer, "files"> | null): dataTransfer is ShellBallDropDataTransfer {
   return dataTransfer !== null && dataTransfer.files.length === 0;
 }
 

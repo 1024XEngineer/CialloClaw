@@ -17,7 +17,6 @@ type TaskMainPanelProps = {
   noteDraft: string;
   onHighlightAssistantCard: (card: AssistantCardKey) => void;
   onNoteDraftChange: (value: string) => void;
-  onOpenFiles: () => void;
   onPrimaryAction: (action: "pause" | "resume" | "cancel" | "restart" | "open-safety") => void;
   onSelectTask: (taskId: string) => void;
   onTabChange: (value: TaskTabsValue) => void;
@@ -34,7 +33,6 @@ export function TaskMainPanel({
   noteDraft,
   onHighlightAssistantCard,
   onNoteDraftChange,
-  onOpenFiles,
   onPrimaryAction,
   onSelectTask,
   onTabChange,
@@ -186,11 +184,6 @@ export function TaskMainPanel({
                 </Tooltip>
               );
             })}
-
-            <Button className="task-capsule-soft-button h-10 rounded-full px-4 text-sm" onClick={onOpenFiles} variant="ghost">
-              查看文件舱门
-            </Button>
-
             {feedback ? (
               <div className="ml-auto inline-flex items-center gap-2 rounded-full bg-orange-50 px-4 py-2 text-sm text-orange-700 ring-1 ring-orange-200/80">
                 <CircleAlert className="h-4 w-4" />

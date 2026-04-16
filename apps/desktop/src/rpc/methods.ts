@@ -1,6 +1,8 @@
 import type {
   AgentDashboardModuleGetParams,
   AgentDashboardModuleGetResult,
+  AgentDeliveryOpenParams,
+  AgentDeliveryOpenResult,
   AgentDashboardOverviewGetParams,
   AgentDashboardOverviewGetResult,
   AgentInputSubmitParams,
@@ -39,6 +41,10 @@ import type {
   AgentMirrorOverviewGetResult,
   AgentTaskConfirmParams,
   AgentTaskConfirmResult,
+  AgentTaskArtifactListParams,
+  AgentTaskArtifactListResult,
+  AgentTaskArtifactOpenParams,
+  AgentTaskArtifactOpenResult,
   AgentTaskControlParams,
   AgentTaskControlResult,
   AgentTaskDetailGetParams,
@@ -81,6 +87,18 @@ export function listTasks(params: AgentTaskListParams) {
 // getTaskDetail loads the task detail view without exposing run-centric internals.
 export function getTaskDetail(params: AgentTaskDetailGetParams) {
   return rpcClient.request<AgentTaskDetailGetResult>(RPC_METHODS.AGENT_TASK_DETAIL_GET, params);
+}
+
+export function listTaskArtifacts(params: AgentTaskArtifactListParams) {
+  return rpcClient.request<AgentTaskArtifactListResult>(RPC_METHODS.AGENT_TASK_ARTIFACT_LIST, params);
+}
+
+export function openTaskArtifact(params: AgentTaskArtifactOpenParams) {
+  return rpcClient.request<AgentTaskArtifactOpenResult>(RPC_METHODS.AGENT_TASK_ARTIFACT_OPEN, params);
+}
+
+export function openDelivery(params: AgentDeliveryOpenParams) {
+  return rpcClient.request<AgentDeliveryOpenResult>(RPC_METHODS.AGENT_DELIVERY_OPEN, params);
 }
 
 export function controlTask(params: AgentTaskControlParams) {

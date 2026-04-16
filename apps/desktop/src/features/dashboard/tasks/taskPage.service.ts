@@ -46,8 +46,8 @@ function createFallbackExperience(task: Task): TaskExperience {
     noteEntries: ["可在后续补充更具体的上下文摘要。"],
     outputs: [
       { id: `${task.task_id}_draft`, label: "当前草稿", content: "等待更多任务上下文后补齐。", tone: "draft" },
-      { id: `${task.task_id}_result`, label: "已生成结果", content: "当前协议未返回更多结果摘要，先展示任务轨迹。", tone: "result" },
-      { id: `${task.task_id}_editable`, label: "可继续编辑", content: "后续可把任务修改或产出打开能力接进来。", tone: "editable" },
+      { id: `${task.task_id}_result`, label: "已生成结果", content: "结果区会优先展示当前任务已经返回的产出与交付入口。", tone: "result" },
+      { id: `${task.task_id}_editable`, label: "可继续编辑", content: "当前可先结合时间线与成果区继续查看已有上下文。", tone: "editable" },
     ],
     phase: `当前步骤：${task.current_step}`,
     priority: task.risk_level === "red" ? "critical" : task.risk_level === "yellow" ? "high" : "steady",
@@ -164,11 +164,74 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
 
 export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
   return {
+    detailWarningMessage: null,
     detail: createFallbackTaskDetail(item.task),
     experience: item.experience,
     source: "fallback",
     task: item.task,
   };
+}
+
+function recoverTaskDetailFromInvalidCollections(detail: AgentTaskDetailGetResult, error: unknown) {
+  if (!(error instanceof Error)) {
+    throw error;
+  }
+
+  const warnings: string[] = [];
+  let candidate = detail;
+  let currentError: unknown = error;
+
+  for (;;) {
+    if (!(currentError instanceof Error)) {
+      throw currentError;
+    }
+
+    if (/artifacts/i.test(currentError.message)) {
+      warnings.push("任务成果信息暂时无法完整展示，已先隐藏格式不符合要求的产物。");
+      candidate = {
+        ...candidate,
+        artifacts: [],
+      };
+    } else if (/mirror/i.test(currentError.message)) {
+      warnings.push("镜子命中信息暂时无法完整展示，已先隐藏格式不符合要求的上下文引用。");
+      candidate = {
+        ...candidate,
+        mirror_references: [],
+      };
+    } else {
+      throw currentError;
+    }
+
+    try {
+      return {
+        detail: normalizeTaskDetailResult(candidate),
+        detailWarningMessage: warnings.join(" "),
+      };
+    } catch (nextError) {
+      const hasRecoveredArtifacts = Array.isArray(candidate.artifacts) && candidate.artifacts.length === 0;
+      const hasRecoveredMirrors = Array.isArray(candidate.mirror_references) && candidate.mirror_references.length === 0;
+
+      if (
+        nextError instanceof Error &&
+        ((/artifacts/i.test(nextError.message) && hasRecoveredArtifacts) || (/mirror/i.test(nextError.message) && hasRecoveredMirrors))
+      ) {
+        throw nextError;
+      }
+
+      currentError = nextError;
+    }
+  }
+}
+
+export function normalizeTaskDetailData(detail: AgentTaskDetailGetResult) {
+  try {
+    return {
+      detailWarningMessage: null,
+      detail: normalizeTaskDetailResult(detail),
+    };
+  } catch (error) {
+    return recoverTaskDetailFromInvalidCollections(detail, error);
+  }
 }
 
 function getMockTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number }): TaskBucketPageData {
@@ -245,7 +308,7 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
   }
 
   try {
-    const detail = normalizeTaskDetailResult(
+    const normalized = normalizeTaskDetailData(
       await withTimeout(
         getTaskDetail({
           request_meta: createRequestMeta(`task_detail_${taskId}`),
@@ -256,10 +319,11 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     );
 
     return {
-      detail,
-      experience: getTaskExperience(taskId) ?? createFallbackExperience(detail.task),
+      detailWarningMessage: normalized.detailWarningMessage,
+      detail: normalized.detail,
+      experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
       source: "rpc",
-      task: detail.task,
+      task: normalized.detail.task,
     };
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {

@@ -654,6 +654,13 @@
   margin: 0;
 }
 
+.task-detail-card__hint {
+  color: color-mix(in srgb, var(--task-copy, rgba(95, 84, 75, 0.68)) 82%, #b86c00 18%);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  margin: 0 0 0.75rem;
+}
+
 .task-detail-timeline {
   display: grid;
   gap: 0.9rem;

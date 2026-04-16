@@ -1,4 +1,5 @@
 import type {
+  Artifact,
   AgentTaskControlResult,
   AgentTaskDetailGetResult,
   JsonRpcPage,
@@ -69,6 +70,11 @@ export type TaskBucketPageData = {
   page: JsonRpcPage;
 };
 
+export type TaskArtifactPageData = {
+  items: Artifact[];
+  page: JsonRpcPage;
+};
+
 export type TaskBucketsData = {
   unfinished: TaskBucketPageData;
   finished: TaskBucketPageData;
@@ -76,6 +82,7 @@ export type TaskBucketsData = {
 };
 
 export type TaskDetailData = {
+  detailWarningMessage?: string | null;
   task: Task;
   detail: AgentTaskDetailGetResult;
   experience: TaskExperience;

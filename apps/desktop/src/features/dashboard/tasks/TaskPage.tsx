@@ -20,6 +20,7 @@ import {
   shouldEnableDashboardTaskDetailQuery,
 } from "./taskPage.query";
 import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
+import { describeTaskOpenResultForCurrentTask, loadTaskArtifactPage, openTaskArtifactForTask, openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "./taskOutput.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import "./taskPage.css";
@@ -122,6 +123,15 @@ export function TaskPage() {
   const detailData = taskDetailQuery.data ?? (selectedTaskItem ? buildFallbackTaskDetailData(selectedTaskItem) : null);
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "任务详情请求失败") : null;
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
+  const artifactListQuery = useQuery({
+    enabled: detailOpen && dataMode === "rpc" && Boolean(selectedTaskId),
+    queryKey: ["dashboard", "tasks", "artifacts", dataMode, selectedTaskId],
+    queryFn: () => loadTaskArtifactPage(selectedTaskId!, dataMode),
+    refetchOnMount: securityRefreshPlan.refetchOnMount,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
   const bucketErrors = [
     { error: unfinishedQuery.error, label: "未完成任务" },
     { error: finishedQuery.error, label: "已结束任务" },
@@ -143,19 +153,23 @@ export function TaskPage() {
       return;
     }
 
-    function invalidateTaskQueries() {
+    function invalidateTaskQueries(deliveryTaskId?: string) {
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
+
+      if (selectedTaskId && (!deliveryTaskId || deliveryTaskId === selectedTaskId)) {
+        void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "artifacts", dataMode, selectedTaskId] });
+      }
     }
 
-    const clearDeliverySubscription = subscribeDeliveryReady(() => {
-      invalidateTaskQueries();
+    const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
+      invalidateTaskQueries(payload.task_id);
     });
 
     const clearTaskSubscription = selectedTaskId
       ? subscribeTask(selectedTaskId, () => {
-          invalidateTaskQueries();
+          invalidateTaskQueries(selectedTaskId);
         })
       : () => {};
 
@@ -191,6 +205,40 @@ export function TaskPage() {
     },
     onError: () => {
       showFeedback("任务操作暂时没有成功返回，请稍后再试。");
+    },
+  });
+
+  async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>) {
+    const plan = resolveTaskOpenExecutionPlan(result);
+    const openResultMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
+
+    if (plan.mode === "task_detail" && plan.taskId) {
+      setSelectedTaskId(plan.taskId);
+      setDetailOpen(true);
+      showFeedback(openResultMessage ?? plan.feedback);
+      return;
+    }
+
+    showFeedback(await performTaskOpenExecution(plan));
+  }
+
+  const artifactOpenMutation = useMutation({
+    mutationFn: ({ artifactId, taskId }: { artifactId: string; taskId: string }) => openTaskArtifactForTask(taskId, artifactId, dataMode),
+    onSuccess: async (result) => {
+      await handleResolvedOpen(result);
+    },
+    onError: (error) => {
+      showFeedback(error instanceof Error ? `打开成果失败：${error.message}` : "打开成果失败，请稍后再试。");
+    },
+  });
+
+  const deliveryOpenMutation = useMutation({
+    mutationFn: ({ artifactId, taskId }: { artifactId?: string; taskId: string }) => openTaskDeliveryForTask(taskId, artifactId, dataMode),
+    onSuccess: async (result) => {
+      await handleResolvedOpen(result);
+    },
+    onError: (error) => {
+      showFeedback(error instanceof Error ? `打开结果失败：${error.message}` : "打开结果失败，请稍后再试。");
     },
   });
 
@@ -233,6 +281,22 @@ export function TaskPage() {
     }
 
     taskControlMutation.mutate({ action, taskId: detailData.task.task_id });
+  }
+
+  function handleOpenArtifact(artifactId: string) {
+    if (!detailData) {
+      return;
+    }
+
+    artifactOpenMutation.mutate({ artifactId, taskId: detailData.task.task_id });
+  }
+
+  function handleOpenLatestDelivery() {
+    if (!detailData) {
+      return;
+    }
+
+    deliveryOpenMutation.mutate({ taskId: detailData.task.task_id });
   }
 
   function handleLoadMore(group: "unfinished" | "finished") {
@@ -417,12 +481,20 @@ export function TaskPage() {
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
               <TaskDetailPanel
+                artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
+                artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
+                artifactItems={artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? []}
+                artifactLoading={artifactListQuery.isPending}
                 detailData={detailData}
+                detailWarningMessage={detailData.detailWarningMessage ?? null}
                 detailErrorMessage={detailErrorMessage}
                 detailState={detailState}
+                deliveryActionPending={deliveryOpenMutation.isPending}
                 feedback={feedback}
                 onAction={handlePrimaryAction}
                 onClose={() => setDetailOpen(false)}
+                onOpenArtifact={handleOpenArtifact}
+                onOpenLatestDelivery={handleOpenLatestDelivery}
                 onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
               />
             </motion.div>

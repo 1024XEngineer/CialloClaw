@@ -159,7 +159,7 @@ function renderTabBody({
                       </button>
                     </TooltipTrigger>
                     <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">
-                      当前协议尚未提供稳定的 artifact.open 能力
+                      当前结果入口以任务详情里的真实产出为准
                     </TooltipContent>
                   </Tooltip>
                 </div>

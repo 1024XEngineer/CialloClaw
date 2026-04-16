@@ -74,6 +74,52 @@ export async function startTask(_params?: unknown) {
   };
 }
 
+export async function listTaskArtifacts(_params?: unknown) {
+  return {
+    items: [],
+    page: {
+      has_more: false,
+      limit: 50,
+      offset: 0,
+      total: 0,
+    },
+  };
+}
+
+export async function openTaskArtifact(_params?: unknown) {
+  return {
+    artifact: {
+      artifact_id: "artifact_stub",
+      artifact_type: "workspace_document",
+      mime_type: "text/plain",
+      path: "workspace/stub.txt",
+      task_id: "task_stub",
+      title: "stub.txt",
+    },
+    delivery_result: {
+      type: "task_detail" as const,
+      title: "Task detail",
+      preview_text: "回到任务详情",
+      payload: { path: null, task_id: "task_stub", url: null },
+    },
+    open_action: "task_detail" as const,
+    resolved_payload: { path: null, task_id: "task_stub", url: null },
+  };
+}
+
+export async function openDelivery(_params?: unknown) {
+  return {
+    delivery_result: {
+      type: "task_detail" as const,
+      title: "Task detail",
+      preview_text: "回到任务详情",
+      payload: { path: null, task_id: "task_stub", url: null },
+    },
+    open_action: "task_detail" as const,
+    resolved_payload: { path: null, task_id: "task_stub", url: null },
+  };
+}
+
 export async function getSettingsDetailed(_params?: unknown) {
   // Dashboard contract tests only need a deterministic snapshot payload.
   return createDetailedResponse(loadSettings());
