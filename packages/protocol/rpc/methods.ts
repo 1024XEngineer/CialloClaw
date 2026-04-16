@@ -59,6 +59,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_SECURITY_RESTORE_APPLY: "agent.security.restore.apply",
   AGENT_SECURITY_PENDING_LIST: "agent.security.pending.list",
   AGENT_SECURITY_RESPOND: "agent.security.respond",
+  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
@@ -66,7 +67,6 @@ export const RPC_METHODS_STABLE = {
 
 // RPC_METHODS_PLANNED 定义共享常量。
 export const RPC_METHODS_PLANNED = {
-  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
 } as const;
 
@@ -175,7 +175,7 @@ export interface AgentTaskStartParams {
     page_context?: PageContext;
     error_message?: string;
   };
-  intent?: IntentPayload;
+  context?: InputContext;
   delivery?: DeliveryPreference;
 }
 
