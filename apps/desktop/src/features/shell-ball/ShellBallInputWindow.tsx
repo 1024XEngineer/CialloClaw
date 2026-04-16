@@ -51,7 +51,7 @@ export function ShellBallInputWindow({
   const compositionActiveRef = useRef(false);
   const pendingWindowBlurRef = useRef(false);
   const windowFocusedRef = useRef(false);
-  const pendingBlurTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const pendingBlurTimeoutRef = useRef<number | null>(null);
   const imeBlurGuardUntilRef = useRef(0);
 
   const clearPendingBlurTimeout = () => {
