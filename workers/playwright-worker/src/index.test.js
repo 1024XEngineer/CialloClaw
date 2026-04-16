@@ -79,12 +79,18 @@ function createDeps(overrides = {}) {
       return {
         async close() {
           lifecycle.push("browser.close");
+          if (overrides.browserCloseError) {
+            throw overrides.browserCloseError;
+          }
         },
         async newContext() {
           lifecycle.push("newContext");
           return {
             async close() {
               lifecycle.push("context.close");
+              if (overrides.contextCloseError) {
+                throw overrides.contextCloseError;
+              }
             },
             async newPage() {
               lifecycle.push("newPage");
@@ -107,6 +113,16 @@ test("health verifies browser startup and page creation", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.result.status, "ok");
+  assert.deepEqual(lifecycle, ["launch", "newContext", "newPage", "context.close", "browser.close"]);
+});
+
+test("health still closes browser when context cleanup fails", async () => {
+  const lifecycle = [];
+  await assert.rejects(
+    () => healthResponse(createDeps({ lifecycle, contextCloseError: new Error("context close failed") })),
+    /context close failed/,
+  );
+
   assert.deepEqual(lifecycle, ["launch", "newContext", "newPage", "context.close", "browser.close"]);
 });
 
@@ -165,6 +181,20 @@ test("page_interact applies actions and returns updated content", async () => {
   assert.equal(response.result.actions_applied, 3);
   assert.equal(response.result.text_content, "Interaction complete");
   assert.deepEqual(actionLog.map((entry) => entry.action), ["click", "fill", "waitForTimeout"]);
+});
+
+test("page_interact rejects selector actions without selectors", async () => {
+  const response = await handleRequest({
+    action: "page_interact",
+    url: "https://example.com",
+    actions: [
+      { type: "click" },
+    ],
+  }, createDeps());
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "invalid_input");
+  assert.match(response.error.message, /selector is required/);
 });
 
 test("unsupported action stays structured", async () => {

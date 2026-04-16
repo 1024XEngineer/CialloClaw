@@ -65,6 +65,14 @@ async function closeIfPossible(target, methodName) {
   }
 }
 
+async function closeResources(context, browser) {
+  try {
+    await closeIfPossible(context, "close");
+  } finally {
+    await closeIfPossible(browser, "close");
+  }
+}
+
 async function openBrowserPage(url, deps, callback) {
   const browser = await deps.launchBrowser();
   let context;
@@ -83,8 +91,7 @@ async function openBrowserPage(url, deps, callback) {
     }
     return await callback(page, response);
   } finally {
-    await closeIfPossible(context, "close");
-    await closeIfPossible(browser, "close");
+    await closeResources(context, browser);
   }
 }
 
@@ -105,8 +112,7 @@ export async function healthResponse(deps = defaultDependencies) {
       },
     };
   } finally {
-    await closeIfPossible(context, "close");
-    await closeIfPossible(browser, "close");
+    await closeResources(context, browser);
   }
 }
 
@@ -144,6 +150,37 @@ async function buildStructuredDOM(url, deps) {
 
 function pageActionTarget(page, selector) {
   return page.locator(selector).first();
+}
+
+function actionNeedsSelector(type) {
+  switch (type) {
+    case "click":
+    case "fill":
+    case "press":
+    case "check":
+    case "uncheck":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function validatePageActions(actions) {
+  for (const action of actions) {
+    const type = String(action?.type ?? "").trim().toLowerCase();
+    const selector = String(action?.selector ?? "").trim();
+    const missingSelector = actionNeedsSelector(type) || (type === "wait_for" && selector === "" && Object.prototype.hasOwnProperty.call(action ?? {}, "selector"));
+    if (missingSelector && selector === "") {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: `selector is required for page_interact action type '${type}'`,
+        },
+      };
+    }
+  }
+  return null;
 }
 
 async function interactWithPage(url, actions, deps) {
@@ -246,11 +283,16 @@ export async function handleRequest(request, deps = defaultDependencies) {
       };
     }
     case "page_interact": {
+      const actions = Array.isArray(request.actions) ? request.actions : [];
+      const validationError = validatePageActions(actions);
+      if (validationError) {
+        return validationError;
+      }
       return {
         ok: true,
         result: await interactWithPage(
           String(request.url ?? ""),
-          Array.isArray(request.actions) ? request.actions : [],
+          actions,
           deps,
         ),
       };
