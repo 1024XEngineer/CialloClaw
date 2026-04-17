@@ -1,7 +1,11 @@
 import type {
+  AgentDashboardModuleGetResult,
+  AgentDashboardOverviewGetResult,
   AgentDeliveryOpenResult,
   AgentInputSubmitResult,
   AgentMirrorOverviewGetResult,
+  AgentRecommendationFeedbackSubmitResult,
+  AgentRecommendationGetResult,
   AgentSettingsUpdateResult,
   AgentSecurityAuditListResult,
   AgentSecurityPendingListResult,
@@ -349,6 +353,52 @@ export async function startTask(_params?: unknown): Promise<AgentTaskStartResult
     task: createTask("processing", "task_start"),
     bubble_message: null,
     delivery_result: null,
+  };
+}
+
+export async function getDashboardOverview(_params?: unknown): Promise<AgentDashboardOverviewGetResult> {
+  return {
+    overview: {
+      focus_summary: {
+        task_id: "task_stub",
+        title: "stub task",
+        status: "processing",
+        current_step: "overview",
+        next_action: "Open the active task.",
+        updated_at: new Date().toISOString(),
+      },
+      trust_summary: {
+        risk_level: "yellow",
+        pending_authorizations: 0,
+        has_restore_point: true,
+        workspace_path: "workspace",
+      },
+      quick_actions: ["Open dashboard"],
+      global_state: {},
+      high_value_signal: ["Continue the current task."],
+    },
+  };
+}
+
+export async function getDashboardModule(_params?: unknown): Promise<AgentDashboardModuleGetResult> {
+  return {
+    module: "home",
+    tab: "summary",
+    summary: {},
+    highlights: ["Stub dashboard module"],
+  };
+}
+
+export async function getRecommendations(_params?: unknown): Promise<AgentRecommendationGetResult> {
+  return {
+    cooldown_hit: false,
+    items: [],
+  };
+}
+
+export async function submitRecommendationFeedback(_params?: unknown): Promise<AgentRecommendationFeedbackSubmitResult> {
+  return {
+    applied: true,
   };
 }
 

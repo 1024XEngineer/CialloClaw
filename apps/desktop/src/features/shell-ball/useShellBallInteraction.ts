@@ -232,7 +232,7 @@ async function startShellBallFileTask(input: {
       fallback: "task_detail",
     },
     source: "floating_ball",
-  });
+  }, input.text);
 }
 
 export function mapShellBallInteractionConsumedEventToFlag(event: ShellBallInteractionConsumedEvent) {
@@ -573,6 +573,15 @@ export function useShellBallInteraction() {
       }
     } catch (error) {
       console.warn("shell-ball voice submit failed", error);
+      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, resolution.finalizedSpeechPayload);
+      setInputValue(restoredDraft);
+      inputFocusedRef.current = true;
+      setInputFocused(true);
+      controllerRef.current?.forceState("hover_input", {
+        regionActive: regionActiveRef.current,
+        hoverRetained: true,
+      });
+      syncVisualState();
     }
   }
 
@@ -803,7 +812,7 @@ export function useShellBallInteraction() {
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
-      return null;
+      throw error;
     }
   }
 

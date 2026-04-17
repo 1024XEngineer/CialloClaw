@@ -10,6 +10,10 @@
     "noImplicitAny": true,
     "paths": {
       "@/*": ["./src/*"],
+      "@/rpc/client": ["./src/features/shell-ball/test-stubs/rpcClient.ts"],
+      "@/rpc/fallback": ["./src/features/shell-ball/test-stubs/rpcFallback.ts"],
+      "@/rpc/methods": ["./src/features/shell-ball/test-stubs/rpcMethods.ts"],
+      "@/rpc/subscriptions": ["./src/features/shell-ball/test-stubs/rpcSubscriptions.ts"],
       "@/features/dashboard/tasks/TasksPage": ["./src/features/shell-ball/test-stubs/dashboardTasksPage.tsx"],
       "@/features/dashboard/notes/NotesPage": ["./src/features/shell-ball/test-stubs/dashboardNotesPage.tsx"],
       "@/features/dashboard/memory/MemoryPage": ["./src/features/shell-ball/test-stubs/dashboardMemoryPage.tsx"],
