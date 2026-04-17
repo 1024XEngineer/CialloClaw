@@ -11,11 +11,9 @@
 
 本文件覆盖：
 
-- `apps/desktop/src`
-- `apps/desktop/src-tauri`
-- `apps/desktop/*.html`
-- `apps/desktop/docs`
-- `apps/desktop/scripts`
+- 整个 `apps/desktop` 目录
+- 包括但不限于 `src`、`src-tauri`、`docs`、`scripts`
+- 以及根级页面与配置文件，例如 `*.html`、`package.json`、`vite.config.ts`、`tailwind.config.ts`、`tsconfig*.json`、`eslint.config.js`、`components.json`
 
 若当前任务会同时修改协议、后端编排或共享 schema，必须回到根目录 `AGENTS.md`，并补读相关上位文档，不得仅凭本文件决策。
 

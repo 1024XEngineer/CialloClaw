@@ -96,6 +96,7 @@
 
 - 前后端唯一稳定边界是 JSON-RPC 2.0
 - 所有正式结果统一通过 `delivery_result / artifact / citation`
+- 下列动作默认视为高风险：文件写入、命令执行、依赖安装、工作区外写入、敏感路径访问，以及任何会改变系统 / 数据状态的动作
 - 高风险动作默认进入风险、授权、审计、恢复点链路
 
 禁止：
@@ -169,6 +170,10 @@
 
 ## 6. 目录路由
 
+- 修改 `packages/protocol`、共享 schema、JSON-RPC 方法、错误码、事件、正式字段前，必须优先补读 `docs/protocol-design.md`，必要时补读 `docs/data-design.md`
+- 修改 `packages/ui`、`packages/config`、共享设计令牌、共享前端配置前，必须先补读 `docs/development-guidelines.md` 与 `docs/work-priority-plan.md`
+- 修改 `workers`、工具能力边界、执行结果映射、交付物落盘约定前，必须先补读 `docs/module-design.md`、`docs/development-guidelines.md`，必要时核对 `docs/protocol-design.md` 与 `docs/data-design.md`
+- 修改根目录 schema / 数据 / 协议相关文档或共享真源前，必须先定位对应真源文档，不得只依据局部实现或单侧目录规则判断
 - 修改 `apps/desktop` 及其子目录前，必须补读 `apps/desktop/AGENTS.md`
 - 修改 `services/local-service` 及其子目录前，必须补读 `services/local-service/AGENTS.md`
 - 任务跨越前后端时，必须同时遵守根目录与对应子目录 `AGENTS.md`
