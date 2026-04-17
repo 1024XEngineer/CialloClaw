@@ -24,6 +24,7 @@ const (
 	StopReasonNeedUserInput      StopReason = "need_user_input"
 	StopReasonMaxIterations      StopReason = "max_iterations_reached"
 	StopReasonPlannerError       StopReason = "planner_error"
+	StopReasonToolRetryExhausted StopReason = "tool_retry_exhausted"
 	StopReasonNoSupportedTools   StopReason = "no_supported_tools"
 	StopReasonRepeatedToolChoice StopReason = "dead_loop_detected"
 )
@@ -112,6 +113,8 @@ type Request struct {
 	CompressChars      int
 	KeepRecent         int
 	RepeatedToolBudget int
+	PlannerRetryBudget int
+	ToolRetryBudget    int
 	Hook               Hook
 	Now                func() time.Time
 }
@@ -142,6 +145,12 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	}
 	if request.RepeatedToolBudget <= 0 {
 		request.RepeatedToolBudget = 2
+	}
+	if request.PlannerRetryBudget <= 0 {
+		request.PlannerRetryBudget = 1
+	}
+	if request.ToolRetryBudget <= 0 {
+		request.ToolRetryBudget = 1
 	}
 	if request.Now == nil {
 		request.Now = time.Now
@@ -186,12 +195,27 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		}
 		events = append(events, newEventForRound(round, "loop.round.started", map[string]any{"loop_round": round.LoopRound}))
 
-		plan, err := request.GenerateToolCalls(ctx, model.ToolCallRequest{
-			TaskID: request.TaskID,
-			RunID:  request.RunID,
-			Input:  plannerInput,
-			Tools:  request.ToolDefinitions,
-		})
+		var plan model.ToolCallResult
+		var err error
+		for attempt := 0; attempt <= request.PlannerRetryBudget; attempt++ {
+			plan, err = request.GenerateToolCalls(ctx, model.ToolCallRequest{
+				TaskID: request.TaskID,
+				RunID:  request.RunID,
+				Input:  plannerInput,
+				Tools:  request.ToolDefinitions,
+			})
+			if err == nil {
+				break
+			}
+			if attempt < request.PlannerRetryBudget {
+				events = append(events, newEventForRound(round, "loop.retrying", map[string]any{
+					"loop_round": round.LoopRound,
+					"phase":      "planner",
+					"attempt":    attempt + 1,
+					"error":      err.Error(),
+				}))
+			}
+		}
 		if err != nil {
 			round.Status = "failed"
 			round.CompletedAt = request.Now()
@@ -276,10 +300,43 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			}
 
 			observation, record := request.ExecuteTool(ctx, call, turn+1)
+			for attempt := 0; attempt < request.ToolRetryBudget && record.Status == tools.ToolCallStatusTimeout; attempt++ {
+				events = append(events, newEventForRound(round, "loop.retrying", map[string]any{
+					"loop_round": round.LoopRound,
+					"phase":      "tool",
+					"attempt":    attempt + 1,
+					"tool_name":  toolName,
+				}))
+				observation, record = request.ExecuteTool(ctx, call, turn+1)
+			}
 			if record.ToolName != "" {
 				allToolCalls = append(allToolCalls, record)
 				round.ToolCallRecord = record
 				round.ToolName = record.ToolName
+			}
+			if record.Status == tools.ToolCallStatusTimeout {
+				round.Status = "completed"
+				round.CompletedAt = request.Now()
+				round.StopReason = StopReasonToolRetryExhausted
+				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
+				rounds = append(rounds, round)
+				events = append(events,
+					newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonToolRetryExhausted)}),
+					newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonToolRetryExhausted), "tool_name": toolName}),
+				)
+				auditRecord, auditErr := request.BuildAuditRecord(ctx, latestInvocation)
+				if auditErr != nil {
+					return Result{}, true, auditErr
+				}
+				return Result{
+					OutputText:      request.FallbackOutput,
+					ToolCalls:       allToolCalls,
+					ModelInvocation: invocationRecordMap(latestInvocation),
+					AuditRecord:     auditRecord,
+					Events:          events,
+					Rounds:          rounds,
+					StopReason:      StopReasonToolRetryExhausted,
+				}, true, nil
 			}
 			observations = append(observations, observation)
 			round.Observation = truncateText(singleLineSummary(observation), 240)

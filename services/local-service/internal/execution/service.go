@@ -938,6 +938,8 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		CompressChars:      s.agentLoopCompressionChars(),
 		KeepRecent:         s.agentLoopKeepRecent(),
 		RepeatedToolBudget: 2,
+		PlannerRetryBudget: 1,
+		ToolRetryBudget:    1,
 		Hook:               noopAgentLoopHook{},
 		Now:                time.Now,
 	})

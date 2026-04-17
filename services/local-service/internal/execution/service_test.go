@@ -466,6 +466,23 @@ func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentLoopRetriesPlannerOnceBeforeFailing(t *testing.T) {
+	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_retry_planner",
+		RunID:        "run_loop_retry_planner",
+		Title:        "Loop retry planner",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop retry result",
+	})
+	if err == nil {
+		t.Fatal("expected planner retry path to still surface final error")
+	}
+}
+
 func newTestExecutionServiceWithModelClientAndConfig(t *testing.T, cfg serviceconfig.ModelConfig, client model.Client) (*Service, string) {
 	t.Helper()
 

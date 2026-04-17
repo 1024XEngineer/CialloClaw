@@ -5864,6 +5864,46 @@ func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	}
 }
 
+func TestServiceTaskListIncludesLoopStopReason(t *testing.T) {
+	service := newTestService()
+	for index := 0; index < 2; index++ {
+		_, err := service.StartTask(map[string]any{
+			"session_id": fmt.Sprintf("sess_loop_stop_%02d", index),
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("task %02d", index),
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("start task %d failed: %v", index, err)
+		}
+	}
+	items, total := service.runEngine.ListTasks("unfinished", "updated_at", "desc", 20, 0)
+	if total == 0 {
+		t.Fatal("expected tasks to exist")
+	}
+	updated, ok := service.runEngine.RecordLoopLifecycle(items[0].TaskID, "loop.failed", "tool_retry_exhausted", map[string]any{"stop_reason": "tool_retry_exhausted"})
+	if !ok {
+		t.Fatal("expected loop lifecycle update to succeed")
+	}
+	result, err := service.TaskList(map[string]any{"group": "unfinished", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	listed := result["items"].([]map[string]any)
+	if listed[0]["task_id"] != updated.TaskID || listed[0]["loop_stop_reason"] != "tool_retry_exhausted" {
+		t.Fatalf("expected task list to expose loop stop reason, got %+v", listed[0])
+	}
+}
+
 func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "第一点\n第二点\n第三点")
 

@@ -1574,16 +1574,17 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 // taskMap 把 runengine 内部任务记录映射成对外统一的 task 结构。
 func taskMap(record runengine.TaskRecord) map[string]any {
 	result := map[string]any{
-		"task_id":      record.TaskID,
-		"title":        record.Title,
-		"source_type":  record.SourceType,
-		"status":       record.Status,
-		"intent":       cloneMap(record.Intent),
-		"current_step": record.CurrentStep,
-		"risk_level":   record.RiskLevel,
-		"started_at":   record.StartedAt.Format(dateTimeLayout),
-		"updated_at":   record.UpdatedAt.Format(dateTimeLayout),
-		"finished_at":  nil,
+		"task_id":          record.TaskID,
+		"title":            record.Title,
+		"source_type":      record.SourceType,
+		"status":           record.Status,
+		"intent":           cloneMap(record.Intent),
+		"current_step":     record.CurrentStep,
+		"risk_level":       record.RiskLevel,
+		"loop_stop_reason": record.LoopStopReason,
+		"started_at":       record.StartedAt.Format(dateTimeLayout),
+		"updated_at":       record.UpdatedAt.Format(dateTimeLayout),
+		"finished_at":      nil,
 	}
 	if record.FinishedAt != nil {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
@@ -2037,6 +2038,8 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
 		LatestEvent:       cloneMap(record.LatestEvent),
 		LatestToolCall:    cloneMap(record.LatestToolCall),
+		LoopStopReason:    record.LoopStopReason,
+		SteeringMessages:  append([]string(nil), record.SteeringMessages...),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
 }
