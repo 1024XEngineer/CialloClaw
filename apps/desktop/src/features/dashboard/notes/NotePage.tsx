@@ -243,7 +243,11 @@ export function NotePage() {
       return;
     }
 
-    showFeedback(await performNoteResourceOpenExecution(plan));
+    try {
+      showFeedback(await performNoteResourceOpenExecution(plan));
+    } catch {
+      showFeedback(plan.path || plan.url ? `${plan.feedback} 地址：${plan.path || plan.url}` : plan.feedback);
+    }
   }
 
   useEffect(() => {
