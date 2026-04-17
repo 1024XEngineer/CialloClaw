@@ -671,7 +671,7 @@ function MirrorMemoryDetail({
                 </div>
 
                 <p className="mirror-page__memory-reason">{reference.reason}</p>
-                <div className="mirror-page__memory-summary">{reference.summary}</div>
+                <div className="mirror-page__memory-summary">{reference.summary || reference.reason}</div>
               </article>
             ))}
           </div>

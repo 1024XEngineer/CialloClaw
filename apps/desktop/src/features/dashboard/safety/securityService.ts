@@ -1,11 +1,13 @@
 import type {
   AgentSecurityAuditListParams,
   AgentSecurityAuditListResult,
+  AgentSecurityApprovalRespondResult,
   AgentSecurityPendingListParams,
   AgentSecurityPendingListResult,
   AgentSecurityRestoreApplyParams,
   AgentSecurityRestoreApplyResult,
   AgentSecurityRestorePointsListParams,
+  AgentSecurityRestoreRespondResult,
   AgentSecurityRestorePointsListResult,
   AgentSecurityRespondParams,
   AgentSecurityRespondResult,
@@ -75,13 +77,25 @@ export type SecurityAuditRecordListData = {
   page: JsonRpcPage;
   rpcContext: SecurityRpcContext;
   source: SecurityModuleSource;
-  taskId: string;
+  taskId: string | null;
 };
 
 export type SecurityRestoreApplyOutcome = {
   response: AgentSecurityRestoreApplyResult;
   rpcContext: SecurityRpcContext;
 };
+
+export function isSecurityApprovalRespondResult(
+  response: AgentSecurityRespondResult,
+): response is AgentSecurityApprovalRespondResult {
+  return "authorization_record" in response;
+}
+
+export function isSecurityRestoreRespondResult(
+  response: AgentSecurityRespondResult,
+): response is AgentSecurityRestoreRespondResult {
+  return "recovery_point" in response;
+}
 
 function createRequestMeta(): RequestMeta {
   return {
@@ -343,7 +357,7 @@ export async function loadSecurityRestorePoints(
 
 export async function loadSecurityAuditRecords(
   source: SecurityModuleSource,
-  taskId: string,
+  taskId?: string | null,
   options?: {
     limit?: number;
     offset?: number;
@@ -351,9 +365,12 @@ export async function loadSecurityAuditRecords(
 ): Promise<SecurityAuditRecordListData> {
   const limit = options?.limit ?? 20;
   const offset = options?.offset ?? 0;
+  const normalizedTaskId = taskId?.trim() || null;
 
   if (source === "mock") {
-    const filteredItems = securityAuditMock.items.filter((item) => item.task_id === taskId);
+    const filteredItems = normalizedTaskId
+      ? securityAuditMock.items.filter((item) => item.task_id === normalizedTaskId)
+      : securityAuditMock.items;
     const pagedItems = filteredItems.slice(offset, offset + limit);
 
     return {
@@ -369,14 +386,18 @@ export async function loadSecurityAuditRecords(
         warnings: [],
       },
       source: "mock",
-      taskId,
+      taskId: normalizedTaskId,
     };
   }
 
   try {
+    if (!normalizedTaskId) {
+      throw new Error("Security audit list requires task context in RPC mode.");
+    }
+
     const params: AgentSecurityAuditListParams = {
       request_meta: createRequestMeta(),
-      task_id: taskId,
+      task_id: normalizedTaskId,
       limit,
       offset,
     };
@@ -390,12 +411,14 @@ export async function loadSecurityAuditRecords(
         warnings: response.warnings,
       },
       source: "rpc",
-      taskId,
+      taskId: normalizedTaskId,
     };
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       logRpcMockFallback("security audit list", error);
-      const filteredItems = securityAuditMock.items.filter((item) => item.task_id === taskId);
+      const filteredItems = normalizedTaskId
+        ? securityAuditMock.items.filter((item) => item.task_id === normalizedTaskId)
+        : securityAuditMock.items;
       const pagedItems = filteredItems.slice(offset, offset + limit);
 
       return {
@@ -411,7 +434,7 @@ export async function loadSecurityAuditRecords(
           warnings: [],
         },
         source: "mock",
-        taskId,
+        taskId: normalizedTaskId,
       };
     }
 

@@ -109,7 +109,6 @@ const DEFAULT_MODULE_POSITIONS: ModulePositions = {
 function isMirrorDirectionKey(value: string): value is MirrorDirectionKey {
   return INITIAL_MODULE_STACK.includes(value as MirrorDirectionKey);
 }
-
 function readMirrorRouteState(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -1137,28 +1136,42 @@ export function MirrorApp() {
     }
 
     if (key === "history") {
+      const historyHeadline = overview.history_summary[0] ?? latestConversation?.user_text ?? "暂无历史概要";
+      const historyDetail =
+        overview.history_summary[1] ??
+        latestConversation?.agent_text ??
+        latestConversation?.user_text ??
+        (mirrorData.conversationSummary.total_records > 0
+          ? `本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话。`
+          : "轻触查看后端历史概要与本地最近 100 条对话记录。");
+
       return {
-        badge: mirrorData.conversationSummary.total_records ? `${mirrorData.conversationSummary.total_records} 条对话` : "暂无对话",
+        badge:
+          overview.history_summary.length > 0
+            ? `${overview.history_summary.length} 条概要`
+            : mirrorData.conversationSummary.total_records
+              ? `${mirrorData.conversationSummary.total_records} 条本地对话`
+              : "暂无历史概要",
         tone: "processing",
-        detailLine:
-          latestConversation?.agent_text ??
-          latestConversation?.user_text ??
-          overview.history_summary[1] ??
-          "轻触查看后端历史概要与最近 100 条本地对话记录。",
+        detailLine: historyDetail,
         accent: getMirrorDirectionMeta(key).accent,
-        mainLine: latestConversation?.user_text ?? overview.history_summary[0] ?? "暂无历史概要",
+        mainLine: historyHeadline,
       };
     }
 
+    const memorySummary = latestMemoryReference?.summary || latestMemoryReference?.reason;
+
     return {
-        badge: `${overview.memory_references.length} 条引用`,
-        tone: "processing",
-        detailLine:
-          latestMemoryReference?.reason ??
-          (mirrorData.conversationSummary.total_records > 0 ? `本地记录 ${mirrorData.conversationSummary.total_records} 条最近对话。` : "等待新的后端记忆引用记录。"),
-        accent: getMirrorDirectionMeta(key).accent,
-        mainLine: latestMemoryReference?.memory_id ?? "暂无近期被调用记忆",
-        emphasis: "memory",
+      badge: `${overview.memory_references.length} 条引用`,
+      tone: "processing",
+      detailLine:
+        memorySummary ??
+        (mirrorData.conversationSummary.total_records > 0
+          ? `后端暂无新引用；本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话统计。`
+          : "等待新的后端记忆引用记录。"),
+      accent: getMirrorDirectionMeta(key).accent,
+      mainLine: latestMemoryReference?.memory_id ?? "暂无近期被调用记忆",
+      emphasis: "memory",
     };
   };
 

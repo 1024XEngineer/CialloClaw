@@ -1,30 +1,238 @@
+import type {
+  AgentDeliveryOpenResult,
+  AgentInputSubmitResult,
+  AgentMirrorOverviewGetResult,
+  AgentSettingsUpdateResult,
+  AgentSecurityAuditListResult,
+  AgentSecurityPendingListResult,
+  AgentSecurityRespondResult,
+  AgentSecurityRestoreApplyResult,
+  AgentSecurityRestorePointsListResult,
+  AgentSecuritySummaryGetResult,
+  AgentTaskArtifactListResult,
+  AgentTaskArtifactOpenResult,
+  AgentTaskStartResult,
+  AuditRecord,
+  DeliveryPayload,
+  DeliveryResult,
+  RecoveryPoint,
+  Task,
+  TokenCostSummary,
+} from "@cialloclaw/protocol";
 import { loadSettings } from "@/services/settingsService";
 
-function createDetailedResponse<T>(data: T) {
+function createDetailedResponse<T>(data: T): {
+  data: T;
+  meta: {
+    server_time: string;
+  };
+  warnings: string[];
+} {
   return {
     data,
     meta: {
       server_time: new Date().toISOString(),
     },
-    warnings: [] as string[],
+    warnings: [],
   };
 }
 
-export async function listSecurityPending(_params?: unknown) {
-  return { items: [], page: { limit: 20, offset: 0, total: 0, has_more: false } };
+function createTask(status: Task["status"], currentStep: string): Task {
+  const now = new Date().toISOString();
+
+  return {
+    task_id: "task_stub",
+    title: "stub task",
+    source_type: "hover_input",
+    status,
+    intent: null,
+    current_step: currentStep,
+    risk_level: status === "waiting_auth" ? "red" : "yellow",
+    started_at: now,
+    updated_at: now,
+    finished_at: status === "completed" ? now : null,
+  };
 }
 
-export async function respondSecurity(_params?: unknown) {
-  return {};
+function createTokenCostSummary(): TokenCostSummary {
+  return {
+    current_task_tokens: 1200,
+    current_task_cost: 0.24,
+    today_tokens: 9200,
+    today_cost: 1.62,
+    single_task_limit: 50000,
+    daily_limit: 300000,
+    budget_auto_downgrade: true,
+  };
 }
 
-export async function getSecuritySummary(_params?: unknown) {
+function createRecoveryPoint(): RecoveryPoint {
+  return {
+    recovery_point_id: "rp_stub",
+    task_id: "task_stub",
+    summary: "write_file_before_change",
+    created_at: new Date().toISOString(),
+    objects: ["workspace/stub.txt"],
+  };
+}
+
+function createAuditRecord(result: AuditRecord["result"] = "success"): AuditRecord {
+  return {
+    audit_id: `audit_stub_${result}`,
+    task_id: "task_stub",
+    type: "recovery",
+    action: "restore_apply",
+    summary: result === "success" ? "Recovered one workspace object from the latest restore point." : "Restore execution failed.",
+    target: "workspace/stub.txt",
+    result,
+    created_at: new Date().toISOString(),
+  };
+}
+
+function createResolvedPayload(): DeliveryPayload {
+  return {
+    path: null,
+    task_id: "task_stub",
+    url: null,
+  };
+}
+
+function createTaskDeliveryResult(): DeliveryResult {
+  return {
+    type: "task_detail",
+    title: "Task detail",
+    preview_text: "Open the task detail view.",
+    payload: createResolvedPayload(),
+  };
+}
+
+function createSecuritySummary(): AgentSecuritySummaryGetResult {
   return {
     summary: {
-      security_status: "normal" as const,
+      security_status: "normal",
       pending_authorizations: 0,
+      latest_restore_point: createRecoveryPoint(),
+      token_cost_summary: createTokenCostSummary(),
     },
   };
+}
+
+function createSecurityPendingList(): AgentSecurityPendingListResult {
+  return {
+    items: [],
+    page: { limit: 20, offset: 0, total: 0, has_more: false },
+  };
+}
+
+function createSecurityRespondResult(): AgentSecurityRespondResult {
+  return {
+    authorization_record: {
+      authorization_record_id: "auth_stub",
+      task_id: "task_stub",
+      approval_id: "approval_stub",
+      decision: "allow_once",
+      remember_rule: false,
+      operator: "test-stub",
+      created_at: new Date().toISOString(),
+    },
+    bubble_message: {
+      bubble_id: "bubble_stub",
+      task_id: "task_stub",
+      type: "status",
+      text: "The approval was accepted for this run.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+    impact_scope: {
+      apps: [],
+      files: [],
+      webpages: [],
+      out_of_workspace: false,
+      overwrite_or_delete_risk: false,
+    },
+    task: createTask("processing", "security"),
+  };
+}
+
+function createSecurityRestorePoints(): AgentSecurityRestorePointsListResult {
+  return {
+    items: [createRecoveryPoint()],
+    page: {
+      limit: 20,
+      offset: 0,
+      total: 1,
+      has_more: false,
+    },
+  };
+}
+
+function createSecurityAuditList(): AgentSecurityAuditListResult {
+  return {
+    items: [createAuditRecord()],
+    page: {
+      limit: 20,
+      offset: 0,
+      total: 1,
+      has_more: false,
+    },
+  };
+}
+
+function createSecurityRestoreApplyResult(): AgentSecurityRestoreApplyResult {
+  return {
+    applied: false,
+    task: createTask("waiting_auth", "restore_point_approval"),
+    recovery_point: createRecoveryPoint(),
+    audit_record: null,
+    bubble_message: {
+      bubble_id: "bubble_restore_stub",
+      task_id: "task_stub",
+      type: "status",
+      text: "Restore requires approval before execution.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+  };
+}
+
+function createMirrorOverview(): AgentMirrorOverviewGetResult {
+  return {
+    history_summary: [
+      "Recent deliveries favor structured summaries.",
+      "Risky actions still route through approval before execution.",
+    ],
+    daily_summary: {
+      date: "2026-04-17",
+      completed_tasks: 2,
+      generated_outputs: 4,
+    },
+    profile: {
+      work_style: "task-centric",
+      preferred_output: "3-point summary",
+      active_hours: "09:30-19:00",
+    },
+    memory_references: [
+      {
+        memory_id: "mem_stub_001",
+        reason: "Continue the existing summary structure.",
+        summary: "Keep a structured conclusion and explicit risk note.",
+      },
+    ],
+  };
+}
+
+export async function listSecurityPending(_params?: unknown): Promise<AgentSecurityPendingListResult> {
+  return createSecurityPendingList();
+}
+
+export async function respondSecurity(_params?: unknown): Promise<AgentSecurityRespondResult> {
+  return createSecurityRespondResult();
+}
+
+export async function getSecuritySummary(_params?: unknown): Promise<AgentSecuritySummaryGetResult> {
+  return createSecuritySummary();
 }
 
 export async function getSecuritySummaryDetailed(_params?: unknown) {
@@ -36,45 +244,58 @@ export async function listSecurityPendingDetailed(_params?: unknown) {
 }
 
 export async function respondSecurityDetailed(_params?: unknown) {
-  return createDetailedResponse({
-    authorization_record: {
-      decision: "allow_once",
-      remember_rule: false,
-    },
-    impact_scope: {
-      apps: [],
-      files: [],
-      webpages: [],
-    },
-    task: {
-      task_id: "task_stub",
-      status: "processing",
-    },
-  });
+  return createDetailedResponse(await respondSecurity());
 }
 
-export async function submitInput(_params?: unknown) {
-  return {
-    task: {
-      task_id: "task_stub",
-      status: "processing",
-    },
-    bubble_message: null,
-  };
+export async function listSecurityRestorePoints(_params?: unknown): Promise<AgentSecurityRestorePointsListResult> {
+  return createSecurityRestorePoints();
 }
 
-export async function startTask(_params?: unknown) {
+export async function listSecurityRestorePointsDetailed(_params?: unknown) {
+  return createDetailedResponse(await listSecurityRestorePoints());
+}
+
+export async function applySecurityRestore(_params?: unknown): Promise<AgentSecurityRestoreApplyResult> {
+  return createSecurityRestoreApplyResult();
+}
+
+export async function applySecurityRestoreDetailed(_params?: unknown) {
+  return createDetailedResponse(await applySecurityRestore());
+}
+
+export async function listSecurityAudit(_params?: unknown): Promise<AgentSecurityAuditListResult> {
+  return createSecurityAuditList();
+}
+
+export async function listSecurityAuditDetailed(_params?: unknown) {
+  return createDetailedResponse(await listSecurityAudit());
+}
+
+export async function getMirrorOverview(_params?: unknown): Promise<AgentMirrorOverviewGetResult> {
+  return createMirrorOverview();
+}
+
+export async function getMirrorOverviewDetailed(_params?: unknown) {
+  return createDetailedResponse(await getMirrorOverview());
+}
+
+export async function submitInput(_params?: unknown): Promise<AgentInputSubmitResult> {
   return {
-    task: {
-      task_id: "task_stub",
-      status: "processing",
-    },
+    task: createTask("processing", "submit_input"),
     bubble_message: null,
     delivery_result: null,
   };
 }
 
-export async function listTaskArtifacts(_params?: unknown) {
+export async function startTask(_params?: unknown): Promise<AgentTaskStartResult> {
+  return {
+    task: createTask("processing", "task_start"),
+    bubble_message: null,
+    delivery_result: null,
+  };
+}
+
+export async function listTaskArtifacts(_params?: unknown): Promise<AgentTaskArtifactListResult> {
   return {
     items: [],
     page: {
@@ -86,7 +307,7 @@ export async function listTaskArtifacts(_params?: unknown) {
   };
 }
 
-export async function openTaskArtifact(_params?: unknown) {
+export async function openTaskArtifact(_params?: unknown): Promise<AgentTaskArtifactOpenResult> {
   return {
     artifact: {
       artifact_id: "artifact_stub",
@@ -96,42 +317,29 @@ export async function openTaskArtifact(_params?: unknown) {
       task_id: "task_stub",
       title: "stub.txt",
     },
-    delivery_result: {
-      type: "task_detail" as const,
-      title: "Task detail",
-      preview_text: "回到任务详情",
-      payload: { path: null, task_id: "task_stub", url: null },
-    },
-    open_action: "task_detail" as const,
-    resolved_payload: { path: null, task_id: "task_stub", url: null },
+    delivery_result: createTaskDeliveryResult(),
+    open_action: "task_detail",
+    resolved_payload: createResolvedPayload(),
   };
 }
 
-export async function openDelivery(_params?: unknown) {
+export async function openDelivery(_params?: unknown): Promise<AgentDeliveryOpenResult> {
   return {
-    delivery_result: {
-      type: "task_detail" as const,
-      title: "Task detail",
-      preview_text: "回到任务详情",
-      payload: { path: null, task_id: "task_stub", url: null },
-    },
-    open_action: "task_detail" as const,
-    resolved_payload: { path: null, task_id: "task_stub", url: null },
+    delivery_result: createTaskDeliveryResult(),
+    open_action: "task_detail",
+    resolved_payload: createResolvedPayload(),
   };
 }
 
 export async function getSettingsDetailed(_params?: unknown) {
-  // Dashboard contract tests only need a deterministic snapshot payload.
   return createDetailedResponse(loadSettings());
 }
 
-export async function updateSettings(_params?: unknown) {
-  // The test stub mirrors the stable settings.update shape without simulating
-  // backend-side policy changes, which is enough for mock-mode contract tests.
+export async function updateSettings(_params?: unknown): Promise<AgentSettingsUpdateResult> {
   const current = loadSettings();
 
   return {
-    apply_mode: "immediate" as const,
+    apply_mode: "immediate",
     effective_settings: current.settings,
     need_restart: false,
     updated_keys: [],

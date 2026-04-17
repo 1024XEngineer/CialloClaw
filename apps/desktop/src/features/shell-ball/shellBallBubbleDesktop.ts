@@ -8,10 +8,13 @@ export type ShellBallBubbleDesktopMotionHint = "settle";
 
 export type ShellBallBubbleDesktopLifecycleState = "visible" | "fading" | "hidden";
 
+export type ShellBallBubbleDesktopPresentationHint = "loading";
+
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
   motionHint?: ShellBallBubbleDesktopMotionHint;
+  presentationHint?: ShellBallBubbleDesktopPresentationHint;
   turnIndex?: number;
   turnPhase?: number;
 };

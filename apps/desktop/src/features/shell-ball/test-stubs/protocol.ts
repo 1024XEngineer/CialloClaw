@@ -49,6 +49,8 @@ export const APPROVAL_STATUSES = ["pending", "approved", "denied"] as const;
 export const APPLY_MODES = ["immediate", "restart_required", "next_task_effective"] as const;
 export const THEME_MODES = ["follow_system", "light", "dark"] as const;
 export const POSITION_MODES = ["fixed", "draggable"] as const;
+export const TODO_STATUSES = ["normal", "due_today", "overdue", "completed", "cancelled"] as const;
+export const NOTEPAD_ACTIONS = ["complete", "cancel", "move_upcoming", "toggle_recurring", "cancel_recurring", "restore", "delete"] as const;
 export const RECOMMENDATION_SCENES = ["hover", "selected_text", "idle", "error"] as const;
 export const RECOMMENDATION_FEEDBACKS = ["positive", "negative", "ignore"] as const;
 export const TASK_CONTROL_ACTIONS = ["pause", "resume", "cancel", "restart"] as const;
@@ -72,6 +74,8 @@ export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 export type ApplyMode = (typeof APPLY_MODES)[number];
 export type ThemeMode = (typeof THEME_MODES)[number];
 export type PositionMode = (typeof POSITION_MODES)[number];
+export type TodoStatus = (typeof TODO_STATUSES)[number];
+export type NotepadAction = (typeof NOTEPAD_ACTIONS)[number];
 export type RecommendationScene = (typeof RECOMMENDATION_SCENES)[number];
 export type RecommendationFeedback = (typeof RECOMMENDATION_FEEDBACKS)[number];
 export type TaskControlAction = (typeof TASK_CONTROL_ACTIONS)[number];
@@ -263,10 +267,12 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_INSPECTOR_RUN: "agent.task_inspector.run",
   AGENT_NOTEPAD_LIST: "agent.notepad.list",
   AGENT_NOTEPAD_CONVERT_TO_TASK: "agent.notepad.convert_to_task",
+  AGENT_NOTEPAD_UPDATE: "agent.notepad.update",
   AGENT_DASHBOARD_OVERVIEW_GET: "agent.dashboard.overview.get",
   AGENT_DASHBOARD_MODULE_GET: "agent.dashboard.module.get",
   AGENT_MIRROR_OVERVIEW_GET: "agent.mirror.overview.get",
   AGENT_SECURITY_SUMMARY_GET: "agent.security.summary.get",
+  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_SECURITY_RESTORE_POINTS_LIST: "agent.security.restore_points.list",
   AGENT_SECURITY_RESTORE_APPLY: "agent.security.restore.apply",
   AGENT_SECURITY_PENDING_LIST: "agent.security.pending.list",
@@ -277,7 +283,6 @@ export const RPC_METHODS_STABLE = {
 } as const;
 
 export const RPC_METHODS_PLANNED = {
-  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
 } as const;
 
@@ -370,7 +375,7 @@ export interface AgentTaskStartParams {
     page_context?: PageContext;
     error_message?: string;
   };
-  intent?: IntentPayload;
+  context?: InputContext;
   delivery?: DeliveryPreference;
 }
 
@@ -556,7 +561,7 @@ export interface TodoItem {
   item_id: string;
   title: string;
   bucket: TodoBucket;
-  status: string;
+  status: TodoStatus;
   type: string;
   due_at: string | null;
   agent_suggestion: string | null;
@@ -582,6 +587,18 @@ export interface AgentNotepadConvertToTaskParams {
 
 export interface AgentNotepadConvertToTaskResult {
   task: Task;
+}
+
+export interface AgentNotepadUpdateParams {
+  request_meta: RequestMeta;
+  item_id: string;
+  action: NotepadAction;
+}
+
+export interface AgentNotepadUpdateResult {
+  notepad_item: TodoItem | null;
+  refresh_groups: TodoBucket[];
+  deleted_item_id?: string | null;
 }
 
 export interface AgentDashboardOverviewGetParams {
@@ -715,12 +732,24 @@ export interface AgentSecurityRespondParams {
   remember_rule?: boolean;
 }
 
-export interface AgentSecurityRespondResult {
+export interface AgentSecurityApprovalRespondResult {
   authorization_record: AuthorizationRecord;
   task: Task;
   bubble_message: BubbleMessage | null;
   impact_scope?: ImpactScope;
 }
+
+export interface AgentSecurityRestoreRespondResult {
+  applied: boolean;
+  task: Task;
+  recovery_point: RecoveryPoint;
+  audit_record: AuditRecord | null;
+  bubble_message: BubbleMessage | null;
+}
+
+export type AgentSecurityRespondResult =
+  | AgentSecurityApprovalRespondResult
+  | AgentSecurityRestoreRespondResult;
 
 export interface AgentSettingsGetParams {
   request_meta: RequestMeta;

@@ -141,6 +141,12 @@ function readImportMetaEnv(): RpcRuntimeEnv {
   };
 }
 
+type ProcessEnvLike = {
+  NODE_ENV?: string;
+  VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT?: string;
+  VITE_CIALLOCLAW_RPC_TRANSPORT?: string;
+};
+
 function isHttpLikeRuntime() {
   return typeof window !== "undefined" && /^https?:$/.test(window.location.protocol);
 }
@@ -148,7 +154,7 @@ function isHttpLikeRuntime() {
 function readRpcRuntimeEnv(): RpcRuntimeEnv {
   const importMetaEnv = readImportMetaEnv();
   const windowEnv = typeof window !== "undefined" ? window.__CIALLOCLAW_RPC_ENV__ : undefined;
-  const processEnv = typeof process !== "undefined" ? process.env : undefined;
+  const processEnv: ProcessEnvLike | undefined = typeof process !== "undefined" ? process.env : undefined;
   const transport = processEnv?.VITE_CIALLOCLAW_RPC_TRANSPORT;
 
   return {

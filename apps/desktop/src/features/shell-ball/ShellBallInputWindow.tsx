@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
@@ -49,6 +50,7 @@ export function ShellBallInputWindow({
   const [focusToken, setFocusToken] = useState(0);
   const [isFocused, setIsFocused] = useState(false);
   const compositionActiveRef = useRef(false);
+  const isResizingRef = useRef(false);
   const pendingWindowBlurRef = useRef(false);
   const windowFocusedRef = useRef(false);
   // Browser helper windows always use the DOM timer API here, so the timeout id
@@ -118,7 +120,7 @@ export function ShellBallInputWindow({
   const resolvedVoicePreview = voicePreview ?? snapshot.voicePreview;
   const resolvedValue = value ?? draftValue;
   const { rootRef } = useShellBallWindowMetrics({
-    clickThrough: resolvedMode === "interactive" && !isFocused,
+    clickThrough: snapshot.inputInteraction.clickThrough,
     role: "input",
     visible: snapshot.visibility.input,
   });
@@ -136,6 +138,11 @@ export function ShellBallInputWindow({
         pendingWindowBlurRef.current = false;
         setIsFocused(true);
         void emitShellBallInputHover(true);
+        return;
+      }
+
+      if (isResizingRef.current) {
+        windowFocusedRef.current = true;
         return;
       }
 
@@ -282,7 +289,44 @@ export function ShellBallInputWindow({
     clearPendingBlurTimeout();
   }
 
-  function handlePointerDown() {
+  function handleResizeStateChange(resizing: boolean) {
+    isResizingRef.current = resizing;
+
+    if (resizing) {
+      windowFocusedRef.current = true;
+      clearPendingBlurTimeout();
+      pendingWindowBlurRef.current = false;
+      setIsFocused(true);
+      void emitShellBallInputHover(true);
+      return;
+    }
+
+    const rootHovered = rootRef.current?.matches(":hover") ?? false;
+    const activeWithinRoot = rootRef.current?.contains(document.activeElement) ?? false;
+
+    if (!rootHovered && !activeWithinRoot) {
+      windowFocusedRef.current = false;
+      pendingWindowBlurRef.current = false;
+      setIsFocused(false);
+      void emitShellBallInputHover(false);
+      void emitShellBallInputFocus(false);
+    }
+  }
+
+  function handlePointerLeave() {
+    if (isResizingRef.current) {
+      return;
+    }
+
+    void emitShellBallInputHover(false);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('[data-shell-ball-input-resize-handle="true"]')) {
+      return;
+    }
+
     windowFocusedRef.current = true;
     clearPendingBlurTimeout();
     pendingWindowBlurRef.current = false;
@@ -299,9 +343,7 @@ export function ShellBallInputWindow({
       onPointerEnter={() => {
         void emitShellBallInputHover(true);
       }}
-      onPointerLeave={() => {
-        void emitShellBallInputHover(false);
-      }}
+      onPointerLeave={handlePointerLeave}
     >
       <ShellBallAttachmentTray paths={snapshot.pendingFiles} onRemove={handleRemovePendingFile} />
       <ShellBallInputBar
@@ -314,6 +356,7 @@ export function ShellBallInputWindow({
         onAttachFile={handleAttachFile}
         onSubmit={handleSubmit}
         onFocusChange={handleFocusChange}
+        onResizeStateChange={handleResizeStateChange}
         onCompositionStateChange={handleCompositionStateChange}
         onTransientInputActivity={handleTransientInputActivity}
       />
