@@ -351,6 +351,44 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 }
 
+func TestLoopRuntimeStoreKeepsAppendOnlyEventsAcrossRuns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "loop-runtime-append.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	store := service.LoopRuntimeStore()
+	if err := store.SaveEvents(context.Background(), []EventRecord{{
+		EventID:     "evt_loop_run_001_001",
+		RunID:       "run_001",
+		TaskID:      "task_001",
+		StepID:      "run_001_step_loop_01",
+		Type:        "loop.round.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-17T10:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save first event failed: %v", err)
+	}
+	if err := store.SaveEvents(context.Background(), []EventRecord{{
+		EventID:     "evt_loop_run_002_001",
+		RunID:       "run_002",
+		TaskID:      "task_001",
+		StepID:      "run_002_step_loop_01",
+		Type:        "loop.round.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-17T10:01:00Z",
+	}}); err != nil {
+		t.Fatalf("save second event failed: %v", err)
+	}
+	events, total, err := store.ListEvents(context.Background(), "task_001", 20, 0)
+	if err != nil {
+		t.Fatalf("list append-only events failed: %v", err)
+	}
+	if total != 2 || len(events) != 2 {
+		t.Fatalf("expected append-only events from multiple runs, got total=%d items=%+v", total, events)
+	}
+}
+
 func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
 	service := NewService(stubAdapter{databasePath: path})

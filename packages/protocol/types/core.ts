@@ -198,6 +198,7 @@ export interface Task {
   intent: IntentPayload | null;
   current_step: string;
   risk_level: RiskLevel;
+  loop_stop_reason?: string | null;
   started_at: string | null;
   updated_at: string;
   finished_at: string | null;

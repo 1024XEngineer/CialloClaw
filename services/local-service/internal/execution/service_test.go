@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -556,6 +557,12 @@ func TestExecuteAgentLoopConsumesActiveRunSteeringBetweenRounds(t *testing.T) {
 	}
 	if pollCount < 2 {
 		t.Fatalf("expected active-run steering poller to run between rounds, got %d", pollCount)
+	}
+}
+
+func TestRunStatusFromStopReasonTreatsToolRetryExhaustedAsFailed(t *testing.T) {
+	if status := runStatusFromStopReason(agentloop.StopReasonToolRetryExhausted); status != "failed" {
+		t.Fatalf("expected tool retry exhausted to map to failed, got %q", status)
 	}
 }
 

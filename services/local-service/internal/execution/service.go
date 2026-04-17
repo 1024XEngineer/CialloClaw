@@ -1610,15 +1610,21 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		UpdatedAt:  updatedAt,
 		StopReason: string(result.StopReason),
 	}
-	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice {
+	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice || result.StopReason == agentloop.StopReasonToolRetryExhausted || result.StopReason == agentloop.StopReasonPlannerError {
 		runRecord.FinishedAt = updatedAt
 	}
 	_ = s.loopStore.SaveRun(context.Background(), runRecord)
+	if s.notificationEmitter != nil && result.StopReason != "" {
+		s.notificationEmitter(request.TaskID, "task.updated", map[string]any{
+			"task_id":          request.TaskID,
+			"loop_stop_reason": string(result.StopReason),
+		})
+	}
 
 	stepRecords := make([]storage.StepRecord, 0, len(result.Rounds))
 	for _, round := range result.Rounds {
 		stepRecords = append(stepRecords, storage.StepRecord{
-			StepID:        round.StepID,
+			StepID:        fmt.Sprintf("%s_%s", request.RunID, round.StepID),
 			RunID:         round.RunID,
 			TaskID:        round.TaskID,
 			OrderIndex:    round.LoopRound,
@@ -1644,10 +1650,10 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 	eventRecords := make([]storage.EventRecord, 0, len(result.Events))
 	for index, event := range result.Events {
 		eventRecords = append(eventRecords, storage.EventRecord{
-			EventID:     fmt.Sprintf("evt_loop_%s_%03d", request.TaskID, index+1),
+			EventID:     fmt.Sprintf("evt_loop_%s_%03d", request.RunID, index+1),
 			RunID:       request.RunID,
 			TaskID:      request.TaskID,
-			StepID:      event.StepID,
+			StepID:      stepEventID(request.RunID, event.StepID),
 			Type:        event.Type,
 			Level:       firstNonEmpty(event.Level, "info"),
 			PayloadJSON: marshalEventPayload(event.Payload),
@@ -1690,11 +1696,18 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 		return "waiting_auth"
 	case agentloop.StopReasonNeedUserInput:
 		return "confirming_intent"
-	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations:
+	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted:
 		return "failed"
 	default:
 		return "processing"
 	}
+}
+
+func stepEventID(runID, stepID string) string {
+	if strings.TrimSpace(stepID) == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s_%s", runID, stepID)
 }
 
 func formatOptionalTime(value time.Time) string {
