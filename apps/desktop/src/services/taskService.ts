@@ -1,9 +1,10 @@
 // 该文件封装前端任务服务调用。
 import type {
+  AgentTaskStartParams,
   AgentTaskStartResult,
   DeliveryPreference,
+  InputContext,
   InputType,
-  IntentPayload,
   RequestMeta,
   RequestSource,
   Task,
@@ -14,8 +15,8 @@ import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";
 
 type StartTaskContext = {
+  context?: InputContext;
   delivery?: DeliveryPreference;
-  intent?: IntentPayload;
   pageContext?: {
     app_name: string;
     title: string;
@@ -105,7 +106,7 @@ function createMockTaskStartResult(input: {
 async function startTaskWithFallback(input: {
   mock: Omit<Parameters<typeof createMockTaskStartResult>[0], "scope">;
   scope: string;
-  params: Parameters<typeof startTask>[0];
+  params: AgentTaskStartParams;
 }) {
   try {
     return await startTask(input.params);
@@ -139,7 +140,7 @@ export async function startTaskFromSelectedText(text: string, context: StartTask
         text: normalizedText,
         page_context: context.pageContext ?? DEFAULT_TASK_PAGE_CONTEXT,
       },
-      intent: context.intent,
+      context: context.context,
       delivery: context.delivery ?? {
         preferred: "bubble",
         fallback: "task_detail",
@@ -177,7 +178,7 @@ export async function startTaskFromFiles(files: string[], context: StartTaskCont
         files: normalizedFiles,
         page_context: context.pageContext ?? DEFAULT_TASK_PAGE_CONTEXT,
       },
-      intent: context.intent,
+      context: context.context,
       delivery: context.delivery ?? {
         preferred: "bubble",
         fallback: "task_detail",
@@ -215,7 +216,7 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
         error_message: normalizedMessage,
         page_context: context.pageContext ?? DEFAULT_TASK_PAGE_CONTEXT,
       },
-      intent: context.intent,
+      context: context.context,
       delivery: context.delivery ?? {
         preferred: "bubble",
         fallback: "task_detail",
@@ -248,12 +249,6 @@ export async function bootstrapTask(title: string) {
           title: "Quick Input",
           url: "local://shell-ball",
           app_name: "desktop",
-        },
-      },
-      intent: {
-        name: "summarize",
-        arguments: {
-          style: "key_points",
         },
       },
       delivery: {

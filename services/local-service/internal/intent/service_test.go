@@ -14,7 +14,7 @@ func TestServiceAnalyzeSnapshotWaitsWhenInputMissing(t *testing.T) {
 	}
 }
 
-func TestServiceSuggestInfersTranslateFromCommandText(t *testing.T) {
+func TestServiceSuggestRoutesCommandTextToAgentLoop(t *testing.T) {
 	service := NewService()
 
 	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
@@ -22,15 +22,15 @@ func TestServiceSuggestInfersTranslateFromCommandText(t *testing.T) {
 		Text:      "Translate this note into English",
 	}, nil, false)
 
-	if suggestion.Intent["name"] != "translate" {
-		t.Fatalf("expected translate intent, got %+v", suggestion.Intent)
+	if suggestion.Intent["name"] != defaultAgentLoopIntent {
+		t.Fatalf("expected generic agent loop intent, got %+v", suggestion.Intent)
 	}
-	if suggestion.TaskTitle != "翻译：Translate this not..." {
-		t.Fatalf("expected translated task title to reflect text subject, got %s", suggestion.TaskTitle)
+	if suggestion.TaskTitle != "处理：Translate this not..." {
+		t.Fatalf("expected generic task title to reflect text subject, got %s", suggestion.TaskTitle)
 	}
 }
 
-func TestServiceSuggestSummarizesLongSelectionIntoWorkspaceDocument(t *testing.T) {
+func TestServiceSuggestRoutesLongSelectionToAgentLoopWorkspaceDelivery(t *testing.T) {
 	service := NewService()
 
 	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
@@ -38,14 +38,14 @@ func TestServiceSuggestSummarizesLongSelectionIntoWorkspaceDocument(t *testing.T
 		SelectionText: "Line one of the selected content.\nLine two adds more detail for a runtime summary decision.",
 	}, nil, false)
 
-	if suggestion.Intent["name"] != "summarize" {
-		t.Fatalf("expected long selection to prefer summarize, got %+v", suggestion.Intent)
+	if suggestion.Intent["name"] != defaultAgentLoopIntent {
+		t.Fatalf("expected long selection to prefer agent loop, got %+v", suggestion.Intent)
 	}
-	if !suggestion.RequiresConfirm {
-		t.Fatal("expected long selected text summary to require confirmation")
+	if suggestion.RequiresConfirm {
+		t.Fatal("expected long selected text to go directly into the agent loop")
 	}
 	if suggestion.DirectDeliveryType != "workspace_document" {
-		t.Fatalf("expected long selection summary to prefer workspace_document, got %s", suggestion.DirectDeliveryType)
+		t.Fatalf("expected long selection to prefer workspace_document, got %s", suggestion.DirectDeliveryType)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestServiceSuggestShortTextKeepsIntentUnconfirmed(t *testing.T) {
 	}
 }
 
-func TestServiceSuggestRecognizesExplicitSummarizeCommand(t *testing.T) {
+func TestServiceSuggestKeepsGenericAgentLoopForExplicitSummarizeLanguage(t *testing.T) {
 	service := NewService()
 
 	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
@@ -79,10 +79,10 @@ func TestServiceSuggestRecognizesExplicitSummarizeCommand(t *testing.T) {
 		Text:      "总结一下这段内容",
 	}, nil, false)
 
-	if suggestion.Intent["name"] != "summarize" {
-		t.Fatalf("expected explicit summarize request to keep summarize intent, got %+v", suggestion.Intent)
+	if suggestion.Intent["name"] != defaultAgentLoopIntent {
+		t.Fatalf("expected free-form summarize request to keep agent loop intent, got %+v", suggestion.Intent)
 	}
 	if !suggestion.IntentConfirmed {
-		t.Fatalf("expected explicit summarize request to keep intent confirmed, got %+v", suggestion)
+		t.Fatalf("expected free-form summarize request to keep agent loop intent confirmed, got %+v", suggestion)
 	}
 }

@@ -1,12 +1,17 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useInterval, useUnmount } from "ahooks";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readShellBallSelectionSnapshot } from "@/platform/shellBallWindow";
+import type { ShellBallVisualState } from "../shellBall.types";
 import { shellBallWindowLabels } from "@/platform/shellBallWindowController";
-import { shellBallWindowSyncEvents, type ShellBallSelectionSnapshotPayload } from "../shellBall.windowSync";
+import {
+  shellBallWindowSyncEvents,
+  type ShellBallSelectionActivityPayload,
+  type ShellBallSelectionSnapshotPayload,
+} from "../shellBall.windowSync";
 import type { ShellBallSelectionSnapshot } from "./selection.types";
 
-const SHELL_BALL_SELECTION_POLL_MS = 250;
+const SHELL_BALL_SELECTION_POLL_MS = 1000;
 
 /**
  * Determines whether the current desktop window should poll the native
@@ -18,6 +23,17 @@ const SHELL_BALL_SELECTION_POLL_MS = 250;
  */
 export function shouldPollShellBallNativeSelection(label: string) {
   return label === shellBallWindowLabels.ball;
+}
+
+/**
+ * Determines whether native selection sensing should stay armed for the current
+ * shell-ball visual state.
+ *
+ * @param visualState Current shell-ball visual state.
+ * @returns Whether selection activity should be tracked.
+ */
+export function shouldTrackShellBallSelectionInState(visualState: ShellBallVisualState) {
+  return visualState === "idle" || visualState === "hover_input";
 }
 
 /**
@@ -55,11 +71,13 @@ export function areShellBallSelectionSnapshotsEqual(
  *
  * @returns `null`; this component only bridges selection state.
  */
-export function ShellBallSelectionProvider() {
+export function ShellBallSelectionProvider({ visualState }: { visualState: ShellBallVisualState }) {
   const currentWindow = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
   const windowLabel = currentWindow?.label ?? "browser";
   const pollEnabled = currentWindow !== null && shouldPollShellBallNativeSelection(windowLabel);
+  const sensingEnabled = pollEnabled && shouldTrackShellBallSelectionInState(visualState);
   const lastSnapshotRef = useRef<ShellBallSelectionSnapshot | null>(null);
+  const [selectionDirty, setSelectionDirty] = useState(false);
 
   const emitSelectionSnapshot = useCallback(async (snapshot: ShellBallSelectionSnapshot | null) => {
     if (currentWindow === null) {
@@ -71,24 +89,65 @@ export function ShellBallSelectionProvider() {
   }, [currentWindow]);
 
   const publishLatestSelection = useCallback(async () => {
-    if (!pollEnabled) {
+    if (!sensingEnabled) {
       return;
     }
 
     const snapshot = await readShellBallSelectionSnapshot();
+    setSelectionDirty(false);
+
     if (areShellBallSelectionSnapshotsEqual(lastSnapshotRef.current, snapshot)) {
       return;
     }
 
     lastSnapshotRef.current = snapshot;
     await emitSelectionSnapshot(snapshot);
-  }, [emitSelectionSnapshot, pollEnabled]);
+  }, [emitSelectionSnapshot, sensingEnabled]);
+
+  useEffect(() => {
+    if (!pollEnabled) {
+      return;
+    }
+
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
+    void currentWindow
+      ?.listen<ShellBallSelectionActivityPayload>(shellBallWindowSyncEvents.selectionActivity, () => {
+        if (!shouldTrackShellBallSelectionInState(visualState)) {
+          return;
+        }
+
+        setSelectionDirty(true);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        cleanup = unlisten;
+      });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [currentWindow, pollEnabled, visualState]);
+
+  useEffect(() => {
+    if (sensingEnabled) {
+      return;
+    }
+
+    setSelectionDirty(false);
+    lastSnapshotRef.current = null;
+    void emitSelectionSnapshot(null);
+  }, [emitSelectionSnapshot, sensingEnabled]);
 
   useInterval(() => {
     void publishLatestSelection();
-  }, pollEnabled ? SHELL_BALL_SELECTION_POLL_MS : undefined, {
-    immediate: true,
-  });
+  }, sensingEnabled && selectionDirty ? SHELL_BALL_SELECTION_POLL_MS : undefined);
 
   useUnmount(() => {
     lastSnapshotRef.current = null;

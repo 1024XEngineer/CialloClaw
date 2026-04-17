@@ -1,4 +1,3 @@
-// 该文件负责 task/run 主状态在 SQLite 中的持久化实现。
 package storage
 
 import (
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	_ "modernc.org/sqlite"
 )
 
@@ -19,28 +19,28 @@ const sqliteTaskRunTableName = "task_runs"
 const sqliteEngineSequenceTableName = "engine_sequences"
 
 var (
-	// ErrTaskRunTaskIDRequired 表示缺少 task_id。
+	// ErrTaskRunTaskIDRequired reports that task_id is missing.
 	ErrTaskRunTaskIDRequired = errors.New("storage task_run task_id is required")
-	// ErrTaskRunSessionIDRequired 表示缺少 session_id。
+	// ErrTaskRunSessionIDRequired reports that session_id is missing.
 	ErrTaskRunSessionIDRequired = errors.New("storage task_run session_id is required")
-	// ErrTaskRunRunIDRequired 表示缺少 run_id。
+	// ErrTaskRunRunIDRequired reports that run_id is missing.
 	ErrTaskRunRunIDRequired = errors.New("storage task_run run_id is required")
-	// ErrTaskRunStatusRequired 表示缺少 status。
+	// ErrTaskRunStatusRequired reports that status is missing.
 	ErrTaskRunStatusRequired = errors.New("storage task_run status is required")
-	// ErrTaskRunStartedAtRequired 表示缺少 started_at。
+	// ErrTaskRunStartedAtRequired reports that started_at is missing.
 	ErrTaskRunStartedAtRequired = errors.New("storage task_run started_at is required")
-	// ErrTaskRunUpdatedAtRequired 表示缺少 updated_at。
+	// ErrTaskRunUpdatedAtRequired reports that updated_at is missing.
 	ErrTaskRunUpdatedAtRequired = errors.New("storage task_run updated_at is required")
-	// ErrTaskRunIdentifierPrefixRequired 表示缺少分配标识符所需的 prefix。
+	// ErrTaskRunIdentifierPrefixRequired reports that AllocateIdentifier received an empty prefix.
 	ErrTaskRunIdentifierPrefixRequired = errors.New("storage task_run identifier prefix is required")
 )
 
-// SQLiteTaskRunStore 提供 task/run 主状态的 SQLite 持久化能力。
+// SQLiteTaskRunStore persists task/run snapshots in SQLite.
 type SQLiteTaskRunStore struct {
 	db *sql.DB
 }
 
-// NewSQLiteTaskRunStore 创建并返回 SQLiteTaskRunStore。
+// NewSQLiteTaskRunStore opens and initializes the SQLite task/run store.
 func NewSQLiteTaskRunStore(databasePath string) (*SQLiteTaskRunStore, error) {
 	databasePath = strings.TrimSpace(databasePath)
 	if databasePath == "" {
@@ -69,7 +69,7 @@ func NewSQLiteTaskRunStore(databasePath string) (*SQLiteTaskRunStore, error) {
 	return store, nil
 }
 
-// AllocateIdentifier 为给定前缀分配一个稳定递增的标识符。
+// AllocateIdentifier reserves the next stable identifier for the given prefix.
 func (s *SQLiteTaskRunStore) AllocateIdentifier(ctx context.Context, prefix string) (string, error) {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
@@ -113,7 +113,21 @@ func (s *SQLiteTaskRunStore) AllocateIdentifier(ctx context.Context, prefix stri
 	return fmt.Sprintf("%s_%03d", prefix, currentValue), nil
 }
 
-// SaveTaskRun 保存或覆盖一条 task/run 主状态快照。
+// DeleteTaskRun removes one persisted task/run snapshot from SQLite storage.
+func (s *SQLiteTaskRunStore) DeleteTaskRun(ctx context.Context, taskID string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ErrTaskRunTaskIDRequired
+	}
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM task_runs WHERE task_id = ?`, taskID); err != nil {
+		return fmt.Errorf("delete task run %s: %w", taskID, err)
+	}
+
+	return nil
+}
+
+// SaveTaskRun saves or overwrites one task/run snapshot.
 func (s *SQLiteTaskRunStore) SaveTaskRun(ctx context.Context, record TaskRunRecord) error {
 	if err := validateTaskRunRecord(record); err != nil {
 		return err
@@ -156,7 +170,7 @@ func (s *SQLiteTaskRunStore) SaveTaskRun(ctx context.Context, record TaskRunReco
 	return nil
 }
 
-// LoadTaskRuns 加载所有 task/run 主状态快照。
+// LoadTaskRuns loads all task/run snapshots from SQLite storage.
 func (s *SQLiteTaskRunStore) LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -190,7 +204,7 @@ func (s *SQLiteTaskRunStore) LoadTaskRuns(ctx context.Context) ([]TaskRunRecord,
 	return records, nil
 }
 
-// Close 关闭底层 SQLite 连接。
+// Close closes the underlying SQLite connection.
 func (s *SQLiteTaskRunStore) Close() error {
 	if s.db == nil {
 		return nil
@@ -302,6 +316,7 @@ func cloneTaskRunRecord(record TaskRunRecord) TaskRunRecord {
 	clone.Artifacts = cloneMapSlice(record.Artifacts)
 	clone.AuditRecords = cloneMapSlice(record.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(record.MirrorReferences)
+	clone.Snapshot = cloneContextSnapshot(record.Snapshot)
 	clone.SecuritySummary = cloneMap(record.SecuritySummary)
 	clone.ApprovalRequest = cloneMap(record.ApprovalRequest)
 	clone.PendingExecution = cloneMap(record.PendingExecution)
@@ -347,6 +362,14 @@ func cloneNotificationSnapshots(values []NotificationSnapshot) []NotificationSna
 	}
 
 	return result
+}
+
+func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	cloned := snapshot
+	if len(snapshot.Files) > 0 {
+		cloned.Files = append([]string(nil), snapshot.Files...)
+	}
+	return cloned
 }
 
 func cloneMap(values map[string]any) map[string]any {

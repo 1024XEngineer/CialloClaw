@@ -10,6 +10,7 @@ export const shellBallWindowSyncEvents = Object.freeze({
   geometry: "desktop-shell-ball:geometry",
   helperReady: "desktop-shell-ball:helper-ready",
   textSelectionState: "desktop-shell-ball:text-selection-state",
+  selectionActivity: "desktop-shell-ball:selection-activity",
   selectionSnapshot: "desktop-shell-ball:selection-snapshot",
   pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
@@ -118,6 +119,10 @@ export type ShellBallTextSelectionStatePayload = {
 
 export type ShellBallSelectionSnapshotPayload = {
   snapshot: ShellBallSelectionSnapshot | null;
+};
+
+export type ShellBallSelectionActivityPayload = {
+  source: "pointer" | "keyboard";
 };
 
 export type ShellBallPrimaryActionPayload = {

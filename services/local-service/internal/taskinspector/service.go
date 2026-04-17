@@ -3,6 +3,7 @@ package taskinspector
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"path"
 	"strings"
@@ -13,6 +14,13 @@ import (
 )
 
 const defaultStaleInterval = 15 * time.Minute
+
+const (
+	notepadBucketClosed        = "closed"
+	notepadBucketLater         = "later"
+	notepadBucketRecurringRule = "recurring_rule"
+	notepadBucketUpcoming      = "upcoming"
+)
 
 // Service 负责根据 workspace、notepad 和 runtime task 状态生成巡检结果。
 type Service struct {
@@ -35,6 +43,8 @@ type RunResult struct {
 	InspectionID string
 	Summary      map[string]any
 	Suggestions  []string
+	NotepadItems []map[string]any
+	SourceSynced bool
 }
 
 // NewService 创建并返回 task inspector 服务。
@@ -48,10 +58,18 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 // Run 执行一次最小真实巡检。
 func (s *Service) Run(input RunInput) RunResult {
 	sources := resolveSources(input.TargetSources, input.Config)
-	parsedFiles, fileItems := s.inspectSources(sources)
-	dueToday, overdue := countDueBuckets(input.NotepadItems, s.now())
+	sourceSynced := len(sources) > 0 && s.fileSystem != nil
+	parsedFiles, parsedNotepadItems := s.inspectSources(sources)
+	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
+	if sourceSynced {
+		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
+	} else if len(parsedNotepadItems) > 0 {
+		resolvedNotepadItems = parsedNotepadItems
+	}
+	fileItems := countOpenNotepadItems(parsedNotepadItems)
+	dueToday, overdue := countDueBuckets(resolvedNotepadItems, s.now())
 	staleCount := countStaleTasks(input.UnfinishedTasks, inspectionDuration(input.Config), s.now())
-	identifiedItems := fileItems + countOpenNotepadItems(input.NotepadItems)
+	identifiedItems := countOpenNotepadItems(resolvedNotepadItems)
 
 	return RunResult{
 		InspectionID: fmt.Sprintf("insp_%d", s.now().UnixNano()),
@@ -62,17 +80,19 @@ func (s *Service) Run(input RunInput) RunResult {
 			"overdue":          overdue,
 			"stale":            staleCount,
 		},
-		Suggestions: buildSuggestions(input.NotepadItems, input.UnfinishedTasks, sources, parsedFiles, dueToday, overdue, staleCount, fileItems),
+		Suggestions:  buildSuggestions(resolvedNotepadItems, input.UnfinishedTasks, sources, parsedFiles, dueToday, overdue, staleCount, fileItems),
+		NotepadItems: cloneMapSlice(resolvedNotepadItems),
+		SourceSynced: sourceSynced,
 	}
 }
 
-func (s *Service) inspectSources(sources []string) (int, int) {
+func (s *Service) inspectSources(sources []string) (int, []map[string]any) {
 	if s.fileSystem == nil || len(sources) == 0 {
-		return 0, 0
+		return 0, nil
 	}
 
 	parsedFiles := 0
-	identifiedItems := 0
+	identifiedItems := make([]map[string]any, 0)
 	seenFiles := map[string]struct{}{}
 
 	for _, source := range sources {
@@ -95,7 +115,7 @@ func (s *Service) inspectSources(sources []string) (int, int) {
 			if err != nil {
 				return nil
 			}
-			identifiedItems += countChecklistItems(string(content))
+			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), string(content), s.now())...)
 			return nil
 		})
 	}
@@ -183,6 +203,367 @@ func countChecklistItems(content string) int {
 		}
 	}
 	return count
+}
+
+func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []map[string]any {
+	lines := strings.Split(content, "\n")
+	items := make([]map[string]any, 0)
+	var current map[string]any
+	noteLines := make([]string, 0)
+	flushCurrent := func() {
+		if current == nil {
+			return
+		}
+		if len(noteLines) > 0 && stringValue(current, "note_text") == "" {
+			current["note_text"] = strings.Join(noteLines, "\n")
+		}
+		items = append(items, normalizeParsedNotepadItem(current, sourcePath, now))
+		current = nil
+		noteLines = noteLines[:0]
+	}
+
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		checked, title, ok := parseChecklistLine(trimmed)
+		if ok {
+			flushCurrent()
+			current = map[string]any{
+				"item_id":     buildSourceBackedNotepadID(sourcePath, index+1, title),
+				"title":       title,
+				"bucket":      bucketFromSourcePath(sourcePath, checked, false),
+				"status":      statusFromChecklist(checked),
+				"type":        todoTypeFromChecklist(checked, false),
+				"source_path": sourcePath,
+				"source_line": index + 1,
+				"created_at":  now.UTC().Format(time.RFC3339),
+				"updated_at":  now.UTC().Format(time.RFC3339),
+			}
+			continue
+		}
+		if current == nil || trimmed == "" {
+			continue
+		}
+		if handled := applyNotepadMetadataLine(current, trimmed, now); handled {
+			continue
+		}
+		noteLines = append(noteLines, trimmed)
+	}
+	flushCurrent()
+	return items
+}
+
+func parseChecklistLine(line string) (bool, string, bool) {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "- [ ] "), strings.HasPrefix(trimmed, "* [ ] "):
+		return false, strings.TrimSpace(trimmed[6:]), true
+	case strings.HasPrefix(trimmed, "- [x] "), strings.HasPrefix(trimmed, "* [x] "), strings.HasPrefix(trimmed, "- [X] "), strings.HasPrefix(trimmed, "* [X] "):
+		return true, strings.TrimSpace(trimmed[6:]), true
+	default:
+		return false, "", false
+	}
+}
+
+func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) bool {
+	key, value, ok := splitMetadataLine(line)
+	if !ok {
+		return false
+	}
+	switch key {
+	case "due":
+		if dueAt := normalizeMetadataTime(value, now); dueAt != "" {
+			item["due_at"] = dueAt
+			item["planned_at"] = dueAt
+		}
+	case "bucket":
+		item["bucket"] = normalizeBucketValue(value, stringValue(item, "bucket"))
+	case "prerequisite":
+		item["prerequisite"] = value
+	case "suggest", "agent":
+		item["agent_suggestion"] = value
+	case "repeat":
+		item["repeat_rule_text"] = value
+		item["bucket"] = notepadBucketRecurringRule
+		item["type"] = "recurring"
+	case "next":
+		if nextOccurrence := normalizeMetadataTime(value, now); nextOccurrence != "" {
+			item["next_occurrence_at"] = nextOccurrence
+			if stringValue(item, "due_at") == "" {
+				item["due_at"] = nextOccurrence
+			}
+		}
+	case "scope":
+		item["effective_scope"] = value
+	case "status":
+		item["recent_instance_status"] = value
+	case "resource":
+		resources := cloneMapSlice(resourceListValue(item["related_resources"]))
+		resources = append(resources, buildSourceResource(item, value))
+		item["related_resources"] = resources
+	case "tags":
+		item["tags"] = splitTagList(value)
+	case "note":
+		item["note_text"] = value
+	case "reminder":
+		item["reminder_strategy"] = value
+	default:
+		return false
+	}
+	return true
+}
+
+func splitMetadataLine(line string) (string, string, bool) {
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	key := strings.ToLower(strings.TrimSpace(parts[0]))
+	value := strings.TrimSpace(parts[1])
+	if key == "" || value == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time) map[string]any {
+	if stringValue(item, "bucket") == notepadBucketRecurringRule {
+		item["type"] = "recurring"
+		if stringValue(item, "repeat_rule_text") == "" {
+			item["repeat_rule_text"] = "每周重复一次"
+		}
+		if _, ok := item["recurring_enabled"]; !ok {
+			item["recurring_enabled"] = true
+		}
+		if stringValue(item, "next_occurrence_at") == "" {
+			if nextOccurrence := deriveParsedRecurringNextOccurrence(item); nextOccurrence != "" {
+				item["next_occurrence_at"] = nextOccurrence
+			}
+		}
+	}
+	resources := resourceListValue(item["related_resources"])
+	if !hasResourcePath(resources, sourcePath) {
+		resources = append(resources, buildSourcePathResource(sourcePath))
+	}
+	if len(resources) > 0 {
+		item["related_resources"] = resources
+	}
+	if stringValue(item, "note_text") == "" {
+		item["note_text"] = stringValue(item, "title")
+	}
+	if stringValue(item, "planned_at") == "" {
+		item["planned_at"] = stringValue(item, "due_at")
+	}
+	if stringValue(item, "status") == "completed" {
+		item["bucket"] = notepadBucketClosed
+		if stringValue(item, "ended_at") == "" {
+			item["ended_at"] = now.UTC().Format(time.RFC3339)
+		}
+	}
+	return item
+}
+
+func buildSourceBackedNotepadID(sourcePath string, line int, title string) string {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(sourcePath))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(fmt.Sprintf("%d", line)))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(strings.TrimSpace(title)))
+	return fmt.Sprintf("todo_%08x", hasher.Sum32())
+}
+
+func sourcePathFromFSPath(fsPath string) string {
+	clean := path.Clean(strings.TrimPrefix(fsPath, "./"))
+	if clean == "." {
+		return "workspace"
+	}
+	return path.Join("workspace", clean)
+}
+
+func bucketFromSourcePath(sourcePath string, closed bool, recurring bool) string {
+	if closed {
+		return notepadBucketClosed
+	}
+	normalized := strings.ToLower(sourcePath)
+	if recurring || strings.Contains(normalized, "recurring") || strings.Contains(normalized, "weekly") || strings.Contains(normalized, "repeat") {
+		return notepadBucketRecurringRule
+	}
+	if strings.Contains(normalized, "later") || strings.Contains(normalized, "backlog") {
+		return notepadBucketLater
+	}
+	return notepadBucketUpcoming
+}
+
+func statusFromChecklist(checked bool) string {
+	if checked {
+		return "completed"
+	}
+	return "normal"
+}
+
+func todoTypeFromChecklist(_ bool, recurring bool) string {
+	if recurring {
+		return "recurring"
+	}
+	return "one_time"
+}
+
+func normalizeMetadataTime(value string, now time.Time) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04", "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			if layout == "2006-01-02" {
+				parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), now.Hour(), now.Minute(), 0, 0, now.Location())
+			}
+			return parsed.Format(time.RFC3339)
+		}
+	}
+	return value
+}
+
+func normalizeBucketValue(value string, fallback string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case notepadBucketUpcoming, notepadBucketLater, notepadBucketRecurringRule, notepadBucketClosed:
+		return strings.TrimSpace(strings.ToLower(value))
+	default:
+		return fallback
+	}
+}
+
+func buildSourceResource(item map[string]any, target string) map[string]any {
+	target = strings.TrimSpace(target)
+	resourceType := "file"
+	targetKind := "file"
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		resourceType = "url"
+		targetKind = "url"
+	} else if !strings.Contains(path.Base(target), ".") || strings.HasSuffix(target, "/") {
+		resourceType = "directory"
+		targetKind = "folder"
+	}
+	return map[string]any{
+		"id":          stringValue(item, "item_id") + fmt.Sprintf("_resource_%08x", fnvHash(target)),
+		"label":       path.Base(strings.TrimSuffix(target, "/")),
+		"path":        target,
+		"type":        resourceType,
+		"target_kind": targetKind,
+	}
+}
+
+func buildSourcePathResource(sourcePath string) map[string]any {
+	return map[string]any{
+		"id":          fmt.Sprintf("source_%08x", fnvHash(sourcePath)),
+		"label":       path.Base(sourcePath),
+		"path":        sourcePath,
+		"type":        "file",
+		"target_kind": "file",
+	}
+}
+
+func splitTagList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func resourceListValue(rawValue any) []map[string]any {
+	resources, ok := rawValue.([]map[string]any)
+	if ok {
+		return resources
+	}
+	anyResources, ok := rawValue.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(anyResources))
+	for _, rawResource := range anyResources {
+		resource, ok := rawResource.(map[string]any)
+		if ok {
+			result = append(result, resource)
+		}
+	}
+	return result
+}
+
+func hasResourcePath(resources []map[string]any, targetPath string) bool {
+	for _, resource := range resources {
+		if stringValue(resource, "path") == targetPath {
+			return true
+		}
+	}
+	return false
+}
+
+func deriveParsedRecurringNextOccurrence(item map[string]any) string {
+	base := stringValue(item, "planned_at")
+	if base == "" {
+		base = stringValue(item, "due_at")
+	}
+	if base == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339, base)
+	if err != nil {
+		return base
+	}
+	ruleText := strings.ToLower(stringValue(item, "repeat_rule_text"))
+	switch {
+	case strings.Contains(ruleText, "2 week"), strings.Contains(ruleText, "两周"):
+		parsed = parsed.AddDate(0, 0, 14)
+	case strings.Contains(ruleText, "month"), strings.Contains(ruleText, "每月"):
+		parsed = parsed.AddDate(0, 1, 0)
+	case strings.Contains(ruleText, "day"), strings.Contains(ruleText, "每天"):
+		parsed = parsed.AddDate(0, 0, 1)
+	default:
+		parsed = parsed.AddDate(0, 0, 7)
+	}
+	return parsed.Format(time.RFC3339)
+}
+
+func cloneMapSlice(values []map[string]any) []map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		result = append(result, cloneMap(value))
+	}
+	return result
+}
+
+func cloneMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]any, len(values))
+	for key, value := range values {
+		switch typed := value.(type) {
+		case map[string]any:
+			result[key] = cloneMap(typed)
+		case []map[string]any:
+			result[key] = cloneMapSlice(typed)
+		case []string:
+			result[key] = append([]string(nil), typed...)
+		default:
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func fnvHash(value string) uint32 {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(value))
+	return hasher.Sum32()
 }
 
 func countOpenNotepadItems(items []map[string]any) int {

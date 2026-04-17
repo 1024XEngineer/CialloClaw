@@ -179,6 +179,7 @@ test("mirror conversation lifecycle stores user and agent sides locally", () => 
       hidden: false,
       created_at: "2026-04-13T10:00:04+08:00",
     },
+    delivery_result: null,
   });
 
   const records = loadMirrorConversationRecords();

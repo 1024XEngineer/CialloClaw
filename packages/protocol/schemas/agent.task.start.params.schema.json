@@ -55,13 +55,26 @@
         }
       }
     },
-    "intent": {
+    "context": {
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "arguments": {
+        "page": {
           "type": "object",
-          "additionalProperties": true
+          "properties": {
+            "title": { "type": "string" },
+            "url": { "type": "string" },
+            "app_name": { "type": "string" }
+          }
+        },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       }
     },

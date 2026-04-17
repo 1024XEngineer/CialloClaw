@@ -3,7 +3,6 @@ import { getShellBallVisibleBubbleItems } from "./shellBall.windowSync";
 import {
   emitShellBallBubbleAction,
   emitShellBallBubbleHover,
-  emitShellBallIntentDecision,
   useShellBallHelperWindowSnapshot,
 } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
@@ -38,12 +37,6 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
       <ShellBallBubbleZone
         visualState={resolvedVisualState}
         bubbleItems={visibleBubbleItems}
-        onCancelIntent={(taskId) => {
-          void emitShellBallIntentDecision("cancel", taskId, "bubble");
-        }}
-        onConfirmIntent={(taskId) => {
-          void emitShellBallIntentDecision("confirm", taskId, "bubble");
-        }}
         onDeleteBubble={(bubbleId) => {
           void emitShellBallBubbleAction("delete", bubbleId);
         }}

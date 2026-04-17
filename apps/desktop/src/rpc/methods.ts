@@ -11,6 +11,8 @@ import type {
   AgentNotepadConvertToTaskResult,
   AgentNotepadListParams,
   AgentNotepadListResult,
+  AgentNotepadUpdateParams,
+  AgentNotepadUpdateResult,
   AgentRecommendationFeedbackSubmitParams,
   AgentRecommendationFeedbackSubmitResult,
   AgentRecommendationGetParams,
@@ -111,6 +113,10 @@ export function listNotepad(params: AgentNotepadListParams) {
 
 export function convertNotepadToTask(params: AgentNotepadConvertToTaskParams) {
   return rpcClient.request<AgentNotepadConvertToTaskResult>(RPC_METHODS.AGENT_NOTEPAD_CONVERT_TO_TASK, params);
+}
+
+export function updateNotepad(params: AgentNotepadUpdateParams) {
+  return rpcClient.request<AgentNotepadUpdateResult>(RPC_METHODS.AGENT_NOTEPAD_UPDATE, params);
 }
 
 export function getDashboardOverview(params: AgentDashboardOverviewGetParams) {

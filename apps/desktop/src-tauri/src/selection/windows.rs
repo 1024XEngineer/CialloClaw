@@ -1,7 +1,10 @@
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
-use tauri::{AppHandle, Manager};
+use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager};
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HWND, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
     COINIT_APARTMENTTHREADED,
@@ -12,8 +15,13 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GA_ROOT,
+    CallNextHookEx, GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    SetWindowsHookExW, GA_ROOT, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WM_KEYUP, WM_LBUTTONUP, WM_SYSKEYUP,
 };
 
 const WINDOWS_UIA_SELECTION_SOURCE: &str = "windows_uia";
@@ -25,6 +33,13 @@ const SHELL_BALL_WINDOW_LABELS: [&str; 4] = [
     "shell-ball-voice",
 ];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
+
+static SELECTION_ACTIVITY_DIRTY: AtomicBool = AtomicBool::new(false);
+static SHELL_BALL_SELECTION_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> =
+    Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> =
+    Lazy::new(|| Mutex::new(None));
 
 struct ComGuard {
     should_uninitialize: bool,
@@ -66,6 +81,7 @@ impl Drop for ComGuard {
 pub fn read_selection_snapshot(
     app: &AppHandle,
 ) -> Result<Option<SelectionSnapshotPayload>, String> {
+    SELECTION_ACTIVITY_DIRTY.store(false, Ordering::SeqCst);
     let _com_guard = ComGuard::initialize()?;
     let foreground_window = unsafe { GetForegroundWindow() };
 
@@ -96,6 +112,136 @@ pub fn read_selection_snapshot(
         },
         WINDOWS_UIA_SELECTION_SOURCE,
     )))
+}
+
+/// Installs Windows-only activity hooks that mark shell-ball selection sensing
+/// as dirty after the user performs a likely text-selection action.
+pub fn install_selection_activity_hook(app: &AppHandle) -> Result<(), String> {
+    if let Ok(mut app_handle) = SHELL_BALL_SELECTION_APP_HANDLE.lock() {
+        *app_handle = Some(app.clone());
+    }
+
+    let mut mouse_hook = SHELL_BALL_SELECTION_MOUSE_HOOK
+        .lock()
+        .map_err(|_| "selection mouse hook lock poisoned".to_string())?;
+    if mouse_hook.is_none() {
+        unsafe {
+            *mouse_hook = Some(
+                SetWindowsHookExW(WH_MOUSE_LL, Some(selection_mouse_observer), None, 0)
+                    .map_err(|error| format!("failed to install selection mouse hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    let mut keyboard_hook = SHELL_BALL_SELECTION_KEYBOARD_HOOK
+        .lock()
+        .map_err(|_| "selection keyboard hook lock poisoned".to_string())?;
+    if keyboard_hook.is_none() {
+        unsafe {
+            *keyboard_hook = Some(
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(selection_keyboard_observer), None, 0)
+                    .map_err(|error| format!("failed to install selection keyboard hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn mark_selection_activity(source: &str) {
+    let Some(app) = SHELL_BALL_SELECTION_APP_HANDLE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned())
+    else {
+        return;
+    };
+
+    if SELECTION_ACTIVITY_DIRTY.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let _ = app.emit_to(
+        "shell-ball",
+        "desktop-shell-ball:selection-activity",
+        serde_json::json!({
+            "source": source,
+        }),
+    );
+}
+
+unsafe extern "system" fn selection_mouse_observer(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code < 0 {
+        return CallNextHookEx(None, n_code, w_param, l_param);
+    }
+
+    if w_param.0 as u32 == WM_LBUTTONUP {
+        let _point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+        let foreground_window = GetForegroundWindow();
+        let app_handle = SHELL_BALL_SELECTION_APP_HANDLE
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned());
+
+        if let Some(app) = app_handle {
+            if foreground_window.0.is_null()
+                || is_shell_ball_cluster_window(&app, foreground_window)
+            {
+                return CallNextHookEx(None, n_code, w_param, l_param);
+            }
+        }
+
+        mark_selection_activity("pointer");
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+unsafe extern "system" fn selection_keyboard_observer(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code < 0 {
+        return CallNextHookEx(None, n_code, w_param, l_param);
+    }
+
+    if w_param.0 as u32 == WM_KEYUP || w_param.0 as u32 == WM_SYSKEYUP {
+        let keyboard = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let foreground_window = GetForegroundWindow();
+        let app_handle = SHELL_BALL_SELECTION_APP_HANDLE
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned());
+
+        if let Some(app) = app_handle {
+            if foreground_window.0.is_null()
+                || is_shell_ball_cluster_window(&app, foreground_window)
+            {
+                return CallNextHookEx(None, n_code, w_param, l_param);
+            }
+        }
+
+        let virtual_key = keyboard.vkCode as u16;
+        let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+        let control_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+        let is_navigation_key = matches!(
+            virtual_key,
+            key if key == VK_LEFT.0 || key == VK_RIGHT.0 || key == VK_UP.0 || key == VK_DOWN.0 || key == VK_HOME.0 || key == VK_END.0
+        );
+
+        if (shift_down && is_navigation_key) || (control_down && virtual_key == b'A' as u16) {
+            mark_selection_activity("keyboard");
+        }
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
 }
 
 fn read_selection_target_element(

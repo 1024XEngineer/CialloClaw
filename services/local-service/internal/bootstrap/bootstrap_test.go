@@ -24,12 +24,15 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
 		DatabasePath:  filepath.Join(t.TempDir(), "data", "local.db"),
 		Model: config.ModelConfig{
-			Provider:            "openai_responses",
-			ModelID:             "gpt-5.4",
-			Endpoint:            "https://api.openai.com/v1/responses",
-			SingleTaskLimit:     10.0,
-			DailyLimit:          50.0,
-			BudgetAutoDowngrade: true,
+			Provider:             "openai_responses",
+			ModelID:              "gpt-5.4",
+			Endpoint:             "https://api.openai.com/v1/responses",
+			SingleTaskLimit:      10.0,
+			DailyLimit:           50.0,
+			BudgetAutoDowngrade:  true,
+			MaxToolIterations:    4,
+			ContextCompressChars: 2400,
+			ContextKeepRecent:    4,
 		},
 	}
 	seed := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
@@ -135,12 +138,15 @@ func TestNewAllowsFirstRunWithoutSeededSecret(t *testing.T) {
 		WorkspaceRoot: filepath.Join(baseDir, "workspace"),
 		DatabasePath:  filepath.Join(baseDir, "data", "local.db"),
 		Model: config.ModelConfig{
-			Provider:            "openai_responses",
-			ModelID:             "gpt-5.4",
-			Endpoint:            "https://api.openai.com/v1/responses",
-			SingleTaskLimit:     10.0,
-			DailyLimit:          50.0,
-			BudgetAutoDowngrade: true,
+			Provider:             "openai_responses",
+			ModelID:              "gpt-5.4",
+			Endpoint:             "https://api.openai.com/v1/responses",
+			SingleTaskLimit:      10.0,
+			DailyLimit:           50.0,
+			BudgetAutoDowngrade:  true,
+			MaxToolIterations:    4,
+			ContextCompressChars: 2400,
+			ContextKeepRecent:    4,
 		},
 	}
 	app, err := New(cfg)

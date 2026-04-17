@@ -194,10 +194,10 @@
   display: flex;
   flex-direction: column;
   gap: 0.38rem;
-  height: clamp(14.6rem, 56vh, 22.5rem);
+  max-height: clamp(14.6rem, 56vh, 22.5rem);
   min-height: 0;
   overflow-x: hidden;
-  overflow-y: scroll;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0.64rem 0.32rem 0.64rem 0.15rem;
   scrollbar-gutter: stable;
@@ -416,52 +416,6 @@
 
 .shell-ball-bubble-message__delete-control {
   inset-inline-end: 0.42rem;
-}
-
-.shell-ball-bubble-message__intent-actions {
-  display: flex;
-  gap: 0.36rem;
-  justify-content: flex-end;
-  margin-bottom: 0.42rem;
-}
-
-.shell-ball-bubble-message__intent-button {
-  appearance: none;
-  border: 1px solid rgba(132, 118, 99, 0.14);
-  border-radius: 999px;
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 0.48rem;
-  line-height: 1;
-  min-height: 1rem;
-  padding: 0.22rem 0.42rem;
-  transition:
-    background 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease,
-    box-shadow 160ms ease;
-}
-
-.shell-ball-bubble-message__intent-button:hover {
-  transform: translateY(-1px);
-}
-
-.shell-ball-bubble-message__intent-button:focus-visible {
-  box-shadow:
-    0 0 0 2px rgba(255, 251, 244, 0.92),
-    0 0 0 4px rgba(106, 145, 200, 0.22);
-  outline: 0;
-}
-
-.shell-ball-bubble-message__intent-button--muted {
-  background: rgba(255, 255, 255, 0.68);
-  color: var(--shell-ball-copy);
-}
-
-.shell-ball-bubble-message__intent-button--primary {
-  background: rgba(106, 145, 200, 0.14);
-  color: rgba(48, 74, 106, 0.98);
 }
 
 .shell-ball-bubble-zone[data-state="waiting_auth"] {
@@ -1752,7 +1706,7 @@
   }
 
   .shell-ball-bubble-zone__scroll {
-    height: 12.8rem;
+    max-height: 12.8rem;
   }
 
   .shell-ball-surface__body {

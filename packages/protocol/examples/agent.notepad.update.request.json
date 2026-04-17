@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req_notepad_update_demo",
+  "method": "agent.notepad.update",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_demo_notepad_update",
+      "client_time": "2026-04-17T10:55:00+08:00"
+    },
+    "item_id": "todo_002",
+    "action": "move_upcoming"
+  }
+}

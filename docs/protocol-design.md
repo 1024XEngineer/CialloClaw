@@ -81,7 +81,7 @@
 
 - `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点。
 - `run`：执行对象，是后端编排和工具链的运行实例。
-- `bubble_message`：轻量承接对象，用于意图确认、状态反馈和短结果返回。
+- `bubble_message`：轻量承接对象，用于状态反馈和短结果返回。
 - `delivery_result`：正式交付对象，统一描述结果以气泡、文档、结果页、打开文件或任务详情交付。
 - `artifact`：正式产物对象，例如 Markdown 文档、导出文件、截图、结构化结果。
 - `approval_request`：待授权对象，高风险动作必须先落到这里。
@@ -91,7 +91,8 @@
 ### 3.4 方法族说明
 
 - `agent.input.*`：近场承接入口，负责长按语音、悬停输入等。
-- `agent.task.*`：任务生命周期方法，负责创建、确认、详情、控制。
+- `agent.task.*`：任务生命周期方法，负责创建、详情、控制与产物查询。
+- `agent.delivery.*`：正式交付结果的统一解析与打开。
 - `agent.recommendation.*`：主动推荐与反馈。
 - `agent.task_inspector.*`：巡检配置与执行。
 - `agent.notepad.*`：事项与任务之间的桥接。
@@ -214,7 +215,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 5.1 任务状态 `task_status`
 
-- `confirming_intent`：等待用户确认系统识别出的意图。
 - `processing`：任务正在执行。
 - `waiting_auth`：命中高风险动作，等待授权。
 - `waiting_input`：等待用户补充必要输入。
@@ -308,7 +308,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.13 气泡类型 `bubble_message_type`
 
 - `status`
-- `intent_confirm`
 - `result`
 
 ### 5.14 授权决策 / 状态
@@ -331,6 +330,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `recommendation_scene`：`hover / selected_text / idle / error`
 - `recommendation_feedback`：`positive / negative / ignore`
 - `task_control_action`：`pause / resume / cancel / restart`
+- `notepad_action`：`complete / cancel / move_upcoming / toggle_recurring / cancel_recurring / restore / delete`
 - `time_unit`：`minute / hour / day / week`
 - `run_status`：`processing / completed`
 
@@ -475,20 +475,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.recommendation.get`
 - `agent.recommendation.feedback.submit`
 
-#### B. 任务状态 / 巡检
+#### B. 任务状态 / 结果交付 / 巡检
 
 - `agent.task.list`
 - `agent.task.detail.get`
 - `agent.task.control`
+- `agent.task.artifact.list`
+- `agent.task.artifact.open`
+- `agent.delivery.open`
 - `agent.task_inspector.config.get`
 - `agent.task_inspector.config.update`
 - `agent.task_inspector.run`
 - `agent.notepad.list`
+- `agent.notepad.update`
 - `agent.notepad.convert_to_task`
 
 #### C. 仪表盘 / 镜子 / 安全卫士
 
 - `agent.dashboard.overview.get`
+- `agent.dashboard.input.start`
 - `agent.dashboard.module.get`
 - `agent.mirror.overview.get`
 - `agent.security.summary.get`
@@ -496,6 +501,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.security.restore.apply`
 - `agent.security.pending.list`
 - `agent.security.respond`
+- `agent.security.audit.list`
 
 #### D. 设置中心
 
@@ -519,8 +525,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **悬浮球单击 / 双击 / 长按 / 上滑 / 下滑 / 悬停** 属于前端交互动作，本地先进入前端状态机，再映射到 `agent.input.submit`、`agent.task.start` 或本地 UI 行为。
 - **文本选中承接、文件拖拽承接、错误信息承接** 统一收敛到 `agent.task.start`。
+- **意图确认与纠偏** 统一使用 `agent.task.confirm`，用于采纳系统猜测或覆盖为用户修正后的意图。
 - 气泡置顶 / 删除 / 恢复：优先作为前端局部能力，必要时再引出设置或历史管理接口
-- **主动推荐与反馈** 统一使用 `agent.recommendation.get` 和 `agent.recommendation.feedback.submit`。`
+- **主动推荐与反馈** 统一使用 `agent.recommendation.get` 和 `agent.recommendation.feedback.submit`。
+- **任务成果列表、产物打开与最终交付打开** 统一使用 `agent.task.artifact.*` 与 `agent.delivery.open`。
 - 长结果自动分流：由交付内核决定，不新增方法
 - 一键中断：复用 `agent.task.control`
 - **插件、多模型、技能安装** 当前阶段先通过 `agent.settings.get / update` 与仪表盘模块承接，待对象、权限与来源字段完全冻结后再升级为独立正式接口。
@@ -539,12 +547,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **接口调用时机**：
   - 用户长按悬浮球说完一句话并松开时
   - 用户悬停输入框输入一句轻量文本并提交时
+  - 用户通过仪表盘固定悬浮入口提交一段自由文本时
 - **系统处理**：
   - 统一承接语音转写文本和轻量输入文本
   - 结合当前页面、选中文本、附带文件做上下文识别
-  - 创建 `task`，并进入意图确认或直接执行
+  - 创建 `task`，并直接进入处理或等待必要补充输入
 - **入参**：会话信息、触发来源、输入内容、上下文、语音元信息、执行偏好
-- **出参**：任务对象、气泡消息
+- **出参**：任务对象、气泡消息、按需附带正式交付结果
 
 ### agent.input.submit 入参说明
 
@@ -553,16 +562,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `request_meta.trace_id`      | 请求链路追踪 ID                |
 | `request_meta.client_time`   | 前端发起时间                   |
 | `session_id`                 | 当前会话 ID                    |
-| `source`                     | 来源位置，如悬浮球             |
+| `source`                     | 来源位置，如悬浮球、仪表盘     |
 | `trigger`                    | 触发方式，如语音提交、轻量输入 |
-| `input.type`                 | 输入对象类型                   |
+| `input.type`                 | 输入对象类型，固定为 `text`    |
 | `input.text`                 | 用户输入文本                   |
 | `input.input_mode`           | 输入模式，语音或文字           |
 | `context.page`               | 当前页面上下文                 |
 | `context.selection.text`     | 当前选中文本                   |
 | `context.files`              | 当前附带文件列表               |
 | `voice_meta`                 | 语音会话元信息                 |
-| `options.confirm_required`   | 是否先走意图确认               |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
 
 ### agent.input.submit 入参示例
@@ -578,32 +586,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "client_time": "2026-04-07T10:20:00+08:00"
     },
     "session_id": "sess_001",
-    "source": "floating_ball",
-    "trigger": "voice_commit",
+    "source": "dashboard",
+    "trigger": "hover_text_input",
     "input": {
       "type": "text",
-      "text": "帮我总结一下这段内容",
-      "input_mode": "voice"
+      "text": "帮我整理一下这页内容，输出成三点摘要",
+      "input_mode": "text"
     },
     "context": {
       "page": {
-        "title": "当前页面标题",
+        "title": "Q3 复盘草稿",
         "app_name": "browser",
         "url": "local://current-page"
       },
       "selection": {
-        "text": "原始选中文本"
+        "text": "这里是一段当前选中的补充上下文"
       },
       "files": []
     },
-    "voice_meta": {
-      "voice_session_id": "vs_001",
-      "is_locked_session": true,
-      "asr_confidence": 0.93,
-      "segment_id": "seg_003"
-    },
     "options": {
-      "confirm_required": true,
       "preferred_delivery": "bubble"
     }
   }
@@ -612,16 +613,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.input.submit 出参说明
 
-| 字段                     | 中文说明       |
-| ------------------------ | -------------- |
-| `data.task.task_id`      | 新建任务 ID    |
-| `data.task.title`        | 任务标题       |
-| `data.task.source_type`  | 任务来源类型   |
-| `data.task.status`       | 当前任务状态   |
-| `data.task.intent`       | 当前推测意图   |
-| `data.task.current_step` | 当前步骤       |
-| `data.bubble_message`    | 气泡承接内容   |
-| `meta.server_time`       | 服务端响应时间 |
+| 字段                     | 中文说明                         |
+| ------------------------ | -------------------------------- |
+| `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.title`        | 任务标题                         |
+| `data.task.source_type`  | 任务来源类型                     |
+| `data.task.status`       | 当前任务状态                     |
+| `data.task.current_step` | 当前步骤                         |
+| `data.bubble_message`    | 气泡承接内容                     |
+| `data.delivery_result`   | 若后端已直接完成，可返回正式交付 |
+| `meta.server_time`       | 服务端响应时间                   |
 
 ### agent.input.submit 出参示例
 
@@ -633,23 +634,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_001",
-        "title": "总结当前内容",
-        "source_type": "voice",
-        "status": "confirming_intent",
-        "intent": {
-          "name": "summarize",
-          "arguments": {
-            "style": "key_points"
-          }
-        },
-        "current_step": "intent_confirmation"
+        "title": "整理当前页面内容",
+        "source_type": "hover_input",
+        "status": "processing",
+        "current_step": "analyze_input"
       },
       "bubble_message": {
         "bubble_id": "bubble_001",
         "task_id": "task_001",
-        "type": "intent_confirm",
-        "text": "你是想总结这段内容吗？"
-      }
+        "type": "status",
+        "text": "已接收你的输入，正在整理当前页面内容。"
+      },
+      "delivery_result": null
     },
     "meta": {
       "server_time": "2026-04-07T10:20:01+08:00"
@@ -669,54 +665,30 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 用户拖拽文件到悬浮球
   - 系统识别到错误信息并进入承接流程
 - **系统处理**：
-  - 识别任务对象
-  - 分析意图
-  - 根据配置直接处理或进入意图确认
-- **入参**：会话信息、触发方式、任务输入对象、意图、交付偏好
-
-### 8.1.3 `agent.task.artifact.list`
-
-- **请求方式**：JSON-RPC 2.0
-- **接口调用时机**：任务详情页、仪表盘结果区需要列出指定 `task_id` 的真实 artifact 时。
-- **系统处理**：按 `task_id` 查询真实 artifact store，并返回稳定分页结构。
-- **入参**：`task_id`、`limit`、`offset`
-- **出参**：`items` + `page`
-
-### 8.1.4 `agent.task.artifact.open`
-
-- **请求方式**：JSON-RPC 2.0
-- **接口调用时机**：用户在任务详情或结果区点击某个 artifact，需要得到稳定打开动作时。
-- **系统处理**：根据 `task_id + artifact_id` 定位真实 artifact，并返回与之对齐的 `delivery_result`、`open_action`、`resolved_payload`。
-- **入参**：`task_id`、`artifact_id`
-- **出参**：`artifact`、`delivery_result`、`open_action`、`resolved_payload`
-
-### 8.1.5 `agent.delivery.open`
-
-- **请求方式**：JSON-RPC 2.0
-- **接口调用时机**：前端需要统一打开最终交付对象时，无论入口来自任务主交付还是某个 artifact。
-- **系统处理**：
-  - 若携带 `artifact_id`，则优先基于真实 artifact 解析打开动作；
-  - 若未携带 `artifact_id`，则基于任务当前 `delivery_result` 解析打开动作；
-  - 返回统一的 `delivery_result`、`open_action`、`resolved_payload`，供前端直接执行打开。
-- **入参**：`task_id`，可选 `artifact_id`
-- **出参**：`delivery_result`、`open_action`、`resolved_payload`，按需附带 `artifact`
-- **出参**：任务对象、气泡消息、交付结果（如已完成）
+  - 识别输入对象与对象上下文
+  - 创建正式 `task` 并决定处理路径
+  - 根据配置直接处理或进入等待补充输入状态
+- **入参**：会话信息、触发方式、任务输入对象、补充上下文、交付偏好
+- **出参**：任务对象、气泡消息、按需附带正式交付结果
 
 ### agent.task.start 入参说明
 
-| 字段                 | 中文说明                           |
-| -------------------- | ---------------------------------- |
-| `session_id`         | 当前会话 ID                        |
-| `source`             | 来源位置                           |
-| `trigger`            | 触发动作，如文本选中点击、文件拖拽 |
-| `input.type`         | 输入对象类型                       |
-| `input.text`         | 文本内容                           |
-| `input.files`        | 文件列表                           |
-| `input.page_context` | 页面上下文                         |
-| `intent.name`        | 明确指定的意图                     |
-| `intent.arguments`   | 意图参数                           |
-| `delivery.preferred` | 优先交付方式                       |
-| `delivery.fallback`  | 兜底交付方式                       |
+| 字段                          | 中文说明                           |
+| ----------------------------- | ---------------------------------- |
+| `request_meta.trace_id`       | 请求链路追踪 ID                    |
+| `request_meta.client_time`    | 前端发起时间                       |
+| `session_id`                  | 当前会话 ID                        |
+| `source`                      | 来源位置                           |
+| `trigger`                     | 触发动作，如文本选中点击、文件拖拽 |
+| `input.type`                  | 输入对象类型                       |
+| `input.text`                  | 文本内容                           |
+| `input.files`                 | 文件列表                           |
+| `input.error_message`         | 错误信息内容                       |
+| `input.page_context`          | 页面上下文                         |
+| `context.selection.text`      | 当前选区补充文本                   |
+| `context.files`               | 补充文件上下文                     |
+| `delivery.preferred`          | 优先交付方式                       |
+| `delivery.fallback`           | 兜底交付方式                       |
 
 ### agent.task.start 入参示例
 
@@ -742,9 +714,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "app_name": "browser"
       }
     },
-    "intent": {
-      "name": "explain",
-      "arguments": {}
+    "context": {
+      "selection": {
+        "text": "这里是补充上下文"
+      },
+      "files": []
     },
     "delivery": {
       "preferred": "bubble",
@@ -776,25 +750,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_101",
         "title": "解释选中文本",
         "source_type": "selected_text",
-        "status": "completed",
-        "intent": {
-          "name": "explain",
-          "arguments": {}
-        },
-        "current_step": "return_result"
+        "status": "processing",
+        "current_step": "analyze_object"
       },
       "bubble_message": {
         "bubble_id": "bubble_101",
         "task_id": "task_101",
-        "type": "result",
-        "text": "这段内容的意思是：……"
+        "type": "status",
+        "text": "已接收这段选中文本，正在分析处理路径。"
       },
-      "delivery_result": {
-        "type": "bubble",
-        "title": "解释结果",
-        "payload": {},
-        "preview_text": "结果已通过气泡返回"
-      }
+      "delivery_result": null
     },
     "meta": {
       "server_time": "2026-04-07T10:31:01+08:00"
@@ -811,7 +776,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：
   - 系统猜测出意图后，用户点击“确认”
-  - 用户认为猜错时，提交修正后的意图
+  - 用户认为系统猜错时，提交修正后的意图
 - **系统处理**：
   - 采纳确认结果
   - 更新任务意图
@@ -819,10 +784,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **入参**：任务 ID、是否确认、修正后的意图
 - **出参**：更新后的任务对象、状态气泡
 
+补充约束：
+
+- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时 `corrected_intent` 可省略；若传入也应被忽略，不得覆盖当前意图。
+- `confirmed = false` 时，调用方应传入完整的 `corrected_intent`，后端以该对象覆盖任务当前意图后再推进执行。
+- 本接口只处理“意图确认 / 纠偏”这一承接阶段，不替代 `agent.task.control` 的暂停、继续、取消、重启控制语义。
+
 ### agent.task.confirm 入参说明
 
 | 字段                         | 中文说明             |
 | ---------------------------- | -------------------- |
+| `request_meta.trace_id`      | 请求链路追踪 ID      |
+| `request_meta.client_time`   | 前端发起时间         |
 | `task_id`                    | 目标任务 ID          |
 | `confirmed`                  | 是否确认系统猜测正确 |
 | `corrected_intent.name`      | 修正后的意图名称     |
@@ -859,7 +832,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------- | ---------------- |
 | `data.task.task_id`   | 任务 ID          |
 | `data.task.status`    | 更新后的任务状态 |
-| `data.task.intent`    | 生效后的意图     |
+| `data.task.intent`    | 生效后的任务意图 |
+| `data.task.current_step` | 当前步骤      |
 | `data.bubble_message` | 状态提示气泡     |
 
 ### agent.task.confirm 出参示例
@@ -899,7 +873,251 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.1.4 `agent.recommendation.get`
+### 8.1.4 `agent.task.artifact.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户打开任务详情页成果区时
+  - 仪表盘结果区需要列出指定任务真实产物时
+- **系统处理**：
+  - 按 `task_id` 查询真实 artifact store
+  - 返回稳定分页结构，供前端渲染列表和翻页
+- **入参**：任务 ID、分页参数
+- **出参**：产物列表、分页信息
+
+### agent.task.artifact.list 入参说明
+
+| 字段      | 中文说明    |
+| --------- | ----------- |
+| `task_id` | 目标任务 ID |
+| `limit`   | 每页条数    |
+| `offset`  | 偏移量      |
+
+### agent.task.artifact.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_artifact_list_001",
+  "method": "agent.task.artifact.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_artifact_list_001",
+      "client_time": "2026-04-07T10:43:00+08:00"
+    },
+    "task_id": "task_201",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.task.artifact.list 出参说明
+
+| 字段         | 中文说明 |
+| ------------ | -------- |
+| `data.items` | 产物列表 |
+| `data.page`  | 分页信息 |
+
+### agent.task.artifact.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_artifact_list_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "artifact_id": "art_001",
+          "task_id": "task_201",
+          "artifact_type": "generated_doc",
+          "title": "Q3复盘.md",
+          "path": "D:/CialloClawWorkspace/Q3复盘.md",
+          "mime_type": "text/markdown"
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T10:43:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.1.5 `agent.task.artifact.open`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户在任务详情或结果区点击某个 artifact 时
+- **系统处理**：
+  - 根据 `task_id + artifact_id` 定位真实 artifact
+  - 返回与之对齐的 `delivery_result`、`open_action`、`resolved_payload`
+- **入参**：任务 ID、产物 ID
+- **出参**：产物对象、交付结果、打开动作、解析后的载荷
+
+### agent.task.artifact.open 入参说明
+
+| 字段          | 中文说明 |
+| ------------- | -------- |
+| `task_id`     | 任务 ID  |
+| `artifact_id` | 产物 ID  |
+
+### agent.task.artifact.open 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_artifact_open_001",
+  "method": "agent.task.artifact.open",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_artifact_open_001",
+      "client_time": "2026-04-07T10:44:00+08:00"
+    },
+    "task_id": "task_201",
+    "artifact_id": "art_001"
+  }
+}
+```
+
+### agent.task.artifact.open 出参说明
+
+| 字段                  | 中文说明         |
+| --------------------- | ---------------- |
+| `data.artifact`       | 目标产物对象     |
+| `data.delivery_result`| 交付结果         |
+| `data.open_action`    | 最终打开动作     |
+| `data.resolved_payload` | 解析后的打开载荷 |
+
+### agent.task.artifact.open 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_artifact_open_001",
+  "result": {
+    "data": {
+      "artifact": {
+        "artifact_id": "art_001",
+        "task_id": "task_201",
+        "artifact_type": "generated_doc",
+        "title": "Q3复盘.md",
+        "path": "D:/CialloClawWorkspace/Q3复盘.md",
+        "mime_type": "text/markdown"
+      },
+      "delivery_result": {
+        "type": "open_file",
+        "title": "打开产物",
+        "payload": {
+          "path": "D:/CialloClawWorkspace/Q3复盘.md"
+        },
+        "preview_text": "已打开文件"
+      },
+      "open_action": "open_file",
+      "resolved_payload": {
+        "path": "D:/CialloClawWorkspace/Q3复盘.md"
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T10:44:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.1.6 `agent.delivery.open`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 前端需要统一打开最终交付对象时
+  - 入口可能来自任务主交付、结果页、任务详情或某个 artifact
+- **系统处理**：
+  - 若携带 `artifact_id`，优先基于真实 artifact 解析打开动作
+  - 若未携带 `artifact_id`，则基于任务当前 `delivery_result` 解析打开动作
+  - 返回统一的 `delivery_result`、`open_action`、`resolved_payload`
+- **入参**：任务 ID，可选产物 ID
+- **出参**：交付结果、打开动作、解析后的载荷，按需附带产物对象
+
+### agent.delivery.open 入参说明
+
+| 字段          | 中文说明                   |
+| ------------- | -------------------------- |
+| `task_id`     | 任务 ID                    |
+| `artifact_id` | 从具体产物入口打开时可传入 |
+
+### agent.delivery.open 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_delivery_open_001",
+  "method": "agent.delivery.open",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_delivery_open_001",
+      "client_time": "2026-04-07T10:45:00+08:00"
+    },
+    "task_id": "task_201"
+  }
+}
+```
+
+### agent.delivery.open 出参说明
+
+| 字段                    | 中文说明         |
+| ----------------------- | ---------------- |
+| `data.delivery_result`  | 主交付对象       |
+| `data.open_action`      | 最终打开动作     |
+| `data.resolved_payload` | 解析后的打开载荷 |
+| `data.artifact`         | 命中的产物对象   |
+
+### agent.delivery.open 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_delivery_open_001",
+  "result": {
+    "data": {
+      "delivery_result": {
+        "type": "workspace_document",
+        "title": "处理结果",
+        "payload": {
+          "path": "D:/CialloClawWorkspace/Q3复盘.md",
+          "task_id": "task_201"
+        },
+        "preview_text": "已为你写入文档并打开"
+      },
+      "open_action": "open_file",
+      "resolved_payload": {
+        "path": "D:/CialloClawWorkspace/Q3复盘.md"
+      },
+      "artifact": null
+    },
+    "meta": {
+      "server_time": "2026-04-07T10:45:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.1.7 `agent.recommendation.get`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：
@@ -907,7 +1125,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 当前场景满足主动推荐触发条件
 - **系统处理**：
   - 结合当前页面、选区、场景信号生成推荐
-  - 返回推荐项与对应意图
+  - 返回推荐项列表与是否命中冷却
 - **入参**：来源、场景、上下文
 - **出参**：推荐项列表、是否命中冷却
 
@@ -952,7 +1170,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.items`                     | 推荐项列表       |
 | `data.items[].recommendation_id` | 推荐项 ID        |
 | `data.items[].text`              | 推荐文案         |
-| `data.items[].intent`            | 推荐对应的意图   |
 
 ### agent.recommendation.get 出参示例
 
@@ -966,23 +1183,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "items": [
         {
           "recommendation_id": "rec_001",
-          "text": "要不要我帮你总结这段内容？",
-          "intent": {
-            "name": "summarize",
-            "arguments": {
-              "style": "key_points"
-            }
-          }
+          "text": "要不要我帮你总结这段内容？"
         },
         {
           "recommendation_id": "rec_002",
-          "text": "也可以直接翻译这段内容",
-          "intent": {
-            "name": "translate",
-            "arguments": {
-              "target_language": "zh-CN"
-            }
-          }
+          "text": "也可以直接翻译这段内容"
         }
       ]
     },
@@ -996,7 +1201,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.1.5 `agent.recommendation.feedback.submit`
+### 8.1.8 `agent.recommendation.feedback.submit`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户对推荐点击喜欢、不喜欢、忽略
@@ -1053,7 +1258,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 }
 ```
 
----
 
 ## 8.2 任务状态 / 任务巡检
 
@@ -1567,7 +1771,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户查看近期要做、后续安排、重复事项、已结束时
-- **系统处理**：返回指定分组的事项列表
+- **系统处理**：返回指定分组的事项列表，并在同一 read model 里补足 notes 详情页需要的详情字段
 - **入参**：分组、分页
 - **出参**：事项列表、分页信息
 
@@ -1600,15 +1804,27 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.notepad.list 出参说明
 
-| 字段                            | 中文说明   |
-| ------------------------------- | ---------- |
-| `data.items`                    | 事项列表   |
-| `data.items[].item_id`          | 事项 ID    |
-| `data.items[].title`            | 事项标题   |
-| `data.items[].bucket`           | 所属分组   |
-| `data.items[].status`           | 当前状态   |
-| `data.items[].agent_suggestion` | Agent 建议 |
-| `data.page`                     | 分页信息   |
+| 字段                                  | 中文说明                 |
+| ------------------------------------- | ------------------------ |
+| `data.items`                          | 事项列表                 |
+| `data.items[].item_id`                | 事项 ID                  |
+| `data.items[].title`                  | 事项标题                 |
+| `data.items[].bucket`                 | 所属分组                 |
+| `data.items[].status`                 | 当前状态                 |
+| `data.items[].type`                   | 事项类型                 |
+| `data.items[].due_at`                 | 到期时间                 |
+| `data.items[].agent_suggestion`       | Agent 建议               |
+| `data.items[].recurring_enabled`      | 重复规则当前是否开启     |
+| `data.items[].note_text`              | 背景与说明               |
+| `data.items[].prerequisite`           | 前置条件                 |
+| `data.items[].repeat_rule`            | 重复规则文本             |
+| `data.items[].next_occurrence_at`     | 下次发生时间             |
+| `data.items[].recent_instance_status` | 最近一次执行状态摘要     |
+| `data.items[].effective_scope`        | 生效范围                 |
+| `data.items[].ended_at`               | 结束时间                 |
+| `data.items[].linked_task_id`         | 已转正式任务后的 task ID |
+| `data.items[].related_resources`      | 相关资料列表             |
+| `data.page`                           | 分页信息                 |
 
 ### agent.notepad.list 出参示例
 
@@ -1626,7 +1842,30 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "status": "due_today",
           "type": "one_time",
           "due_at": "2026-04-07T18:00:00+08:00",
-          "agent_suggestion": "先生成一个 3 点摘要"
+          "agent_suggestion": "先生成一个 3 点摘要",
+          "recurring_enabled": null,
+          "note_text": "先把本周关键结论和风险项整理成一页摘要，再决定是否扩写为正式文档。",
+          "prerequisite": "确认会议纪要和图表截图都已齐全。",
+          "repeat_rule": null,
+          "next_occurrence_at": null,
+          "recent_instance_status": null,
+          "effective_scope": null,
+          "ended_at": null,
+          "linked_task_id": null,
+          "related_resources": [
+            {
+              "resource_id": "todo_001_minutes",
+              "label": "会议纪要目录",
+              "path": "workspace/meetings",
+              "resource_type": "folder",
+              "open_action": "reveal_in_folder",
+              "open_payload": {
+                "path": "workspace/meetings",
+                "task_id": null,
+                "url": null
+              }
+            }
+          ]
         }
       ],
       "page": {
@@ -1646,13 +1885,91 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.8 `agent.notepad.convert_to_task`
+### 8.2.8 `agent.notepad.update`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户在 notes 详情页对事项执行状态变更动作时
+- **系统处理**：按动作更新事项状态或分组，并返回更新后的事项结果
+- **入参**：事项 ID、动作类型
+- **出参**：更新后的事项、建议刷新的分组、按需附带删除结果
+
+当前稳定支持的动作：
+
+- `complete`
+- `cancel`
+- `move_upcoming`
+- `toggle_recurring`
+- `cancel_recurring`
+- `restore`
+- `delete`
+
+### agent.notepad.update 入参说明
+
+| 字段      | 中文说明               |
+| --------- | ---------------------- |
+| `item_id` | 事项 ID                |
+| `action`  | 变更动作，取值来自 `notepad_action` |
+
+### agent.notepad.update 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_notepad_update_001",
+  "method": "agent.notepad.update",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_notepad_update_001",
+      "client_time": "2026-04-07T10:55:30+08:00"
+    },
+    "item_id": "todo_001",
+    "action": "complete"
+  }
+}
+```
+
+### agent.notepad.update 出参说明
+
+| 字段                     | 中文说明                    |
+| ------------------------ | --------------------------- |
+| `data.notepad_item`      | 更新后的事项；若删除则为 `null` |
+| `data.refresh_groups`    | 建议前端重新拉取的分组列表  |
+| `data.deleted_item_id`   | 若执行删除动作，返回被删除的事项 ID |
+
+### agent.notepad.update 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_notepad_update_001",
+  "result": {
+    "data": {
+      "notepad_item": {
+        "item_id": "todo_001",
+        "bucket": "closed",
+        "status": "completed",
+        "ended_at": "2026-04-07T10:55:31+08:00"
+      },
+      "refresh_groups": ["upcoming", "closed"],
+      "deleted_item_id": null
+    },
+    "meta": {
+      "server_time": "2026-04-07T10:55:31+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.2.9 `agent.notepad.convert_to_task`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
 - **系统处理**：将事项转成任务，并保留来源关系
 - **入参**：事项 ID、确认标记
-- **出参**：新任务对象
+- **出参**：新任务对象、更新后的来源事项、建议刷新的事项分组
 
 ### agent.notepad.convert_to_task 入参说明
 
@@ -1681,12 +1998,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.notepad.convert_to_task 出参说明
 
-| 字段                    | 中文说明              |
-| ----------------------- | --------------------- |
-| `data.task.task_id`     | 新任务 ID             |
-| `data.task.title`       | 任务标题              |
-| `data.task.source_type` | 来源类型，通常为 `todo` |
-| `data.task.status`      | 初始任务状态          |
+| 字段                         | 中文说明                        |
+| ---------------------------- | ------------------------------- |
+| `data.task.task_id`          | 新任务 ID                       |
+| `data.task.title`            | 任务标题                        |
+| `data.task.source_type`      | 来源类型，通常为 `todo`         |
+| `data.task.status`           | 初始任务状态                    |
+| `data.notepad_item.item_id`  | 来源事项 ID                     |
+| `data.notepad_item.bucket`   | 来源事项仍所在的 bucket         |
+| `data.notepad_item.linked_task_id` | 来源事项关联的新 task ID |
+| `data.refresh_groups`        | 建议前端重新拉取的事项分组列表  |
 
 ### agent.notepad.convert_to_task 出参示例
 
@@ -1701,7 +2022,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "title": "整理 Q3 复盘要点",
         "source_type": "todo",
         "status": "confirming_intent"
-      }
+      },
+      "notepad_item": {
+        "item_id": "todo_001",
+        "bucket": "upcoming",
+        "linked_task_id": "task_401"
+      },
+      "refresh_groups": ["upcoming"]
     },
     "meta": {
       "server_time": "2026-04-07T10:56:01+08:00"
@@ -1799,7 +2126,79 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.2 `agent.dashboard.module.get`
+### 8.3.2 `agent.dashboard.input.start`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户通过中心球语音输入并完成转写时
+  - 用户通过中心球轻量文本输入框提交跳转指令时
+- **系统处理**：
+  - 接收用户输入文本
+  - 识别目标页面并解析跳转路由
+  - 返回是否匹配成功及目标页面信息
+- **入参**：会话 ID、输入模式、输入文本
+- **出参**：是否匹配成功、目标页面、目标路由、识别置信度
+
+### agent.dashboard.input.start 入参说明
+
+| 字段         | 中文说明                         |
+| ------------ | -------------------------------- |
+| `session_id` | 当前会话标识                     |
+| `input_mode` | 输入模式，`voice / text`         |
+| `input_text` | 用户最终文本，语音输入需先完成转写 |
+
+### agent.dashboard.input.start 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_dashboard_input_start_001",
+  "method": "agent.dashboard.input.start",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_dashboard_input_start_001",
+      "client_time": "2026-04-07T11:00:30+08:00"
+    },
+    "session_id": "sess_001",
+    "input_mode": "voice",
+    "input_text": "打开安全卫士页面"
+  }
+}
+```
+
+### agent.dashboard.input.start 出参说明
+
+| 字段               | 中文说明             |
+| ------------------ | -------------------- |
+| `data.matched`     | 是否成功匹配目标页面 |
+| `data.target_page` | 目标页面编码         |
+| `data.target_url`  | 目标路由             |
+| `data.confidence`  | 识别置信度           |
+
+### agent.dashboard.input.start 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_dashboard_input_start_001",
+  "result": {
+    "data": {
+      "matched": true,
+      "target_page": "security_guard",
+      "target_url": "app://dashboard/security",
+      "confidence": 0.96
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:00:31+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.3.3 `agent.dashboard.module.get`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户切换仪表盘一级模块时
@@ -1873,7 +2272,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.3 `agent.mirror.overview.get`
+### 8.3.4 `agent.mirror.overview.get`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入镜子页时
@@ -1957,7 +2356,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.4 `agent.security.summary.get`
+### 8.3.5 `agent.security.summary.get`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入安全卫士总览页时
@@ -2026,7 +2425,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.5 `agent.security.pending.list`
+### 8.3.6 `agent.security.pending.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户查看待确认操作列表时
@@ -2107,7 +2506,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.6 `agent.security.respond`
+### 8.3.7 `agent.security.respond`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“允许本次”或“拒绝本次”时
@@ -2190,7 +2589,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.7 `agent.security.restore_points.list`
+### 8.3.8 `agent.security.restore_points.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在安全卫士或任务详情中查看恢复点列表时
@@ -2270,7 +2669,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.8 `agent.security.restore.apply`
+### 8.3.9 `agent.security.restore.apply`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户选定某个恢复点并发起回滚时
@@ -2404,6 +2803,88 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ```
 
 ---
+
+### 8.3.10 `agent.security.audit.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户在安全卫士中查看审计明细时
+  - 任务详情需要展示审计区时
+- **系统处理**：
+  - 按任务或全局范围拉取审计记录
+  - 返回稳定分页结构供前端展示
+- **入参**：可选任务 ID、分页参数
+- **出参**：审计记录列表、分页信息
+
+### agent.security.audit.list 入参说明
+
+| 字段      | 中文说明                 |
+| --------- | ------------------------ |
+| `task_id` | 可选的任务 ID            |
+| `limit`   | 每页条数                 |
+| `offset`  | 分页偏移                 |
+
+### agent.security.audit.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_audit_list_001",
+  "method": "agent.security.audit.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_audit_list_001",
+      "client_time": "2026-04-07T11:07:00+08:00"
+    },
+    "task_id": "task_301",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.security.audit.list 出参说明
+
+| 字段         | 中文说明     |
+| ------------ | ------------ |
+| `data.items` | 审计记录列表 |
+| `data.page`  | 分页信息     |
+
+### agent.security.audit.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_audit_list_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "audit_id": "audit_001",
+          "task_id": "task_301",
+          "type": "recovery",
+          "action": "restore_apply",
+          "summary": "已根据恢复点 rp_001 恢复 1 个对象。",
+          "target": "workspace/notes/output.md",
+          "result": "success",
+          "created_at": "2026-04-07T11:06:01+08:00"
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:07:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
 
 ## 8.4 设置中心
 

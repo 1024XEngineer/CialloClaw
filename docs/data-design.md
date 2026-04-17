@@ -170,6 +170,9 @@
 - TodoItem 与 Task 明确分层：TodoItem 表示未来安排或巡检事项，Task 表示已进入执行。
 - RecurringRule 描述重复规则，不直接等同于任务实例。
 - TodoItem 可关联一个或多个 RecurringRule，也可在人工确认后转换为 Task。
+- `notes` 详情补强继续挂在既有 `todo_items / recurring_rules` 语义上推进，不新增独立 `note_details` 或平行读模型真源表。
+- owner-5 为 notes 详情预留的底座字段优先落在既有对象扩展上：`todo_items` 侧承接 `note_text / prerequisite / planned_at / source_bucket / previous_bucket / previous_due_at / previous_status / ended_at / related_resources`，`recurring_rules` 侧承接 `repeat_rule_text / next_occurrence_at / recent_instance_status / effective_scope / recurring_enabled`。
+- notes 动作底座（complete / cancel / restore / toggle-recurring / delete）应直接更新既有 `todo_items / recurring_rules` 生命周期，不得绕过它们直接改写 `tasks`。
 - MemorySummary、MemoryCandidate、RetrievalHit 通过引用关联 Task 与 Run，不混存原始运行态。
 - SkillManifest、BlueprintDefinition、PromptTemplateVersion 与具体 Run 之间必须可追踪，便于 Trace / Eval、回放和问题定位。
 - TraceRecord、EvalSnapshot、Hook 记录、审查结果和熔断事件应与 Task / Run / Step 形成稳定引用关系。
@@ -201,6 +204,12 @@
 | `prompt_template_versions` | Prompt 模板 | 前馈层 | Prompt Composer | Prompt 版本 |
 | `trace_records` | 运行轨迹 | 排障、Eval | Trace Engine | LLM、规则、延迟、成本 |
 | `eval_snapshots` | 评估快照 | Eval、回放 | Eval Engine | 质量和回归结果 |
+
+### 5.6 Notes detail enrichment guidance
+
+- 当前 notes 详情补强属于 owner-5 数据底座准备工作，而不是新增协议对象。
+- 运行态可以先维护 richer note metadata，RPC 暴露前必须由 4 号在 `packages/protocol` 冻结字段与方法。
+- 如果后续需要持久化 notes 详情补强字段，应扩展既有 `todo_items / recurring_rules` 存储结构，而不是新建平行真源。
 
 ---
 
@@ -270,6 +279,7 @@
 - `todo_items.item_id`：巡检事项主键，表示尚未进入正式执行态的未来安排。
 - `todo_items.bucket`：事项桶位，区分 `upcoming / later / recurring_rule / closed` 这类用户可见分组。
 - `todo_items.status`：事项状态，不得直接映射成 `task.status`。
+- `todo_items.source_bucket / previous_bucket / previous_due_at / previous_status`：记录事项最近一次关闭前的可恢复位置、计划时间和状态，用于重启后仍可正确 restore。
 - `todo_items.linked_task_id`：事项被升级为正式任务后才允许写入，用于建立来源追踪。
 - `todo_items.source_path / source_line`：用于把巡检结果精确回链到 Markdown 来源。
 - `recurring_rules.rule_type / cron_expr / interval_*`：用于描述重复规则与提醒策略，不直接等价于任务实例。
@@ -409,9 +419,18 @@ CREATE TABLE todo_items (
     status TEXT NOT NULL,                        -- 当前状态
     source_path TEXT,                            -- 来源文件路径
     source_line INTEGER,                         -- 来源行号
+    source_bucket TEXT,                          -- 最近一次关闭前或原始开放桶位
     due_at TEXT,                                 -- 截止时间
     tags_json TEXT,                              -- 标签(JSON)
     agent_suggestion TEXT,                       -- Agent建议
+    note_text TEXT,                              -- 备注正文/详情摘要
+    prerequisite TEXT,                           -- 前置条件
+    planned_at TEXT,                             -- 原计划时间
+    previous_bucket TEXT,                        -- 最近一次关闭前桶位
+    previous_due_at TEXT,                        -- 最近一次关闭前计划时间
+    previous_status TEXT,                        -- 最近一次关闭前状态
+    ended_at TEXT,                               -- 结束时间
+    related_resources_json TEXT,                 -- 相关资料(JSON)
     linked_task_id TEXT,                         -- 转任务后的task_id
     created_at TEXT NOT NULL,                    -- 创建时间
     updated_at TEXT NOT NULL                     -- 更新时间
@@ -432,6 +451,10 @@ CREATE TABLE recurring_rules (
     interval_unit TEXT,                          -- 间隔单位(day/week/month)
     reminder_strategy TEXT NOT NULL,             -- 提醒策略
     enabled INTEGER NOT NULL DEFAULT 1,          -- 是否启用
+    repeat_rule_text TEXT,                       -- 规则展示文本
+    next_occurrence_at TEXT,                     -- 下次发生时间
+    recent_instance_status TEXT,                 -- 最近一次状态
+    effective_scope TEXT,                        -- 生效范围
     created_at TEXT NOT NULL,                    -- 创建时间
     updated_at TEXT NOT NULL,                    -- 更新时间,
     FOREIGN KEY(item_id) REFERENCES todo_items(item_id)

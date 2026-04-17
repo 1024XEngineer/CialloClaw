@@ -656,7 +656,12 @@ fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
         .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| Ok(install_system_tray(app)?))
+        .setup(|app| {
+            selection::install_selection_activity_hook(app.handle())
+                .map_err(|error| std::io::Error::other(error))?;
+
+            Ok(install_system_tray(app)?)
+        })
         .invoke_handler(tauri::generate_handler![
             named_pipe_request,
             named_pipe_subscribe,

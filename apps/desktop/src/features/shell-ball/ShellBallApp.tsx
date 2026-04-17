@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEventListener } from "ahooks";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
+import { ShellBallSelectionProvider } from "./selection/selection.provider";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
@@ -20,7 +21,6 @@ import {
   hideShellBallWindow,
   shellBallWindowLabels,
   showShellBallWindow,
-  startShellBallWindowDragging,
 } from "../../platform/shellBallWindowController";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 
@@ -207,7 +207,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
-  const { rootRef, windowFrame } = useShellBallWindowMetrics({ role: "ball" });
+  const {
+    beginBallWindowPointerDrag,
+    endBallWindowPointerDrag,
+    rootRef,
+    updateBallWindowPointerDrag,
+    windowFrame,
+  } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
@@ -502,42 +508,66 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, [handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPrompt]);
 
   return (
-    <ShellBallSurface
-      containerRef={rootRef}
-      dashboardTransitionPhase={dashboardTransitionPhase}
-      fileDropActive={shouldShowShellBallFileDropOverlay({
-        fileDropActive,
-      })}
-      textDropActive={shouldArmShellBallTextDropTarget({
-        fileDropActive,
-        textDragActive,
-        visualState,
-      })}
-      visualState={visualState}
-      selectionIndicatorVisible={shouldShowShellBallSelectionIndicator({
-        selection: selectionPrompt,
-        visualState,
-      })}
-      voicePreview={voicePreview}
-      voiceHoldProgress={voiceHoldProgress}
-      motionConfig={motionConfig}
-      onDragStart={() => {
-        void startShellBallWindowDragging();
-      }}
-      onPrimaryClick={handleMascotPrimaryAction}
-      onDoubleClick={handleDoubleClick}
-      onRegionEnter={handleRegionEnter}
-      onRegionLeave={handleRegionLeave}
-      onTextDrop={handleSurfaceTextDrop}
-      inputFocused={inputFocused}
-      onInputProxyClick={() => {
-        handleInputFocusRequest();
-        void emitShellBallInputRequestFocus(Date.now());
-      }}
-      onPressStart={handlePressStart}
-      onPressMove={handlePressMove}
-      onPressEnd={handlePressEnd}
-      onPressCancel={handlePressCancel}
-    />
+    <>
+      <ShellBallSelectionProvider visualState={visualState} />
+      <ShellBallSurface
+        containerRef={rootRef}
+        dashboardTransitionPhase={dashboardTransitionPhase}
+        fileDropActive={shouldShowShellBallFileDropOverlay({
+          fileDropActive,
+        })}
+        textDropActive={shouldArmShellBallTextDropTarget({
+          fileDropActive,
+          textDragActive,
+          visualState,
+        })}
+        visualState={visualState}
+        selectionIndicatorVisible={shouldShowShellBallSelectionIndicator({
+          selection: selectionPrompt,
+          visualState,
+        })}
+        voicePreview={voicePreview}
+        voiceHoldProgress={voiceHoldProgress}
+        motionConfig={motionConfig}
+        onDragStart={(event) => {
+          beginBallWindowPointerDrag({
+            x: event.screenX,
+            y: event.screenY,
+          });
+        }}
+        onDragMove={(event) => {
+          updateBallWindowPointerDrag({
+            x: event.screenX,
+            y: event.screenY,
+          });
+        }}
+        onDragEnd={(event) => {
+          void endBallWindowPointerDrag({
+            x: event.screenX,
+            y: event.screenY,
+          });
+        }}
+        onDragCancel={(event) => {
+          void endBallWindowPointerDrag({
+            x: event.screenX,
+            y: event.screenY,
+          });
+        }}
+        onPrimaryClick={handleMascotPrimaryAction}
+        onDoubleClick={handleDoubleClick}
+        onRegionEnter={handleRegionEnter}
+        onRegionLeave={handleRegionLeave}
+        onTextDrop={handleSurfaceTextDrop}
+        inputFocused={inputFocused}
+        onInputProxyClick={() => {
+          handleInputFocusRequest();
+          void emitShellBallInputRequestFocus(Date.now());
+        }}
+        onPressStart={handlePressStart}
+        onPressMove={handlePressMove}
+        onPressEnd={handlePressEnd}
+        onPressCancel={handlePressCancel}
+      />
+    </>
   );
 }

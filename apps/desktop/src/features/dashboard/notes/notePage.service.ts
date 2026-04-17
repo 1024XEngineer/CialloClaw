@@ -1,17 +1,29 @@
 import type {
   AgentNotepadConvertToTaskParams,
   AgentNotepadListParams,
+  AgentNotepadUpdateParams,
+  DeliveryPayload,
+  DeliveryType,
+  NotepadAction,
   RequestMeta,
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
-import { convertNotepadToTask, listNotepad } from "@/rpc/methods";
-import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask } from "./notePage.mock";
-import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem } from "./notePage.types";
+import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
+import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, runMockUpdateNote } from "./notePage.mock";
+import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 export type NotePageDataMode = "rpc" | "mock";
+
+export type NoteResourceOpenExecutionPlan = {
+  mode: "task_detail" | "open_url" | "copy_path";
+  feedback: string;
+  path: string | null;
+  taskId: string | null;
+  url: string | null;
+};
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -46,13 +58,33 @@ function formatRelativeTime(value: string) {
   return diffMs >= 0 ? `还剩 ${absDays} 天` : `逾期 ${absDays} 天`;
 }
 
+function isAllowedNoteOpenUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function resolveResourceOpenPayload(resource: NonNullable<TodoItem["related_resources"]>[number]): DeliveryPayload | null {
+  if (!resource?.open_payload) {
+    return null;
+  }
+  return {
+    path: resource.open_payload.path ?? null,
+    task_id: resource.open_payload.task_id ?? null,
+    url: resource.open_payload.url ?? null,
+  };
+}
+
 function getPreviewStatus(item: TodoItem) {
   if (item.bucket === "closed") {
     return item.status === "completed" ? "已完成" : "已取消";
   }
 
   if (item.bucket === "recurring_rule") {
-    return "规则生效中";
+    return item.recurring_enabled === false ? "规则已暂停" : "规则生效中";
   }
 
   if (item.status === "overdue") {
@@ -72,7 +104,7 @@ function getDetailStatus(item: TodoItem) {
   }
 
   if (item.bucket === "recurring_rule") {
-    return "重复规则开启中";
+    return item.recurring_enabled === false ? "重复规则已暂停" : "重复规则开启中";
   }
 
   if (item.status === "overdue") {
@@ -87,12 +119,14 @@ function getDetailStatus(item: TodoItem) {
 }
 
 function getTimeHint(item: TodoItem) {
-  if (!item.due_at) {
-    return item.bucket === "recurring_rule" ? "规则时间待补充" : "未设置时间";
-  }
+  const completedTime = item.ended_at ?? item.due_at;
 
   if (item.bucket === "closed") {
-    return formatAbsoluteTime(item.due_at);
+    return completedTime ? formatAbsoluteTime(completedTime) : "未设置时间";
+  }
+
+  if (!item.due_at) {
+    return item.bucket === "recurring_rule" ? "规则时间待补充" : "未设置时间";
   }
 
   if (item.bucket === "recurring_rule") {
@@ -136,8 +170,20 @@ function getTypeLabel(item: TodoItem) {
 }
 
 function createResourceHints(item: TodoItem) {
+  if (item.related_resources && item.related_resources.length > 0) {
+    return item.related_resources.map<NoteResource>((resource) => ({
+      id: resource.resource_id,
+      label: resource.label,
+      openAction: normalizeResourceOpenAction(resource.open_action ?? null, resolveResourceOpenPayload(resource)),
+      path: resource.path,
+      taskId: resolveResourceOpenPayload(resource)?.task_id ?? null,
+      type: resource.resource_type,
+      url: resolveResourceOpenPayload(resource)?.url ?? null,
+    }));
+  }
+
   const normalizedTitle = item.title.toLowerCase();
-  const resources = [];
+  const resources: NoteResource[] = [];
 
   if (normalizedTitle.includes("模板")) {
     resources.push({
@@ -169,6 +215,16 @@ function createResourceHints(item: TodoItem) {
   return resources;
 }
 
+function normalizeResourceOpenAction(action: DeliveryType | null, payload: DeliveryPayload | null): NoteResource["openAction"] {
+  if (action === "task_detail") {
+    return "task_detail";
+  }
+  if (action === "result_page" && payload?.url) {
+    return "open_url";
+  }
+  return "copy_path";
+}
+
 function createFallbackExperience(item: TodoItem): NoteDetailExperience {
   const previewStatus = getPreviewStatus(item);
   const detailStatus = getDetailStatus(item);
@@ -178,23 +234,23 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
       detail: item.agent_suggestion ?? "当前拿到的是协议中的基础便签数据，建议补一条更明确的上下文后再决定是否转交给 Agent。",
       label: "下一步建议",
     },
-    canConvertToTask: item.bucket !== "closed",
+    canConvertToTask: item.bucket !== "closed" && !item.linked_task_id,
     detailStatus,
     detailStatusTone: item.status === "overdue" ? "overdue" : item.status === "completed" || item.status === "cancelled" ? "done" : "normal",
-    effectiveScope: item.bucket === "recurring_rule" ? "规则持续生效，直到手动暂停或取消。" : null,
-    endedAt: item.status === "completed" || item.status === "cancelled" ? item.due_at : null,
-    isRecurringEnabled: item.bucket === "recurring_rule",
-    nextOccurrenceAt: item.bucket === "recurring_rule" ? item.due_at : null,
-    noteText: item.agent_suggestion
+    effectiveScope: item.effective_scope ?? (item.bucket === "recurring_rule" ? "规则持续生效，直到手动暂停或取消。" : null),
+    endedAt: item.ended_at ?? (item.status === "completed" || item.status === "cancelled" ? item.due_at : null),
+    isRecurringEnabled: item.bucket === "recurring_rule" ? item.recurring_enabled !== false : false,
+    nextOccurrenceAt: item.next_occurrence_at ?? (item.bucket === "recurring_rule" ? item.due_at : null),
+    noteText: item.note_text ?? (item.agent_suggestion
       ? `${item.title}。当前已同步到便签页，建议先按提示整理上下文，再视情况转成正式任务。`
-      : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`,
+      : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`),
     noteType: item.bucket === "recurring_rule" ? "recurring" : item.bucket === "closed" ? "archive" : "reminder",
     plannedAt: item.due_at,
     previewStatus,
-    prerequisite: item.bucket === "later" ? "当前还没进入处理窗口，先保留上下文即可。" : item.bucket === "recurring_rule" ? "确认这条规则仍然需要继续生效。" : null,
-    recentInstanceStatus: null,
+    prerequisite: item.prerequisite ?? (item.bucket === "later" ? "当前还没进入处理窗口，先保留上下文即可。" : item.bucket === "recurring_rule" ? "确认这条规则仍然需要继续生效。" : null),
+    recentInstanceStatus: item.recent_instance_status ?? null,
     relatedResources: createResourceHints(item),
-    repeatRule: item.bucket === "recurring_rule" ? "协议暂未返回具体重复规则，当前只展示规则条目。" : null,
+    repeatRule: item.repeat_rule ?? (item.bucket === "recurring_rule" ? "协议暂未返回具体重复规则，当前只展示规则条目。" : null),
     summaryLabel: getSummaryLabel(item),
     timeHint: getTimeHint(item),
     title: item.title,
@@ -286,4 +342,64 @@ export async function convertNoteToTask(itemId: string, source: NotePageDataMode
 
     throw error;
   }
+}
+
+export async function updateNote(itemId: string, action: NotepadAction, source: NotePageDataMode = "rpc"): Promise<NoteUpdateOutcome> {
+  if (source === "mock") {
+    return runMockUpdateNote(itemId, action);
+  }
+
+  const params: AgentNotepadUpdateParams = {
+    action,
+    item_id: itemId,
+    request_meta: createRequestMeta(`notepad_update_${action}_${itemId}`),
+  };
+
+  try {
+    const result = await withTimeout(updateNotepad(params), `update note ${itemId} with ${action}`);
+    return {
+      result,
+      source: "rpc",
+    };
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback(`update note ${itemId} with ${action}`, error);
+      return runMockUpdateNote(itemId, action);
+    }
+
+    throw error;
+  }
+}
+
+export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): NoteResourceOpenExecutionPlan {
+  if (resource.openAction === "task_detail" && resource.taskId) {
+    return {
+      feedback: `已定位到任务 ${resource.label}。`,
+      mode: "task_detail",
+      path: resource.path,
+      taskId: resource.taskId,
+      url: resource.url ?? null,
+    };
+  }
+
+  return {
+    feedback: resource.path || resource.url ? `当前环境暂不直接执行打开动作，已准备 ${resource.label} 的地址。` : `当前资源 ${resource.label} 缺少可打开地址。`,
+    mode: "copy_path",
+    path: resource.path || resource.url || null,
+    taskId: resource.taskId ?? null,
+    url: resource.url ?? null,
+  };
+}
+
+export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExecutionPlan): Promise<string> {
+  if (plan.mode === "copy_path" && plan.path) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(plan.path);
+      return `${plan.feedback} 已复制路径。`;
+    }
+
+    return `${plan.feedback} 路径：${plan.path}`;
+  }
+
+  return plan.feedback;
 }

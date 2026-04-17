@@ -49,6 +49,7 @@ type Service struct {
 	taskRunStore       TaskRunStore
 	toolCallStore      ToolCallStore
 	artifactStore      ArtifactStore
+	todoStore          TodoStore
 	secretStore        SecretStore
 	auditStore         AuditStore
 	recoveryPointStore RecoveryPointStore
@@ -68,6 +69,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
+	todoStore := TodoStore(NewInMemoryTodoStore())
 	secretStore := SecretStore(newInMemorySecretStore())
 	auditStore := AuditStore(newInMemoryAuditStore())
 	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
@@ -123,6 +125,15 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			sqliteTodoStore, err := NewSQLiteTodoStore(databasePath)
+			if err == nil {
+				todoStore = sqliteTodoStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite todo store: %w", err))
+				fallbackActive = true
+			}
+
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
 				sqliteSecretStore, err := NewSQLiteSecretStore(secretPath)
 				if err == nil {
@@ -163,6 +174,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		taskRunStore:       taskRunStore,
 		toolCallStore:      toolCallStore,
 		artifactStore:      artifactStore,
+		todoStore:          todoStore,
 		secretStore:        secretStore,
 		auditStore:         auditStore,
 		recoveryPointStore: recoveryPointStore,
@@ -266,6 +278,11 @@ func (s *Service) ArtifactStore() ArtifactStore {
 	return s.artifactStore
 }
 
+// TodoStore returns the configured notes/todo persistence store.
+func (s *Service) TodoStore() TodoStore {
+	return s.todoStore
+}
+
 // SecretStore returns the configured secret store.
 func (s *Service) SecretStore() SecretStore {
 	return s.secretStore
@@ -315,6 +332,9 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.artifactStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.todoStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.secretStore.(interface{ Close() error }); ok {

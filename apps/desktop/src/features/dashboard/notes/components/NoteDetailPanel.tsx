@@ -14,9 +14,10 @@ type NoteDetailPanelProps = {
   item: NoteListItem;
   onAction: (action: NoteDetailAction) => void;
   onClose: () => void;
+  onResourceOpen: (resourceId: string) => void;
 };
 
-export function NoteDetailPanel({ feedback, item, onAction, onClose }: NoteDetailPanelProps) {
+export function NoteDetailPanel({ feedback, item, onAction, onClose, onResourceOpen }: NoteDetailPanelProps) {
   const { experience } = item;
 
   return (
@@ -183,6 +184,9 @@ export function NoteDetailPanel({ feedback, item, onAction, onClose }: NoteDetai
                       <p className="note-detail-resource-item__meta">{resource.type}</p>
                       <p className="note-detail-resource-item__path">{resource.path}</p>
                     </div>
+                    <Button className="note-detail-resource-item__open" onClick={() => onResourceOpen(resource.id)} variant="ghost">
+                      打开
+                    </Button>
                   </article>
                 ))
               ) : (

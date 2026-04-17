@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "method": "task.session_queued",
+  "params": {
+    "task_id": "task_002",
+    "blocking_task_id": "task_001"
+  }
+}

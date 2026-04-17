@@ -3,6 +3,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -19,6 +20,10 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+)
+
+const (
+	defaultAgentLoopIntentName = "agent_loop"
 )
 
 // Service 负责在当前仓库代码范围内完成一条可运行的最小执行链路。
@@ -832,6 +837,16 @@ func (s *Service) fileSection(filePath string) string {
 }
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
+	if trace, ok, err := s.generateOutputWithAgentLoop(ctx, request, inputText); err != nil {
+		return generationTrace{}, err
+	} else if ok {
+		return trace, nil
+	}
+
+	return s.generateOutputWithPrompt(ctx, request, inputText)
+}
+
+func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	prompt := buildPrompt(request, inputText)
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, "generate_text", map[string]any{
 		"prompt":        prompt,
@@ -860,6 +875,89 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		AuditRecord:      auditRecord,
 		GenerationOutput: cloneMap(toolResult.RawOutput),
 	}, nil
+}
+
+// generateOutputWithAgentLoop runs a bounded think -> tool -> observe cycle for
+// free-form tasks that should stay inside an agent-style tool-calling flow.
+// The loop stops when the model returns a final answer or when the turn budget
+// is exhausted, in which case the normal fallback output is returned.
+func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Request, inputText string) (generationTrace, bool, error) {
+	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() {
+		return generationTrace{}, false, nil
+	}
+
+	toolDefs := s.agentLoopToolDefinitions()
+	if len(toolDefs) == 0 {
+		return generationTrace{}, false, nil
+	}
+
+	history := []string{}
+	allToolCalls := []tools.ToolCallRecord{}
+	var latestInvocation *model.InvocationRecord
+	for turn := 0; turn < s.agentLoopMaxTurns(); turn++ {
+		planInput := buildAgentLoopPlannerInput(inputText, history, s.agentLoopCompressionChars(), s.agentLoopKeepRecent())
+		plan, err := s.model.GenerateToolCalls(ctx, model.ToolCallRequest{
+			TaskID: request.TaskID,
+			RunID:  request.RunID,
+			Input:  planInput,
+			Tools:  toolDefs,
+		})
+		if err != nil {
+			if errors.Is(err, model.ErrToolCallingNotSupported) {
+				return generationTrace{}, false, nil
+			}
+			return generationTrace{}, false, fmt.Errorf("agent loop planning turn %d: %w", turn+1, err)
+		}
+
+		latestInvocation = &model.InvocationRecord{
+			TaskID:    request.TaskID,
+			RunID:     request.RunID,
+			RequestID: plan.RequestID,
+			Provider:  plan.Provider,
+			ModelID:   plan.ModelID,
+			Usage:     plan.Usage,
+			LatencyMS: plan.LatencyMS,
+		}
+
+		if len(plan.ToolCalls) == 0 {
+			outputText := strings.TrimSpace(plan.OutputText)
+			if outputText == "" {
+				outputText = fallbackOutput(request, inputText)
+			}
+			auditRecord, err := s.buildModelAuditRecord(ctx, request, latestInvocation)
+			if err != nil {
+				return generationTrace{}, false, err
+			}
+			return generationTrace{
+				OutputText:      outputText,
+				ToolCalls:       allToolCalls,
+				ModelInvocation: invocationRecordMap(latestInvocation),
+				AuditRecord:     auditRecord,
+			}, true, nil
+		}
+
+		observations := make([]string, 0, len(plan.ToolCalls))
+		for _, call := range plan.ToolCalls {
+			observation, record := s.executeAgentLoopTool(ctx, request, call, turn+1)
+			if record.ToolName != "" {
+				allToolCalls = append(allToolCalls, record)
+			}
+			observations = append(observations, observation)
+		}
+		history = append(history, observations...)
+	}
+
+	finalOutput := fallbackOutput(request, inputText)
+	auditRecord, err := s.buildModelAuditRecord(ctx, request, latestInvocation)
+	if err != nil {
+		return generationTrace{}, false, err
+	}
+	return generationTrace{
+		OutputText:      finalOutput,
+		ToolCalls:       allToolCalls,
+		ModelInvocation: invocationRecordMap(latestInvocation),
+		AuditRecord:     auditRecord,
+	}, true, nil
 }
 
 func (s *Service) buildModelAuditRecord(ctx context.Context, request Request, invocation *model.InvocationRecord) (map[string]any, error) {
@@ -929,6 +1027,8 @@ func buildPrompt(request Request, inputText string) string {
 
 	instruction := "请先根据输入判断用户想要什么帮助；如果目标不明确，请明确指出需要用户补充处理方式，不要把内容误当成总结任务。"
 	switch intentName {
+	case defaultAgentLoopIntentName:
+		instruction = "请像桌面 Agent 一样理解以下输入。如果目标清晰，直接给出结果；如果仍缺少关键信息，请明确指出需要补充什么。"
 	case "rewrite":
 		instruction = "请保留原意并以更清晰、可直接使用的中文改写以下内容。"
 	case "translate":
@@ -954,6 +1054,12 @@ func fallbackOutput(request Request, inputText string) string {
 	switch intentName {
 	case "":
 		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
+	case defaultAgentLoopIntentName:
+		highlights := extractHighlights(normalized, 3)
+		if len(highlights) == 0 {
+			return "我已经理解了当前输入，但还需要更多信息才能继续执行。"
+		}
+		return "初步处理结果：\n- " + strings.Join(highlights, "\n- ")
 	case "rewrite":
 		return "改写结果：\n" + normalized
 	case "translate":
@@ -1190,6 +1296,249 @@ func firstNonEmpty(primary, fallback string) string {
 		return primary
 	}
 	return fallback
+}
+
+// agentLoopMaxTurns resolves the maximum number of planning turns allowed for a
+// single loop execution. The value is read from model-facing runtime settings so
+// the execution layer stays configurable without introducing a parallel config path.
+func (s *Service) agentLoopMaxTurns() int {
+	if s.model == nil {
+		return 4
+	}
+	return s.model.MaxToolIterations()
+}
+
+// agentLoopCompressionChars resolves the planner-input size budget that should
+// trigger lightweight observation compaction.
+func (s *Service) agentLoopCompressionChars() int {
+	if s.model == nil {
+		return 2400
+	}
+	return s.model.ContextCompressChars()
+}
+
+// agentLoopKeepRecent returns how many recent observations stay verbatim when
+// older tool results are compacted.
+func (s *Service) agentLoopKeepRecent() int {
+	if s.model == nil {
+		return 4
+	}
+	return s.model.ContextKeepRecent()
+}
+
+// isAgentLoopIntent reports whether the current task should execute through the
+// generic agent loop instead of the legacy single-shot prompt path.
+func isAgentLoopIntent(taskIntent map[string]any) bool {
+	return effectiveIntentName(taskIntent) == defaultAgentLoopIntentName
+}
+
+// agentLoopToolDefinitions exposes the minimal safe tool set that the model can
+// use inside the current loop. The allowlist is intentionally narrow so the
+// first integrated flow stays bounded and auditable.
+func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
+	if s.tools == nil {
+		return nil
+	}
+
+	definitions := make([]model.ToolDefinition, 0, 4)
+	for _, metadata := range s.tools.List() {
+		switch metadata.Name {
+		case "read_file":
+			definitions = append(definitions, model.ToolDefinition{
+				Name:        metadata.Name,
+				Description: metadata.Description,
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string", "description": "Workspace-relative path to a file."},
+					},
+					"required":             []string{"path"},
+					"additionalProperties": false,
+				},
+			})
+		case "list_dir":
+			definitions = append(definitions, model.ToolDefinition{
+				Name:        metadata.Name,
+				Description: metadata.Description,
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path":  map[string]any{"type": "string", "description": "Workspace-relative path to a directory."},
+						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+					},
+					"required":             []string{"path"},
+					"additionalProperties": false,
+				},
+			})
+		case "page_read":
+			definitions = append(definitions, model.ToolDefinition{
+				Name:        metadata.Name,
+				Description: metadata.Description,
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{"type": "string", "description": "Absolute URL to read."},
+					},
+					"required":             []string{"url"},
+					"additionalProperties": false,
+				},
+			})
+		case "page_search":
+			definitions = append(definitions, model.ToolDefinition{
+				Name:        metadata.Name,
+				Description: metadata.Description,
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url":   map[string]any{"type": "string", "description": "Absolute URL to search."},
+						"query": map[string]any{"type": "string", "description": "Query to search within the page."},
+						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
+					},
+					"required":             []string{"url", "query"},
+					"additionalProperties": false,
+				},
+			})
+		}
+	}
+	return definitions
+}
+
+// buildAgentLoopPlannerInput assembles the textual context seen by the planner
+// turn. Previous tool observations are compacted when they exceed the configured
+// budget so the loop remains bounded even after several tool iterations.
+func buildAgentLoopPlannerInput(inputText string, history []string, compressChars, keepRecent int) string {
+	compressedHistory := compactAgentLoopHistory(history, compressChars, keepRecent)
+	sections := []string{
+		"You are the planning step of a desktop agent loop.",
+		"Decide whether to answer directly or call one of the provided tools.",
+		"Use tools only when they materially improve the answer.",
+		"Never invent file contents, directory entries, or page contents.",
+		"If the task is already clear and no tool is required, return the final answer directly.",
+		"",
+		"User context:",
+		strings.TrimSpace(inputText),
+	}
+	if len(compressedHistory) > 0 {
+		sections = append(sections, "", "Observed tool results:")
+		sections = append(sections, compressedHistory...)
+	}
+	return strings.Join(sections, "\n")
+}
+
+func compactAgentLoopHistory(history []string, compressChars, keepRecent int) []string {
+	if len(history) == 0 {
+		return nil
+	}
+	if compressChars <= 0 || keepRecent < 0 {
+		return append([]string(nil), history...)
+	}
+
+	normalized := make([]string, 0, len(history))
+	totalChars := 0
+	for _, item := range history {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+		totalChars += len(trimmed)
+	}
+	if len(normalized) == 0 || totalChars <= compressChars || len(normalized) <= keepRecent {
+		return normalized
+	}
+
+	if keepRecent > len(normalized) {
+		keepRecent = len(normalized)
+	}
+	headCount := len(normalized) - keepRecent
+	headSummary := summarizeAgentLoopHistory(normalized[:headCount], compressChars/2)
+	result := make([]string, 0, keepRecent+1)
+	if headSummary != "" {
+		result = append(result, headSummary)
+	}
+	result = append(result, normalized[headCount:]...)
+	return result
+}
+
+func summarizeAgentLoopHistory(history []string, maxChars int) string {
+	if len(history) == 0 || maxChars <= 0 {
+		return ""
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString(fmt.Sprintf("Compressed earlier observations (%d items):", len(history)))
+	for index, item := range history {
+		snippet := singleLineSummary(item)
+		entry := "\n- " + truncateText(snippet, 160)
+		if builder.Len()+len(entry) > maxChars {
+			remaining := len(history) - index
+			if remaining > 0 {
+				builder.WriteString(fmt.Sprintf("\n- ... %d more observations omitted", remaining))
+			}
+			break
+		}
+		builder.WriteString(entry)
+	}
+	return builder.String()
+}
+
+func singleLineSummary(value string) string {
+	lines := strings.Fields(strings.ReplaceAll(strings.ReplaceAll(value, "\r", " "), "\n", " "))
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, " ")
+}
+
+func annotateLoopRound(record tools.ToolCallRecord, loopRound int) tools.ToolCallRecord {
+	if loopRound <= 0 {
+		return record
+	}
+	if record.Output == nil {
+		record.Output = map[string]any{}
+	}
+	record.Output["loop_round"] = loopRound
+	return record
+}
+
+// executeAgentLoopTool executes one model-selected tool and converts the result
+// into a compact textual observation that can be fed back into the next model
+// turn. The returned tool record is also preserved for audit and task history.
+func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
+	toolName := strings.TrimSpace(call.Name)
+	if !s.isAllowedAgentLoopTool(toolName) {
+		return fmt.Sprintf("Tool %s is not allowed in the current agent loop.", toolName), tools.ToolCallRecord{}
+	}
+
+	toolInput := cloneMap(call.Arguments)
+	toolResult, _, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
+	if err != nil {
+		if toolResult != nil {
+			return fmt.Sprintf("Tool %s failed with error: %v", toolName, err), toolResult.ToolCall
+		}
+		return fmt.Sprintf("Tool %s failed with error: %v", toolName, err), tools.ToolCallRecord{}
+	}
+
+	summary := map[string]any{}
+	if toolResult != nil {
+		summary = cloneMap(toolResult.SummaryOutput)
+	}
+	summaryJSON, marshalErr := json.Marshal(summary)
+	if marshalErr != nil {
+		return fmt.Sprintf("Tool %s succeeded, but its summary could not be serialized.", toolName), annotateLoopRound(toolResult.ToolCall, loopRound)
+	}
+	return fmt.Sprintf("Tool %s succeeded. Summary: %s", toolName, string(summaryJSON)), annotateLoopRound(toolResult.ToolCall, loopRound)
+}
+
+// isAllowedAgentLoopTool guards the first loop implementation so only
+// read-oriented tools participate in the autonomous planning cycle.
+func (s *Service) isAllowedAgentLoopTool(name string) bool {
+	switch name {
+	case "read_file", "list_dir", "page_read", "page_search":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) availableToolNames() []string {

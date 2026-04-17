@@ -60,6 +60,9 @@ export function buildNoteSummary(groups: Pick<Record<NotePreviewGroupKey, NoteLi
   const dueToday = groups.upcoming.filter((item) => item.item.status === "due_today").length;
   const overdue = groups.upcoming.filter((item) => item.item.status === "overdue").length;
   const recurringToday = groups.recurring_rule.filter((item) => {
+    if (!item.experience.isRecurringEnabled) {
+      return false;
+    }
     const occurrence = item.experience.nextOccurrenceAt ?? item.experience.plannedAt ?? item.item.due_at;
     if (!occurrence) {
       return false;

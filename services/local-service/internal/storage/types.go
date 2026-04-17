@@ -8,6 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -86,6 +87,55 @@ type ArtifactStore interface {
 	ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error)
 }
 
+// TodoItemRecord describes one persisted notes/todo snapshot.
+type TodoItemRecord struct {
+	ItemID               string
+	Title                string
+	Bucket               string
+	Status               string
+	SourcePath           string
+	SourceLine           int
+	SourceBucket         string
+	DueAt                string
+	TagsJSON             string
+	AgentSuggestion      string
+	NoteText             string
+	Prerequisite         string
+	PlannedAt            string
+	PreviousBucket       string
+	PreviousDueAt        string
+	PreviousStatus       string
+	EndedAt              string
+	RelatedResourcesJSON string
+	LinkedTaskID         string
+	CreatedAt            string
+	UpdatedAt            string
+}
+
+// RecurringRuleRecord describes one persisted recurring-rule snapshot.
+type RecurringRuleRecord struct {
+	RuleID               string
+	ItemID               string
+	RuleType             string
+	CronExpr             string
+	IntervalValue        int
+	IntervalUnit         string
+	ReminderStrategy     string
+	Enabled              bool
+	RepeatRuleText       string
+	NextOccurrenceAt     string
+	RecentInstanceStatus string
+	EffectiveScope       string
+	CreatedAt            string
+	UpdatedAt            string
+}
+
+// TodoStore defines persistence for notes/todo items and recurring rules.
+type TodoStore interface {
+	ReplaceTodoState(ctx context.Context, items []TodoItemRecord, rules []RecurringRuleRecord) error
+	LoadTodoState(ctx context.Context) ([]TodoItemRecord, []RecurringRuleRecord, error)
+}
+
 // SecretRecord captures one secret value persisted outside the normal settings path.
 type SecretRecord struct {
 	Namespace string
@@ -141,6 +191,7 @@ type TaskRunRecord struct {
 	Artifacts         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
+	Snapshot          contextsvc.TaskContextSnapshot
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
@@ -160,6 +211,7 @@ type TaskRunRecord struct {
 // TaskRunStore 定义 task/run 主状态的持久化契约。
 type TaskRunStore interface {
 	AllocateIdentifier(ctx context.Context, prefix string) (string, error)
+	DeleteTaskRun(ctx context.Context, taskID string) error
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
 }

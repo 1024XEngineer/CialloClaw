@@ -14,6 +14,7 @@ import (
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/responses"
 )
 
@@ -165,6 +166,44 @@ func (c *OpenAIResponsesClient) GenerateText(ctx context.Context, request Genera
 	}, nil
 }
 
+// GenerateToolCalls asks the Responses API to decide whether to call custom tools.
+func (c *OpenAIResponsesClient) GenerateToolCalls(ctx context.Context, request ToolCallRequest) (ToolCallResult, error) {
+	startedAt := time.Now()
+	if strings.TrimSpace(request.Input) == "" {
+		return ToolCallResult{}, ErrGenerateTextInputRequired
+	}
+
+	params := responses.ResponseNewParams{
+		Model: responses.ResponsesModel(c.modelID),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: param.NewOpt(strings.TrimSpace(request.Input)),
+		},
+		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+		},
+		Tools: buildOpenAIFunctionTools(request.Tools),
+	}
+
+	response, err := c.client.Responses.New(ctx, params)
+	if err != nil {
+		return ToolCallResult{}, classifyOpenAIRequestError(err)
+	}
+
+	return ToolCallResult{
+		RequestID:  response.ID,
+		Provider:   OpenAIResponsesProvider,
+		ModelID:    firstNonEmpty(string(response.Model), c.modelID),
+		OutputText: extractSDKResponseText(*response),
+		ToolCalls:  extractFunctionToolCalls(*response),
+		Usage: TokenUsage{
+			InputTokens:  int(response.Usage.InputTokens),
+			OutputTokens: int(response.Usage.OutputTokens),
+			TotalTokens:  int(response.Usage.TotalTokens),
+		},
+		LatencyMS: time.Since(startedAt).Milliseconds(),
+	}, nil
+}
+
 // Provider 返回 provider 名称。
 func (c *OpenAIResponsesClient) Provider() string {
 	return OpenAIResponsesProvider
@@ -255,6 +294,60 @@ func extractSDKResponseText(response responses.Response) string {
 	}
 
 	return ""
+}
+
+func buildOpenAIFunctionTools(definitions []ToolDefinition) []responses.ToolUnionParam {
+	tools := make([]responses.ToolUnionParam, 0, len(definitions))
+	for _, definition := range definitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			continue
+		}
+		params := responses.FunctionToolParam{
+			Name:       name,
+			Parameters: normalizeToolSchema(definition.InputSchema),
+			Strict:     param.NewOpt(true),
+		}
+		if description := strings.TrimSpace(definition.Description); description != "" {
+			params.Description = param.NewOpt(description)
+		}
+		tools = append(tools, responses.ToolUnionParam{OfFunction: &params})
+	}
+	return tools
+}
+
+func normalizeToolSchema(schema map[string]any) map[string]any {
+	if len(schema) == 0 {
+		return map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": true,
+		}
+	}
+	return schema
+}
+
+func extractFunctionToolCalls(response responses.Response) []ToolInvocation {
+	toolCalls := make([]ToolInvocation, 0)
+	for _, item := range response.Output {
+		if item.Type != "function_call" {
+			continue
+		}
+		call := item.AsFunctionCall()
+		arguments := map[string]any{}
+		if strings.TrimSpace(call.Arguments) != "" {
+			if err := json.Unmarshal([]byte(call.Arguments), &arguments); err != nil {
+				arguments = map[string]any{
+					"_raw_arguments": call.Arguments,
+				}
+			}
+		}
+		toolCalls = append(toolCalls, ToolInvocation{
+			Name:      strings.TrimSpace(call.Name),
+			Arguments: arguments,
+		})
+	}
+	return toolCalls
 }
 
 func truncateErrorMessage(value string) string {

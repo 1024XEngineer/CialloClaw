@@ -14,6 +14,7 @@ import type {
   InputType,
   IntentPayload,
   MirrorReference,
+  NotepadAction,
   RecommendationFeedback,
   RecommendationScene,
   RecoveryPoint,
@@ -34,7 +35,8 @@ import type {
   AuthorizationRecord,
 } from "../types/index";
 
-// RPC_METHODS_STABLE 定义共享常量。
+// RPC_METHODS_STABLE lists the frozen JSON-RPC methods that are already
+// implemented and safe for frontend/backend integration.
 export const RPC_METHODS_STABLE = {
   AGENT_INPUT_SUBMIT: "agent.input.submit",
   AGENT_TASK_START: "agent.task.start",
@@ -51,10 +53,12 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_INSPECTOR_RUN: "agent.task_inspector.run",
   AGENT_NOTEPAD_LIST: "agent.notepad.list",
   AGENT_NOTEPAD_CONVERT_TO_TASK: "agent.notepad.convert_to_task",
+  AGENT_NOTEPAD_UPDATE: "agent.notepad.update",
   AGENT_DASHBOARD_OVERVIEW_GET: "agent.dashboard.overview.get",
   AGENT_DASHBOARD_MODULE_GET: "agent.dashboard.module.get",
   AGENT_MIRROR_OVERVIEW_GET: "agent.mirror.overview.get",
   AGENT_SECURITY_SUMMARY_GET: "agent.security.summary.get",
+  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_SECURITY_RESTORE_POINTS_LIST: "agent.security.restore_points.list",
   AGENT_SECURITY_RESTORE_APPLY: "agent.security.restore.apply",
   AGENT_SECURITY_PENDING_LIST: "agent.security.pending.list",
@@ -64,13 +68,13 @@ export const RPC_METHODS_STABLE = {
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
 } as const;
 
-// RPC_METHODS_PLANNED 定义共享常量。
+// RPC_METHODS_PLANNED reserves method names that are still documented as
+// planned and do not have a frozen implementation contract yet.
 export const RPC_METHODS_PLANNED = {
-  AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
 } as const;
 
-// RPC_METHODS 定义共享常量。
+// RPC_METHODS combines stable and planned method names for typed reuse.
 export const RPC_METHODS = {
   ...RPC_METHODS_STABLE,
   ...RPC_METHODS_PLANNED,
@@ -81,6 +85,8 @@ export const NOTIFICATION_METHODS = {
   TASK_UPDATED: "task.updated",
   DELIVERY_READY: "delivery.ready",
   APPROVAL_PENDING: "approval.pending",
+  TASK_SESSION_QUEUED: "task.session_queued",
+  TASK_SESSION_RESUMED: "task.session_resumed",
   MIRROR_OVERVIEW_UPDATED: "mirror.overview.updated",
   PLUGIN_UPDATED: "plugin.updated",
   PLUGIN_METRIC_UPDATED: "plugin.metric.updated",
@@ -157,6 +163,7 @@ export interface AgentInputSubmitParams {
 export interface AgentInputSubmitResult {
   task: Task;
   bubble_message: BubbleMessage | null;
+  delivery_result: DeliveryResult | null;
 }
 
 // AgentTaskStartParams 定义当前模块的接口约束。
@@ -172,7 +179,7 @@ export interface AgentTaskStartParams {
     page_context?: PageContext;
     error_message?: string;
   };
-  intent?: IntentPayload;
+  context?: InputContext;
   delivery?: DeliveryPreference;
 }
 
@@ -412,6 +419,22 @@ export interface AgentNotepadConvertToTaskParams {
 // AgentNotepadConvertToTaskResult 定义当前模块的接口约束。
 export interface AgentNotepadConvertToTaskResult {
   task: Task;
+  notepad_item: TodoItem;
+  refresh_groups: TodoBucket[];
+}
+
+// AgentNotepadUpdateParams defines the parameters for `agent.notepad.update`.
+export interface AgentNotepadUpdateParams {
+  request_meta: RequestMeta;
+  item_id: string;
+  action: NotepadAction;
+}
+
+// AgentNotepadUpdateResult defines the result for `agent.notepad.update`.
+export interface AgentNotepadUpdateResult {
+  notepad_item: TodoItem | null;
+  refresh_groups: TodoBucket[];
+  deleted_item_id?: string | null;
 }
 
 // AgentDashboardOverviewGetParams 定义当前模块的接口约束。
@@ -509,7 +532,8 @@ export interface AgentSecurityPendingListResult {
   page: JsonRpcPage;
 }
 
-// AgentSecurityAuditListParams 定义当前模块的接口约束。
+// AgentSecurityAuditListParams defines the parameters for
+// `agent.security.audit.list`.
 export interface AgentSecurityAuditListParams {
   request_meta: RequestMeta;
   task_id: string;
@@ -517,7 +541,8 @@ export interface AgentSecurityAuditListParams {
   offset: number;
 }
 
-// AgentSecurityAuditListResult 定义当前模块的接口约束。
+// AgentSecurityAuditListResult defines the result for
+// `agent.security.audit.list`.
 export interface AgentSecurityAuditListResult {
   items: AuditRecord[];
   page: JsonRpcPage;
@@ -617,6 +642,15 @@ export interface DeliveryReadyNotification {
 export interface ApprovalPendingNotification {
   task_id: string;
   approval_request: ApprovalRequest;
+}
+
+export interface TaskSessionQueuedNotification {
+  task_id: string;
+  blocking_task_id: string;
+}
+
+export interface TaskSessionResumedNotification {
+  task_id: string;
 }
 
 export interface MirrorOverviewUpdatedNotification {

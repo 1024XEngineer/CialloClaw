@@ -23,11 +23,12 @@ import (
 )
 
 type stubModelClient struct {
-	output string
-	err    error
+	output    string
+	err       error
+	toolCalls []model.ToolCallResult
 }
 
-func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+func (s *stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 	if s.err != nil {
 		return model.GenerateTextResponse{}, s.err
 	}
@@ -42,7 +43,29 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 	}, nil
 }
 
+func (s *stubModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.err != nil {
+		return model.ToolCallResult{}, s.err
+	}
+	if len(s.toolCalls) == 0 {
+		return model.ToolCallResult{
+			RequestID:  "req_tool_final",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: request.Input,
+		}, nil
+	}
+	result := s.toolCalls[0]
+	s.toolCalls = s.toolCalls[1:]
+	return result, nil
+}
+
 func newTestExecutionService(t *testing.T, output string) (*Service, string) {
+	t.Helper()
+	return newTestExecutionServiceWithConfig(t, serviceconfig.ModelConfig{}, output)
+}
+
+func newTestExecutionServiceWithConfig(t *testing.T, cfg serviceconfig.ModelConfig, output string) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -62,7 +85,37 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
 		sidecarclient.NewNoopOCRWorkerClient(),
 		sidecarclient.NewNoopMediaWorkerClient(),
-		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
+		model.NewService(cfg, &stubModelClient{output: output}),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		toolExecutor,
+		plugin.NewService(),
+	), workspaceRoot
+}
+
+func newTestExecutionServiceWithModelClient(t *testing.T, client model.Client) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+
+	return NewService(
+		platform.NewLocalFileSystemAdapter(pathPolicy),
+		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		model.NewService(serviceconfig.ModelConfig{}, client),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),
@@ -95,7 +148,7 @@ func newTestExecutionServiceWithPlaywright(t *testing.T, output string, playwrig
 		playwright,
 		sidecarclient.NewNoopOCRWorkerClient(),
 		sidecarclient.NewNoopMediaWorkerClient(),
-		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
+		model.NewService(serviceconfig.ModelConfig{}, &stubModelClient{output: output}),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),
@@ -134,7 +187,7 @@ func newTestExecutionServiceWithWorkers(t *testing.T, output string, playwright 
 		playwright,
 		ocr,
 		media,
-		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
+		model.NewService(serviceconfig.ModelConfig{}, &stubModelClient{output: output}),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),
@@ -226,6 +279,165 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	if !strings.Contains(string(content), "第一点") {
 		t.Fatalf("expected written document to contain generated content, got %s", string(content))
 	}
+}
+
+func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_loop_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{
+					{
+						Name:      "read_file",
+						Arguments: map[string]any{"path": "notes/source.txt"},
+					},
+				},
+			},
+			{
+				RequestID:  "req_loop_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I checked the file and extracted the key takeaway.",
+			},
+		},
+	}
+	service, workspaceRoot := newTestExecutionServiceWithModelClient(t, modelClient)
+	sourcePath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("Important launch note"), 0o644); err != nil {
+		t.Fatalf("seed source file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop",
+		RunID:        "run_loop",
+		Title:        "Loop test",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please inspect the note and tell me the takeaway."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if result.Content != "I checked the file and extracted the key takeaway." {
+		t.Fatalf("unexpected loop output: %s", result.Content)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected one executed tool call, got %+v", result.ToolCalls)
+	}
+	if result.ToolCalls[0].ToolName != "read_file" {
+		t.Fatalf("expected read_file tool call, got %+v", result.ToolCalls[0])
+	}
+	if result.ToolCalls[0].Output["loop_round"] != 1 {
+		t.Fatalf("expected first tool call to be annotated with loop round, got %+v", result.ToolCalls[0].Output)
+	}
+	if result.ModelInvocation["request_id"] != "req_loop_2" {
+		t.Fatalf("expected final planning turn metadata, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestCompactAgentLoopHistoryKeepsRecentObservations(t *testing.T) {
+	history := []string{
+		"Tool read_file succeeded. Summary: {\"path\":\"notes/1.md\",\"excerpt\":\"alpha alpha alpha alpha alpha\"}",
+		"Tool read_file succeeded. Summary: {\"path\":\"notes/2.md\",\"excerpt\":\"beta beta beta beta beta\"}",
+		"Tool page_read succeeded. Summary: {\"url\":\"https://example.com\",\"title\":\"Example\"}",
+	}
+
+	compacted := compactAgentLoopHistory(history, 120, 1)
+	if len(compacted) != 2 {
+		t.Fatalf("expected one compressed summary plus one recent item, got %+v", compacted)
+	}
+	if !strings.Contains(compacted[0], "Compressed earlier observations") {
+		t.Fatalf("expected compacted head summary, got %+v", compacted)
+	}
+	if compacted[1] != history[2] {
+		t.Fatalf("expected most recent observation to stay verbatim, got %+v", compacted)
+	}
+}
+
+func TestExecuteAgentLoopHonorsConfiguredMaxToolIterations(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_loop_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+			{
+				RequestID: "req_loop_2",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+			{
+				RequestID: "req_loop_3",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+		},
+	}
+	cfg := serviceconfig.ModelConfig{MaxToolIterations: 2}
+	service, workspaceRoot := newTestExecutionServiceWithModelClientAndConfig(t, cfg, modelClient)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_limit",
+		RunID:        "run_loop_limit",
+		Title:        "Loop limit test",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the notes directory and keep going."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("expected loop to stop after two configured iterations, got %+v", result.ToolCalls)
+	}
+	if result.ModelInvocation["request_id"] != "req_loop_2" {
+		t.Fatalf("expected last recorded invocation to come from second turn, got %+v", result.ModelInvocation)
+	}
+}
+
+func newTestExecutionServiceWithModelClientAndConfig(t *testing.T, cfg serviceconfig.ModelConfig, client model.Client) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+
+	return NewService(
+		platform.NewLocalFileSystemAdapter(pathPolicy),
+		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		model.NewService(cfg, client),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		toolExecutor,
+		plugin.NewService(),
+	), workspaceRoot
 }
 
 func TestExecuteWriteFileBubbleConsumesArtifactCandidate(t *testing.T) {
@@ -625,7 +837,7 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
 		sidecarclient.NewNoopOCRWorkerClient(),
 		sidecarclient.NewNoopMediaWorkerClient(),
-		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{err: errors.New("provider unavailable")}),
+		model.NewService(serviceconfig.ModelConfig{}, &stubModelClient{err: errors.New("provider unavailable")}),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),
