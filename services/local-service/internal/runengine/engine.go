@@ -65,6 +65,7 @@ type TaskRecord struct {
 	Notifications     []NotificationRecord
 	LatestEvent       map[string]any
 	LatestToolCall    map[string]any
+	LoopStopReason    string
 	CurrentStepStatus string
 }
 
@@ -572,6 +573,36 @@ func (e *Engine) RecordToolCallLifecycle(taskID, toolName, status string, input,
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
 		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// RecordLoopLifecycle records one structured agent loop lifecycle event so
+// task-centric consumers can inspect round transitions without querying the
+// normalized compatibility tables directly.
+func (e *Engine) RecordLoopLifecycle(taskID, eventType, stopReason string, payload map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.LoopStopReason = firstNonEmpty(stopReason, record.LoopStopReason)
+	record.LatestEvent = e.buildEventWithPayload(record, eventType, payload)
+	record.queueNotification(eventType, map[string]any{
+		"task_id":     record.TaskID,
+		"event":       cloneMap(record.LatestEvent),
+		"stop_reason": firstNonEmpty(stopReason, record.LoopStopReason),
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id":     record.TaskID,
+		"status":      record.Status,
+		"stop_reason": firstNonEmpty(stopReason, record.LoopStopReason),
 	})
 	e.persistTaskLocked(record)
 
@@ -2379,6 +2410,7 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		Notifications:     notificationsToStorage(record.Notifications),
 		LatestEvent:       cloneMap(record.LatestEvent),
 		LatestToolCall:    cloneMap(record.LatestToolCall),
+		LoopStopReason:    record.LoopStopReason,
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
 }
@@ -2419,6 +2451,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		Notifications:     notificationsFromStorage(record.Notifications),
 		LatestEvent:       cloneMap(record.LatestEvent),
 		LatestToolCall:    cloneMap(record.LatestToolCall),
+		LoopStopReason:    record.LoopStopReason,
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
 }

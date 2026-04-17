@@ -48,6 +48,7 @@ type Service struct {
 	memoryStore        MemoryStore
 	taskRunStore       TaskRunStore
 	toolCallStore      ToolCallStore
+	loopRuntimeStore   LoopRuntimeStore
 	artifactStore      ArtifactStore
 	todoStore          TodoStore
 	secretStore        SecretStore
@@ -68,6 +69,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
 	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
+	loopRuntimeStore := LoopRuntimeStore(newInMemoryLoopRuntimeStore())
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
 	todoStore := TodoStore(NewInMemoryTodoStore())
 	secretStore := SecretStore(newInMemorySecretStore())
@@ -112,6 +114,15 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			}
 			if err != nil {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite tool_call store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteLoopRuntimeStore, err := NewSQLiteLoopRuntimeStore(databasePath)
+			if err == nil {
+				loopRuntimeStore = sqliteLoopRuntimeStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite loop runtime store: %w", err))
 				fallbackActive = true
 			}
 
@@ -173,6 +184,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		memoryStore:        memoryStore,
 		taskRunStore:       taskRunStore,
 		toolCallStore:      toolCallStore,
+		loopRuntimeStore:   loopRuntimeStore,
 		artifactStore:      artifactStore,
 		todoStore:          todoStore,
 		secretStore:        secretStore,
@@ -250,6 +262,7 @@ func (s *Service) Capabilities() CapabilitySnapshot {
 		SupportsFTS5:           structuredReady,
 		SupportsSQLiteVecStub:  structuredReady,
 		SupportsArtifactStore:  s.artifactStore != nil,
+		SupportsLoopRuntime:    s.loopRuntimeStore != nil,
 		SupportsSecretStore:    s.secretStore != nil,
 		MemoryStoreBackend:     s.memoryStoreName,
 		ToolCallStoreBackend:   s.toolCallStoreName,
@@ -271,6 +284,11 @@ func (s *Service) TaskRunStore() TaskRunStore {
 
 func (s *Service) ToolCallSink() tools.ToolCallSink {
 	return s.toolCallStore
+}
+
+// LoopRuntimeStore returns the normalized loop runtime persistence store.
+func (s *Service) LoopRuntimeStore() LoopRuntimeStore {
+	return s.loopRuntimeStore
 }
 
 // ArtifactStore returns the configured artifact store.
@@ -329,6 +347,9 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.toolCallStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.loopRuntimeStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.artifactStore.(interface{ Close() error }); ok {

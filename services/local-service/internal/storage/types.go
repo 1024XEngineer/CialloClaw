@@ -23,6 +23,7 @@ type CapabilitySnapshot struct {
 	SupportsFTS5           bool
 	SupportsSQLiteVecStub  bool
 	SupportsArtifactStore  bool
+	SupportsLoopRuntime    bool
 	SupportsSecretStore    bool
 	MemoryStoreBackend     string
 	ToolCallStoreBackend   string
@@ -205,6 +206,7 @@ type TaskRunRecord struct {
 	Notifications     []NotificationSnapshot
 	LatestEvent       map[string]any
 	LatestToolCall    map[string]any
+	LoopStopReason    string
 	CurrentStepStatus string
 }
 
@@ -214,6 +216,15 @@ type TaskRunStore interface {
 	DeleteTaskRun(ctx context.Context, taskID string) error
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
+}
+
+// LoopRuntimeStore defines normalized run/step/event/delivery_result persistence.
+type LoopRuntimeStore interface {
+	SaveRun(ctx context.Context, record RunRecord) error
+	SaveSteps(ctx context.Context, records []StepRecord) error
+	SaveEvents(ctx context.Context, records []EventRecord) error
+	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
+	ListEvents(ctx context.Context, taskID string, limit, offset int) ([]EventRecord, int, error)
 }
 
 // ToolCallStore 定义 tool_call 持久化契约。

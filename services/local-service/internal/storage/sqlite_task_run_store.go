@@ -330,6 +330,7 @@ func cloneTaskRunRecord(record TaskRunRecord) TaskRunRecord {
 	clone.Notifications = cloneNotificationSnapshots(record.Notifications)
 	clone.LatestEvent = cloneMap(record.LatestEvent)
 	clone.LatestToolCall = cloneMap(record.LatestToolCall)
+	clone.LoopStopReason = record.LoopStopReason
 	if record.FinishedAt != nil {
 		finishedAt := *record.FinishedAt
 		clone.FinishedAt = &finishedAt
