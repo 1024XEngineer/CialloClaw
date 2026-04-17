@@ -76,6 +76,14 @@ function createRecoveryPoint(): RecoveryPoint {
   };
 }
 
+function createRecoveryPointForTask(taskId: string): RecoveryPoint {
+  return {
+    ...createRecoveryPoint(),
+    recovery_point_id: `rp_${taskId}`,
+    task_id: taskId,
+  };
+}
+
 function createAuditRecord(result: AuditRecord["result"] = "success"): AuditRecord {
   return {
     audit_id: `audit_stub_${result}`,
@@ -86,6 +94,15 @@ function createAuditRecord(result: AuditRecord["result"] = "success"): AuditReco
     target: "workspace/stub.txt",
     result,
     created_at: new Date().toISOString(),
+  };
+}
+
+function createAuditRecordForTask(taskId: string, result: AuditRecord["result"] = "success"): AuditRecord {
+  return {
+    ...createAuditRecord(result),
+    audit_id: `audit_${taskId}_${result}`,
+    task_id: taskId,
+    target: `workspace/${taskId}.txt`,
   };
 }
 
@@ -124,12 +141,21 @@ function createSecurityPendingList(): AgentSecurityPendingListResult {
   };
 }
 
-function createSecurityRespondResult(): AgentSecurityRespondResult {
+function readStringParam(params: unknown, key: "approval_id" | "task_id"): string | null {
+  if (!params || typeof params !== "object") {
+    return null;
+  }
+
+  const value = (params as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : null;
+}
+
+function createSecurityApprovalRespondResult(taskId = "task_stub", approvalId = "approval_stub"): AgentSecurityRespondResult {
   return {
     authorization_record: {
       authorization_record_id: "auth_stub",
-      task_id: "task_stub",
-      approval_id: "approval_stub",
+      task_id: taskId,
+      approval_id: approvalId,
       decision: "allow_once",
       remember_rule: false,
       operator: "test-stub",
@@ -137,7 +163,7 @@ function createSecurityRespondResult(): AgentSecurityRespondResult {
     },
     bubble_message: {
       bubble_id: "bubble_stub",
-      task_id: "task_stub",
+      task_id: taskId,
       type: "status",
       text: "The approval was accepted for this run.",
       pinned: false,
@@ -151,7 +177,31 @@ function createSecurityRespondResult(): AgentSecurityRespondResult {
       out_of_workspace: false,
       overwrite_or_delete_risk: false,
     },
-    task: createTask("processing", "security"),
+    task: {
+      ...createTask("processing", "security"),
+      task_id: taskId,
+    },
+  };
+}
+
+function createSecurityRestoreRespondResult(taskId = "task_stub"): AgentSecurityRespondResult {
+  return {
+    applied: true,
+    task: {
+      ...createTask("completed", "restore_apply"),
+      task_id: taskId,
+    },
+    recovery_point: createRecoveryPointForTask(taskId),
+    audit_record: createAuditRecordForTask(taskId),
+    bubble_message: {
+      bubble_id: "bubble_restore_stub",
+      task_id: taskId,
+      type: "status",
+      text: `Restored the workspace state for ${taskId}.`,
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
   };
 }
 
@@ -227,8 +277,15 @@ export async function listSecurityPending(_params?: unknown): Promise<AgentSecur
   return createSecurityPendingList();
 }
 
-export async function respondSecurity(_params?: unknown): Promise<AgentSecurityRespondResult> {
-  return createSecurityRespondResult();
+export async function respondSecurity(params?: unknown): Promise<AgentSecurityRespondResult> {
+  const approvalId = readStringParam(params, "approval_id");
+  const taskId = readStringParam(params, "task_id") ?? "task_stub";
+
+  if (approvalId?.includes("restore")) {
+    return createSecurityRestoreRespondResult(taskId);
+  }
+
+  return createSecurityApprovalRespondResult(taskId, approvalId ?? "approval_stub");
 }
 
 export async function getSecuritySummary(_params?: unknown): Promise<AgentSecuritySummaryGetResult> {
@@ -243,8 +300,8 @@ export async function listSecurityPendingDetailed(_params?: unknown) {
   return createDetailedResponse(await listSecurityPending());
 }
 
-export async function respondSecurityDetailed(_params?: unknown) {
-  return createDetailedResponse(await respondSecurity());
+export async function respondSecurityDetailed(params?: unknown) {
+  return createDetailedResponse(await respondSecurity(params));
 }
 
 export async function listSecurityRestorePoints(_params?: unknown): Promise<AgentSecurityRestorePointsListResult> {

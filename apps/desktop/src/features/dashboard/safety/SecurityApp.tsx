@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type {
+  AgentSecurityApprovalRespondResult,
   AuditRecord,
   ApprovalDecision,
   ApprovalPendingNotification,
@@ -44,6 +45,7 @@ import {
   getInitialSecurityModuleData,
   loadSecurityPendingApprovals,
   applySecurityRestorePoint,
+  isSecurityApprovalRespondResult,
   isSecurityRestoreRespondResult,
   loadSecurityAuditRecords,
   loadSecurityModuleData,
@@ -90,6 +92,7 @@ type SecurityCardPreview = {
 };
 type SecurityRestoreScope = "focused_task" | "all";
 type SecurityAuditScope = "focused_task" | "all";
+type ImpactScopeDetails = NonNullable<AgentSecurityApprovalRespondResult["impact_scope"]>;
 
 const STATIC_CARD_KEYS: SecurityCardKey[] = ["status", "restore", "budget", "governance"];
 const DRAG_THRESHOLD = 8;
@@ -157,6 +160,18 @@ function formatDateTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatImpactScopeSummary(impactScope: AgentSecurityApprovalRespondResult["impact_scope"] | undefined) {
+  if (!impactScope) {
+    return "影响范围待确认";
+  }
+
+  return `${impactScope.files.length} 文件 / ${impactScope.webpages.length} 网页 / ${impactScope.apps.length} 应用`;
+}
+
+function formatBooleanLabel(value: boolean) {
+  return value ? "是" : "否";
 }
 
 function getPendingSecurityStatus(pendingCount: number, fallbackStatus: SecurityStatus) {
@@ -1152,13 +1167,18 @@ export function SecurityApp() {
         delete nextState[approval.approval_id];
         return nextState;
       });
-      if (routeDrivenDetailKey === approvalRouteKey) {
-        setApprovalSnapshot(null);
-        setRouteDrivenDetailKey(null);
-      }
       setSubscribedTaskId(result.response.task.task_id);
       if (isSecurityRestoreRespondResult(result.response)) {
+        if (routeDrivenDetailKey === approvalRouteKey) {
+          setApprovalSnapshot(null);
+          setRouteDrivenDetailKey(null);
+        }
         setRestorePointSnapshot(result.response.recovery_point);
+        setApprovalSnapshot(null);
+        setRouteDrivenDetailKey("restore");
+        setActiveDetailKey("restore");
+        setActiveRestorePointId(result.response.recovery_point.recovery_point_id);
+        bringCardToFront("restore");
       }
       setLastResolvedApproval(result);
       for (const queryKey of taskRefreshPlan.invalidatePrefixes) {
@@ -1391,6 +1411,13 @@ export function SecurityApp() {
       restorePoint ??
       restorePoints[0] ??
       null;
+    const resolvedRestoreOutcome =
+      selectedRestorePoint &&
+      lastResolvedApproval &&
+      isSecurityRestoreRespondResult(lastResolvedApproval.response) &&
+      lastResolvedApproval.response.recovery_point.recovery_point_id === selectedRestorePoint.recovery_point_id
+        ? lastResolvedApproval.response
+        : null;
 
     return (
       <div className="security-page__detail-stack">
@@ -1457,6 +1484,50 @@ export function SecurityApp() {
               <p className="security-page__detail-label">影响对象</p>
               {renderDetailEntryList(selectedRestorePoint.objects, "该恢复点没有对象清单。", "restore-objects")}
             </article>
+
+            {resolvedRestoreOutcome ? (
+              <>
+                <div className="security-page__detail-grid">
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">恢复结果</p>
+                    <p className="security-page__detail-value">{resolvedRestoreOutcome.applied ? "completed" : "pending"}</p>
+                    <p className="security-page__detail-copy">task {resolvedRestoreOutcome.task.status}</p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">审计记录</p>
+                    <p className="security-page__detail-value security-page__detail-value--mono">
+                      {resolvedRestoreOutcome.audit_record?.audit_id ?? "未生成"}
+                    </p>
+                    <p className="security-page__detail-copy">
+                      {resolvedRestoreOutcome.audit_record
+                        ? `${resolvedRestoreOutcome.audit_record.result} · ${formatDateTime(resolvedRestoreOutcome.audit_record.created_at)}`
+                        : "最近一次恢复响应没有返回 audit_record。"}
+                    </p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">状态气泡</p>
+                    <p className="security-page__detail-value">
+                      {resolvedRestoreOutcome.bubble_message ? "已返回" : "未返回"}
+                    </p>
+                    <p className="security-page__detail-copy">
+                      {resolvedRestoreOutcome.bubble_message?.text ?? "最近一次恢复响应没有返回 bubble_message。"}
+                    </p>
+                  </article>
+                </div>
+
+                {resolvedRestoreOutcome.audit_record ? (
+                  <article className="security-page__detail-list-item">
+                    <p className="security-page__detail-label">审计摘要</p>
+                    <p className="security-page__detail-copy">
+                      {resolvedRestoreOutcome.audit_record.action} · {resolvedRestoreOutcome.audit_record.summary}
+                    </p>
+                    <p className="security-page__detail-copy">
+                      target {resolvedRestoreOutcome.audit_record.target} · result {resolvedRestoreOutcome.audit_record.result}
+                    </p>
+                  </article>
+                ) : null}
+              </>
+            ) : null}
 
             <Flex align="center" gap="3" wrap="wrap">
               <Button variant="soft" color="gray" onClick={() => openTaskDetail(selectedRestorePoint.task_id)}>
@@ -1710,6 +1781,22 @@ export function SecurityApp() {
     }
 
     const rememberRule = rememberRuleByApprovalId[approval.approval_id] ?? false;
+    // Preserve the last approval payload on the same detail view so operators can
+    // verify the final decision after the pending card disappears from the list.
+    const resolvedApprovalOutcome =
+      lastResolvedApproval &&
+      isSecurityApprovalRespondResult(lastResolvedApproval.response) &&
+      lastResolvedApproval.response.authorization_record.approval_id === approval.approval_id
+        ? lastResolvedApproval
+        : null;
+    const resolvedApprovalResponse =
+      resolvedApprovalOutcome && isSecurityApprovalRespondResult(resolvedApprovalOutcome.response)
+        ? resolvedApprovalOutcome.response
+        : null;
+    const authorizationRecord = resolvedApprovalResponse?.authorization_record;
+    const responseTask = resolvedApprovalResponse?.task;
+    const bubbleMessage = resolvedApprovalResponse?.bubble_message;
+    const impactScope = resolvedApprovalResponse?.impact_scope as ImpactScopeDetails | undefined;
 
     return (
       <div className="security-page__detail-stack">
@@ -1737,6 +1824,47 @@ export function SecurityApp() {
         </article>
 
         {snapshotOnly ? <div className="security-page__detail-callout">该审批快照已脱离实时待处理列表，当前不能继续提交决策。</div> : null}
+
+        {resolvedApprovalOutcome && authorizationRecord && responseTask ? (
+          <>
+            <div className="security-page__detail-grid">
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">响应结果</p>
+                <p className="security-page__detail-value">{authorizationRecord.decision}</p>
+                <p className="security-page__detail-copy">
+                  remember_rule {formatBooleanLabel(authorizationRecord.remember_rule)} · task {responseTask.status}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">授权记录</p>
+                <p className="security-page__detail-value security-page__detail-value--mono">{authorizationRecord.authorization_record_id}</p>
+                <p className="security-page__detail-copy">{formatDateTime(authorizationRecord.created_at)} · {authorizationRecord.operator}</p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">影响范围</p>
+                <p className="security-page__detail-value">{formatImpactScopeSummary(impactScope)}</p>
+                <p className="security-page__detail-copy">
+                  工作区外 {formatBooleanLabel(impactScope?.out_of_workspace ?? false)} · 覆盖/删除风险{" "}
+                  {formatBooleanLabel(impactScope?.overwrite_or_delete_risk ?? false)}
+                </p>
+              </article>
+            </div>
+
+            <article className="security-page__detail-list-item">
+              <p className="security-page__detail-label">Bubble message</p>
+              <p className="security-page__detail-copy">{bubbleMessage?.text ?? "最近一次响应没有返回 bubble_message。"}</p>
+            </article>
+
+            <article className="security-page__detail-list-item">
+              <p className="security-page__detail-label">影响对象</p>
+              {renderDetailEntryList(
+                [...(impactScope?.files ?? []), ...(impactScope?.webpages ?? []), ...(impactScope?.apps ?? [])],
+                "当前没有记录影响对象。",
+                "approval-impact",
+              )}
+            </article>
+          </>
+        ) : null}
 
         <label className="security-page__approval-remember">
           <input
