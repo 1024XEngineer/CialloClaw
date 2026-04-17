@@ -473,13 +473,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
   }, [revealBubbleRegion]);
 
-  const handleSelectedTextPrompt = useCallback(() => {
+  const handleSelectedTextPrompt = useCallback((text: string) => {
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
         createShellBallTextBubbleItem({
           role: "agent",
-          text: "识别到选中了文字",
+          text: createShellBallSelectedTextPreview(text),
           bubbleType: "status",
           createdAt: new Date().toISOString(),
         }),

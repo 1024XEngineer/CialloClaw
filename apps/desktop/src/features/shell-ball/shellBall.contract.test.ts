@@ -92,6 +92,10 @@ import {
   useShellBallInteraction,
 } from "./useShellBallInteraction";
 import { useShellBallStore } from "../../stores/shellBallStore";
+import {
+  areShellBallSelectionSnapshotsEqual,
+  shouldPollShellBallNativeSelection,
+} from "./selection/selection.provider";
 
 const desktopRoot = process.cwd();
 
@@ -1217,6 +1221,7 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
     geometry: "desktop-shell-ball:geometry",
     helperReady: "desktop-shell-ball:helper-ready",
     textSelectionState: "desktop-shell-ball:text-selection-state",
+    selectionSnapshot: "desktop-shell-ball:selection-snapshot",
     pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
     pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
     bubbleHover: "desktop-shell-ball:bubble-hover",
@@ -3868,32 +3873,81 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   assert.match(surfaceSource, /className="shell-ball-surface__text-drop-target"/);
 });
 
+test("shell-ball clipboard command stays frontend-only and reads the desktop clipboard service", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const clipboardServiceSource = readFileSync(resolve(desktopRoot, "src/services/clipboardService.ts"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallClipboardCommand\(/);
+  assert.match(coordinatorSource, /const clipboardText = await readClipboardText\(\);/);
+  assert.match(coordinatorSource, /Clipboard is unavailable right now\./);
+  assert.match(clipboardServiceSource, /import \{ readText \} from "@tauri-apps\/plugin-clipboard-manager";/);
+  assert.match(clipboardServiceSource, /export async function readClipboardText\(\)/);
+  assert.doesNotMatch(interactionSource, /SHELL_BALL_CLIPBOARD_COMMAND/);
+});
+
 test("shell-ball selected-text prompt only surfaces in resting states", () => {
   assert.equal(
     shouldShowShellBallSelectionIndicator({
-      available: true,
+      selection: {
+        text: "selected text",
+        page_context: { title: "Dashboard", url: "local://dashboard", app_name: "dashboard" },
+        source: "windows_uia",
+        updated_at: "2026-04-16T10:00:00.000Z",
+      },
       visualState: "idle",
     }),
     true,
   );
   assert.equal(
     shouldShowShellBallSelectionIndicator({
-      available: true,
+      selection: {
+        text: "selected text",
+        page_context: { title: "Dashboard", url: "local://dashboard", app_name: "dashboard" },
+        source: "windows_uia",
+        updated_at: "2026-04-16T10:00:00.000Z",
+      },
       visualState: "processing",
     }),
     false,
   );
 });
 
-test("shell-ball app routes selected-text prompts into input focus and a mock agent reply", () => {
+test("shell-ball app routes real selection snapshots into input focus and an acknowledgement bubble", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const providersSource = readFileSync(resolve(desktopRoot, "src/features/shared/AppProviders.tsx"), "utf8");
+  const selectionProviderSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/selection/selection.provider.tsx"), "utf8");
 
-  assert.match(appSource, /listen<ShellBallTextSelectionStatePayload>\(shellBallWindowSyncEvents\.textSelectionState/);
+  assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
-  assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
-  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(\) => \{/);
-  assert.match(coordinatorSource, /text: "识别到选中了文字"/);
+  assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(selectionPrompt\.text\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
+  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(text: string\) => \{/);
+  assert.match(coordinatorSource, /createShellBallSelectedTextPreview\(text\)/);
+  assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
+  assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
+  assert.match(selectionProviderSource, /readShellBallSelectionSnapshot/);
+  assert.match(selectionProviderSource, /useInterval\(/);
+  assert.equal(shouldPollShellBallNativeSelection("shell-ball"), true);
+  assert.equal(shouldPollShellBallNativeSelection("dashboard"), false);
+  assert.equal(
+    areShellBallSelectionSnapshotsEqual(
+      {
+        text: "selected text",
+        page_context: { title: "A", url: "native://windows-uia-selection", app_name: "notepad" },
+        source: "windows_uia",
+        updated_at: "1",
+      },
+      {
+        text: "selected text",
+        page_context: { title: "A", url: "native://windows-uia-selection", app_name: "notepad" },
+        source: "windows_uia",
+        updated_at: "2",
+      },
+    ),
+    true,
+  );
 });
 
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {

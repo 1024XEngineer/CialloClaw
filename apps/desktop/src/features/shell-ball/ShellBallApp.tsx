@@ -6,12 +6,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useEventListener } from "ahooks";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
+import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import type { ShellBallVisualState } from "./shellBall.types";
 import { emitShellBallInputRequestFocus, useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
-import { shellBallWindowSyncEvents, type ShellBallTextSelectionStatePayload } from "./shellBall.windowSync";
+import { shellBallWindowSyncEvents, type ShellBallSelectionSnapshotPayload } from "./shellBall.windowSync";
 import type { ShellBallDashboardTransitionRequest } from "../../platform/dashboardWindowTransition";
 import { shellBallDashboardTransitionEvents } from "../../platform/dashboardWindowTransition";
 import {
@@ -85,10 +86,10 @@ function waitForAnimationFrame() {
  * @returns Whether the marker should be shown.
  */
 export function shouldShowShellBallSelectionIndicator(input: {
-  available: boolean;
+  selection: ShellBallSelectionSnapshot | null;
   visualState: ShellBallVisualState;
 }) {
-  return input.available && (input.visualState === "idle" || input.visualState === "hover_input");
+  return input.selection !== null && (input.visualState === "idle" || input.visualState === "hover_input");
 }
 
 function easeShellBallDashboardTransition(progress: number) {
@@ -210,7 +211,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
-  const [selectionPromptActive, setSelectionPromptActive] = useState(false);
+  const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const transitionQueueRef = useRef(Promise.resolve());
@@ -432,7 +433,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
   useEffect(() => {
     if (visualState !== "idle" && visualState !== "hover_input") {
-      setSelectionPromptActive(false);
+      setSelectionPrompt(null);
     }
   }, [visualState]);
 
@@ -447,8 +448,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     let disposed = false;
 
     void currentWindow
-      .listen<ShellBallTextSelectionStatePayload>(shellBallWindowSyncEvents.textSelectionState, ({ payload }) => {
-        setSelectionPromptActive(payload.available);
+      .listen<ShellBallSelectionSnapshotPayload>(shellBallWindowSyncEvents.selectionSnapshot, ({ payload }) => {
+        setSelectionPrompt(payload.snapshot);
       })
       .then((unlisten) => {
         if (disposed) {
@@ -489,16 +490,16 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   };
 
   const handleMascotPrimaryAction = useCallback(() => {
-    if (selectionPromptActive) {
-      setSelectionPromptActive(false);
+    if (selectionPrompt !== null) {
+      setSelectionPrompt(null);
       handleInputFocusRequest();
-      handleCoordinatorSelectedTextPrompt();
+      handleCoordinatorSelectedTextPrompt(selectionPrompt.text);
       void emitShellBallInputRequestFocus(Date.now());
       return;
     }
 
     handlePrimaryClick();
-  }, [handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPromptActive]);
+  }, [handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPrompt]);
 
   return (
     <ShellBallSurface
@@ -514,7 +515,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       })}
       visualState={visualState}
       selectionIndicatorVisible={shouldShowShellBallSelectionIndicator({
-        available: selectionPromptActive,
+        selection: selectionPrompt,
         visualState,
       })}
       voicePreview={voicePreview}

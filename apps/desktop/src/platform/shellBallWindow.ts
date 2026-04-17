@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import type { ShellBallSelectionSnapshot } from "@/features/shell-ball/selection/selection.types";
 
 export type ShellBallMousePosition = {
   client_x: number;
@@ -63,6 +64,21 @@ export async function getShellBallMousePosition() {
   }
 
   return invoke<ShellBallMousePosition | null>("shell_ball_get_mouse_position");
+}
+
+/**
+ * Reads the current native selection snapshot captured by the host platform
+ * adapter.
+ *
+ * @returns The latest native selection snapshot, or `null` when no selection is
+ *          available.
+ */
+export async function readShellBallSelectionSnapshot() {
+  if (!isTauriWindowEnvironment()) {
+    return null;
+  }
+
+  return invoke<ShellBallSelectionSnapshot | null>("shell_ball_read_selection_snapshot");
 }
 
 export async function startShellBallDragging() {
