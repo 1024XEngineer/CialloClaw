@@ -43,7 +43,12 @@ import { shouldSuppressShellBallMascotHotspotGestures } from "./components/Shell
 import { extractShellBallDroppedText, resolveShellBallTextDropEffect, ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { shellBallWindowLabels, shellBallWindowPermissions } from "../../platform/shellBallWindowController";
-import { ShellBallInputBar } from "./components/ShellBallInputBar";
+import {
+  clampShellBallInputResizeDimension,
+  focusShellBallInputField,
+  resolveShellBallInputFieldHeight,
+  ShellBallInputBar,
+} from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
 import {
@@ -2650,10 +2655,55 @@ test("shell-ball input bar uses a resizable textarea for focused draft editing",
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
   assert.match(interactiveMarkup, /<textarea/);
+  assert.match(interactiveMarkup, /shell-ball-input-bar__resize-handle/);
   assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \.shell-ball-input-bar__field \{[\s\S]*resize:\s*both;/);
+  assert.match(inputBarSource, /focusShellBallInputField\(inputRef\.current\);/);
+  assert.doesNotMatch(inputBarSource, /inputRef\.current\.select\(\)/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar__resize-handle \{[\s\S]*cursor:\s*nwse-resize;/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar__field \{[\s\S]*overflow-y:\s*hidden;/);
+  assert.match(shellBallStyles, /\.shell-ball-input-bar__field::-webkit-scrollbar-thumb \{/);
   assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \{[\s\S]*border-radius:\s*1rem;/);
   assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within::before \{[\s\S]*border-radius:\s*1rem;/);
+});
+
+test("shell-ball input helpers clamp manual resize and autosize heights", () => {
+  assert.equal(clampShellBallInputResizeDimension(96.4, 120, 240), 120);
+  assert.equal(clampShellBallInputResizeDimension(188.2, 120, 240), 188);
+  assert.equal(clampShellBallInputResizeDimension(312.7, 120, 240), 240);
+
+  assert.equal(
+    resolveShellBallInputFieldHeight({
+      contentHeight: 224,
+      manualHeight: null,
+      minHeight: 44,
+      maxHeight: 192,
+    }),
+    192,
+  );
+  assert.equal(
+    resolveShellBallInputFieldHeight({
+      contentHeight: 224,
+      manualHeight: 96,
+      minHeight: 44,
+      maxHeight: 192,
+    }),
+    96,
+  );
+});
+
+test("shell-ball input focus helper keeps the caret at the end of the draft", () => {
+  const calls: string[] = [];
+  focusShellBallInputField({
+    focus() {
+      calls.push("focus");
+    },
+    setSelectionRange(start, end) {
+      calls.push(`range:${String(start)}:${String(end)}`);
+    },
+    value: "Draft text",
+  });
+
+  assert.deepEqual(calls, ["focus", "range:10:10"]);
 });
 
 test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
@@ -4212,6 +4262,12 @@ test("shell-ball app routes selected-text prompts into input focus and a mock ag
   assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
   assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(\) => \{/);
   assert.match(coordinatorSource, /text: "识别到选中了文字"/);
+});
+
+test("shell-ball input window skips window-focus pointer handling for the resize grip", () => {
+  const inputWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallInputWindow.tsx"), "utf8");
+
+  assert.match(inputWindowSource, /target\.closest\('\[data-shell-ball-input-resize-handle="true"\]'\)/);
 });
 
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {

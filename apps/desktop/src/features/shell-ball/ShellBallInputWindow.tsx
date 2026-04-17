@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
@@ -282,7 +283,12 @@ export function ShellBallInputWindow({
     clearPendingBlurTimeout();
   }
 
-  function handlePointerDown() {
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('[data-shell-ball-input-resize-handle="true"]')) {
+      return;
+    }
+
     windowFocusedRef.current = true;
     clearPendingBlurTimeout();
     pendingWindowBlurRef.current = false;

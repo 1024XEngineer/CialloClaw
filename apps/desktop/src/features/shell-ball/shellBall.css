@@ -710,7 +710,12 @@
     border-radius 180ms ease,
     height 180ms ease,
     background 180ms ease,
-    border-color 180ms ease;
+  border-color 180ms ease;
+}
+
+.shell-ball-input-bar__field-shell {
+  min-width: 0;
+  position: relative;
 }
 
 .shell-ball-input-bar__field {
@@ -726,9 +731,12 @@
   min-height: 1.28rem;
   min-width: 11rem;
   outline: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: hidden;
   padding: 0 0.18rem;
   resize: none;
+  scrollbar-color: rgba(156, 171, 190, 0.82) rgba(255, 255, 255, 0.16);
+  scrollbar-width: thin;
   white-space: pre-wrap;
   width: clamp(12rem, calc(var(--shell-ball-helper-width) - 4.8rem), 23rem);
 }
@@ -737,8 +745,34 @@
   color: rgba(24, 24, 24, 0.28);
 }
 
-.shell-ball-input-bar__field::-webkit-resizer {
-  background: linear-gradient(135deg, transparent 0 48%, rgba(91, 103, 118, 0.42) 48% 56%, transparent 56% 100%);
+.shell-ball-input-bar__field::-webkit-scrollbar {
+  width: 0.38rem;
+}
+
+.shell-ball-input-bar__field::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+.shell-ball-input-bar__field::-webkit-scrollbar-thumb {
+  background: rgba(156, 171, 190, 0.82);
+  border-radius: 999px;
+}
+
+.shell-ball-input-bar__field::-webkit-scrollbar-thumb:hover {
+  background: rgba(136, 153, 174, 0.92);
+}
+
+.shell-ball-input-bar__resize-handle {
+  background: transparent;
+  bottom: 0;
+  cursor: nwse-resize;
+  height: 1rem;
+  position: absolute;
+  right: 0;
+  touch-action: none;
+  width: 1rem;
+  z-index: 1;
 }
 
 .shell-ball-input-bar__action {
@@ -826,7 +860,6 @@
   caret-color: rgba(18, 18, 18, 0.94);
   color: rgba(18, 18, 18, 0.94);
   min-height: 2.56rem;
-  resize: both;
   text-shadow: none;
 }
 
