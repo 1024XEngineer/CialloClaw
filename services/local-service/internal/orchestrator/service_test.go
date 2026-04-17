@@ -4182,6 +4182,168 @@ func TestServiceSecuritySummaryCountsRuntimeAndStoredPendingAuthorizations(t *te
 	}
 }
 
+func TestServiceSecurityPendingListMergesRuntimeAndStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending mixed waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_security_pending_list_mixed",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for pending list",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTask := runtimeResult["task"].(map[string]any)
+	runtimeUpdatedAt, err := time.Parse(dateTimeLayout, runtimeTask["updated_at"].(string))
+	if err != nil {
+		t.Fatalf("parse runtime updated_at failed: %v", err)
+	}
+
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_pending_list_stored",
+		SessionID:   "sess_security_pending_list_mixed",
+		RunID:       "run_security_pending_list_stored",
+		Title:       "stored waiting auth task for pending list",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "red",
+		StartedAt:   runtimeUpdatedAt.Add(-5 * time.Minute),
+		UpdatedAt:   runtimeUpdatedAt.Add(1 * time.Minute),
+		ApprovalRequest: map[string]any{
+			"approval_id":    "appr_security_pending_list_stored",
+			"task_id":        "task_security_pending_list_stored",
+			"operation_name": "write_file",
+			"target_object":  "/workspace/security.txt",
+			"reason":         "Stored high-risk write still needs authorization.",
+			"status":         "pending",
+			"risk_level":     "red",
+			"created_at":     runtimeUpdatedAt.Add(1 * time.Minute).Format(time.RFC3339Nano),
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	}); err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{
+		"limit":  float64(20),
+		"offset": float64(0),
+	})
+	if err != nil {
+		t.Fatalf("security pending list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected merged pending authorization list to return two items, got %+v", items)
+	}
+	if items[0]["task_id"] != "task_security_pending_list_stored" {
+		t.Fatalf("expected newer stored pending task to lead merged list, got %+v", items)
+	}
+
+	page := result["page"].(map[string]any)
+	if page["total"] != 2 || page["has_more"] != false {
+		t.Fatalf("expected merged pending list page metadata, got %+v", page)
+	}
+}
+
+func TestServiceSecurityPendingListPaginatesMergedPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending pagination")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_security_pending_list_page",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for pending pagination",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTask := runtimeResult["task"].(map[string]any)
+	runtimeUpdatedAt, err := time.Parse(dateTimeLayout, runtimeTask["updated_at"].(string))
+	if err != nil {
+		t.Fatalf("parse runtime updated_at failed: %v", err)
+	}
+
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_pending_page_stored",
+		SessionID:   "sess_security_pending_list_page",
+		RunID:       "run_security_pending_page_stored",
+		Title:       "stored waiting auth task for pending pagination",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   runtimeUpdatedAt.Add(-5 * time.Minute),
+		UpdatedAt:   runtimeUpdatedAt.Add(1 * time.Minute),
+		ApprovalRequest: map[string]any{
+			"approval_id":    "appr_security_pending_page_stored",
+			"task_id":        "task_security_pending_page_stored",
+			"operation_name": "write_file",
+			"target_object":  "/workspace/pending.txt",
+			"reason":         "Stored task should occupy the first merged page slot.",
+			"status":         "pending",
+			"risk_level":     "yellow",
+			"created_at":     runtimeUpdatedAt.Add(1 * time.Minute).Format(time.RFC3339Nano),
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	}); err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{
+		"limit":  float64(1),
+		"offset": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("security pending list with pagination failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one paged pending authorization item, got %+v", items)
+	}
+	if items[0]["task_id"] != runtimeTask["task_id"] {
+		t.Fatalf("expected offset page to return runtime task after stored task, got %+v", items)
+	}
+
+	page := result["page"].(map[string]any)
+	if page["limit"] != 1 || page["offset"] != 1 || page["total"] != 2 || page["has_more"] != false {
+		t.Fatalf("expected paged merged pending list metadata, got %+v", page)
+	}
+}
+
 func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "dashboard audit trail")
 

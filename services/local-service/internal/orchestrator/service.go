@@ -1119,32 +1119,29 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 	}, nil
 }
 
-// SecurityPendingList 处理当前模块的相关逻辑。
-
-// SecurityPendingList 处理 agent.security.pending.list。
+// SecurityPendingList handles `agent.security.pending.list` and keeps the
+// pending-authorization list aligned with the merged task-centric read model.
 func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, error) {
-	limit := intValue(params, "limit", 20)
-	offset := intValue(params, "offset", 0)
-	items, total := s.runEngine.PendingApprovalRequests(limit, offset)
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	unfinishedTasks := newTaskQueryViews(s).tasks("unfinished", "updated_at", "desc")
+	items := pendingApprovalsFromTasks(unfinishedTasks)
+	total := len(items)
 
-	// Fallback to storage if runtime has no pending approvals
+	// Keep the legacy runtime response as a safety net when runtime approval
+	// requests exist but the task snapshots do not expose a structured payload.
 	if total == 0 {
-		unfinishedTasks, totalTasks, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0)
-		if ok && totalTasks > 0 {
-			allPendingApprovals := pendingApprovalsFromTasks(unfinishedTasks)
-			total = len(allPendingApprovals)
-			if total > 0 {
-				start := offset
-				if start >= total {
-					start = total
-				}
-				end := start + limit
-				if end > total {
-					end = total
-				}
-				items = allPendingApprovals[start:end]
-			}
+		runtimeItems, runtimeTotal := s.runEngine.PendingApprovalRequests(limit, offset)
+		items = runtimeItems
+		total = runtimeTotal
+	} else if offset >= total {
+		items = []map[string]any{}
+	} else {
+		end := offset + limit
+		if end > total {
+			end = total
 		}
+		items = items[offset:end]
 	}
 
 	return map[string]any{
