@@ -261,6 +261,91 @@ func TestToolCallSinkReturnsWorkingImplementation(t *testing.T) {
 	assertToolCallCount(t, sqliteSink.db, 1)
 }
 
+func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "loop-runtime.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	store := service.LoopRuntimeStore()
+	if store == nil {
+		t.Fatal("expected loop runtime store to be available")
+	}
+	if err := store.SaveRun(context.Background(), RunRecord{
+		RunID:      "run_loop_001",
+		TaskID:     "task_loop_001",
+		SessionID:  "sess_loop_001",
+		Status:     "completed",
+		IntentName: "agent_loop",
+		StartedAt:  "2026-04-17T10:00:00Z",
+		UpdatedAt:  "2026-04-17T10:00:05Z",
+		FinishedAt: "2026-04-17T10:00:06Z",
+		StopReason: "completed",
+	}); err != nil {
+		t.Fatalf("SaveRun returned error: %v", err)
+	}
+	if err := store.SaveSteps(context.Background(), []StepRecord{{
+		StepID:        "step_loop_001",
+		RunID:         "run_loop_001",
+		TaskID:        "task_loop_001",
+		OrderIndex:    1,
+		LoopRound:     1,
+		Name:          "agent_loop_round",
+		Status:        "completed",
+		InputSummary:  "planner input",
+		OutputSummary: "planner output",
+		StopReason:    "completed",
+		StartedAt:     "2026-04-17T10:00:00Z",
+		CompletedAt:   "2026-04-17T10:00:01Z",
+		PlannerInput:  "read file",
+		PlannerOutput: "call read_file",
+		Observation:   "file contents loaded",
+		ToolName:      "read_file",
+		ToolCallID:    "tool_call_001",
+	}}); err != nil {
+		t.Fatalf("SaveSteps returned error: %v", err)
+	}
+	if err := store.SaveEvents(context.Background(), []EventRecord{{
+		EventID:     "evt_loop_001",
+		RunID:       "run_loop_001",
+		TaskID:      "task_loop_001",
+		StepID:      "step_loop_001",
+		Type:        "loop.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-17T10:00:06Z",
+	}}); err != nil {
+		t.Fatalf("SaveEvents returned error: %v", err)
+	}
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{
+		DeliveryResultID: "delivery_result_001",
+		TaskID:           "task_loop_001",
+		Type:             "bubble",
+		Title:            "Loop result",
+		PayloadJSON:      `{"task_id":"task_loop_001"}`,
+		PreviewText:      "loop preview",
+		CreatedAt:        "2026-04-17T10:00:06Z",
+	}); err != nil {
+		t.Fatalf("SaveDeliveryResult returned error: %v", err)
+	}
+
+	sqliteStore, ok := service.loopRuntimeStore.(*SQLiteLoopRuntimeStore)
+	if !ok {
+		t.Fatalf("expected sqlite loop runtime store, got %T", service.loopRuntimeStore)
+	}
+	assertTableCount(t, sqliteStore.db, "runs", 1)
+	assertTableCount(t, sqliteStore.db, "steps", 1)
+	assertTableCount(t, sqliteStore.db, "events", 1)
+	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
+
+	events, total, err := store.ListEvents(context.Background(), "task_loop_001", 20, 0)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
+		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
+	}
+}
+
 func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -487,6 +572,18 @@ func assertToolCallCount(t *testing.T, db *sql.DB, expected int) {
 	}
 	if count != expected {
 		t.Fatalf("expected tool call count %d, got %d", expected, count)
+	}
+}
+
+func assertTableCount(t *testing.T, db *sql.DB, table string, expected int) {
+	t.Helper()
+	var count int
+	query := "SELECT COUNT(1) FROM " + table
+	if err := db.QueryRow(query).Scan(&count); err != nil {
+		t.Fatalf("query %s count failed: %v", table, err)
+	}
+	if count != expected {
+		t.Fatalf("expected %s count %d, got %d", table, expected, count)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -407,6 +408,61 @@ func TestExecuteAgentLoopHonorsConfiguredMaxToolIterations(t *testing.T) {
 	}
 	if result.ModelInvocation["request_id"] != "req_loop_2" {
 		t.Fatalf("expected last recorded invocation to come from second turn, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_loop_runtime_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "."}}},
+			},
+			{
+				RequestID:  "req_loop_runtime_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Loop runtime finished cleanly.",
+			},
+		},
+	}
+	loopStore := storage.NewService(nil).LoopRuntimeStore()
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	service = service.WithLoopRuntimeStore(loopStore)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_runtime",
+		RunID:        "run_loop_runtime",
+		Title:        "Loop runtime persistence",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop runtime result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "Loop runtime finished cleanly." {
+		t.Fatalf("unexpected loop runtime result: %+v", result)
+	}
+	events, total, err := loopStore.ListEvents(context.Background(), "task_loop_runtime", 20, 0)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	if total == 0 || len(events) == 0 {
+		t.Fatal("expected persisted loop events")
+	}
+	foundCompleted := false
+	for _, event := range events {
+		if event.Type == "loop.completed" {
+			foundCompleted = true
+			break
+		}
+	}
+	if !foundCompleted {
+		t.Fatalf("expected loop.completed event in %+v", events)
 	}
 }
 
