@@ -2792,6 +2792,74 @@ func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T
 	}
 }
 
+func TestServiceTaskListClampsPagingParams(t *testing.T) {
+	service := newTestService()
+
+	for index := 0; index < 25; index++ {
+		_, err := service.StartTask(map[string]any{
+			"session_id": fmt.Sprintf("sess_clamp_%02d", index),
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("task %02d for task list clamp", index),
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("start task %d failed: %v", index, err)
+		}
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"limit":      float64(0),
+		"offset":     float64(-5),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list with clamped defaults failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 20 {
+		t.Fatalf("expected zero limit to clamp to default page size 20, got %d", len(items))
+	}
+	page := result["page"].(map[string]any)
+	if page["limit"] != 20 {
+		t.Fatalf("expected clamped page limit 20, got %+v", page)
+	}
+	if page["offset"] != 0 {
+		t.Fatalf("expected negative offset to clamp to 0, got %+v", page)
+	}
+
+	largeResult, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"limit":      float64(999),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list with large limit failed: %v", err)
+	}
+
+	largeItems := largeResult["items"].([]map[string]any)
+	if len(largeItems) != 25 {
+		t.Fatalf("expected large limit to return all 25 tasks after clamping to 100, got %d", len(largeItems))
+	}
+	largePage := largeResult["page"].(map[string]any)
+	if largePage["limit"] != 100 {
+		t.Fatalf("expected oversized limit to clamp to 100, got %+v", largePage)
+	}
+}
+
 func TestServiceTaskListFallbackMatchesRuntimeUnknownGroupSemantics(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "stored unknown group")
 	if service.storage == nil {

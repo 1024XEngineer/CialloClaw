@@ -463,13 +463,14 @@ func (s *Service) RecommendationFeedbackSubmit(params map[string]any) (map[strin
 	}, nil
 }
 
-// TaskList 处理当前模块的相关逻辑。
-
-// TaskList 处理 agent.task.list，返回符合排序规则的任务列表。
+// TaskList handles `agent.task.list` and returns protocol-facing task items
+// with stable paging semantics for both runtime and storage-backed queries.
 func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	group := stringValue(params, "group", "unfinished")
-	limit := intValue(params, "limit", 20)
-	offset := intValue(params, "offset", 0)
+	// Clamp paging params at the RPC boundary so runtime and storage-backed
+	// list flows expose the same contract to dashboard consumers.
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
 	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
