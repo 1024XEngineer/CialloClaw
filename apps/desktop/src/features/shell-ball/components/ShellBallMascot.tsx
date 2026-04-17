@@ -147,6 +147,7 @@ export function ShellBallMascot({
   const shouldRenderVoiceHints = showVoiceHints && (visualState === "voice_listening" || visualState === "voice_locked");
   const showVoiceMarker = visualState === "voice_listening" || visualState === "voice_locked";
   const showSelectionMarker = selectionIndicatorVisible && !showVoiceMarker;
+  const shouldRouteHotspotDrag = visualState !== "voice_listening" && visualState !== "voice_locked";
 
   function resetPointerSequence() {
     activeSequenceRef.current = false;
@@ -185,7 +186,9 @@ export function ShellBallMascot({
       return;
     }
 
-    onHotspotDragMove(event);
+    if (shouldRouteHotspotDrag) {
+      onHotspotDragMove(event);
+    }
 
     if (
       !draggingSequenceRef.current &&
@@ -212,8 +215,6 @@ export function ShellBallMascot({
       return;
     }
 
-    onHotspotDragEnd(event);
-
     const pointerAction = getShellBallMascotPointerPhaseAction({
       phase: "pointer_up",
       button: event.button,
@@ -227,6 +228,11 @@ export function ShellBallMascot({
 
     const dragSuppressed = draggingSequenceRef.current;
     const handled = onPressEnd(event);
+
+    if (!handled) {
+      onHotspotDragEnd(event);
+    }
+
     resetPointerSequence();
     const action = getShellBallMascotPointerPhaseAction({
       phase: "pointer_up",
@@ -260,7 +266,7 @@ export function ShellBallMascot({
 
     suppressGestureRef.current = false;
     const shouldNotifyCancel = activeSequenceRef.current;
-    if (shouldNotifyCancel) {
+    if (shouldNotifyCancel && shouldRouteHotspotDrag) {
       onHotspotDragCancel(event);
     }
     resetPointerSequence();

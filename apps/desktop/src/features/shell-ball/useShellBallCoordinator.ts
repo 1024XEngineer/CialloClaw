@@ -607,6 +607,18 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     scheduleBubbleRegionHide();
   }, [applyBubbleVisibilityPhase, clearBubbleVisibilityTimers, helpersVisible, revealBubbleRegion, scheduleBubbleRegionHide]);
 
+  const handleCoordinatorRegionEnter = useCallback(() => {
+    regionActiveRef.current = true;
+    revealBubbleRegion();
+    handlersRef.current.onRegionEnter();
+  }, [revealBubbleRegion]);
+
+  const handleCoordinatorRegionLeave = useCallback(() => {
+    regionActiveRef.current = false;
+    scheduleBubbleRegionHide();
+    handlersRef.current.onRegionLeave();
+  }, [scheduleBubbleRegionHide]);
+
   useEffect(() => {
     const hoverDrivenState =
       input.visualState === "hover_input" || input.visualState === "voice_listening" || input.visualState === "voice_locked";
@@ -788,18 +800,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           .filter((item) => item.bubble.pinned)
           .map((item) => syncPinnedBubbleWindowAnchor(item.bubble.bubble_id)),
       );
-    }
-
-    function handleCoordinatorRegionEnter() {
-      regionActiveRef.current = true;
-      revealBubbleRegion();
-      handlersRef.current.onRegionEnter();
-    }
-
-    function handleCoordinatorRegionLeave() {
-      regionActiveRef.current = false;
-      scheduleBubbleRegionHide();
-      handlersRef.current.onRegionLeave();
     }
 
     function handleCoordinatorInputFocusChange(focused: boolean) {
@@ -1084,9 +1084,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         cleanup();
       }
     };
-  }, [revealBubbleRegion, scheduleBubbleRegionHide]);
+  }, [handleCoordinatorRegionEnter, handleCoordinatorRegionLeave, revealBubbleRegion, scheduleBubbleRegionHide]);
 
-  return { snapshot, handleDroppedFiles, handleSelectedTextPrompt };
+  return {
+    snapshot,
+    handleDroppedFiles,
+    handleSelectedTextPrompt,
+    handleRegionEnter: handleCoordinatorRegionEnter,
+    handleRegionLeave: handleCoordinatorRegionLeave,
+  };
 }
 
 export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {
