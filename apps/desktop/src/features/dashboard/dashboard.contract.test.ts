@@ -139,8 +139,12 @@ function loadDashboardSettingsMutationModule(rpcMethods?: {
   updateSettings?: (params: unknown) => Promise<unknown>;
   getSettingsDetailed?: (params: unknown) => Promise<unknown>;
 }) {
-  return withDesktopAliasRuntime((requireFn) =>
-    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsMutation.js")) as {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsMutation.js");
+
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
       updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc" | "mock") => Promise<{
         applyMode: string;
         needRestart: boolean;
@@ -164,8 +168,8 @@ function loadDashboardSettingsMutationModule(rpcMethods?: {
           };
         };
       }>;
-    }, rpcMethods,
-  );
+    };
+  }, rpcMethods);
 }
 
 function withDesktopAliasRuntime<T>(
@@ -665,6 +669,23 @@ test("SecurityApp keeps task-detail navigation hooks above the module-data early
   assert.notEqual(earlyReturnIndex, -1);
   assert.notEqual(openTaskDetailHookIndex, -1);
   assert.ok(openTaskDetailHookIndex < earlyReturnIndex);
+});
+
+test("security audit cards and mirror cards stay aligned with the v6 frontend protocol contract", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+  const mirrorDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorDetailContent.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const \[auditScope, setAuditScope\] = useState<SecurityAuditScope>\("focused_task"\)/);
+  assert.match(securityAppSource, /const auditFilterTaskId = auditScope === "focused_task" \? focusedTaskId : null/);
+  assert.match(securityAppSource, /loadSecurityAuditRecords\(moduleData\.source, auditFilterTaskId/);
+  assert.match(securityAppSource, /title: "审计记录"/);
+  assert.doesNotMatch(securityAppSource, /decisionHistory/);
+  assert.doesNotMatch(securityAppSource, /loadDashboardSettingsSnapshot/);
+  assert.match(mirrorAppSource, /overview\.history_summary\[0\] \?\? latestConversation\?\.user_text/);
+  assert.match(mirrorAppSource, /overview\.history_summary\[1\] \?\?[\s\S]*latestConversation\?\.agent_text/);
+  assert.match(mirrorAppSource, /latestMemoryReference\?\.summary \|\| latestMemoryReference\?\.reason/);
+  assert.match(mirrorDetailSource, /reference\.summary \|\| reference\.reason/);
 });
 
 test("task context links back into mirror detail state instead of plain text dead ends", () => {
