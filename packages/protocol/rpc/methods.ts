@@ -45,6 +45,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_RECOMMENDATION_FEEDBACK_SUBMIT: "agent.recommendation.feedback.submit",
   AGENT_TASK_LIST: "agent.task.list",
   AGENT_TASK_DETAIL_GET: "agent.task.detail.get",
+  AGENT_TASK_EVENTS_LIST: "agent.task.events.list",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
   AGENT_TASK_CONTROL: "agent.task.control",
@@ -280,6 +281,32 @@ export interface AgentTaskDetailGetResult {
   mirror_references: MirrorReference[];
   approval_request: ApprovalRequest | null;
   security_summary: SecuritySummary;
+}
+
+// TaskEvent defines one persisted compatibility event exposed through task-centric queries.
+export interface TaskEvent {
+  event_id: string;
+  run_id: string;
+  task_id: string;
+  step_id?: string;
+  type: string;
+  level: string;
+  payload_json: string;
+  created_at: string;
+}
+
+// AgentTaskEventsListParams defines the parameters for agent.task.events.list.
+export interface AgentTaskEventsListParams {
+  request_meta: RequestMeta;
+  task_id: string;
+  limit?: number;
+  offset?: number;
+}
+
+// AgentTaskEventsListResult defines the result for agent.task.events.list.
+export interface AgentTaskEventsListResult {
+  items: TaskEvent[];
+  page: JsonRpcPage;
 }
 
 // AgentTaskArtifactListParams defines the parameters for agent.task.artifact.list.

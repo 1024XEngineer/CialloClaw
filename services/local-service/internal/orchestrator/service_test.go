@@ -5791,6 +5791,38 @@ func TestServiceTaskControlReturnsUpdatedTaskAndBubbleForWaitingAuthCancel(t *te
 	}
 }
 
+func TestServiceTaskEventsListReturnsNormalizedLoopEvents(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event list")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     "evt_loop_list_001",
+		RunID:       "run_loop_list_001",
+		TaskID:      "task_loop_list_001",
+		StepID:      "step_loop_list_001",
+		Type:        "loop.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-17T10:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save loop events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": "task_loop_list_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["type"] != "loop.completed" {
+		t.Fatalf("expected normalized loop event item, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
 func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "第一点\n第二点\n第三点")
 

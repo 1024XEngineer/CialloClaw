@@ -535,6 +535,41 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	}, nil
 }
 
+// TaskEventsList handles agent.task.events.list and exposes normalized runtime
+// events without leaking storage-specific row shapes across the RPC boundary.
+func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		items = append(items, map[string]any{
+			"event_id":     record.EventID,
+			"run_id":       record.RunID,
+			"task_id":      record.TaskID,
+			"step_id":      record.StepID,
+			"type":         record.Type,
+			"level":        record.Level,
+			"payload_json": record.PayloadJSON,
+			"created_at":   record.CreatedAt,
+		})
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
 // TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready
 // artifact items.
 func (s *Service) TaskArtifactList(params map[string]any) (map[string]any, error) {

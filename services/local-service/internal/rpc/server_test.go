@@ -28,6 +28,21 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
+type testStorageAdapter struct {
+	databasePath string
+}
+
+func (a testStorageAdapter) DatabasePath() string {
+	return a.databasePath
+}
+
+func (a testStorageAdapter) SecretStorePath() string {
+	if a.databasePath == "" {
+		return ""
+	}
+	return a.databasePath + ".stronghold"
+}
+
 // TestHandleStreamConnEmitsApprovalNotifications verifies that approval notifications
 // are emitted on the stream connection after task confirmation enters waiting_auth.
 func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
@@ -893,6 +908,46 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	}
 	if numericValue(t, page["total"]) != 25 {
 		t.Fatalf("expected rpc page total 25, got %+v", page)
+	}
+}
+
+func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-loop-events.db")})
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	if err := storageService.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     "evt_rpc_loop_001",
+		RunID:       "run_rpc_loop_001",
+		TaskID:      "task_rpc_loop_001",
+		StepID:      "step_rpc_loop_001",
+		Type:        "loop.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-17T10:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save loop events failed: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-events-list"`),
+		Method:  "agent.task.events.list",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": "task_rpc_loop_001",
+			"limit":   20,
+			"offset":  0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["type"] != "loop.completed" {
+		t.Fatalf("expected rpc task events list to return loop.completed, got %+v", items)
 	}
 }
 

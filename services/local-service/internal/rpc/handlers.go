@@ -24,6 +24,7 @@ func (s *Server) registerHandlers() {
 		"agent.recommendation.feedback.submit": s.handleAgentRecommendationFeedbackSubmit,
 		"agent.task.list":                      s.handleAgentTaskList,
 		"agent.task.detail.get":                s.handleAgentTaskDetailGet,
+		"agent.task.events.list":               s.handleAgentTaskEventsList,
 		"agent.task.control":                   s.handleAgentTaskControl,
 		"agent.task_inspector.config.get":      s.handleAgentTaskInspectorConfigGet,
 		"agent.task_inspector.config.update":   s.handleAgentTaskInspectorConfigUpdate,
@@ -116,6 +117,12 @@ func (s *Server) handleAgentTaskList(params map[string]any) (any, *rpcError) {
 // handleAgentTaskDetailGet 处理 agent.task.detail.get。
 func (s *Server) handleAgentTaskDetailGet(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.TaskDetailGet(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentTaskEventsList handles agent.task.events.list.
+func (s *Server) handleAgentTaskEventsList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.TaskEventsList(params)
 	return wrapOrchestratorResult(data, err)
 }
 
