@@ -1,4 +1,4 @@
-// JsonRpcRequest 描述当前模块请求结构。
+// JsonRpcRequest represents a single outbound JSON-RPC request envelope.
 type JsonRpcRequest = {
   jsonrpc: "2.0";
   id: string;
@@ -6,7 +6,7 @@ type JsonRpcRequest = {
   params?: object;
 };
 
-// JsonRpcEnvelope 定义当前模块的数据结构。
+// JsonRpcEnvelope captures the success or error payload returned by the transport.
 type JsonRpcEnvelope<T> = {
   jsonrpc?: "2.0";
   id?: string | number | null;
@@ -48,7 +48,7 @@ type NamedPipeSubscription = {
   unsubscribe: () => Promise<void>;
 };
 
-// JsonRpcTransport 定义当前模块的接口约束。
+// JsonRpcTransport is the minimal transport contract shared by both runtime modes.
 interface JsonRpcTransport {
   send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>>;
 }
@@ -62,10 +62,11 @@ declare global {
         handler: (message: JsonRpcNotification) => void,
       ) => Promise<NamedPipeSubscription>;
     };
+    __CIALLOCLAW_RPC_ENV__?: RpcRuntimeEnv;
   }
 }
 
-// NamedPipeJsonRpcTransport 定义当前模块的数据结构。
+// NamedPipeJsonRpcTransport sends requests through the desktop named-pipe bridge.
 class NamedPipeJsonRpcTransport implements JsonRpcTransport {
   async send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>> {
     const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
@@ -78,7 +79,7 @@ class NamedPipeJsonRpcTransport implements JsonRpcTransport {
   }
 }
 
-// DebugHttpJsonRpcTransport 定义当前模块的数据结构。
+// DebugHttpJsonRpcTransport keeps local browser-style development flows available.
 class DebugHttpJsonRpcTransport implements JsonRpcTransport {
   constructor(private readonly endpoint: string) {}
 
@@ -119,13 +120,53 @@ export class JsonRpcClientError extends Error {
   }
 }
 
-// createTransport 处理当前模块的相关逻辑。
 function isTauriEnvironment() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+type RpcRuntimeEnv = {
+  debugEndpoint?: string;
+  isDev?: boolean;
+  transport?: "http" | "named_pipe";
+};
+
+function readImportMetaEnv(): RpcRuntimeEnv {
+  const viteEnv = import.meta.env;
+  const transport = viteEnv.VITE_CIALLOCLAW_RPC_TRANSPORT;
+
+  return {
+    debugEndpoint: viteEnv.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT,
+    isDev: viteEnv.DEV,
+    transport: transport === "http" || transport === "named_pipe" ? transport : undefined,
+  };
+}
+
+function isHttpLikeRuntime() {
+  return typeof window !== "undefined" && /^https?:$/.test(window.location.protocol);
+}
+
+function readRpcRuntimeEnv(): RpcRuntimeEnv {
+  const importMetaEnv = readImportMetaEnv();
+  const windowEnv = typeof window !== "undefined" ? window.__CIALLOCLAW_RPC_ENV__ : undefined;
+  const processEnv = typeof process !== "undefined" ? process.env : undefined;
+  const transport = processEnv?.VITE_CIALLOCLAW_RPC_TRANSPORT;
+
+  return {
+    debugEndpoint:
+      windowEnv?.debugEndpoint ?? importMetaEnv.debugEndpoint ?? processEnv?.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT ?? undefined,
+    isDev:
+      windowEnv?.isDev ??
+      importMetaEnv.isDev ??
+      (typeof processEnv?.NODE_ENV === "string" ? processEnv.NODE_ENV !== "production" : isHttpLikeRuntime()),
+    transport:
+      windowEnv?.transport ??
+      importMetaEnv.transport ??
+      (transport === "http" || transport === "named_pipe" ? transport : undefined),
+  };
+}
+
 function resolveDefaultTransportMode() {
-  if (import.meta.env.DEV) {
+  if (readRpcRuntimeEnv().isDev) {
     return "http";
   }
 
@@ -133,11 +174,13 @@ function resolveDefaultTransportMode() {
 }
 
 function resolveDebugRpcEndpoint() {
-  if (import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT) {
-    return import.meta.env.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT;
+  const runtimeEnv = readRpcRuntimeEnv();
+
+  if (runtimeEnv.debugEndpoint) {
+    return runtimeEnv.debugEndpoint;
   }
 
-  if (import.meta.env.DEV && !isTauriEnvironment()) {
+  if (isHttpLikeRuntime() && !isTauriEnvironment()) {
     return "/rpc";
   }
 
@@ -145,7 +188,7 @@ function resolveDebugRpcEndpoint() {
 }
 
 function createTransport(): JsonRpcTransport {
-  const transportMode = import.meta.env.VITE_CIALLOCLAW_RPC_TRANSPORT ?? resolveDefaultTransportMode();
+  const transportMode = readRpcRuntimeEnv().transport ?? resolveDefaultTransportMode();
 
   if (transportMode === "http") {
     return new DebugHttpJsonRpcTransport(resolveDebugRpcEndpoint());
@@ -176,7 +219,7 @@ function logJsonRpcRequest(method: string, payload: JsonRpcRequest) {
   });
 }
 
-// JsonRpcClient 定义当前模块的数据结构。
+// JsonRpcClient provides typed request helpers on top of the selected transport.
 export class JsonRpcClient {
   constructor(private readonly transport: JsonRpcTransport = createTransport()) {}
 
@@ -215,5 +258,5 @@ export class JsonRpcClient {
   }
 }
 
-// rpcClient 表示当前模块的客户端实例。
+// rpcClient is the shared desktop JSON-RPC client instance.
 export const rpcClient = new JsonRpcClient();

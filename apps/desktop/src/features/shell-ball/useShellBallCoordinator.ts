@@ -75,6 +75,11 @@ const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
 
+type ShellBallBubbleTurnOrder = {
+  turnIndex?: number;
+  turnPhase?: number;
+};
+
 function createShellBallRequestMeta() {
   const now = new Date().toISOString();
   const traceId = typeof globalThis.crypto?.randomUUID === "function"
@@ -87,7 +92,34 @@ function createShellBallRequestMeta() {
   };
 }
 
+function createShellBallBubbleDesktopState(turnOrder: ShellBallBubbleTurnOrder = {}) {
+  return {
+    lifecycleState: "visible" as const,
+    freshnessHint: "fresh" as const,
+    motionHint: "settle" as const,
+    turnIndex: turnOrder.turnIndex,
+    turnPhase: turnOrder.turnPhase,
+  };
+}
+
 export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem, right: ShellBallBubbleItem) {
+  // Anchor late agent replies to the user turn that created them before falling back to timestamps.
+  const leftTurnIndex = left.desktop.turnIndex;
+  const rightTurnIndex = right.desktop.turnIndex;
+
+  if (leftTurnIndex !== undefined && rightTurnIndex !== undefined) {
+    if (leftTurnIndex !== rightTurnIndex) {
+      return leftTurnIndex - rightTurnIndex;
+    }
+
+    const leftTurnPhase = left.desktop.turnPhase ?? 0;
+    const rightTurnPhase = right.desktop.turnPhase ?? 0;
+
+    if (leftTurnPhase !== rightTurnPhase) {
+      return leftTurnPhase - rightTurnPhase;
+    }
+  }
+
   const createdAtOrder = left.bubble.created_at.localeCompare(right.bubble.created_at);
 
   if (createdAtOrder !== 0) {
@@ -109,6 +141,8 @@ export function createShellBallFinalizedSpeechBubbleItem(input: {
   text: string;
   sequence: number;
   createdAt: string;
+  turnIndex?: number;
+  turnPhase?: number;
 }): ShellBallBubbleItem {
   return {
     bubble: {
@@ -121,11 +155,7 @@ export function createShellBallFinalizedSpeechBubbleItem(input: {
       created_at: input.createdAt,
     },
     role: "user",
-    desktop: {
-      lifecycleState: "visible",
-      freshnessHint: "fresh",
-      motionHint: "settle",
-    },
+    desktop: createShellBallBubbleDesktopState(input),
   };
 }
 
@@ -135,6 +165,8 @@ function createShellBallTextBubbleItem(input: {
   bubbleType: BubbleMessage["type"];
   createdAt: string;
   taskId?: string;
+  turnIndex?: number;
+  turnPhase?: number;
 }) {
   const prefix = input.role === "user" ? "shell-ball-local-user-text" : "shell-ball-local-agent-text";
 
@@ -149,11 +181,7 @@ function createShellBallTextBubbleItem(input: {
       created_at: input.createdAt,
     },
     role: input.role,
-    desktop: {
-      lifecycleState: "visible",
-      freshnessHint: "fresh",
-      motionHint: "settle",
-    },
+    desktop: createShellBallBubbleDesktopState(input),
   } satisfies ShellBallBubbleItem;
 }
 
@@ -203,6 +231,8 @@ function createShellBallDeliveryResultBubbleItem(input: {
   taskId: string;
   deliveryResult: DeliveryResult;
   createdAt: string;
+  turnIndex?: number;
+  turnPhase?: number;
 }) {
   return createShellBallTextBubbleItem({
     role: "agent",
@@ -210,6 +240,8 @@ function createShellBallDeliveryResultBubbleItem(input: {
     bubbleType: "result",
     createdAt: input.createdAt,
     taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
   });
 }
 
@@ -219,7 +251,11 @@ function syncShellBallVisualStateFromTaskStatus(status: Parameters<typeof getShe
   useShellBallStore.getState().setVisualState(nextState);
 }
 
-export function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fallbackCreatedAt: string) {
+export function createShellBallAgentBubbleItem(
+  result: ShellBallInputSubmitResult,
+  fallbackCreatedAt: string,
+  turnOrder: ShellBallBubbleTurnOrder = {},
+) {
   const deliveryPreview = result.delivery_result?.type === "bubble" ? result.delivery_result.preview_text?.trim() ?? "" : "";
   const bubbleMessage = result.bubble_message;
 
@@ -230,6 +266,8 @@ export function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResul
       bubbleType: "result",
       createdAt: result.delivery_result?.payload?.task_id ? fallbackCreatedAt : bubbleMessage?.created_at ?? fallbackCreatedAt,
       taskId: result.task.task_id,
+      turnIndex: turnOrder.turnIndex,
+      turnPhase: turnOrder.turnPhase,
     });
   }
 
@@ -241,11 +279,7 @@ export function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResul
         pinned: false,
       },
       role: "agent",
-      desktop: {
-        lifecycleState: "visible",
-        freshnessHint: "fresh",
-        motionHint: "settle",
-      },
+      desktop: createShellBallBubbleDesktopState(turnOrder),
     } satisfies ShellBallBubbleItem;
   }
 
@@ -255,6 +289,8 @@ export function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResul
     bubbleType: "status",
     createdAt: fallbackCreatedAt,
     taskId: result.task.task_id,
+    turnIndex: turnOrder.turnIndex,
+    turnPhase: turnOrder.turnPhase,
   });
 }
 
@@ -287,6 +323,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const [bubbleItems, setBubbleItems] = useState(() => sortShellBallBubbleItemsByTimestamp(cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS)));
   const appendedVoiceBubbleSequenceRef = useRef(0);
   const handledFinalizedSpeechPayloadRef = useRef<string | null>(null);
+  const bubbleTurnIndexRef = useRef(0);
   const [bubbleVisibilityPhase, setBubbleVisibilityPhase] = useState<ShellBallBubbleVisibilityPhase>("hidden");
   const helpersVisible = input.helperWindowsVisible ?? true;
   const snapshot = useMemo(
@@ -311,6 +348,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
+  const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
   const helperWindowsVisibleRef = useRef(input.helperWindowsVisible ?? true);
   const regionActiveRef = useRef(false);
   const bubbleHoveredRef = useRef(false);
@@ -346,6 +384,19 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   };
+
+  function allocateBubbleTurnIndex() {
+    bubbleTurnIndexRef.current += 1;
+    return bubbleTurnIndexRef.current;
+  }
+
+  function bindTaskToBubbleTurn(taskId: string, turnIndex: number) {
+    shellBallTaskTurnIndexRef.current.set(taskId, turnIndex);
+  }
+
+  function getTaskBubbleTurnIndex(taskId: string) {
+    return shellBallTaskTurnIndexRef.current.get(taskId);
+  }
 
   const clearBubbleVisibilityTimers = useCallback(() => {
     if (bubbleHideDelayTimeoutRef.current !== null) {
@@ -419,18 +470,23 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
 
     const createdAt = new Date().toISOString();
+    const turnIndex = allocateBubbleTurnIndex();
     const leadFile = normalizedPaths[0].split(/[\\/]/).pop() ?? normalizedPaths[0];
     const userText = normalizedPaths.length === 1 ? `拖入文件：${leadFile}` : `拖入 ${normalizedPaths.length} 个文件`;
+
+    const userBubbleItem = createShellBallTextBubbleItem({
+      role: "user",
+      text: userText,
+      bubbleType: "status",
+      createdAt,
+      turnIndex,
+      turnPhase: 0,
+    });
 
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
-        createShellBallTextBubbleItem({
-          role: "user",
-          text: userText,
-          bubbleType: "status",
-          createdAt,
-        }),
+        userBubbleItem,
       ]),
     );
     revealBubbleRegion();
@@ -444,15 +500,31 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         source: "floating_ball",
       });
       shellBallTaskIdsRef.current.add(result.task.task_id);
+      bindTaskToBubbleTurn(result.task.task_id, turnIndex);
 
       syncShellBallVisualStateFromTaskStatus(result.task.status);
 
-      setBubbleItems((currentItems) =>
-        sortShellBallBubbleItemsByTimestamp([
-          ...currentItems,
-          createShellBallAgentBubbleItem(result, new Date().toISOString()),
-        ]),
-      );
+      setBubbleItems((currentItems) => {
+        const nextItems = currentItems.map((item) =>
+          item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+            ? {
+                ...item,
+                bubble: {
+                  ...item.bubble,
+                  task_id: result.task.task_id,
+                },
+              }
+            : item,
+        );
+
+        return sortShellBallBubbleItemsByTimestamp([
+          ...nextItems,
+          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ]);
+      });
       revealBubbleRegion();
     } catch (error) {
       console.warn("shell-ball file drop start failed", error);
@@ -464,6 +536,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             text: error instanceof Error ? error.message : "文件承接失败，请稍后再试。",
             bubbleType: "status",
             createdAt: new Date().toISOString(),
+            turnIndex,
+            turnPhase: 1,
           }),
         ]),
       );
@@ -472,6 +546,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }, [revealBubbleRegion]);
 
   const handleSelectedTextPrompt = useCallback(() => {
+    const turnIndex = allocateBubbleTurnIndex();
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
@@ -480,6 +555,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           text: "识别到选中了文字",
           bubbleType: "status",
           createdAt: new Date().toISOString(),
+          turnIndex,
+          turnPhase: 0,
         }),
       ]),
     );
@@ -569,6 +646,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     handledFinalizedSpeechPayloadRef.current = finalizedSpeechPayload;
     appendedVoiceBubbleSequenceRef.current += 1;
+    const turnIndex = allocateBubbleTurnIndex();
 
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
@@ -577,6 +655,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           text: finalizedSpeechPayload,
           sequence: appendedVoiceBubbleSequenceRef.current,
           createdAt: new Date().toISOString(),
+          turnIndex,
+          turnPhase: 0,
         }),
       ]),
     );
@@ -610,12 +690,17 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           return currentItems;
         }
 
+        const turnIndex = getTaskBubbleTurnIndex(payload.task_id) ?? allocateBubbleTurnIndex();
+        bindTaskToBubbleTurn(payload.task_id, turnIndex);
+
         return sortShellBallBubbleItemsByTimestamp([
           ...currentItems,
           createShellBallDeliveryResultBubbleItem({
             createdAt: new Date().toISOString(),
             deliveryResult: payload.delivery_result,
             taskId: payload.task_id,
+            turnIndex,
+            turnPhase: 2,
           }),
         ]);
       });
@@ -744,8 +829,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     async function handlePrimaryAction(action: ShellBallPrimaryAction) {
       switch (action) {
-        case "attach_file":
+        case "attach_file": {
           handlersRef.current.onAttachFile();
+          const turnIndex = allocateBubbleTurnIndex();
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
               ...currentItems,
@@ -754,11 +840,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                 text: "把文件拖到悬浮球上，就会按 issue #187 的 file_drop 入口创建任务。",
                 bubbleType: "status",
                 createdAt: new Date().toISOString(),
+                turnIndex,
+                turnPhase: 0,
               }),
             ]),
           );
           revealBubbleRegion();
           break;
+        }
         case "submit": {
           const submittedText = snapshotRef.current.inputValue.trim();
           const submittedFiles = snapshotRef.current.pendingFiles;
@@ -773,15 +862,19 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           }
 
           const createdAt = new Date().toISOString();
+          const turnIndex = allocateBubbleTurnIndex();
+          const userBubbleItem = createShellBallTextBubbleItem({
+            role: "user",
+            text: submittedPreview,
+            bubbleType: "result",
+            createdAt,
+            turnIndex,
+            turnPhase: 0,
+          });
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
               ...currentItems,
-              createShellBallTextBubbleItem({
-                role: "user",
-                text: submittedPreview,
-                bubbleType: "result",
-                createdAt,
-              }),
+              userBubbleItem,
             ]),
           );
           revealBubbleRegion();
@@ -789,12 +882,28 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           const result = await handlersRef.current.onSubmitText();
           if (isShellBallInputSubmitResult(result)) {
             shellBallTaskIdsRef.current.add(result.task.task_id);
-            setBubbleItems((currentItems) =>
-              sortShellBallBubbleItemsByTimestamp([
-                ...currentItems,
-                createShellBallAgentBubbleItem(result, new Date().toISOString()),
-              ]),
-            );
+            bindTaskToBubbleTurn(result.task.task_id, turnIndex);
+            setBubbleItems((currentItems) => {
+              const nextItems = currentItems.map((item) =>
+                item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+                  ? {
+                      ...item,
+                      bubble: {
+                        ...item.bubble,
+                        task_id: result.task.task_id,
+                      },
+                    }
+                  : item,
+              );
+
+              return sortShellBallBubbleItemsByTimestamp([
+                ...nextItems,
+                createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ]);
+            });
             revealBubbleRegion();
           }
 
@@ -818,7 +927,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       try {
         const rpcMethods = await importRpcMethods();
         const createdAt = new Date().toISOString();
+        const turnIndex = allocateBubbleTurnIndex();
         const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
+
+        bindTaskToBubbleTurn(payload.taskId, turnIndex);
 
         setBubbleItems((currentItems) =>
           sortShellBallBubbleItemsByTimestamp([
@@ -829,6 +941,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               text: decisionText,
               bubbleType: "status",
               taskId: payload.taskId,
+              turnIndex,
+              turnPhase: 0,
             }),
           ]),
         );
@@ -855,11 +969,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
         syncShellBallVisualStateFromTaskStatus(result.task.status);
         shellBallTaskIdsRef.current.add(result.task.task_id);
+        bindTaskToBubbleTurn(result.task.task_id, turnIndex);
 
         setBubbleItems((currentItems) =>
           sortShellBallBubbleItemsByTimestamp([
             ...currentItems,
-            createShellBallAgentBubbleItem(result, new Date().toISOString()),
+            createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+              turnIndex,
+              turnPhase: 1,
+            }),
           ]),
         );
         revealBubbleRegion();

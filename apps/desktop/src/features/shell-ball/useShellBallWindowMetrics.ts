@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow, monitorFromPoint, type Monitor } from "@tauri-apps/api/window";
 import {
   createShellBallLogicalPosition,
@@ -17,6 +17,8 @@ type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pin
 
 export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 12;
 export const SHELL_BALL_BUBBLE_GAP_PX = 6;
+export const SHELL_BALL_BUBBLE_DRAG_CLEARANCE_PX = 24;
+export const SHELL_BALL_BUBBLE_REPOSITION_DURATION_MS = 180;
 export const SHELL_BALL_INPUT_GAP_PX = 4;
 export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 6;
 
@@ -44,12 +46,19 @@ type ShellBallWindowFrame = ShellBallWindowSize & {
   y: number;
 };
 
+type ShellBallPointerPosition = {
+  x: number;
+  y: number;
+};
+
 type ShellBallWindowBounds = {
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
 };
+
+type ShellBallBubblePlacement = "above" | "left" | "right" | "below";
 
 type UseShellBallWindowMetricsInput = {
   role: "ball" | AnchoredShellBallHelperWindowRole;
@@ -61,6 +70,48 @@ type ShellBallHelperWindowInteractionMode = {
   focusable: boolean;
   ignoreCursorEvents: boolean;
 };
+
+type ShellBallResolvedHelperFrame = ShellBallWindowFrame & {
+  placement?: ShellBallBubblePlacement;
+};
+
+type ShellBallBallDragSession = {
+  pointerStart: ShellBallPointerPosition;
+  latestPointer: ShellBallPointerPosition;
+  frameStart: ShellBallWindowFrame;
+};
+
+export function createShellBallWindowGeometry(input: {
+  position: {
+    x: number;
+    y: number;
+  };
+  size: {
+    width: number;
+    height: number;
+  };
+  bounds: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  };
+  scaleFactor: number;
+}): ShellBallWindowGeometry {
+  return {
+    ballFrame: clampShellBallFrameToBounds(
+      {
+        x: Math.round(input.position.x),
+        y: Math.round(input.position.y),
+        width: input.size.width,
+        height: input.size.height,
+      },
+      input.bounds,
+    ),
+    bounds: input.bounds,
+    scaleFactor: input.scaleFactor,
+  };
+}
 
 export function createShellBallWindowFrame(
   contentSize: ShellBallContentSize,
@@ -85,12 +136,14 @@ export function getShellBallBubbleAnchor(input: {
   ballFrame: ShellBallWindowFrame;
   helperFrame: ShellBallWindowSize;
   gap?: number;
+  clearance?: number;
 }) {
   const gap = input.gap ?? SHELL_BALL_BUBBLE_GAP_PX;
+  const clearance = input.clearance ?? SHELL_BALL_BUBBLE_DRAG_CLEARANCE_PX;
 
   return {
     x: Math.round(input.ballFrame.x + input.ballFrame.width / 2 - input.helperFrame.width / 2),
-    y: Math.round(input.ballFrame.y - gap - input.helperFrame.height),
+    y: Math.round(input.ballFrame.y - gap - clearance - input.helperFrame.height),
   };
 }
 
@@ -129,6 +182,137 @@ export function clampShellBallFrameToBounds(
     x: Math.min(Math.max(frame.x, bounds.minX), maxX),
     y: Math.min(Math.max(frame.y, bounds.minY), maxY),
   };
+}
+
+function clampShellBallAxisPosition(value: number, min: number, max: number) {
+  if (max <= min) {
+    return min;
+  }
+
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function getShellBallBubbleFrame(input: {
+  ballFrame: ShellBallWindowFrame;
+  helperFrame: ShellBallWindowSize;
+  bounds: ShellBallWindowBounds;
+  gap?: number;
+}): ShellBallResolvedHelperFrame {
+  const gap = input.gap ?? SHELL_BALL_BUBBLE_GAP_PX;
+  const maxX = Math.max(input.bounds.minX, input.bounds.maxX - input.helperFrame.width);
+  const maxY = Math.max(input.bounds.minY, input.bounds.maxY - input.helperFrame.height);
+  const centeredX = input.ballFrame.x + input.ballFrame.width / 2 - input.helperFrame.width / 2;
+  const centeredY = input.ballFrame.y + input.ballFrame.height / 2 - input.helperFrame.height / 2;
+  const spaceAbove = input.ballFrame.y - input.bounds.minY;
+  const spaceBelow = input.bounds.maxY - (input.ballFrame.y + input.ballFrame.height);
+  const spaceLeft = input.ballFrame.x - input.bounds.minX;
+  const spaceRight = input.bounds.maxX - (input.ballFrame.x + input.ballFrame.width);
+  const canPlaceAbove = spaceAbove >= input.helperFrame.height + gap;
+  const canPlaceBelow = spaceBelow >= input.helperFrame.height + gap;
+  const canPlaceLeft = spaceLeft >= input.helperFrame.width + gap;
+  const canPlaceRight = spaceRight >= input.helperFrame.width + gap;
+
+  if (canPlaceAbove) {
+    return {
+      x: clampShellBallAxisPosition(centeredX, input.bounds.minX, maxX),
+      y: Math.round(input.ballFrame.y - gap - input.helperFrame.height),
+      width: input.helperFrame.width,
+      height: input.helperFrame.height,
+      placement: "above",
+    };
+  }
+
+  if (canPlaceLeft) {
+    return {
+      x: Math.round(input.ballFrame.x - gap - input.helperFrame.width),
+      y: clampShellBallAxisPosition(centeredY, input.bounds.minY, maxY),
+      width: input.helperFrame.width,
+      height: input.helperFrame.height,
+      placement: "left",
+    };
+  }
+
+  if (canPlaceRight) {
+    return {
+      x: Math.round(input.ballFrame.x + input.ballFrame.width + gap),
+      y: clampShellBallAxisPosition(centeredY, input.bounds.minY, maxY),
+      width: input.helperFrame.width,
+      height: input.helperFrame.height,
+      placement: "right",
+    };
+  }
+
+  if (canPlaceBelow) {
+    return {
+      x: clampShellBallAxisPosition(centeredX, input.bounds.minX, maxX),
+      y: Math.round(input.ballFrame.y + input.ballFrame.height + gap),
+      width: input.helperFrame.width,
+      height: input.helperFrame.height,
+      placement: "below",
+    };
+  }
+
+  const preferAbove = spaceAbove >= spaceLeft && spaceAbove >= spaceRight && spaceAbove >= spaceBelow;
+  const preferLeft = !preferAbove && spaceLeft >= spaceRight && spaceLeft >= spaceBelow;
+  const preferRight = !preferAbove && !preferLeft && spaceRight >= spaceBelow;
+
+  return {
+    x: preferAbove || !preferLeft && !preferRight
+      ? clampShellBallAxisPosition(centeredX, input.bounds.minX, maxX)
+      : preferLeft
+        ? input.bounds.minX
+        : maxX,
+    y: preferAbove
+      ? input.bounds.minY
+      : preferLeft || preferRight
+        ? clampShellBallAxisPosition(centeredY, input.bounds.minY, maxY)
+        : maxY,
+    width: input.helperFrame.width,
+    height: input.helperFrame.height,
+    placement: preferAbove
+      ? "above"
+      : preferLeft
+        ? "left"
+        : preferRight
+          ? "right"
+          : "below",
+  };
+}
+
+function resolveShellBallHelperFrame(input: {
+  role: AnchoredShellBallHelperWindowRole;
+  ballFrame: ShellBallWindowFrame;
+  helperFrame: ShellBallWindowSize;
+  bounds: ShellBallWindowBounds;
+}): ShellBallResolvedHelperFrame {
+  if (input.role === "bubble") {
+    return getShellBallBubbleFrame({
+      ballFrame: input.ballFrame,
+      helperFrame: input.helperFrame,
+      bounds: input.bounds,
+    });
+  }
+
+  const anchor =
+    input.role === "input"
+      ? getShellBallInputAnchor({
+          ballFrame: input.ballFrame,
+          helperFrame: input.helperFrame,
+        })
+      : getShellBallVoiceAnchor({
+          ballFrame: input.ballFrame,
+          helperFrame: input.helperFrame,
+        });
+
+  return clampShellBallFrameToBounds(
+    {
+      x: anchor.x,
+      y: anchor.y,
+      width: input.helperFrame.width,
+      height: input.helperFrame.height,
+    },
+    input.bounds,
+  );
 }
 
 export function getShellBallHelperWindowInteractionMode(input: {
@@ -188,6 +372,258 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
   const rootRef = useRef<HTMLDivElement>(null);
   const [windowFrame, setWindowFrame] = useState<ShellBallWindowSize | null>(null);
   const geometryRef = useRef<ShellBallWindowGeometry | null>(null);
+  const ballDragSessionRef = useRef<ShellBallBallDragSession | null>(null);
+  const ballDragMoveAnimationFrameRef = useRef<number | null>(null);
+  const ballDragPositionQueueRef = useRef(Promise.resolve());
+  const helperWindowVisibleRef = useRef(false);
+  const helperWindowShouldBeVisibleRef = useRef(visible);
+  const helperWindowFrameRef = useRef<ShellBallResolvedHelperFrame | null>(null);
+  const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
+  const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
+  const helperWindowMoveAnimationTokenRef = useRef(0);
+
+  helperWindowShouldBeVisibleRef.current = visible;
+
+  function cancelHelperWindowMoveAnimation() {
+    helperWindowMoveAnimationTokenRef.current += 1;
+    if (helperWindowMoveAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(helperWindowMoveAnimationFrameRef.current);
+      helperWindowMoveAnimationFrameRef.current = null;
+    }
+    const resolveAnimation = helperWindowMoveAnimationResolveRef.current;
+    helperWindowMoveAnimationResolveRef.current = null;
+    resolveAnimation?.();
+  }
+
+  const cancelBallWindowDragAnimation = useCallback(() => {
+    if (ballDragMoveAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(ballDragMoveAnimationFrameRef.current);
+      ballDragMoveAnimationFrameRef.current = null;
+    }
+  }, []);
+
+  async function snapHelperWindowToFrame(nextFrame: ShellBallResolvedHelperFrame) {
+    cancelHelperWindowMoveAnimation();
+    await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
+    helperWindowFrameRef.current = nextFrame;
+  }
+
+  const publishBallGeometry = useCallback(async (input?: { snapToBounds?: boolean }) => {
+    if (role !== "ball" || windowFrame === null) {
+      return;
+    }
+
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    const physicalPosition = await currentWindow.outerPosition();
+    const physicalSize = await currentWindow.outerSize();
+    const scaleFactor = await currentWindow.scaleFactor();
+    const monitor = await monitorFromPoint(
+      Math.round(physicalPosition.x + physicalSize.width / 2),
+      Math.round(physicalPosition.y + physicalSize.height / 2),
+    );
+    const logicalPosition = physicalPosition.toLogical(scaleFactor);
+    const geometry = createShellBallWindowGeometry({
+      position: {
+        x: logicalPosition.x,
+        y: logicalPosition.y,
+      },
+      size: {
+        width: windowFrame.width,
+        height: windowFrame.height,
+      },
+      bounds: getShellBallBoundsFromMonitor(monitor, geometryRef.current),
+      scaleFactor,
+    });
+
+    geometryRef.current = geometry;
+
+    if (input?.snapToBounds && (geometry.ballFrame.x !== logicalPosition.x || geometry.ballFrame.y !== logicalPosition.y)) {
+      await currentWindow.setPosition(createShellBallLogicalPosition(geometry.ballFrame.x, geometry.ballFrame.y));
+    }
+
+    await Promise.all([
+      currentWindow.emitTo(shellBallWindowLabels.bubble, shellBallWindowSyncEvents.geometry, geometry),
+      currentWindow.emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.geometry, geometry),
+      currentWindow.emitTo(shellBallWindowLabels.voice, shellBallWindowSyncEvents.geometry, geometry),
+    ]);
+  }, [role, windowFrame]);
+
+  const snapBallWindowToBounds = useCallback(async () => {
+    await publishBallGeometry({ snapToBounds: true });
+  }, [publishBallGeometry]);
+
+  const queueBallWindowDragPosition = useCallback((nextFrame: ShellBallWindowFrame) => {
+    if (role !== "ball") {
+      return Promise.resolve();
+    }
+
+    ballDragPositionQueueRef.current = ballDragPositionQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const currentWindow = getCurrentWindow();
+
+        if (currentWindow.label !== shellBallWindowLabels.ball) {
+          return;
+        }
+
+        if (geometryRef.current !== null) {
+          geometryRef.current = {
+            ...geometryRef.current,
+            ballFrame: nextFrame,
+          };
+        }
+
+        await currentWindow.setPosition(createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
+      });
+
+    return ballDragPositionQueueRef.current;
+  }, [role]);
+
+  const beginBallWindowPointerDrag = useCallback((pointerStart: ShellBallPointerPosition) => {
+    if (role !== "ball" || windowFrame === null) {
+      return;
+    }
+
+    cancelBallWindowDragAnimation();
+    const frameStart = geometryRef.current?.ballFrame;
+
+    if (frameStart === undefined) {
+      return;
+    }
+
+    ballDragSessionRef.current = {
+      pointerStart,
+      latestPointer: pointerStart,
+      frameStart,
+    };
+  }, [cancelBallWindowDragAnimation, role, windowFrame]);
+
+  const updateBallWindowPointerDrag = useCallback((pointer: ShellBallPointerPosition) => {
+    if (role !== "ball") {
+      return;
+    }
+
+    const dragSession = ballDragSessionRef.current;
+    if (dragSession === null) {
+      return;
+    }
+
+    dragSession.latestPointer = pointer;
+
+    if (ballDragMoveAnimationFrameRef.current !== null) {
+      return;
+    }
+
+    ballDragMoveAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      ballDragMoveAnimationFrameRef.current = null;
+      const activeSession = ballDragSessionRef.current;
+
+      if (activeSession === null) {
+        return;
+      }
+
+      const nextFrame = {
+        ...activeSession.frameStart,
+        x: Math.round(activeSession.frameStart.x + (activeSession.latestPointer.x - activeSession.pointerStart.x)),
+        y: Math.round(activeSession.frameStart.y + (activeSession.latestPointer.y - activeSession.pointerStart.y)),
+      };
+
+      void queueBallWindowDragPosition(nextFrame);
+    });
+  }, [queueBallWindowDragPosition, role]);
+
+  const endBallWindowPointerDrag = useCallback(async (pointer?: ShellBallPointerPosition) => {
+    if (role !== "ball") {
+      return;
+    }
+
+    cancelBallWindowDragAnimation();
+    const dragSession = ballDragSessionRef.current;
+    ballDragSessionRef.current = null;
+
+    if (dragSession !== null) {
+      const finalPointer = pointer ?? dragSession.latestPointer;
+      const finalFrame = {
+        ...dragSession.frameStart,
+        x: Math.round(dragSession.frameStart.x + (finalPointer.x - dragSession.pointerStart.x)),
+        y: Math.round(dragSession.frameStart.y + (finalPointer.y - dragSession.pointerStart.y)),
+      };
+
+      await queueBallWindowDragPosition(finalFrame);
+    }
+
+    await snapBallWindowToBounds();
+  }, [cancelBallWindowDragAnimation, queueBallWindowDragPosition, role, snapBallWindowToBounds]);
+
+  async function animateBubbleWindowToFrame(nextFrame: ShellBallResolvedHelperFrame) {
+    const previousFrame = helperWindowFrameRef.current;
+    if (role !== "bubble" || previousFrame === null || previousFrame.placement === nextFrame.placement) {
+      await snapHelperWindowToFrame(nextFrame);
+      return;
+    }
+
+    cancelHelperWindowMoveAnimation();
+    const animationToken = helperWindowMoveAnimationTokenRef.current;
+    const startX = previousFrame.x;
+    const startY = previousFrame.y;
+    const deltaX = nextFrame.x - startX;
+    const deltaY = nextFrame.y - startY;
+    const startTime = performance.now();
+
+    await new Promise<void>((resolve) => {
+      helperWindowMoveAnimationResolveRef.current = resolve;
+
+      const step = (timestamp: number) => {
+        if (helperWindowMoveAnimationTokenRef.current !== animationToken) {
+          helperWindowMoveAnimationFrameRef.current = null;
+          if (helperWindowMoveAnimationResolveRef.current === resolve) {
+            helperWindowMoveAnimationResolveRef.current = null;
+          }
+          resolve();
+          return;
+        }
+
+        const progress = Math.min(1, (timestamp - startTime) / SHELL_BALL_BUBBLE_REPOSITION_DURATION_MS);
+        const easedProgress = 1 - (1 - progress) ** 3;
+        const nextX = Math.round(startX + deltaX * easedProgress);
+        const nextY = Math.round(startY + deltaY * easedProgress);
+
+        // Track the in-flight frame so later geometry updates continue from the
+        // current visual position instead of restarting from the old edge.
+        helperWindowFrameRef.current = {
+          ...nextFrame,
+          x: nextX,
+          y: nextY,
+        };
+        void setShellBallWindowPosition(role, createShellBallLogicalPosition(nextX, nextY));
+
+        if (progress >= 1) {
+          helperWindowMoveAnimationFrameRef.current = null;
+          if (helperWindowMoveAnimationResolveRef.current === resolve) {
+            helperWindowMoveAnimationResolveRef.current = null;
+          }
+          resolve();
+          return;
+        }
+
+        helperWindowMoveAnimationFrameRef.current = window.requestAnimationFrame(step);
+      };
+
+      helperWindowMoveAnimationFrameRef.current = window.requestAnimationFrame(step);
+    });
+
+    if (helperWindowMoveAnimationTokenRef.current !== animationToken) {
+      return;
+    }
+
+    await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
+    helperWindowFrameRef.current = nextFrame;
+  }
 
   useEffect(() => {
     const element = rootRef.current;
@@ -246,47 +682,20 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     if (currentWindow.label !== shellBallWindowLabels.ball) {
       return;
     }
-    const ballFrame = windowFrame;
-
     let disposed = false;
     let cleanupFns: Array<() => void> = [];
 
-    async function publishGeometry() {
-      const physicalPosition = await currentWindow.outerPosition();
-      const scaleFactor = await currentWindow.scaleFactor();
-      const monitor = await monitorFromPoint(physicalPosition.x, physicalPosition.y);
-      const logicalPosition = physicalPosition.toLogical(scaleFactor);
-      const geometry: ShellBallWindowGeometry = {
-        ballFrame: {
-          x: logicalPosition.x,
-          y: logicalPosition.y,
-          width: ballFrame.width,
-          height: ballFrame.height,
-        },
-        bounds: getShellBallBoundsFromMonitor(monitor, geometryRef.current),
-        scaleFactor,
-      };
-
-      geometryRef.current = geometry;
-
-      await Promise.all([
-        currentWindow.emitTo(shellBallWindowLabels.bubble, shellBallWindowSyncEvents.geometry, geometry),
-        currentWindow.emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.geometry, geometry),
-        currentWindow.emitTo(shellBallWindowLabels.voice, shellBallWindowSyncEvents.geometry, geometry),
-      ]);
-    }
-
-    void publishGeometry();
+    void publishBallGeometry({ snapToBounds: true });
 
     void Promise.all([
       currentWindow.onMoved(() => {
-        void publishGeometry();
+        void publishBallGeometry();
       }),
       currentWindow.onResized(() => {
-        void publishGeometry();
+        void publishBallGeometry();
       }),
       currentWindow.listen(shellBallWindowSyncEvents.helperReady, () => {
-        void publishGeometry();
+        void publishBallGeometry();
       }),
     ]).then((unlisteners) => {
       if (disposed) {
@@ -305,7 +714,14 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
         cleanup();
       }
     };
-  }, [role, windowFrame]);
+  }, [publishBallGeometry, role, windowFrame]);
+
+  useEffect(() => {
+    return () => {
+      cancelBallWindowDragAnimation();
+      ballDragSessionRef.current = null;
+    };
+  }, [cancelBallWindowDragAnimation]);
 
   useEffect(() => {
     if (role === "ball" || windowFrame === null) {
@@ -316,7 +732,6 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     if (currentWindow.label !== shellBallWindowLabels[role]) {
       return;
     }
-    const helperFrame = windowFrame;
 
     const interactionMode = getShellBallHelperWindowInteractionMode({
       role,
@@ -326,47 +741,53 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
 
     void setShellBallWindowFocusable(role, interactionMode.focusable);
     void setShellBallWindowIgnoreCursorEvents(role, interactionMode.ignoreCursorEvents);
+  }, [clickThrough, role, visible, windowFrame]);
+
+  useEffect(() => {
+    if (role === "ball" || windowFrame === null) {
+      return;
+    }
+
+    const helperRole = role;
+
+    const currentWindow = getCurrentWindow();
+    if (currentWindow.label !== shellBallWindowLabels[helperRole]) {
+      return;
+    }
+    const helperFrame = windowFrame;
 
     let cleanup: (() => void) | null = null;
     let disposed = false;
 
     async function applyGeometry(geometry: ShellBallWindowGeometry) {
       geometryRef.current = geometry;
+      const nextFrame = resolveShellBallHelperFrame({
+        role: helperRole,
+        ballFrame: geometry.ballFrame,
+        helperFrame,
+        bounds: geometry.bounds,
+      });
 
-      const anchor =
-        role === "bubble"
-          ? getShellBallBubbleAnchor({
-              ballFrame: geometry.ballFrame,
-              helperFrame,
-            })
-          : role === "input"
-            ? getShellBallInputAnchor({
-                ballFrame: geometry.ballFrame,
-                helperFrame,
-              })
-            : getShellBallVoiceAnchor({
-              ballFrame: geometry.ballFrame,
-              helperFrame,
-            });
+      if (helperWindowShouldBeVisibleRef.current) {
+        if (helperWindowVisibleRef.current) {
+          await animateBubbleWindowToFrame(nextFrame);
+        } else {
+          await snapHelperWindowToFrame(nextFrame);
+        }
 
-      const nextFrame = clampShellBallFrameToBounds(
-        {
-          x: anchor.x,
-          y: anchor.y,
-          width: helperFrame.width,
-          height: helperFrame.height,
-        },
-        geometry.bounds,
-      );
-
-      await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
-
-      if (visible) {
-        await showShellBallWindow(role);
+        if (!helperWindowVisibleRef.current) {
+          await showShellBallWindow(helperRole);
+          helperWindowVisibleRef.current = true;
+        }
         return;
       }
 
-      await hideShellBallWindow(role);
+      cancelHelperWindowMoveAnimation();
+      if (helperWindowVisibleRef.current) {
+        await hideShellBallWindow(helperRole);
+        helperWindowVisibleRef.current = false;
+      }
+      helperWindowFrameRef.current = nextFrame;
     }
 
     void currentWindow
@@ -385,14 +806,15 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
           void applyGeometry(geometryRef.current);
         }
 
-        void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.helperReady, { role });
+        void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.helperReady, { role: helperRole });
       });
 
     return () => {
       disposed = true;
+      cancelHelperWindowMoveAnimation();
       cleanup?.();
     };
-  }, [clickThrough, role, visible, windowFrame]);
+  }, [role, windowFrame]);
 
   useEffect(() => {
     if (role === "ball") {
@@ -400,6 +822,8 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     }
 
     if (!visible) {
+      cancelHelperWindowMoveAnimation();
+      helperWindowVisibleRef.current = false;
       void hideShellBallWindow(role);
       return;
     }
@@ -408,38 +832,28 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
       return;
     }
     const helperFrame = windowFrame;
-
-    const anchor =
-      role === "bubble"
-        ? getShellBallBubbleAnchor({
-            ballFrame: geometryRef.current.ballFrame,
-            helperFrame,
-          })
-        : role === "input"
-          ? getShellBallInputAnchor({
-              ballFrame: geometryRef.current.ballFrame,
-              helperFrame,
-            })
-          : getShellBallVoiceAnchor({
-            ballFrame: geometryRef.current.ballFrame,
-            helperFrame,
-          });
-
-    const nextFrame = clampShellBallFrameToBounds(
-        {
-          x: anchor.x,
-          y: anchor.y,
-          width: helperFrame.width,
-          height: helperFrame.height,
-        },
-      geometryRef.current.bounds,
-    );
+    const nextFrame = resolveShellBallHelperFrame({
+      role,
+      ballFrame: geometryRef.current.ballFrame,
+      helperFrame,
+      bounds: geometryRef.current.bounds,
+    });
 
     void (async () => {
-      await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
-      await showShellBallWindow(role);
+      await snapHelperWindowToFrame(nextFrame);
+      if (!helperWindowVisibleRef.current) {
+        await showShellBallWindow(role);
+        helperWindowVisibleRef.current = true;
+      }
     })();
   }, [role, visible, windowFrame]);
 
-  return { rootRef, windowFrame };
+  return {
+    beginBallWindowPointerDrag,
+    endBallWindowPointerDrag,
+    rootRef,
+    snapBallWindowToBounds,
+    updateBallWindowPointerDrag,
+    windowFrame,
+  };
 }

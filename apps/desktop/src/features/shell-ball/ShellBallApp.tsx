@@ -19,7 +19,6 @@ import {
   hideShellBallWindow,
   shellBallWindowLabels,
   showShellBallWindow,
-  startShellBallWindowDragging,
 } from "../../platform/shellBallWindowController";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 
@@ -206,7 +205,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
-  const { rootRef, windowFrame } = useShellBallWindowMetrics({ role: "ball" });
+  const {
+    beginBallWindowPointerDrag,
+    endBallWindowPointerDrag,
+    rootRef,
+    updateBallWindowPointerDrag,
+    windowFrame,
+  } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
@@ -520,8 +525,29 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}
       motionConfig={motionConfig}
-      onDragStart={() => {
-        void startShellBallWindowDragging();
+      onDragStart={(event) => {
+        beginBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
+      }}
+      onDragMove={(event) => {
+        updateBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
+      }}
+      onDragEnd={(event) => {
+        void endBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
+      }}
+      onDragCancel={(event) => {
+        void endBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
       }}
       onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}
