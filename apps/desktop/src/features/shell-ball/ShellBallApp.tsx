@@ -301,7 +301,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     void currentWindow
       .listen<ShellBallDashboardTransitionRequest>(shellBallDashboardTransitionEvents.request, ({ payload }) => {
         transitionQueueRef.current = transitionQueueRef.current
-          .catch(() => undefined)
+          .catch((): void => undefined)
           .then(async () => {
             if (disposed) {
               return;

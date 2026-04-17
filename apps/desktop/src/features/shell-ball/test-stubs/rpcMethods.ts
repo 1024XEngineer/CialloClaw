@@ -1,25 +1,56 @@
 import type {
+  AgentDeliveryOpenResult,
+  AgentInputSubmitResult,
   AgentMirrorOverviewGetResult,
+  AgentSettingsUpdateResult,
   AgentSecurityAuditListResult,
   AgentSecurityPendingListResult,
   AgentSecurityRespondResult,
   AgentSecurityRestoreApplyResult,
   AgentSecurityRestorePointsListResult,
   AgentSecuritySummaryGetResult,
+  AgentTaskArtifactListResult,
+  AgentTaskArtifactOpenResult,
+  AgentTaskStartResult,
   AuditRecord,
+  DeliveryPayload,
   DeliveryResult,
   RecoveryPoint,
+  Task,
   TokenCostSummary,
 } from "@cialloclaw/protocol";
 import { loadSettings } from "@/services/settingsService";
 
-function createDetailedResponse<T>(data: T) {
+function createDetailedResponse<T>(data: T): {
+  data: T;
+  meta: {
+    server_time: string;
+  };
+  warnings: string[];
+} {
   return {
     data,
     meta: {
       server_time: new Date().toISOString(),
     },
-    warnings: [] as string[],
+    warnings: [],
+  };
+}
+
+function createTask(status: Task["status"], currentStep: string): Task {
+  const now = new Date().toISOString();
+
+  return {
+    task_id: "task_stub",
+    title: "stub task",
+    source_type: "hover_input",
+    status,
+    intent: null,
+    current_step: currentStep,
+    risk_level: status === "waiting_auth" ? "red" : "yellow",
+    started_at: now,
+    updated_at: now,
+    finished_at: status === "completed" ? now : null,
   };
 }
 
@@ -51,10 +82,27 @@ function createAuditRecord(result: AuditRecord["result"] = "success"): AuditReco
     task_id: "task_stub",
     type: "recovery",
     action: "restore_apply",
-    summary: result === "success" ? "已根据恢复点恢复 1 个对象。" : "恢复执行失败。",
+    summary: result === "success" ? "Recovered one workspace object from the latest restore point." : "Restore execution failed.",
     target: "workspace/stub.txt",
     result,
     created_at: new Date().toISOString(),
+  };
+}
+
+function createResolvedPayload(): DeliveryPayload {
+  return {
+    path: null,
+    task_id: "task_stub",
+    url: null,
+  };
+}
+
+function createTaskDeliveryResult(): DeliveryResult {
+  return {
+    type: "task_detail",
+    title: "Task detail",
+    preview_text: "Open the task detail view.",
+    payload: createResolvedPayload(),
   };
 }
 
@@ -91,7 +139,7 @@ function createSecurityRespondResult(): AgentSecurityRespondResult {
       bubble_id: "bubble_stub",
       task_id: "task_stub",
       type: "status",
-      text: "已允许本次操作，任务继续执行。",
+      text: "The approval was accepted for this run.",
       pinned: false,
       hidden: false,
       created_at: new Date().toISOString(),
@@ -103,18 +151,7 @@ function createSecurityRespondResult(): AgentSecurityRespondResult {
       out_of_workspace: false,
       overwrite_or_delete_risk: false,
     },
-    task: {
-      task_id: "task_stub",
-      title: "stub task",
-      source_type: "hover_input",
-      status: "processing",
-      intent: null,
-      current_step: "security",
-      risk_level: "yellow",
-      started_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      finished_at: null,
-    },
+    task: createTask("processing", "security"),
   };
 }
 
@@ -145,25 +182,14 @@ function createSecurityAuditList(): AgentSecurityAuditListResult {
 function createSecurityRestoreApplyResult(): AgentSecurityRestoreApplyResult {
   return {
     applied: false,
-    task: {
-      task_id: "task_stub",
-      title: "stub task",
-      source_type: "hover_input",
-      status: "waiting_auth",
-      intent: null,
-      current_step: "restore_point_approval",
-      risk_level: "red",
-      started_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      finished_at: null,
-    },
+    task: createTask("waiting_auth", "restore_point_approval"),
     recovery_point: createRecoveryPoint(),
     audit_record: null,
     bubble_message: {
       bubble_id: "bubble_restore_stub",
       task_id: "task_stub",
       type: "status",
-      text: "恢复操作已进入授权确认。",
+      text: "Restore requires approval before execution.",
       pinned: false,
       hidden: false,
       created_at: new Date().toISOString(),
@@ -173,7 +199,10 @@ function createSecurityRestoreApplyResult(): AgentSecurityRestoreApplyResult {
 
 function createMirrorOverview(): AgentMirrorOverviewGetResult {
   return {
-    history_summary: ["最近的正式交付以结构化摘要为主。", "风险动作会先进入授权链路。"],
+    history_summary: [
+      "Recent deliveries favor structured summaries.",
+      "Risky actions still route through approval before execution.",
+    ],
     daily_summary: {
       date: "2026-04-17",
       completed_tasks: 2,
@@ -181,28 +210,28 @@ function createMirrorOverview(): AgentMirrorOverviewGetResult {
     },
     profile: {
       work_style: "task-centric",
-      preferred_output: "3点摘要",
+      preferred_output: "3-point summary",
       active_hours: "09:30-19:00",
     },
     memory_references: [
       {
         memory_id: "mem_stub_001",
-        reason: "延续既有摘要结构。",
-        summary: "优先保留结构化结论与风险提示。",
+        reason: "Continue the existing summary structure.",
+        summary: "Keep a structured conclusion and explicit risk note.",
       },
     ],
   };
 }
 
-export async function listSecurityPending(_params?: unknown) {
+export async function listSecurityPending(_params?: unknown): Promise<AgentSecurityPendingListResult> {
   return createSecurityPendingList();
 }
 
-export async function respondSecurity(_params?: unknown) {
+export async function respondSecurity(_params?: unknown): Promise<AgentSecurityRespondResult> {
   return createSecurityRespondResult();
 }
 
-export async function getSecuritySummary(_params?: unknown) {
+export async function getSecuritySummary(_params?: unknown): Promise<AgentSecuritySummaryGetResult> {
   return createSecuritySummary();
 }
 
@@ -218,7 +247,7 @@ export async function respondSecurityDetailed(_params?: unknown) {
   return createDetailedResponse(await respondSecurity());
 }
 
-export async function listSecurityRestorePoints(_params?: unknown) {
+export async function listSecurityRestorePoints(_params?: unknown): Promise<AgentSecurityRestorePointsListResult> {
   return createSecurityRestorePoints();
 }
 
@@ -226,7 +255,7 @@ export async function listSecurityRestorePointsDetailed(_params?: unknown) {
   return createDetailedResponse(await listSecurityRestorePoints());
 }
 
-export async function applySecurityRestore(_params?: unknown) {
+export async function applySecurityRestore(_params?: unknown): Promise<AgentSecurityRestoreApplyResult> {
   return createSecurityRestoreApplyResult();
 }
 
@@ -234,7 +263,7 @@ export async function applySecurityRestoreDetailed(_params?: unknown) {
   return createDetailedResponse(await applySecurityRestore());
 }
 
-export async function listSecurityAudit(_params?: unknown) {
+export async function listSecurityAudit(_params?: unknown): Promise<AgentSecurityAuditListResult> {
   return createSecurityAuditList();
 }
 
@@ -242,7 +271,7 @@ export async function listSecurityAuditDetailed(_params?: unknown) {
   return createDetailedResponse(await listSecurityAudit());
 }
 
-export async function getMirrorOverview(_params?: unknown) {
+export async function getMirrorOverview(_params?: unknown): Promise<AgentMirrorOverviewGetResult> {
   return createMirrorOverview();
 }
 
@@ -250,37 +279,23 @@ export async function getMirrorOverviewDetailed(_params?: unknown) {
   return createDetailedResponse(await getMirrorOverview());
 }
 
-export async function submitInput(_params?: unknown) {
+export async function submitInput(_params?: unknown): Promise<AgentInputSubmitResult> {
   return {
-    task: {
-      task_id: "task_stub",
-      status: "processing",
-    },
-    bubble_message: null,
-  };
-}
-
-function createTaskDeliveryResult(): DeliveryResult {
-  return {
-    type: "task_detail",
-    title: "Task detail",
-    preview_text: "回到任务详情",
-    payload: { path: null, task_id: "task_stub", url: null },
-  };
-}
-
-export async function startTask(_params?: unknown) {
-  return {
-    task: {
-      task_id: "task_stub",
-      status: "processing",
-    },
+    task: createTask("processing", "submit_input"),
     bubble_message: null,
     delivery_result: null,
   };
 }
 
-export async function listTaskArtifacts(_params?: unknown) {
+export async function startTask(_params?: unknown): Promise<AgentTaskStartResult> {
+  return {
+    task: createTask("processing", "task_start"),
+    bubble_message: null,
+    delivery_result: null,
+  };
+}
+
+export async function listTaskArtifacts(_params?: unknown): Promise<AgentTaskArtifactListResult> {
   return {
     items: [],
     page: {
@@ -292,7 +307,7 @@ export async function listTaskArtifacts(_params?: unknown) {
   };
 }
 
-export async function openTaskArtifact(_params?: unknown) {
+export async function openTaskArtifact(_params?: unknown): Promise<AgentTaskArtifactOpenResult> {
   return {
     artifact: {
       artifact_id: "artifact_stub",
@@ -303,31 +318,28 @@ export async function openTaskArtifact(_params?: unknown) {
       title: "stub.txt",
     },
     delivery_result: createTaskDeliveryResult(),
-    open_action: "task_detail" as const,
-    resolved_payload: { path: null, task_id: "task_stub", url: null },
+    open_action: "task_detail",
+    resolved_payload: createResolvedPayload(),
   };
 }
 
-export async function openDelivery(_params?: unknown) {
+export async function openDelivery(_params?: unknown): Promise<AgentDeliveryOpenResult> {
   return {
     delivery_result: createTaskDeliveryResult(),
-    open_action: "task_detail" as const,
-    resolved_payload: { path: null, task_id: "task_stub", url: null },
+    open_action: "task_detail",
+    resolved_payload: createResolvedPayload(),
   };
 }
 
 export async function getSettingsDetailed(_params?: unknown) {
-  // Dashboard contract tests only need a deterministic snapshot payload.
   return createDetailedResponse(loadSettings());
 }
 
-export async function updateSettings(_params?: unknown) {
-  // The test stub mirrors the stable settings.update shape without simulating
-  // backend-side policy changes, which is enough for mock-mode contract tests.
+export async function updateSettings(_params?: unknown): Promise<AgentSettingsUpdateResult> {
   const current = loadSettings();
 
   return {
-    apply_mode: "immediate" as const,
+    apply_mode: "immediate",
     effective_settings: current.settings,
     need_restart: false,
     updated_keys: [],

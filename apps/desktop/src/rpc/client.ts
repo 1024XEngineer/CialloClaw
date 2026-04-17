@@ -130,37 +130,29 @@ type RpcRuntimeEnv = {
   transport?: "http" | "named_pipe";
 };
 
-function readImportMetaEnv(): RpcRuntimeEnv {
-  const viteEnv = import.meta.env;
-  const transport = viteEnv.VITE_CIALLOCLAW_RPC_TRANSPORT;
-
-  return {
-    debugEndpoint: viteEnv.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT,
-    isDev: viteEnv.DEV,
-    transport: transport === "http" || transport === "named_pipe" ? transport : undefined,
-  };
-}
+type ProcessEnvLike = {
+  NODE_ENV?: string;
+  VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT?: string;
+  VITE_CIALLOCLAW_RPC_TRANSPORT?: string;
+};
 
 function isHttpLikeRuntime() {
   return typeof window !== "undefined" && /^https?:$/.test(window.location.protocol);
 }
 
 function readRpcRuntimeEnv(): RpcRuntimeEnv {
-  const importMetaEnv = readImportMetaEnv();
   const windowEnv = typeof window !== "undefined" ? window.__CIALLOCLAW_RPC_ENV__ : undefined;
-  const processEnv = typeof process !== "undefined" ? process.env : undefined;
+  const processEnv: ProcessEnvLike | undefined = typeof process !== "undefined" ? process.env : undefined;
   const transport = processEnv?.VITE_CIALLOCLAW_RPC_TRANSPORT;
 
   return {
     debugEndpoint:
-      windowEnv?.debugEndpoint ?? importMetaEnv.debugEndpoint ?? processEnv?.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT ?? undefined,
+      windowEnv?.debugEndpoint ?? processEnv?.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT ?? undefined,
     isDev:
       windowEnv?.isDev ??
-      importMetaEnv.isDev ??
       (typeof processEnv?.NODE_ENV === "string" ? processEnv.NODE_ENV !== "production" : isHttpLikeRuntime()),
     transport:
       windowEnv?.transport ??
-      importMetaEnv.transport ??
       (transport === "http" || transport === "named_pipe" ? transport : undefined),
   };
 }

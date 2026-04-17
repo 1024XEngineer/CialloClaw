@@ -425,7 +425,10 @@ function resolveActiveSafetyDetail(args: {
   approvalSnapshot: ApprovalRequest | null;
   restorePointSnapshot: RecoveryPoint | null;
   moduleData: SecurityModuleData;
-}) {
+}): {
+  approval: ApprovalRequest | null;
+  restorePoint: RecoveryPoint | null;
+} {
   const { activeDetailKey, approvalLookup, approvalSnapshot, restorePointSnapshot, moduleData } = args;
 
   if (activeDetailKey === "restore") {

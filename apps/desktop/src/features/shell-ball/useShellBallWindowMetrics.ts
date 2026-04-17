@@ -463,7 +463,7 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     }
 
     ballDragPositionQueueRef.current = ballDragPositionQueueRef.current
-      .catch(() => undefined)
+      .catch((): void => undefined)
       .then(async () => {
         const currentWindow = getCurrentWindow();
 
