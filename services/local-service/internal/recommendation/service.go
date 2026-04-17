@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -32,8 +33,22 @@ type GenerateInput struct {
 	Source          string
 	Scene           string
 	PageTitle       string
+	PageURL         string
 	AppName         string
+	WindowTitle     string
+	VisibleText     string
+	ScreenSummary   string
 	SelectionText   string
+	ClipboardText   string
+	ClipboardMime   string
+	HoverTarget     string
+	LastAction      string
+	ErrorText       string
+	DwellMillis     int
+	WindowSwitches  int
+	PageSwitches    int
+	CopyCount       int
+	Signals         perception.SignalSnapshot
 	UnfinishedTasks []runengine.TaskRecord
 	FinishedTasks   []runengine.TaskRecord
 	NotepadItems    []map[string]any
@@ -182,6 +197,14 @@ func buildCandidates(input GenerateInput) []candidate {
 	candidates := make([]candidate, 0, 4)
 	selectionText := strings.TrimSpace(input.SelectionText)
 	pageTitle := fallbackString(strings.TrimSpace(input.PageTitle), "当前页面")
+	signals := input.perceptionSignals()
+	for _, opportunity := range perception.IdentifyOpportunities(signals, input.UnfinishedTasks, input.NotepadItems) {
+		candidates = append(candidates, candidate{
+			IntentName: opportunity.IntentName,
+			Text:       opportunity.Text,
+			Intent:     intentPayload(opportunity.IntentName),
+		})
+	}
 
 	switch input.Scene {
 	case "error":
@@ -247,9 +270,36 @@ func recommendationFingerprint(input GenerateInput) string {
 		strings.TrimSpace(input.PageTitle),
 		strings.TrimSpace(input.AppName),
 		strings.TrimSpace(input.SelectionText),
+		perception.SignalFingerprint(input.perceptionSignals()),
 		taskContextFingerprint(input.UnfinishedTasks),
 		notepadContextFingerprint(input.NotepadItems),
 	}, "|"))
+}
+
+func (input GenerateInput) perceptionSignals() perception.SignalSnapshot {
+	if strings.TrimSpace(input.Signals.Source) != "" || strings.TrimSpace(input.Signals.PageTitle) != "" || strings.TrimSpace(input.Signals.ClipboardText) != "" || input.Signals.DwellMillis > 0 || input.Signals.CopyCount > 0 || input.Signals.WindowSwitchCount > 0 || input.Signals.PageSwitchCount > 0 {
+		return input.Signals
+	}
+	return perception.SignalSnapshot{
+		Source:            input.Source,
+		Scene:             input.Scene,
+		PageTitle:         input.PageTitle,
+		PageURL:           input.PageURL,
+		AppName:           input.AppName,
+		WindowTitle:       input.WindowTitle,
+		VisibleText:       input.VisibleText,
+		ScreenSummary:     input.ScreenSummary,
+		SelectionText:     input.SelectionText,
+		ClipboardText:     input.ClipboardText,
+		ClipboardMimeType: input.ClipboardMime,
+		HoverTarget:       input.HoverTarget,
+		LastAction:        input.LastAction,
+		ErrorText:         input.ErrorText,
+		DwellMillis:       input.DwellMillis,
+		WindowSwitchCount: input.WindowSwitches,
+		PageSwitchCount:   input.PageSwitches,
+		CopyCount:         input.CopyCount,
+	}
 }
 
 func taskContextFingerprint(tasks []runengine.TaskRecord) string {

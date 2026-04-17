@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -148,5 +149,59 @@ func TestServicePrunesExpiredRuntimeCaches(t *testing.T) {
 	}
 	if _, ok := service.state["stale"]; ok {
 		t.Fatal("expected stale fingerprint state to be pruned")
+	}
+}
+
+func TestServiceGetUsesCopyBehaviorAndSwitchSignals(t *testing.T) {
+	service := NewService()
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC) }
+
+	result := service.Get(GenerateInput{
+		Source:        "floating_ball",
+		Scene:         "hover",
+		PageTitle:     "Release Checklist",
+		AppName:       "browser",
+		ClipboardText: "请 translate this paragraph into English before sharing externally.",
+		VisibleText:   "Warning: release notes are incomplete.",
+		DwellMillis:   16000,
+		CopyCount:     1,
+		Signals: perception.SignalSnapshot{
+			Source:        "floating_ball",
+			Scene:         "hover",
+			PageTitle:     "Release Checklist",
+			VisibleText:   "Warning: release notes are incomplete.",
+			ClipboardText: "请 translate this paragraph into English before sharing externally.",
+			DwellMillis:   16000,
+			CopyCount:     1,
+			LastAction:    "copy",
+		},
+	})
+
+	if len(result.Items) == 0 {
+		t.Fatal("expected recommendation items for copy behavior")
+	}
+	if result.Items[0]["intent"].(map[string]any)["name"] != "translate" {
+		t.Fatalf("expected copy behavior to prioritize translate, got %+v", result.Items[0])
+	}
+}
+
+func TestRecommendationFingerprintIncludesPerceptionSignals(t *testing.T) {
+	base := GenerateInput{
+		Source:    "floating_ball",
+		Scene:     "hover",
+		PageTitle: "Dashboard",
+		Signals: perception.SignalSnapshot{
+			Source:        "floating_ball",
+			Scene:         "hover",
+			PageTitle:     "Dashboard",
+			ClipboardText: "copied text",
+			CopyCount:     1,
+		},
+	}
+	changed := base
+	changed.Signals.CopyCount = 2
+
+	if recommendationFingerprint(base) == recommendationFingerprint(changed) {
+		t.Fatal("expected perception signals to affect fingerprint")
 	}
 }
