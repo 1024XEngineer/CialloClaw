@@ -845,12 +845,8 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
-        .setup(|app| {
-            install_shell_ball_selection_hook(app.handle())
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
-
-            Ok(install_system_tray(app)?)
-        })
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .setup(|app| Ok(install_system_tray(app)?))
         .invoke_handler(tauri::generate_handler![
             named_pipe_request,
             named_pipe_subscribe,

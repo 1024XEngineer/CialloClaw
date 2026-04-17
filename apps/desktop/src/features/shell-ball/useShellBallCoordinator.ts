@@ -18,6 +18,7 @@ import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromFiles } from "@/services/taskService";
 import {
   createDefaultShellBallWindowSnapshot,
@@ -74,6 +75,7 @@ type ShellBallHelperSnapshotInput = {
 const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
+const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";
 
 function createShellBallRequestMeta() {
   const now = new Date().toISOString();
@@ -762,6 +764,59 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         case "submit": {
           const submittedText = snapshotRef.current.inputValue.trim();
           const submittedFiles = snapshotRef.current.pendingFiles;
+
+          if (shouldHandleShellBallClipboardCommand({
+            text: submittedText,
+            files: submittedFiles,
+          })) {
+            const createdAt = new Date().toISOString();
+            setBubbleItems((currentItems) =>
+              sortShellBallBubbleItemsByTimestamp([
+                ...currentItems,
+                createShellBallTextBubbleItem({
+                  role: "user",
+                  text: SHELL_BALL_CLIPBOARD_COMMAND,
+                  bubbleType: "result",
+                  createdAt,
+                }),
+              ]),
+            );
+            revealBubbleRegion();
+
+            try {
+              const clipboardText = await readClipboardText();
+              setBubbleItems((currentItems) =>
+                sortShellBallBubbleItemsByTimestamp([
+                  ...currentItems,
+                  createShellBallTextBubbleItem({
+                    role: "agent",
+                    text: createShellBallClipboardReply(clipboardText),
+                    bubbleType: "result",
+                    createdAt: new Date().toISOString(),
+                  }),
+                ]),
+              );
+            } catch (error) {
+              console.warn("shell-ball clipboard read failed", error);
+              setBubbleItems((currentItems) =>
+                sortShellBallBubbleItemsByTimestamp([
+                  ...currentItems,
+                  createShellBallTextBubbleItem({
+                    role: "agent",
+                    text: "Clipboard is unavailable right now.",
+                    bubbleType: "status",
+                    createdAt: new Date().toISOString(),
+                  }),
+                ]),
+              );
+            }
+
+            handlersRef.current.setInputValue("");
+            handlersRef.current.onInputFocusChange(false);
+            revealBubbleRegion();
+            break;
+          }
+
           const submittedPreview = createShellBallSubmittedContentPreview({
             text: submittedText,
             files: submittedFiles,
@@ -1085,4 +1140,52 @@ export async function emitShellBallPinnedWindowDetached(bubbleId: string) {
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pinnedWindowDetached, {
     bubbleId,
   });
+}
+/**
+ * Builds a compact selection preview so shell-ball can acknowledge the exact
+ * text that was detected without overwhelming the bubble region.
+ *
+ * @param text Selected text captured from the current DOM scene.
+ * @returns A short preview string for the acknowledgement bubble.
+ */
+function createShellBallSelectedTextPreview(text: string) {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+
+  if (normalizedText === "") {
+    return "识别到选中了文字";
+  }
+
+  if (normalizedText.length <= 28) {
+    return `识别到选中了文字：${normalizedText}`;
+  }
+
+  return `识别到选中了文字：${normalizedText.slice(0, 28)}…`;
+}
+
+/**
+ * Determines whether the current shell-ball draft should be handled by the
+ * frontend-only clipboard shortcut instead of the normal submit path.
+ *
+ * @param input Current text draft and pending file attachments.
+ * @returns Whether the clipboard shortcut should run locally.
+ */
+function shouldHandleShellBallClipboardCommand(input: {
+  text: string;
+  files: string[];
+}) {
+  return input.files.length === 0 && input.text.trim() === SHELL_BALL_CLIPBOARD_COMMAND;
+}
+
+/**
+ * Resolves the fixed assistant reply used by the clipboard shortcut.
+ *
+ * @param text Clipboard text returned by the desktop clipboard service.
+ * @returns The user-facing reply bubble content.
+ */
+function createShellBallClipboardReply(text: string) {
+  if (text.trim() === "") {
+    return "Clipboard is empty.";
+  }
+
+  return text;
 }
