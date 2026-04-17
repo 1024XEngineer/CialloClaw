@@ -696,6 +696,13 @@ flowchart TB
 - 复制、停留、切换等弱信号默认保守处理，不得变成高频打扰源。
 - 感知信号只能作为输入候选，正式执行仍需经过意图确认、风险治理和交付内核。
 
+当前 owner-5 底座实现约束：
+
+- 后端可先维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
+- recommendation 与 dashboard 可消费这些 richer signals 做机会识别和高价值信号增强，但正式推荐触发边界仍需由 4 号统一冻结；
+- 屏幕 / 页面 / 复制 / 停留 / 切换信号属于上下文候选输入，不得直接替代 `task` 创建、授权或正式交付链路；
+- 感知能力增强应优先服务主动推荐、Context Manager 和 memory query，而不是先扩散到新的前端页面状态模型。
+
 ## 4. 后端模块设计
 
 ### 4.0 后端 Harness 总览图
