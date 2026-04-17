@@ -652,6 +652,26 @@ func (e *Engine) RecordLoopLifecycle(taskID, eventType, stopReason string, paylo
 	return record.clone(), true
 }
 
+// EmitRuntimeNotification appends a formal runtime notification for task-level
+// consumers while also keeping LatestEvent in sync for query surfaces.
+func (e *Engine) EmitRuntimeNotification(taskID, method string, payload map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+	record.UpdatedAt = e.now()
+	record.LatestEvent = e.buildEventWithPayload(record, method, payload)
+	record.queueNotification(method, map[string]any{
+		"task_id": taskID,
+		"event":   cloneMap(record.LatestEvent),
+	})
+	e.persistTaskLocked(record)
+	return record.clone(), true
+}
+
 // AppendSteeringMessage stores one follow-up instruction for a non-terminal task
 // so future execution or resume paths can fold it into the loop planner input.
 func (e *Engine) AppendSteeringMessage(taskID, message string, bubbleMessage map[string]any) (TaskRecord, bool) {
@@ -683,6 +703,25 @@ func (e *Engine) AppendSteeringMessage(taskID, message string, bubbleMessage map
 	})
 	e.persistTaskLocked(record)
 	return record.clone(), true
+}
+
+// DrainSteeringMessages returns and clears queued steering messages for the
+// active task so an in-flight loop can absorb new follow-up guidance.
+func (e *Engine) DrainSteeringMessages(taskID string) ([]string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return nil, false
+	}
+	if len(record.SteeringMessages) == 0 {
+		return nil, true
+	}
+	messages := append([]string(nil), record.SteeringMessages...)
+	record.SteeringMessages = nil
+	e.persistTaskLocked(record)
+	return messages, true
 }
 
 // FailTaskExecution 将任务收敛到 failed，用于执行失败或恢复点准备失败场景。

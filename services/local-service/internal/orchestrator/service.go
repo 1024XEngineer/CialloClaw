@@ -107,6 +107,17 @@ func (s *Service) WithAudit(auditService *audit.Service) *Service {
 // WithExecutor 把真实执行服务挂入 orchestrator。
 func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 	s.executor = executorService
+	if executorService != nil {
+		executorService.WithNotificationEmitter(func(taskID, method string, params map[string]any) {
+			_, _ = s.runEngine.EmitRuntimeNotification(taskID, method, params)
+		}).WithSteeringPoller(func(taskID string) []string {
+			messages, ok := s.runEngine.DrainSteeringMessages(taskID)
+			if !ok {
+				return nil
+			}
+			return messages
+		})
+	}
 	return s
 }
 
@@ -153,6 +164,12 @@ func (s *Service) Snapshot() map[string]any {
 		"pending_approvals":       pendingTotal,
 		"latest_approval_request": firstMapOrNil(pendingApprovals),
 	}
+}
+
+// RunEngine exposes the attached runtime engine for transport-layer tests and
+// debug wiring that need to seed notifications or inspect task state.
+func (s *Service) RunEngine() *runengine.Engine {
+	return s.runEngine
 }
 
 // SubmitInput 处理当前模块的相关逻辑。

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -26,10 +28,24 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 )
 
 type testStorageAdapter struct {
 	databasePath string
+}
+
+type stubExecutionCapability struct {
+	result tools.CommandExecutionResult
+	err    error
+}
+
+func (s stubExecutionCapability) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
+	if s.err != nil {
+		return tools.CommandExecutionResult{}, s.err
+	}
+	return s.result, nil
 }
 
 func (a testStorageAdapter) DatabasePath() string {
@@ -118,6 +134,82 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 
 	if !seenApprovalPending {
 		t.Fatal("expected approval.pending notification to be emitted on stream connection")
+	}
+}
+
+func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
+	server := newTestServer()
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_loop_notify",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Inspect the workspace and answer.",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := server.orchestrator.RunEngine().EmitRuntimeNotification(taskID, "loop.round.completed", map[string]any{
+		"loop_round":  1,
+		"stop_reason": "completed",
+	}); !ok {
+		t.Fatal("expected runtime notification injection to succeed")
+	}
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-detail"`),
+		Method:  "agent.task.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+
+	var response successEnvelope
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Result.Data.(map[string]any)["task"].(map[string]any)["task_id"] != taskID {
+		t.Fatalf("expected task detail response for %s, got %+v", taskID, response)
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	seenLoopNotification := false
+	for index := 0; index < 12; index++ {
+		var notification notificationEnvelope
+		if err := decoder.Decode(&notification); err != nil {
+			break
+		}
+		if strings.HasPrefix(notification.Method, "loop.") {
+			seenLoopNotification = true
+			break
+		}
+	}
+	if !seenLoopNotification {
+		t.Fatal("expected loop.* notification to be emitted on stream connection")
 	}
 }
 
@@ -994,6 +1086,25 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 }
 
 func newTestServer() *Server {
+	toolRegistry := tools.NewRegistry()
+	_ = builtin.RegisterBuiltinTools(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	pathPolicy, _ := platform.NewLocalPathPolicy(filepath.Join("workspace", "rpc-test"))
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executionService := execution.NewService(
+		fileSystem,
+		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		model.NewService(serviceconfig.ModelConfig{Provider: "openai_responses", ModelID: "gpt-5.4", Endpoint: "https://api.openai.com/v1/responses"}),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		toolExecutor,
+		plugin.NewService(),
+	)
 	orch := orchestrator.NewService(
 		contextsvc.NewService(),
 		intent.NewService(),
@@ -1006,9 +1117,9 @@ func newTestServer() *Server {
 			ModelID:  "gpt-5.4",
 			Endpoint: "https://api.openai.com/v1/responses",
 		}),
-		tools.NewRegistry(),
+		toolRegistry,
 		plugin.NewService(),
-	)
+	).WithExecutor(executionService)
 
 	server := NewServer(serviceconfig.RPCConfig{
 		Transport:        "named_pipe",

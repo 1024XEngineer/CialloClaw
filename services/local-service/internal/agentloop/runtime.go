@@ -105,6 +105,7 @@ type Request struct {
 	FallbackOutput     string
 	ToolDefinitions    []model.ToolDefinition
 	AllowedTool        func(name string) bool
+	PollSteering       func(context.Context, string) []string
 	GenerateToolCalls  func(context.Context, model.ToolCallRequest) (model.ToolCallResult, error)
 	ExecuteTool        func(context.Context, model.ToolInvocation, int) (string, tools.ToolCallRecord)
 	BuildAuditRecord   func(context.Context, *model.InvocationRecord) (map[string]any, error)
@@ -161,6 +162,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		defer cancel()
 	}
 
+	activeInputText := request.InputText
 	history := []string{}
 	allToolCalls := []tools.ToolCallRecord{}
 	rounds := []PersistedRound{}
@@ -170,7 +172,17 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	repeatedToolCount := 0
 
 	for turn := 0; turn < request.MaxTurns; turn++ {
-		plannerInput, compactedHistory := buildPlannerInput(request.InputText, history, request.CompressChars, request.KeepRecent)
+		if request.PollSteering != nil {
+			steeringMessages := request.PollSteering(ctx, request.TaskID)
+			if len(steeringMessages) > 0 {
+				activeInputText = appendSteeringInput(request.InputText, steeringMessages)
+				events = append(events, newEvent(request, "task.steered", map[string]any{
+					"task_id":  request.TaskID,
+					"messages": append([]string(nil), steeringMessages...),
+				}))
+			}
+		}
+		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, request.CompressChars, request.KeepRecent)
 		round := PersistedRound{
 			StepID:        fmt.Sprintf("step_loop_%02d", turn+1),
 			RunID:         request.RunID,
@@ -436,6 +448,24 @@ func buildPlannerInput(inputText string, history []string, compressChars, keepRe
 		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n"), compressedHistory
+}
+
+func appendSteeringInput(inputText string, steeringMessages []string) string {
+	if len(steeringMessages) == 0 {
+		return inputText
+	}
+	steeringLines := make([]string, 0, len(steeringMessages))
+	for _, item := range steeringMessages {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		steeringLines = append(steeringLines, "- "+trimmed)
+	}
+	if len(steeringLines) == 0 {
+		return inputText
+	}
+	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
 }
 
 func compactHistory(history []string, compressChars, keepRecent int) []string {

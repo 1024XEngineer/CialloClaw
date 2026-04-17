@@ -16,6 +16,8 @@ type Service struct {
 	endpoint             string
 	client               Client
 	maxToolIterations    int
+	plannerRetryBudget   int
+	toolRetryBudget      int
 	contextCompressChars int
 	contextKeepRecent    int
 }
@@ -92,6 +94,8 @@ func NewService(cfg config.ModelConfig, clients ...Client) *Service {
 		endpoint:             cfg.Endpoint,
 		client:               client,
 		maxToolIterations:    cfg.MaxToolIterations,
+		plannerRetryBudget:   cfg.PlannerRetryBudget,
+		toolRetryBudget:      cfg.ToolRetryBudget,
 		contextCompressChars: cfg.ContextCompressChars,
 		contextKeepRecent:    cfg.ContextKeepRecent,
 	}
@@ -155,6 +159,24 @@ func (s *Service) ContextKeepRecent() int {
 		return s.contextKeepRecent
 	}
 	return defaultContextKeepRecent
+}
+
+// PlannerRetryBudget returns the configured retry budget for recoverable
+// planner/model failures inside one agent loop run.
+func (s *Service) PlannerRetryBudget() int {
+	if s.plannerRetryBudget > 0 {
+		return s.plannerRetryBudget
+	}
+	return 1
+}
+
+// ToolRetryBudget returns the configured retry budget for recoverable tool
+// execution failures such as timeouts.
+func (s *Service) ToolRetryBudget() int {
+	if s.toolRetryBudget > 0 {
+		return s.toolRetryBudget
+	}
+	return 1
 }
 
 // GenerateText 处理当前模块的相关逻辑。

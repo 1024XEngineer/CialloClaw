@@ -3,15 +3,17 @@ package config
 
 // ModelConfig 描述当前模块配置。
 type ModelConfig struct {
-	Provider            string
-	ModelID             string
-	Endpoint            string
-	SingleTaskLimit     float64
-	DailyLimit          float64
-	BudgetAutoDowngrade bool
-	MaxToolIterations   int
+	Provider             string
+	ModelID              string
+	Endpoint             string
+	SingleTaskLimit      float64
+	DailyLimit           float64
+	BudgetAutoDowngrade  bool
+	MaxToolIterations    int
+	PlannerRetryBudget   int
+	ToolRetryBudget      int
 	ContextCompressChars int
-	ContextKeepRecent   int
+	ContextKeepRecent    int
 }
 
 // RPCConfig 描述当前模块配置。
@@ -40,15 +42,17 @@ func Load() Config {
 		WorkspaceRoot: "workspace",
 		DatabasePath:  "data/cialloclaw.db",
 		Model: ModelConfig{
-			Provider:            "openai_responses",
-			ModelID:             "gpt-5.4",
-			Endpoint:            "https://api.openai.com/v1/responses",
-			SingleTaskLimit:     10.0,
-			DailyLimit:          50.0,
-			BudgetAutoDowngrade: true,
-			MaxToolIterations:   4,
+			Provider:             "openai_responses",
+			ModelID:              "gpt-5.4",
+			Endpoint:             "https://api.openai.com/v1/responses",
+			SingleTaskLimit:      10.0,
+			DailyLimit:           50.0,
+			BudgetAutoDowngrade:  true,
+			MaxToolIterations:    4,
+			PlannerRetryBudget:   1,
+			ToolRetryBudget:      1,
 			ContextCompressChars: 2400,
-			ContextKeepRecent:   4,
+			ContextKeepRecent:    4,
 		},
 	}
 }

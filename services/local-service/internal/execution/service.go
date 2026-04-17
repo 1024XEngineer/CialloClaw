@@ -31,21 +31,23 @@ const (
 
 // Service 负责在当前仓库代码范围内完成一条可运行的最小执行链路。
 type Service struct {
-	fileSystem platform.FileSystemAdapter
-	execution  tools.ExecutionCapability
-	playwright tools.PlaywrightSidecarClient
-	ocr        tools.OCRWorkerClient
-	media      tools.MediaWorkerClient
-	model      *model.Service
-	loop       *agentloop.Runtime
-	audit      *audit.Service
-	checkpoint *checkpoint.Service
-	delivery   *delivery.Service
-	tools      *tools.Registry
-	executor   *tools.ToolExecutor
-	plugin     *plugin.Service
-	loopStore  storage.LoopRuntimeStore
-	workspace  string
+	fileSystem          platform.FileSystemAdapter
+	execution           tools.ExecutionCapability
+	playwright          tools.PlaywrightSidecarClient
+	ocr                 tools.OCRWorkerClient
+	media               tools.MediaWorkerClient
+	model               *model.Service
+	loop                *agentloop.Runtime
+	audit               *audit.Service
+	checkpoint          *checkpoint.Service
+	delivery            *delivery.Service
+	tools               *tools.Registry
+	executor            *tools.ToolExecutor
+	plugin              *plugin.Service
+	loopStore           storage.LoopRuntimeStore
+	notificationEmitter func(taskID, method string, params map[string]any)
+	steeringPoller      func(taskID string) []string
+	workspace           string
 }
 
 // Request 描述一次任务执行所需的最小输入。
@@ -147,6 +149,26 @@ func (s *Service) WithLoopRuntimeStore(store storage.LoopRuntimeStore) *Service 
 		return nil
 	}
 	s.loopStore = store
+	return s
+}
+
+// WithNotificationEmitter lets the execution layer publish formal runtime
+// notifications without depending directly on runengine internals.
+func (s *Service) WithNotificationEmitter(emitter func(taskID, method string, params map[string]any)) *Service {
+	if s == nil {
+		return nil
+	}
+	s.notificationEmitter = emitter
+	return s
+}
+
+// WithSteeringPoller injects a callback that drains active-run follow-up
+// guidance between loop rounds.
+func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Service {
+	if s == nil {
+		return nil
+	}
+	s.steeringPoller = poller
 	return s
 }
 
@@ -903,29 +925,22 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
-	runtimeInput := inputText
-	if len(request.SteeringMessages) > 0 {
-		steeringLines := make([]string, 0, len(request.SteeringMessages))
-		for _, item := range request.SteeringMessages {
-			trimmed := strings.TrimSpace(item)
-			if trimmed == "" {
-				continue
-			}
-			steeringLines = append(steeringLines, "- "+trimmed)
-		}
-		if len(steeringLines) > 0 {
-			runtimeInput += "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
-		}
-	}
+	runtimeInput := agentloopAppendSteeringInput(inputText, request.SteeringMessages)
 	runtimeResult, ok, err := s.loop.Run(ctx, agentloop.Request{
-		TaskID:            request.TaskID,
-		RunID:             request.RunID,
-		Intent:            request.Intent,
-		InputText:         runtimeInput,
-		ResultTitle:       request.ResultTitle,
-		FallbackOutput:    fallbackOutput(request, inputText),
-		ToolDefinitions:   s.agentLoopToolDefinitions(),
-		AllowedTool:       s.isAllowedAgentLoopTool,
+		TaskID:          request.TaskID,
+		RunID:           request.RunID,
+		Intent:          request.Intent,
+		InputText:       runtimeInput,
+		ResultTitle:     request.ResultTitle,
+		FallbackOutput:  fallbackOutput(request, inputText),
+		ToolDefinitions: s.agentLoopToolDefinitions(),
+		AllowedTool:     s.isAllowedAgentLoopTool,
+		PollSteering: func(_ context.Context, taskID string) []string {
+			if s.steeringPoller == nil {
+				return nil
+			}
+			return s.steeringPoller(taskID)
+		},
 		GenerateToolCalls: s.model.GenerateToolCalls,
 		ExecuteTool: func(execCtx context.Context, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 			return s.executeAgentLoopTool(execCtx, request, call, loopRound)
@@ -938,8 +953,8 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		CompressChars:      s.agentLoopCompressionChars(),
 		KeepRecent:         s.agentLoopKeepRecent(),
 		RepeatedToolBudget: 2,
-		PlannerRetryBudget: 1,
-		ToolRetryBudget:    1,
+		PlannerRetryBudget: s.agentLoopPlannerRetryBudget(),
+		ToolRetryBudget:    s.agentLoopToolRetryBudget(),
 		Hook:               noopAgentLoopHook{},
 		Now:                time.Now,
 	})
@@ -947,6 +962,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		return generationTrace{}, ok, err
 	}
 	s.persistAgentLoopRuntime(request, runtimeResult)
+	s.EmitAgentLoopNotifications(request.TaskID, runtimeResult)
 	return generationTrace{
 		OutputText:      runtimeResult.OutputText,
 		ToolCalls:       runtimeResult.ToolCalls,
@@ -1325,6 +1341,20 @@ func (s *Service) agentLoopTimeout() time.Duration {
 	return defaultAgentLoopTimeout
 }
 
+func (s *Service) agentLoopPlannerRetryBudget() int {
+	if s.model == nil {
+		return 1
+	}
+	return s.model.PlannerRetryBudget()
+}
+
+func (s *Service) agentLoopToolRetryBudget() int {
+	if s.model == nil {
+		return 1
+	}
+	return s.model.ToolRetryBudget()
+}
+
 type noopAgentLoopHook struct{}
 
 func (noopAgentLoopHook) BeforeRound(_ context.Context, round agentloop.PersistedRound, plannerInput string) (string, error) {
@@ -1341,6 +1371,24 @@ func (noopAgentLoopHook) BeforeTool(_ context.Context, _ agentloop.PersistedRoun
 
 func (noopAgentLoopHook) AfterTool(_ context.Context, _ agentloop.PersistedRound, _ tools.ToolCallRecord, _ string) error {
 	return nil
+}
+
+func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {
+	if len(steeringMessages) == 0 {
+		return inputText
+	}
+	steeringLines := make([]string, 0, len(steeringMessages))
+	for _, item := range steeringMessages {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		steeringLines = append(steeringLines, "- "+trimmed)
+	}
+	if len(steeringLines) == 0 {
+		return inputText
+	}
+	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
 }
 
 // isAgentLoopIntent reports whether the current task should execute through the
@@ -1620,6 +1668,17 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 			PreviewText:      result.DeliveryRecord.PreviewText,
 			CreatedAt:        result.DeliveryRecord.CreatedAt.UTC().Format(time.RFC3339),
 		})
+	}
+}
+
+// EmitAgentLoopNotifications forwards formal loop lifecycle methods into the
+// shared runtime notification stream once persistence has succeeded.
+func (s *Service) EmitAgentLoopNotifications(taskID string, result agentloop.Result) {
+	if s == nil || s.notificationEmitter == nil {
+		return
+	}
+	for _, event := range result.Events {
+		s.notificationEmitter(taskID, event.Type, cloneMap(event.Payload))
 	}
 }
 
