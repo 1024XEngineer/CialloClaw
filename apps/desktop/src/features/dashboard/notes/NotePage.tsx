@@ -121,7 +121,14 @@ export function NotePage() {
 
   const convertMutation = useMutation({
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
-    onSuccess: (outcome) => {
+    onSuccess: async (outcome) => {
+      await Promise.all(
+        outcome.result.refresh_groups.map((group) =>
+          queryClient.invalidateQueries({
+            queryKey: ["dashboard", "notes", "bucket", dataMode, group],
+          }),
+        ),
+      );
       showFeedback("已为这条事项生成任务，正在跳转到任务页。");
       navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: outcome.result.task.task_id, openDetail: true } });
     },
