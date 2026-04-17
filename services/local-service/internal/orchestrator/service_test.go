@@ -3426,6 +3426,79 @@ func TestServiceDashboardOverviewFallsBackToStoredTaskRuns(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardOverviewResortsMergedRuntimeAndStoredTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "merged dashboard overview")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_merge_overview",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime task should not win when stored task is newer",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime task failed: %v", err)
+	}
+	runtimeTask := runtimeResult["task"].(map[string]any)
+	runtimeUpdatedAt, err := time.Parse(dateTimeLayout, runtimeTask["updated_at"].(string))
+	if err != nil {
+		t.Fatalf("parse runtime updated_at failed: %v", err)
+	}
+
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_waiting_newer",
+		SessionID:   "sess_merge_overview",
+		RunID:       "run_dashboard_waiting_newer",
+		Title:       "stored waiting task should become focus",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   runtimeUpdatedAt.Add(-5 * time.Minute),
+		UpdatedAt:   runtimeUpdatedAt.Add(1 * time.Minute),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_dashboard_newer",
+			"task_id":     "task_dashboard_waiting_newer",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save newer waiting task run failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	overview := result["overview"].(map[string]any)
+	focusSummary := overview["focus_summary"].(map[string]any)
+	if focusSummary["task_id"] != "task_dashboard_waiting_newer" {
+		t.Fatalf("expected merged overview to re-sort and focus the newer stored task, got %+v", focusSummary)
+	}
+	if focusSummary["task_id"] == runtimeResult["task"].(map[string]any)["task_id"] {
+		t.Fatalf("expected newer stored task to outrank runtime task in merged overview, got %+v", focusSummary)
+	}
+	trustSummary := overview["trust_summary"].(map[string]any)
+	if trustSummary["pending_authorizations"] != 2 {
+		t.Fatalf("expected merged overview to count runtime and stored pending authorizations, got %+v", trustSummary)
+	}
+}
+
 func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	service := newTestService()
 
@@ -5280,6 +5353,62 @@ func TestServiceTaskControlRejectsFinishedTaskOperations(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTaskAlreadyFinished) {
 		t.Fatalf("expected cancel on completed task to return ErrTaskAlreadyFinished, got %v", err)
+	}
+}
+
+func TestServiceTaskControlReturnsUpdatedTaskAndBubbleForWaitingAuthCancel(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_task_control_payload",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task control should return stable payload",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	result, err := service.TaskControl(map[string]any{
+		"task_id":   taskID,
+		"action":    "cancel",
+		"arguments": map[string]any{"reason": "user_cancelled_from_dashboard"},
+	})
+	if err != nil {
+		t.Fatalf("task control failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] != taskID {
+		t.Fatalf("expected task control to keep task_id %s, got %+v", taskID, task)
+	}
+	if task["status"] != "cancelled" {
+		t.Fatalf("expected cancelled task after task.control cancel, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["task_id"] != taskID || bubble["type"] != "status" {
+		t.Fatalf("expected stable status bubble payload, got %+v", bubble)
+	}
+	if bubble["text"] != "任务已取消" {
+		t.Fatalf("expected cancel bubble text, got %+v", bubble)
+	}
+
+	recordedTask, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected cancelled task to remain available in runtime")
+	}
+	if recordedTask.Status != "cancelled" || recordedTask.CurrentStep != "task_cancelled" {
+		t.Fatalf("expected runtime task to stay aligned with task.control payload, got %+v", recordedTask)
 	}
 }
 

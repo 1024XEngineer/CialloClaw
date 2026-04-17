@@ -923,21 +923,15 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 
 // DashboardOverviewGet 处理 agent.dashboard.overview.get。
 func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, error) {
-	runtimeUnfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	runtimeFinishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	pendingApprovals, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	unfinishedTasks := s.queryTaskView("unfinished", "updated_at", "desc")
+	finishedTasks := s.queryTaskView("finished", "finished_at", "desc")
+	pendingApprovals, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	needStorageFallback := !s.hasRuntimeQueryState()
 
-	// Always merge storage data with runtime data for complete dashboard view
-	allPersistedTasks := s.loadAllTasksFromStorage()
-	unfinishedTasks := mergeTaskLists(runtimeUnfinishedTasks, filterAndSortTasks(allPersistedTasks, "unfinished", "updated_at", "desc"))
-	finishedTasks := mergeTaskLists(runtimeFinishedTasks, filterAndSortTasks(allPersistedTasks, "finished", "finished_at", "desc"))
-	needStorageFallback := len(runtimeUnfinishedTasks) == 0 && len(runtimeFinishedTasks) == 0
-
-	if pendingTotal == 0 {
-		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
-	}
-	if len(pendingApprovals) == 0 && pendingTotal > 0 {
-		pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
+	pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
+	pendingTotal := len(pendingApprovals)
+	if pendingTotal == 0 && runtimePendingTotal > 0 {
+		pendingTotal = runtimePendingTotal
 	}
 	focusMode := boolValue(params, "focus_mode", false)
 	requestedIncludes := stringSliceValue(params["include"])
@@ -1059,18 +1053,8 @@ func pendingApprovalsFromTasks(tasks []runengine.TaskRecord) []map[string]any {
 func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, error) {
 	module := stringValue(params, "module", "mirror")
 	tab := stringValue(params, "tab", "daily_summary")
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	if len(finishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
-			finishedTasks = persistedTasks
-		}
-	}
-	if len(unfinishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
-			unfinishedTasks = persistedTasks
-		}
-	}
+	finishedTasks := s.queryTaskView("finished", "finished_at", "desc")
+	unfinishedTasks := s.queryTaskView("unfinished", "updated_at", "desc")
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
 	if pendingTotal == 0 {
 		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
@@ -1097,12 +1081,7 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 // MirrorOverviewGet 处理 agent.mirror.overview.get。
 func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	if len(finishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
-			finishedTasks = persistedTasks
-		}
-	}
+	finishedTasks := s.queryTaskView("finished", "finished_at", "desc")
 	memoryReferences := collectMirrorReferences(finishedTasks)
 	return map[string]any{
 		"history_summary": buildMirrorHistorySummary(finishedTasks, memoryReferences),
@@ -1121,18 +1100,8 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 // SecuritySummaryGet 处理 agent.security.summary.get。
 func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
-	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	if len(unfinishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
-			unfinishedTasks = persistedTasks
-		}
-	}
-	if len(finishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
-			finishedTasks = persistedTasks
-		}
-	}
+	unfinishedTasks := s.queryTaskView("unfinished", "updated_at", "desc")
+	finishedTasks := s.queryTaskView("finished", "finished_at", "desc")
 	if pendingTotal == 0 {
 		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
 	}
@@ -1708,6 +1677,29 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 		tasks = append(tasks, taskRecordFromStorage(record))
 	}
 	return tasks
+}
+
+// queryTaskView builds one task-centric read model by merging runtime and
+// durable task snapshots, then sorting the merged result with the same rules
+// used by list/detail/dashboard queries.
+func (s *Service) queryTaskView(group, sortBy, sortOrder string) []runengine.TaskRecord {
+	runtimeTasks, _ := s.runEngine.ListTasks(group, sortBy, sortOrder, 0, 0)
+	storageTasks := filterAndSortTasks(s.loadAllTasksFromStorage(), group, sortBy, sortOrder)
+	merged := mergeTaskLists(runtimeTasks, storageTasks)
+	if len(merged) == 0 {
+		return nil
+	}
+	runengineSortTaskRecords(merged, sortBy, sortOrder)
+	return merged
+}
+
+func (s *Service) hasRuntimeQueryState() bool {
+	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
+	if len(unfinishedTasks) > 0 {
+		return true
+	}
+	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	return len(finishedTasks) > 0
 }
 
 func filterAndSortTasks(tasks []runengine.TaskRecord, group, sortBy, sortOrder string) []runengine.TaskRecord {
