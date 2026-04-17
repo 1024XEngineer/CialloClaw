@@ -252,6 +252,10 @@ func querySQLiteCount(t *testing.T, databasePath, query string, args ...any) int
 	return count
 }
 
+func intPtr(value int) *int {
+	return &value
+}
+
 func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, string) {
 	return newTestServiceWithExecutionAndPlaywright(t, modelOutput, platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient())
 }
@@ -1677,6 +1681,83 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok || record.PendingExecution != nil {
 		t.Fatalf("expected resumed task to clear pending execution, got %+v", record)
+	}
+}
+
+func TestServiceTaskControlResumePausedTaskDoesNotReexecute(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Should not rerun.")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_pause_resume",
+		Title:       "总结：paused task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	if _, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "pause"}); err != nil {
+		t.Fatalf("pause task failed: %v", err)
+	}
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "resume"})
+	if err != nil {
+		t.Fatalf("resume task failed: %v", err)
+	}
+	updatedTask := result["task"].(map[string]any)
+	if updatedTask["status"] != "processing" || updatedTask["current_step"] != "generate_output" {
+		t.Fatalf("expected plain resume to restore processing without rerun, got %+v", updatedTask)
+	}
+	if result["bubble_message"].(map[string]any)["type"] != "status" {
+		t.Fatalf("expected plain resume to keep status bubble, got %+v", result["bubble_message"])
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected resumed task to remain in runtime")
+	}
+	if record.DeliveryResult != nil || record.FinishedAt != nil {
+		t.Fatalf("expected paused resume not to implicitly rerun task, got %+v", record)
+	}
+	if record.PendingExecution != nil {
+		t.Fatalf("expected paused resume not to create pending execution, got %+v", record.PendingExecution)
+	}
+}
+
+func TestMaybeEscalateHumanLoopSkipsSideEffectingExecutionAttempt(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_side_effect",
+		Title:       "doom loop write task",
+		SourceType:  "floating_ball",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "write_file"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+	})
+	capture, err := service.traceEval.Capture(traceeval.CaptureInput{
+		TaskID:     task.TaskID,
+		RunID:      task.RunID,
+		IntentName: "write_file",
+		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep rewriting"},
+		ToolCalls: []tools.ToolCallRecord{
+			{ToolName: "write_file", Input: map[string]any{"path": "workspace/out.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
+			{ToolName: "write_file", Input: map[string]any{"path": "workspace/out.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
+			{ToolName: "write_file", Input: map[string]any{"path": "workspace/out.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("trace capture failed: %v", err)
+	}
+	escalated, bubble, ok := service.maybeEscalateHumanLoop(task, capture, execution.Result{
+		ToolCalls: []tools.ToolCallRecord{{ToolName: "write_file", Input: map[string]any{"path": "workspace/out.md"}, Status: tools.ToolCallStatusSucceeded}},
+	})
+	if ok || bubble != nil || escalated.TaskID != "" {
+		t.Fatalf("expected side-effecting attempt to skip human-loop escalation, got task=%+v bubble=%+v ok=%v", escalated, bubble, ok)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected original task to remain unchanged")
+	}
+	if record.Status != "processing" || record.CurrentStep != "generate_output" {
+		t.Fatalf("expected side-effecting skip not to mutate runtime task, got %+v", record)
 	}
 }
 

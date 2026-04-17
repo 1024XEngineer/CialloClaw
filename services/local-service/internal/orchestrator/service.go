@@ -751,6 +751,12 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	if !isSupportedTaskControlAction(action) {
 		return nil, fmt.Errorf("unsupported task control action: %s", action)
 	}
+	wasHumanLoop := false
+	if action == "resume" {
+		if existingTask, ok := s.runEngine.GetTask(taskID); ok {
+			wasHumanLoop = taskIsBlockedHumanLoop(existingTask)
+		}
+	}
 	bubble := s.delivery.BuildBubbleMessage(taskID, "status", controlBubbleText(action), currentTimeFromTask(s.runEngine, taskID))
 	updatedTask, err := s.runEngine.ControlTask(taskID, action, bubble)
 	if err != nil {
@@ -765,7 +771,7 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	if action == "resume" && updatedTask.Status == "processing" {
+	if action == "resume" && wasHumanLoop {
 		if traceResumedTask, traceBubble, _, resumed, resumeErr := s.resumeHumanLoopTask(updatedTask); resumeErr != nil {
 			return nil, resumeErr
 		} else if resumed {
@@ -4082,7 +4088,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, traceErr)
 		return failedTask, failureBubble, nil, nil, nil
 	}
-	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture); ok {
+	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture, executionResult); ok {
 		return escalatedTask, escalatedBubble, nil, nil, nil
 	}
 	if err != nil {
@@ -4133,7 +4139,7 @@ func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot cont
 }
 
 func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, map[string]any, bool, error) {
-	if task.Status != "processing" || task.CurrentStep != executionStepName(task.Intent) {
+	if !resumedFromHumanLoop(task) {
 		return runengine.TaskRecord{}, nil, nil, false, nil
 	}
 	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "人工复核完成，任务继续执行。", task.UpdatedAt.Format(dateTimeLayout))
@@ -4147,8 +4153,11 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord) (runengine.Task
 	return updatedTask, bubble, deliveryResult, true, nil
 }
 
-func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture traceeval.CaptureResult) (runengine.TaskRecord, map[string]any, bool) {
+func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture traceeval.CaptureResult, executionResult ...execution.Result) (runengine.TaskRecord, map[string]any, bool) {
 	if capture.HumanInLoop == nil {
+		return runengine.TaskRecord{}, nil, false
+	}
+	if len(executionResult) > 0 && executionAttemptHasSideEffects(executionResult[0]) {
 		return runengine.TaskRecord{}, nil, false
 	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", capture.HumanInLoop.Summary, task.UpdatedAt.Format(dateTimeLayout))
@@ -4166,6 +4175,33 @@ func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture trac
 		return runengine.TaskRecord{}, nil, false
 	}
 	return updatedTask, bubble, true
+}
+
+func resumedFromHumanLoop(task runengine.TaskRecord) bool {
+	if task.Status != "processing" || task.CurrentStep != executionStepName(task.Intent) {
+		return false
+	}
+	return true
+}
+
+func taskIsBlockedHumanLoop(task runengine.TaskRecord) bool {
+	if task.Status != "blocked" || task.CurrentStep != "human_in_loop" {
+		return false
+	}
+	return stringValue(task.PendingExecution, "kind", "") == "human_in_loop"
+}
+
+func executionAttemptHasSideEffects(result execution.Result) bool {
+	if len(result.ToolCalls) == 0 {
+		return false
+	}
+	for _, toolCall := range result.ToolCalls {
+		if toolCall.ToolName == "" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord) runengine.TaskRecord {
