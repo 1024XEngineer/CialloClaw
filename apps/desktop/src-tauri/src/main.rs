@@ -879,6 +879,8 @@ fn main() {
         .setup(|app| {
             install_shell_ball_clipboard_hooks(app.handle())
                 .map_err(|error| std::io::Error::other(error))?;
+            selection::install_selection_listener(app.handle())
+                .map_err(|error| std::io::Error::other(error))?;
 
             Ok(install_system_tray(app)?)
         })

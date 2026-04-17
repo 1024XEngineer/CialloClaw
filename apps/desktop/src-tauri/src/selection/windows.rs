@@ -1,7 +1,11 @@
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HWND, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
     COINIT_APARTMENTTHREADED,
@@ -12,12 +16,19 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR,
+    VK_RIGHT, VK_SHIFT, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GA_ROOT,
+    CallNextHookEx, GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    KBDLLHOOKSTRUCT, SetWindowsHookExW, GA_ROOT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
+    WM_LBUTTONUP, WM_SYSKEYDOWN,
 };
 
 const WINDOWS_UIA_SELECTION_SOURCE: &str = "windows_uia";
 const WINDOWS_UIA_SELECTION_URL: &str = "native://windows-uia-selection";
+const SHELL_BALL_SELECTION_SNAPSHOT_EVENT: &str = "desktop-shell-ball:selection-snapshot";
 const SHELL_BALL_WINDOW_LABELS: [&str; 4] = [
     "shell-ball",
     "shell-ball-bubble",
@@ -25,6 +36,20 @@ const SHELL_BALL_WINDOW_LABELS: [&str; 4] = [
     "shell-ball-voice",
 ];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
+const SHELL_BALL_SELECTION_MOUSE_DELAY_MS: u64 = 100;
+const SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS: u64 = 80;
+
+static SHELL_BALL_SELECTION_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_MONITOR_STATE: Lazy<Mutex<SelectionMonitorState>> =
+    Lazy::new(|| Mutex::new(SelectionMonitorState::default()));
+
+#[derive(Default)]
+struct SelectionMonitorState {
+    last_fingerprint: Option<String>,
+    probe_pending: bool,
+}
 
 struct ComGuard {
     should_uninitialize: bool,
@@ -59,6 +84,43 @@ impl Drop for ComGuard {
             }
         }
     }
+}
+
+/// Installs the Windows host-side listeners that detect likely text-selection
+/// gestures before resolving the final selection through UI Automation.
+pub fn install_selection_listener(app: &AppHandle) -> Result<(), String> {
+    if let Ok(mut app_handle) = SHELL_BALL_SELECTION_APP_HANDLE.lock() {
+        *app_handle = Some(app.clone());
+    }
+
+    let mut mouse_hook = SHELL_BALL_SELECTION_MOUSE_HOOK
+        .lock()
+        .map_err(|_| "selection mouse hook lock poisoned".to_string())?;
+    let mut keyboard_hook = SHELL_BALL_SELECTION_KEYBOARD_HOOK
+        .lock()
+        .map_err(|_| "selection keyboard hook lock poisoned".to_string())?;
+
+    if mouse_hook.is_none() {
+        unsafe {
+            *mouse_hook = Some(
+                SetWindowsHookExW(WH_MOUSE_LL, Some(shell_ball_selection_mouse_hook), None, 0)
+                    .map_err(|error| format!("failed to install selection mouse hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    if keyboard_hook.is_none() {
+        unsafe {
+            *keyboard_hook = Some(
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(shell_ball_selection_keyboard_hook), None, 0)
+                    .map_err(|error| format!("failed to install selection keyboard hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Reads the current Windows UI Automation text selection and normalizes it into
@@ -96,6 +158,131 @@ pub fn read_selection_snapshot(
         },
         WINDOWS_UIA_SELECTION_SOURCE,
     )))
+}
+
+unsafe extern "system" fn shell_ball_selection_mouse_hook(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 && w_param.0 as u32 == WM_LBUTTONUP {
+        schedule_selection_probe(SHELL_BALL_SELECTION_MOUSE_DELAY_MS);
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+unsafe extern "system" fn shell_ball_selection_keyboard_hook(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 && (w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN) {
+        let keyboard_info = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+        if should_probe_selection_from_key_event(keyboard_info.vkCode) {
+            schedule_selection_probe(SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS);
+        }
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+fn should_probe_selection_from_key_event(vk_code: u32) -> bool {
+    let ctrl_down = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 };
+    let shift_down = unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 };
+
+    if ctrl_down && vk_code == b'A' as u32 {
+        return true;
+    }
+
+    if !shift_down {
+        return false;
+    }
+
+    matches!(
+        vk_code,
+        code if code == VK_LEFT.0 as u32
+            || code == VK_RIGHT.0 as u32
+            || code == VK_UP.0 as u32
+            || code == VK_DOWN.0 as u32
+            || code == VK_HOME.0 as u32
+            || code == VK_END.0 as u32
+            || code == VK_PRIOR.0 as u32
+            || code == VK_NEXT.0 as u32
+    )
+}
+
+fn schedule_selection_probe(delay_ms: u64) {
+    {
+        let mut state = match SHELL_BALL_SELECTION_MONITOR_STATE.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+
+        if state.probe_pending {
+            return;
+        }
+
+        state.probe_pending = true;
+    }
+
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(delay_ms));
+
+        let Some(app) = SHELL_BALL_SELECTION_APP_HANDLE
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
+        else {
+            reset_probe_pending();
+            return;
+        };
+
+        let snapshot = read_selection_snapshot(&app).ok().flatten();
+        let fingerprint = selection_snapshot_fingerprint(snapshot.as_ref());
+
+        let should_emit = {
+            let mut state = match SHELL_BALL_SELECTION_MONITOR_STATE.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+
+            state.probe_pending = false;
+            if state.last_fingerprint == fingerprint {
+                false
+            } else {
+                state.last_fingerprint = fingerprint;
+                true
+            }
+        };
+
+        if !should_emit {
+            return;
+        }
+
+        let _ = app.emit_to(
+            "shell-ball",
+            SHELL_BALL_SELECTION_SNAPSHOT_EVENT,
+            serde_json::json!({
+                "snapshot": snapshot,
+            }),
+        );
+    });
+}
+
+fn reset_probe_pending() {
+    if let Ok(mut state) = SHELL_BALL_SELECTION_MONITOR_STATE.lock() {
+        state.probe_pending = false;
+    }
+}
+
+fn selection_snapshot_fingerprint(snapshot: Option<&SelectionSnapshotPayload>) -> Option<String> {
+    snapshot.map(|value| {
+        format!(
+            "{}|{}|{}|{}",
+            value.text, value.page_context.title, value.page_context.url, value.page_context.app_name
+        )
+    })
 }
 
 fn read_selection_target_element(

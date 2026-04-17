@@ -116,7 +116,6 @@ import {
 import { useShellBallStore } from "../../stores/shellBallStore";
 import {
   areShellBallSelectionSnapshotsEqual,
-  shouldPollShellBallNativeSelection,
 } from "./selection/selection.provider";
 
 const desktopRoot = process.cwd();
@@ -4498,10 +4497,8 @@ test("shell-ball app routes real selection snapshots into input focus and an ack
   assert.match(coordinatorSource, /createShellBallSelectedTextPreview\(text\)/);
   assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
   assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
-  assert.match(selectionProviderSource, /readShellBallSelectionSnapshot/);
-  assert.match(selectionProviderSource, /useInterval\(/);
-  assert.equal(shouldPollShellBallNativeSelection("shell-ball"), true);
-  assert.equal(shouldPollShellBallNativeSelection("dashboard"), false);
+  assert.doesNotMatch(selectionProviderSource, /readShellBallSelectionSnapshot/);
+  assert.doesNotMatch(selectionProviderSource, /useInterval\(/);
   assert.equal(
     areShellBallSelectionSnapshotsEqual(
       {

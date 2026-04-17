@@ -1,24 +1,4 @@
-import { useCallback, useRef } from "react";
-import { useInterval, useUnmount } from "ahooks";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { readShellBallSelectionSnapshot } from "@/platform/shellBallWindow";
-import { shellBallWindowLabels } from "@/platform/shellBallWindowController";
-import { shellBallWindowSyncEvents, type ShellBallSelectionSnapshotPayload } from "../shellBall.windowSync";
 import type { ShellBallSelectionSnapshot } from "./selection.types";
-
-const SHELL_BALL_SELECTION_POLL_MS = 250;
-
-/**
- * Determines whether the current desktop window should poll the native
- * selection adapter. The floating ball window owns global selection polling so
- * helper windows do not duplicate the host calls.
- *
- * @param label Current Tauri window label.
- * @returns Whether this window should poll native selection snapshots.
- */
-export function shouldPollShellBallNativeSelection(label: string) {
-  return label === shellBallWindowLabels.ball;
-}
 
 /**
  * Compares two selection snapshots while ignoring transient timestamp changes.
@@ -49,51 +29,11 @@ export function areShellBallSelectionSnapshotsEqual(
 }
 
 /**
- * Publishes native text selections from the host platform adapter so shell-ball
- * can react to real selections without encoding Windows-specific details in the
- * frontend.
+ * Reserves a stable frontend seam for shell-ball selection sensing while the
+ * Windows host adapter owns the actual event emission.
  *
- * @returns `null`; this component only bridges selection state.
+ * @returns `null`; host-side listeners now publish selection snapshots.
  */
 export function ShellBallSelectionProvider() {
-  const currentWindow = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
-  const windowLabel = currentWindow?.label ?? "browser";
-  const pollEnabled = currentWindow !== null && shouldPollShellBallNativeSelection(windowLabel);
-  const lastSnapshotRef = useRef<ShellBallSelectionSnapshot | null>(null);
-
-  const emitSelectionSnapshot = useCallback(async (snapshot: ShellBallSelectionSnapshot | null) => {
-    if (currentWindow === null) {
-      return;
-    }
-
-    const payload: ShellBallSelectionSnapshotPayload = { snapshot };
-    await currentWindow.emit(shellBallWindowSyncEvents.selectionSnapshot, payload);
-  }, [currentWindow]);
-
-  const publishLatestSelection = useCallback(async () => {
-    if (!pollEnabled) {
-      return;
-    }
-
-    const snapshot = await readShellBallSelectionSnapshot();
-    if (areShellBallSelectionSnapshotsEqual(lastSnapshotRef.current, snapshot)) {
-      return;
-    }
-
-    lastSnapshotRef.current = snapshot;
-    await emitSelectionSnapshot(snapshot);
-  }, [emitSelectionSnapshot, pollEnabled]);
-
-  useInterval(() => {
-    void publishLatestSelection();
-  }, pollEnabled ? SHELL_BALL_SELECTION_POLL_MS : undefined, {
-    immediate: true,
-  });
-
-  useUnmount(() => {
-    lastSnapshotRef.current = null;
-    void emitSelectionSnapshot(null);
-  });
-
   return null;
 }
