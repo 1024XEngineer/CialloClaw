@@ -1217,6 +1217,34 @@ func TestServiceRecommendationGetUsesRuntimeTaskState(t *testing.T) {
 	}
 }
 
+func TestServiceRecommendationGetUsesPerceptionSignals(t *testing.T) {
+	service := newTestService()
+	result, err := service.RecommendationGet(map[string]any{
+		"source": "floating_ball",
+		"scene":  "hover",
+		"context": map[string]any{
+			"page_title":          "Release Checklist",
+			"app_name":            "browser",
+			"clipboard_text":      "请 translate this paragraph into English before sharing externally.",
+			"visible_text":        "Warning: release notes are incomplete.",
+			"dwell_millis":        18000,
+			"copy_count":          1,
+			"window_switch_count": 3,
+			"last_action":         "copy",
+		},
+	})
+	if err != nil {
+		t.Fatalf("recommendation get failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatal("expected recommendation items from perception signals")
+	}
+	if items[0]["intent"].(map[string]any)["name"] != "translate" {
+		t.Fatalf("expected copy behavior to prioritize translate, got %+v", items[0])
+	}
+}
+
 func TestServiceRecommendationFeedbackSubmitAppliesCooldown(t *testing.T) {
 	service := newTestService()
 	params := map[string]any{
@@ -2595,6 +2623,24 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	highValueSignals := overview["high_value_signal"].([]string)
 	if len(highValueSignals) == 0 {
 		t.Fatal("expected runtime-derived high value signals")
+	}
+	perceptionResult, err := service.DashboardOverviewGet(map[string]any{
+		"include": []any{"high_value_signal"},
+		"context": map[string]any{
+			"clipboard_text":      "请 translate this paragraph into English before sharing externally.",
+			"page_title":          "Release Checklist",
+			"visible_text":        "Warning: release notes are incomplete.",
+			"dwell_millis":        15000,
+			"copy_count":          1,
+			"window_switch_count": 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("DashboardOverviewGet with perception context returned error: %v", err)
+	}
+	perceptionSignals := strings.Join(perceptionResult["overview"].(map[string]any)["high_value_signal"].([]string), " ")
+	if !strings.Contains(perceptionSignals, "复制行为") || !strings.Contains(perceptionSignals, "切换页面或窗口") {
+		t.Fatalf("expected dashboard to surface perception-derived high value signals, got %s", perceptionSignals)
 	}
 
 	completedTaskID := completedResult["task"].(map[string]any)["task_id"].(string)

@@ -19,6 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/recommendation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
@@ -207,19 +208,19 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 			task = queuedTask
 			bubble = queueBubble
 		} else {
-		governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
-		if governanceErr != nil {
-			return nil, governanceErr
-		}
-		if handled {
-			return governedResponse, nil
-		}
-		task = governedTask
-		var execErr error
-		task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
-		if execErr != nil {
-			return nil, execErr
-		}
+			governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+			if governanceErr != nil {
+				return nil, governanceErr
+			}
+			if handled {
+				return governedResponse, nil
+			}
+			task = governedTask
+			var execErr error
+			task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+			if execErr != nil {
+				return nil, execErr
+			}
 		}
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
@@ -228,8 +229,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	}
 
 	response := map[string]any{
-		"task":           taskMap(task),
-		"bubble_message": bubble,
+		"task":            taskMap(task),
+		"bubble_message":  bubble,
 		"delivery_result": nil,
 	}
 	if deliveryResult != nil {
@@ -408,15 +409,30 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 // RecommendationGet 处理 agent.recommendation.get，返回轻量推荐动作。
 func (s *Service) RecommendationGet(params map[string]any) (map[string]any, error) {
 	contextValue := mapValue(params, "context")
+	signals := perception.CaptureContextSignals(stringValue(params, "source", "floating_ball"), stringValue(params, "scene", "hover"), contextValue)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 20, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 20, 0)
 	notepadItems, _ := s.runEngine.NotepadItems("", 20, 0)
 	result := s.recommendation.Get(recommendation.GenerateInput{
 		Source:          stringValue(params, "source", "floating_ball"),
 		Scene:           stringValue(params, "scene", "hover"),
-		PageTitle:       stringValue(contextValue, "page_title", ""),
-		AppName:         stringValue(contextValue, "app_name", ""),
-		SelectionText:   stringValue(contextValue, "selection_text", ""),
+		PageTitle:       signals.PageTitle,
+		PageURL:         signals.PageURL,
+		AppName:         signals.AppName,
+		WindowTitle:     signals.WindowTitle,
+		VisibleText:     signals.VisibleText,
+		ScreenSummary:   signals.ScreenSummary,
+		SelectionText:   signals.SelectionText,
+		ClipboardText:   signals.ClipboardText,
+		ClipboardMime:   signals.ClipboardMimeType,
+		HoverTarget:     signals.HoverTarget,
+		LastAction:      signals.LastAction,
+		ErrorText:       signals.ErrorText,
+		DwellMillis:     signals.DwellMillis,
+		WindowSwitches:  signals.WindowSwitchCount,
+		PageSwitches:    signals.PageSwitchCount,
+		CopyCount:       signals.CopyCount,
+		Signals:         signals,
 		UnfinishedTasks: unfinishedTasks,
 		FinishedTasks:   finishedTasks,
 		NotepadItems:    notepadItems,
@@ -912,6 +928,10 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	highValueSignal := []string(nil)
 	if shouldIncludeOverviewField(includeAll, includeSet, "high_value_signal") {
 		highValueSignal = buildDashboardSignalsWithAudit(unfinishedTasks, finishedTasks, pendingApprovals, latestAudit)
+		if contextValue := mapValue(params, "context"); len(contextValue) > 0 {
+			highValueSignal = append(highValueSignal, perception.BehaviorSignals(perception.CaptureContextSignals("dashboard", "hover", contextValue))...)
+			highValueSignal = dedupeStringSlice(highValueSignal)
+		}
 		if focusMode {
 			highValueSignal = filterDashboardSignalsForFocus(highValueSignal)
 		}
@@ -2174,6 +2194,23 @@ func filterDashboardSignalsForFocus(signals []string) []string {
 	return append([]string(nil), signals[:2]...)
 }
 
+func dedupeStringSlice(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
 func buildDashboardSignals(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingApprovals []map[string]any) []string {
 	signals := make([]string, 0, 3)
 	if len(unfinishedTasks) > 0 {
@@ -3186,7 +3223,17 @@ func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
 		len(snapshot.Files) == 0 &&
 		strings.TrimSpace(snapshot.PageTitle) == "" &&
 		strings.TrimSpace(snapshot.PageURL) == "" &&
-		strings.TrimSpace(snapshot.AppName) == ""
+		strings.TrimSpace(snapshot.AppName) == "" &&
+		strings.TrimSpace(snapshot.WindowTitle) == "" &&
+		strings.TrimSpace(snapshot.VisibleText) == "" &&
+		strings.TrimSpace(snapshot.ScreenSummary) == "" &&
+		strings.TrimSpace(snapshot.ClipboardText) == "" &&
+		strings.TrimSpace(snapshot.HoverTarget) == "" &&
+		strings.TrimSpace(snapshot.LastAction) == "" &&
+		snapshot.DwellMillis == 0 &&
+		snapshot.CopyCount == 0 &&
+		snapshot.WindowSwitches == 0 &&
+		snapshot.PageSwitches == 0
 }
 
 func originalTextFromTaskTitle(title string) string {
@@ -3203,7 +3250,7 @@ func originalTextFromTaskTitle(title string) string {
 
 // memoryQueryFromSnapshot 从当前上下文挑选最适合作为检索 query 的内容。
 func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
-	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText, snapshot.PageTitle} {
+	for _, value := range []string{snapshot.SelectionText, snapshot.ClipboardText, snapshot.Text, snapshot.ErrorText, snapshot.VisibleText, snapshot.ScreenSummary, snapshot.PageTitle, snapshot.WindowTitle} {
 		if value != "" {
 			return truncateText(value, 64)
 		}
@@ -3227,7 +3274,23 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 	if preview == "" {
 		preview = title
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+	perceptionSummary := []string{}
+	if snapshot.CopyCount > 0 || strings.EqualFold(snapshot.LastAction, "copy") {
+		perceptionSummary = append(perceptionSummary, "copy")
+	}
+	if snapshot.DwellMillis > 0 {
+		perceptionSummary = append(perceptionSummary, fmt.Sprintf("dwell=%dms", snapshot.DwellMillis))
+	}
+	if snapshot.WindowSwitches > 0 || snapshot.PageSwitches > 0 {
+		perceptionSummary = append(perceptionSummary, fmt.Sprintf("switch=%d/%d", snapshot.WindowSwitches, snapshot.PageSwitches))
+	}
+	if snapshot.PageTitle != "" {
+		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
+	}
+	if len(perceptionSummary) == 0 {
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+	}
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
 }
 
 // resultSpecFromIntent 处理当前模块的相关逻辑。
