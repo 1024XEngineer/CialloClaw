@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type {
+  AgentSecurityApprovalRespondResult,
   AuditRecord,
   ApprovalDecision,
   ApprovalPendingNotification,
@@ -44,6 +45,7 @@ import {
   getInitialSecurityModuleData,
   loadSecurityPendingApprovals,
   applySecurityRestorePoint,
+  isSecurityApprovalRespondResult,
   isSecurityRestoreRespondResult,
   loadSecurityAuditRecords,
   loadSecurityModuleData,
@@ -90,6 +92,7 @@ type SecurityCardPreview = {
 };
 type SecurityRestoreScope = "focused_task" | "all";
 type SecurityAuditScope = "focused_task" | "all";
+type ImpactScopeDetails = NonNullable<AgentSecurityApprovalRespondResult["impact_scope"]>;
 
 const STATIC_CARD_KEYS: SecurityCardKey[] = ["status", "restore", "budget", "governance"];
 const DRAG_THRESHOLD = 8;
@@ -157,6 +160,18 @@ function formatDateTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatImpactScopeSummary(impactScope: AgentSecurityApprovalRespondResult["impact_scope"] | undefined) {
+  if (!impactScope) {
+    return "影响范围待确认";
+  }
+
+  return `${impactScope.files.length} 文件 / ${impactScope.webpages.length} 网页 / ${impactScope.apps.length} 应用`;
+}
+
+function formatBooleanLabel(value: boolean) {
+  return value ? "是" : "否";
 }
 
 function getPendingSecurityStatus(pendingCount: number, fallbackStatus: SecurityStatus) {
@@ -1689,6 +1704,18 @@ export function SecurityApp() {
     }
 
     const rememberRule = rememberRuleByApprovalId[approval.approval_id] ?? false;
+    // Preserve the last approval payload on the same detail view so operators can
+    // verify the final decision after the pending card disappears from the list.
+    const resolvedApprovalOutcome =
+      lastResolvedApproval &&
+      isSecurityApprovalRespondResult(lastResolvedApproval.response) &&
+      lastResolvedApproval.response.authorization_record.approval_id === approval.approval_id
+        ? lastResolvedApproval
+        : null;
+    const authorizationRecord = resolvedApprovalOutcome?.response.authorization_record;
+    const responseTask = resolvedApprovalOutcome?.response.task;
+    const bubbleMessage = resolvedApprovalOutcome?.response.bubble_message;
+    const impactScope = resolvedApprovalOutcome?.response.impact_scope as ImpactScopeDetails | undefined;
 
     return (
       <div className="security-page__detail-stack">
@@ -1716,6 +1743,47 @@ export function SecurityApp() {
         </article>
 
         {snapshotOnly ? <div className="security-page__detail-callout">该审批快照已脱离实时待处理列表，当前不能继续提交决策。</div> : null}
+
+        {resolvedApprovalOutcome && authorizationRecord && responseTask ? (
+          <>
+            <div className="security-page__detail-grid">
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">响应结果</p>
+                <p className="security-page__detail-value">{authorizationRecord.decision}</p>
+                <p className="security-page__detail-copy">
+                  remember_rule {formatBooleanLabel(authorizationRecord.remember_rule)} · task {responseTask.status}
+                </p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">授权记录</p>
+                <p className="security-page__detail-value security-page__detail-value--mono">{authorizationRecord.authorization_record_id}</p>
+                <p className="security-page__detail-copy">{formatDateTime(authorizationRecord.created_at)} · {authorizationRecord.operator}</p>
+              </article>
+              <article className="security-page__detail-card">
+                <p className="security-page__detail-label">影响范围</p>
+                <p className="security-page__detail-value">{formatImpactScopeSummary(impactScope)}</p>
+                <p className="security-page__detail-copy">
+                  工作区外 {formatBooleanLabel(impactScope?.out_of_workspace ?? false)} · 覆盖/删除风险{" "}
+                  {formatBooleanLabel(impactScope?.overwrite_or_delete_risk ?? false)}
+                </p>
+              </article>
+            </div>
+
+            <article className="security-page__detail-list-item">
+              <p className="security-page__detail-label">Bubble message</p>
+              <p className="security-page__detail-copy">{bubbleMessage?.text ?? "最近一次响应没有返回 bubble_message。"}</p>
+            </article>
+
+            <article className="security-page__detail-list-item">
+              <p className="security-page__detail-label">影响对象</p>
+              {renderDetailEntryList(
+                [...(impactScope?.files ?? []), ...(impactScope?.webpages ?? []), ...(impactScope?.apps ?? [])],
+                "当前没有记录影响对象。",
+                "approval-impact",
+              )}
+            </article>
+          </>
+        ) : null}
 
         <label className="security-page__approval-remember">
           <input

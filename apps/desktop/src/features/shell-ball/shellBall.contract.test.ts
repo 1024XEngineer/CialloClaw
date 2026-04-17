@@ -76,6 +76,7 @@ import {
   measureShellBallContentSize,
 } from "./useShellBallWindowMetrics";
 import { applyShellBallBubbleAction, createShellBallAgentBubbleItem, sortShellBallBubbleItemsByTimestamp } from "./useShellBallCoordinator";
+import { respondSecurity } from "./test-stubs/rpcMethods";
 import {
   appendShellBallDroppedText,
   createShellBallInputSubmitParams,
@@ -4316,4 +4317,19 @@ test("shell-ball store defaults to idle and only exposes the visual-state API", 
 test("shell-ball interaction hook module exports the thin adapter", () => {
   assert.equal(typeof useShellBallInteraction, "function");
   assert.equal(typeof syncShellBallInteractionController, "function");
+});
+
+test("shell-ball security respond stub exposes the restore union branch for restore approvals", async () => {
+  const result = await respondSecurity({
+    approval_id: "approval_restore_stub",
+    task_id: "task_restore_stub",
+  });
+
+  assert.equal("authorization_record" in result, false);
+  assert.equal("recovery_point" in result, true);
+
+  if ("recovery_point" in result) {
+    assert.equal(result.task.task_id, "task_restore_stub");
+    assert.equal(result.recovery_point.task_id, "task_restore_stub");
+  }
 });
