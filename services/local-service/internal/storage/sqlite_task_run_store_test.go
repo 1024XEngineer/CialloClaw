@@ -39,6 +39,18 @@ func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].TaskID != record.TaskID || records[0].RunID != record.RunID {
 		t.Fatalf("unexpected task run record: %+v", records[0])
 	}
+
+	if err := store.DeleteTaskRun(context.Background(), record.TaskID); err != nil {
+		t.Fatalf("DeleteTaskRun returned error: %v", err)
+	}
+
+	records, err = store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns after delete returned error: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected task run record to be deleted, got %d records", len(records))
+	}
 }
 
 func TestNewSQLiteTaskRunStoreInitializesWALMode(t *testing.T) {
@@ -106,6 +118,18 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	}
 	if len(records[0].Notifications) != 1 || records[0].Notifications[0].Method != "task.updated" {
 		t.Fatalf("expected notifications to round-trip, got %+v", records[0].Notifications)
+	}
+
+	if err := store.DeleteTaskRun(context.Background(), taskID); err != nil {
+		t.Fatalf("DeleteTaskRun returned error: %v", err)
+	}
+
+	records, err = store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns after delete returned error: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected sqlite task run record to be deleted, got %d records", len(records))
 	}
 }
 

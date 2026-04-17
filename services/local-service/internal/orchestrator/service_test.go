@@ -182,6 +182,28 @@ func (w failingCheckpointWriter) WriteRecoveryPoint(_ context.Context, _ checkpo
 	return w.err
 }
 
+type failingTodoStore struct {
+	base       storage.TodoStore
+	replaceErr error
+}
+
+func (s failingTodoStore) ReplaceTodoState(ctx context.Context, items []storage.TodoItemRecord, rules []storage.RecurringRuleRecord) error {
+	if s.replaceErr != nil {
+		return s.replaceErr
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.ReplaceTodoState(ctx, items, rules)
+}
+
+func (s failingTodoStore) LoadTodoState(ctx context.Context) ([]storage.TodoItemRecord, []storage.RecurringRuleRecord, error) {
+	if s.base == nil {
+		return nil, nil, nil
+	}
+	return s.base.LoadTodoState(ctx)
+}
+
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 	return model.GenerateTextResponse{
 		TaskID:     request.TaskID,
@@ -1216,6 +1238,73 @@ func TestServiceNotepadConvertToTaskRejectsInFlightClaim(t *testing.T) {
 	}
 	if err.Error() != "notepad item is already being converted: todo_claimed" {
 		t.Fatalf("expected in-flight conversion error, got %v", err)
+	}
+}
+
+func TestServiceNotepadConvertToTaskRollsBackTaskWhenLinkPersistenceFails(t *testing.T) {
+	taskStore := storage.NewInMemoryTaskRunStore()
+	engine, err := runengine.NewEngineWithStore(taskStore)
+	if err != nil {
+		t.Fatalf("new stored engine failed: %v", err)
+	}
+	baseTodoStore := storage.NewInMemoryTodoStore()
+	if err := engine.WithTodoStore(baseTodoStore); err != nil {
+		t.Fatalf("attach base todo store failed: %v", err)
+	}
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_link_failure",
+		"title":   "convert with failing note persistence",
+		"bucket":  "upcoming",
+		"status":  "normal",
+		"type":    "todo_item",
+	}})
+	if err := engine.WithTodoStore(failingTodoStore{
+		base:       baseTodoStore,
+		replaceErr: errors.New("todo replace failed"),
+	}); err != nil {
+		t.Fatalf("swap to failing todo store failed: %v", err)
+	}
+
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		engine,
+		delivery.NewService(),
+		memory.NewService(),
+		risk.NewService(),
+		model.NewService(modelConfig()),
+		tools.NewRegistry(),
+		plugin.NewService(),
+	)
+
+	_, err = service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_link_failure",
+		"confirmed": true,
+	})
+	if err == nil {
+		t.Fatal("expected convert_to_task to fail when note persistence fails")
+	}
+	if !strings.Contains(err.Error(), "failed to link notepad item to task: todo_link_failure") {
+		t.Fatalf("expected link failure in error message, got %v", err)
+	}
+
+	if tasks, total := engine.ListTasks("unfinished", "updated_at", "desc", 10, 0); total != 0 || len(tasks) != 0 {
+		t.Fatalf("expected rollback to remove runtime task, total=%d tasks=%+v", total, tasks)
+	}
+	persisted, loadErr := taskStore.LoadTaskRuns(context.Background())
+	if loadErr != nil {
+		t.Fatalf("load persisted task runs failed: %v", loadErr)
+	}
+	if len(persisted) != 0 {
+		t.Fatalf("expected rollback to remove persisted task run, got %+v", persisted)
+	}
+
+	item, ok := engine.NotepadItem("todo_link_failure")
+	if !ok {
+		t.Fatal("expected note to remain available after rollback")
+	}
+	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
+		t.Fatalf("expected note to remain unlinked after rollback, got %+v", item)
 	}
 }
 

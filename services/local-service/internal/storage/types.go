@@ -207,6 +207,7 @@ type TaskRunRecord struct {
 // TaskRunStore 定义 task/run 主状态的持久化契约。
 type TaskRunStore interface {
 	AllocateIdentifier(ctx context.Context, prefix string) (string, error)
+	DeleteTaskRun(ctx context.Context, taskID string) error
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
 }

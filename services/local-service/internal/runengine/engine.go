@@ -131,17 +131,17 @@ type InspectorConfig struct {
 // Engine 是主链路运行态的内存状态机。
 // 它负责维护 task/run 映射、时间线推进、授权等待、交付计划、通知缓存以及设置项快照。
 type Engine struct {
-	mu           sync.RWMutex
-	nextID       uint64
-	now          func() time.Time
-	taskStore    storage.TaskRunStore
-	todoStore    storage.TodoStore
-	tasks        map[string]*TaskRecord
-	taskOrder    []string
-	sessionOrder []string
-	inspector    InspectorConfig
-	settings     map[string]any
-	notepadItems []map[string]any
+	mu            sync.RWMutex
+	nextID        uint64
+	now           func() time.Time
+	taskStore     storage.TaskRunStore
+	todoStore     storage.TodoStore
+	tasks         map[string]*TaskRecord
+	taskOrder     []string
+	sessionOrder  []string
+	inspector     InspectorConfig
+	settings      map[string]any
+	notepadItems  []map[string]any
 	notepadClaims map[string]struct{}
 }
 
@@ -180,11 +180,11 @@ func (e *Engine) WithTodoStore(todoStore storage.TodoStore) error {
 
 func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 	engine := &Engine{
-		now:          time.Now,
-		taskStore:    taskStore,
-		tasks:        map[string]*TaskRecord{},
-		taskOrder:    []string{},
-		sessionOrder: []string{},
+		now:           time.Now,
+		taskStore:     taskStore,
+		tasks:         map[string]*TaskRecord{},
+		taskOrder:     []string{},
+		sessionOrder:  []string{},
 		notepadClaims: map[string]struct{}{},
 		inspector: InspectorConfig{
 			TaskSources:          []string{defaultTaskSourcePath},
@@ -288,6 +288,35 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 	e.persistTaskLocked(record)
 
 	return record.clone()
+}
+
+// DeleteTask removes a task from runtime state and the backing task store.
+// It is used for compensating rollback paths where task creation succeeded but
+// the surrounding workflow failed before the task became a valid external
+// object.
+func (e *Engine) DeleteTask(taskID string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ErrTaskNotFound
+	}
+
+	record, ok := e.tasks[taskID]
+	if !ok || record == nil {
+		return ErrTaskNotFound
+	}
+	if e.taskStore != nil {
+		if err := e.taskStore.DeleteTaskRun(context.Background(), taskID); err != nil {
+			return fmt.Errorf("delete task run %s: %w", taskID, err)
+		}
+	}
+
+	delete(e.tasks, taskID)
+	e.taskOrder = removeStringValue(e.taskOrder, taskID)
+	e.untrackSessionLocked(record.SessionID)
+	return nil
 }
 
 // GetTask 获取Task。
@@ -1873,6 +1902,33 @@ func (e *Engine) trackSessionLocked(sessionID string) {
 		}
 	}
 	e.sessionOrder = append(e.sessionOrder, sessionID)
+}
+
+func (e *Engine) untrackSessionLocked(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	for _, task := range e.tasks {
+		if task != nil && task.SessionID == sessionID {
+			return
+		}
+	}
+	e.sessionOrder = removeStringValue(e.sessionOrder, sessionID)
+}
+
+func removeStringValue(values []string, target string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	filtered := values[:0]
+	for _, value := range values {
+		if value == target {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return append([]string(nil), filtered...)
 }
 
 // timelineCurrentStepID 处理当前模块的相关逻辑。

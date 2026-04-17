@@ -1,4 +1,3 @@
-// 该文件负责 task/run 主状态在存储层的本地回退实现。
 package storage
 
 import (
@@ -9,14 +8,14 @@ import (
 	"sync"
 )
 
-// InMemoryTaskRunStore 提供 task/run 主状态的内存回退存储。
+// InMemoryTaskRunStore provides an in-memory fallback for task/run persistence.
 type InMemoryTaskRunStore struct {
 	mu        sync.RWMutex
 	records   map[string]TaskRunRecord
 	sequences map[string]uint64
 }
 
-// NewInMemoryTaskRunStore 创建并返回 InMemoryTaskRunStore。
+// NewInMemoryTaskRunStore builds a fresh in-memory task/run store.
 func NewInMemoryTaskRunStore() *InMemoryTaskRunStore {
 	return &InMemoryTaskRunStore{
 		records:   make(map[string]TaskRunRecord),
@@ -24,7 +23,7 @@ func NewInMemoryTaskRunStore() *InMemoryTaskRunStore {
 	}
 }
 
-// AllocateIdentifier 为给定前缀分配一个稳定递增的标识符。
+// AllocateIdentifier reserves the next stable identifier for the given prefix.
 func (s *InMemoryTaskRunStore) AllocateIdentifier(_ context.Context, prefix string) (string, error) {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
@@ -38,7 +37,21 @@ func (s *InMemoryTaskRunStore) AllocateIdentifier(_ context.Context, prefix stri
 	return fmt.Sprintf("%s_%03d", prefix, s.sequences[prefix]), nil
 }
 
-// SaveTaskRun 保存或覆盖一条 task/run 主状态快照。
+// DeleteTaskRun removes one persisted task/run snapshot from the in-memory store.
+func (s *InMemoryTaskRunStore) DeleteTaskRun(_ context.Context, taskID string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return ErrTaskRunTaskIDRequired
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.records, taskID)
+	return nil
+}
+
+// SaveTaskRun saves or overwrites one task/run snapshot.
 func (s *InMemoryTaskRunStore) SaveTaskRun(_ context.Context, record TaskRunRecord) error {
 	if err := validateTaskRunRecord(record); err != nil {
 		return err
@@ -51,7 +64,7 @@ func (s *InMemoryTaskRunStore) SaveTaskRun(_ context.Context, record TaskRunReco
 	return nil
 }
 
-// LoadTaskRuns 返回当前所有 task/run 主状态快照。
+// LoadTaskRuns returns all currently persisted task/run snapshots.
 func (s *InMemoryTaskRunStore) LoadTaskRuns(_ context.Context) ([]TaskRunRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -207,19 +207,19 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 			task = queuedTask
 			bubble = queueBubble
 		} else {
-		governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
-		if governanceErr != nil {
-			return nil, governanceErr
-		}
-		if handled {
-			return governedResponse, nil
-		}
-		task = governedTask
-		var execErr error
-		task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
-		if execErr != nil {
-			return nil, execErr
-		}
+			governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+			if governanceErr != nil {
+				return nil, governanceErr
+			}
+			if handled {
+				return governedResponse, nil
+			}
+			task = governedTask
+			var execErr error
+			task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+			if execErr != nil {
+				return nil, execErr
+			}
 		}
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
@@ -228,8 +228,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	}
 
 	response := map[string]any{
-		"task":           taskMap(task),
-		"bubble_message": bubble,
+		"task":            taskMap(task),
+		"bubble_message":  bubble,
 		"delivery_result": nil,
 	}
 	if deliveryResult != nil {
@@ -879,13 +879,17 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
 	if !ok {
-		return nil, fmt.Errorf("failed to link notepad item to task: %s", itemID)
+		linkErr := fmt.Errorf("failed to link notepad item to task: %s", itemID)
+		if rollbackErr := s.runEngine.DeleteTask(task.TaskID); rollbackErr != nil {
+			return nil, errors.Join(linkErr, fmt.Errorf("rollback task %s: %w", task.TaskID, rollbackErr))
+		}
+		return nil, linkErr
 	}
 	claimed = false
 
 	return map[string]any{
-		"task":          taskMap(task),
-		"notepad_item":  updatedItem,
+		"task":           taskMap(task),
+		"notepad_item":   updatedItem,
 		"refresh_groups": []string{stringValue(updatedItem, "bucket", "upcoming")},
 	}, nil
 }
