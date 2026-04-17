@@ -1405,8 +1405,12 @@ func (e *Engine) LinkNotepadItemTask(itemID, taskID string) (map[string]any, boo
 
 	updated := cloneMap(item)
 	updated["linked_task_id"] = strings.TrimSpace(taskID)
-	e.notepadItems[index] = updated
-	delete(e.notepadClaims, itemID)
+	items := cloneMapSlice(e.notepadItems)
+	items[index] = updated
+	if err := e.replaceNotepadItemsLocked(items); err != nil {
+		return nil, false
+	}
+	delete(e.notepadClaims, strings.TrimSpace(itemID))
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
@@ -1475,13 +1479,21 @@ func (e *Engine) UpdateNotepadItem(itemID, action string) (map[string]any, []str
 		if currentBucket != "closed" {
 			return nil, nil, "", true, fmt.Errorf("notepad action delete requires closed bucket: %s", itemID)
 		}
-		e.notepadItems = append(e.notepadItems[:index], e.notepadItems[index+1:]...)
+		items := cloneMapSlice(e.notepadItems)
+		items = append(items[:index], items[index+1:]...)
+		if err := e.replaceNotepadItemsLocked(items); err != nil {
+			return nil, nil, "", true, err
+		}
 		return nil, dedupeStrings(refreshGroups), itemID, true, nil
 	default:
 		return nil, nil, "", true, fmt.Errorf("unsupported notepad action: %s", action)
 	}
 
-	e.notepadItems[index] = updated
+	items := cloneMapSlice(e.notepadItems)
+	items[index] = updated
+	if err := e.replaceNotepadItemsLocked(items); err != nil {
+		return nil, nil, "", true, err
+	}
 	return normalizeNotepadItem(updated, now), dedupeStrings(refreshGroups), "", true, nil
 }
 

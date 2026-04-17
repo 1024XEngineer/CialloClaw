@@ -285,6 +285,105 @@ func TestEngineCompleteNotepadItemPersistsThroughTodoStore(t *testing.T) {
 	}
 }
 
+func TestEngineLinkNotepadItemTaskPersistsThroughTodoStore(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	engine, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine with store failed: %v", err)
+	}
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	if err := engine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":     "todo_link_persist",
+		"title":       "persist linked task",
+		"bucket":      notepadBucketUpcoming,
+		"status":      "normal",
+		"type":        "one_time",
+		"planned_at":  now.Add(4 * time.Hour).Format(time.RFC3339),
+		"due_at":      now.Add(4 * time.Hour).Format(time.RFC3339),
+		"created_at":  now.Format(time.RFC3339),
+		"updated_at":  now.Format(time.RFC3339),
+		"note_text":   "persist linked task",
+		"source_path": "workspace/todos/inbox.md",
+	}}); err != nil {
+		t.Fatalf("sync notepad items failed: %v", err)
+	}
+	if _, handled, err := engine.ClaimNotepadItemTask("todo_link_persist"); err != nil || !handled {
+		t.Fatalf("claim before link failed, handled=%v err=%v", handled, err)
+	}
+	linked, ok := engine.LinkNotepadItemTask("todo_link_persist", "task_999")
+	if !ok || linked["linked_task_id"] != "task_999" {
+		t.Fatalf("expected linked task id to be written, got %+v ok=%v", linked, ok)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+	detail, ok := reloaded.NotepadItem("todo_link_persist")
+	if !ok || detail["linked_task_id"] != "task_999" {
+		t.Fatalf("expected linked_task_id to persist across reload, got %+v ok=%v", detail, ok)
+	}
+}
+
+func TestEngineUpdateNotepadItemPersistsThroughTodoStore(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	engine, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine with store failed: %v", err)
+	}
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	if err := engine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":            "todo_update_persist",
+		"title":              "persist recurring rule",
+		"bucket":             notepadBucketRecurringRule,
+		"status":             "normal",
+		"type":               "recurring",
+		"due_at":             now.Add(24 * time.Hour).Format(time.RFC3339),
+		"next_occurrence_at": now.Add(24 * time.Hour).Format(time.RFC3339),
+		"recurring_enabled":  true,
+		"created_at":         now.Format(time.RFC3339),
+		"updated_at":         now.Format(time.RFC3339),
+		"note_text":          "persist recurring update",
+	}}); err != nil {
+		t.Fatalf("sync notepad items failed: %v", err)
+	}
+	updated, refreshGroups, deletedItemID, handled, err := engine.UpdateNotepadItem("todo_update_persist", "toggle_recurring")
+	if err != nil || !handled {
+		t.Fatalf("toggle recurring failed, handled=%v err=%v", handled, err)
+	}
+	if deletedItemID != "" || len(refreshGroups) != 1 || refreshGroups[0] != notepadBucketRecurringRule {
+		t.Fatalf("unexpected update result, deleted=%q refresh=%+v", deletedItemID, refreshGroups)
+	}
+	if updated["recurring_enabled"] != false {
+		t.Fatalf("expected recurring_enabled=false after toggle, got %+v", updated)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+	detail, ok := reloaded.NotepadItem("todo_update_persist")
+	if !ok || detail["recurring_enabled"] != false || detail["status"] != "cancelled" {
+		t.Fatalf("expected recurring update to persist across reload, got %+v ok=%v", detail, ok)
+	}
+}
+
 func TestNotepadHelperFunctionsCoverRecurringAndEncodingPaths(t *testing.T) {
 	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	if recurringRuleTextFromSpec(recurringRuleSpec{ruleType: "cron", cronExpr: "0 9 * * 1"}) != "cron: 0 9 * * 1" {
