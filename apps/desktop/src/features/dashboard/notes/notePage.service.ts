@@ -48,14 +48,14 @@ function formatRelativeTime(value: string) {
   const absDays = Math.round(Math.abs(diffMs) / (1000 * 60 * 60 * 24));
 
   if (absHours < 1) {
-    return diffMs >= 0 ? "within 1 hour" : "just overdue";
+    return diffMs >= 0 ? "1 小时内" : "刚刚超时";
   }
 
   if (absHours < 24) {
-    return diffMs >= 0 ? `${absHours}h left` : `${absHours}h overdue`;
+    return diffMs >= 0 ? `还剩 ${absHours} 小时` : `逾期 ${absHours} 小时`;
   }
 
-  return diffMs >= 0 ? `${absDays}d left` : `${absDays}d overdue`;
+  return diffMs >= 0 ? `还剩 ${absDays} 天` : `逾期 ${absDays} 天`;
 }
 
 export function isAllowedNoteOpenUrl(url: string): boolean {
@@ -81,53 +81,53 @@ function resolveResourceOpenPayload(resource: NonNullable<TodoItem["related_reso
 
 function getPreviewStatus(item: TodoItem) {
   if (item.bucket === "closed") {
-    return item.status === "completed" ? "Completed" : "Cancelled";
+    return item.status === "completed" ? "已完成" : "已取消";
   }
 
   if (item.bucket === "recurring_rule") {
-    return item.recurring_enabled === false ? "Rule paused" : "Rule active";
+    return item.recurring_enabled === false ? "规则已暂停" : "规则生效中";
   }
 
   if (item.status === "overdue") {
-    return "Overdue";
+    return "已逾期";
   }
 
   if (item.status === "due_today") {
-    return "Due today";
+    return "今天要做";
   }
 
-  return item.bucket === "later" ? "Scheduled later" : "Upcoming";
+  return item.bucket === "later" ? "未到时间" : "近期要做";
 }
 
 function getDetailStatus(item: TodoItem) {
   if (item.bucket === "closed") {
-    return item.status === "completed" ? "Finished" : "Cancelled";
+    return item.status === "completed" ? "已结束" : "已取消";
   }
 
   if (item.bucket === "recurring_rule") {
-    return item.recurring_enabled === false ? "Recurring rule paused" : "Recurring rule active";
+    return item.recurring_enabled === false ? "重复规则已暂停" : "重复规则开启中";
   }
 
   if (item.status === "overdue") {
-    return "Overdue";
+    return "已逾期";
   }
 
   if (item.status === "due_today") {
-    return "Due today";
+    return "今日待处理";
   }
 
-  return item.bucket === "later" ? "Waiting window" : "Upcoming";
+  return item.bucket === "later" ? "尚未开始" : "即将到来";
 }
 
 function getTimeHint(item: TodoItem) {
   const completedTime = item.ended_at ?? item.due_at;
 
   if (item.bucket === "closed") {
-    return completedTime ? formatAbsoluteTime(completedTime) : "No time set";
+    return completedTime ? formatAbsoluteTime(completedTime) : "未设置时间";
   }
 
   if (!item.due_at) {
-    return item.bucket === "recurring_rule" ? "Rule time pending" : "No time set";
+    return item.bucket === "recurring_rule" ? "规则时间待补充" : "未设置时间";
   }
 
   if (item.bucket === "recurring_rule") {
@@ -143,31 +143,47 @@ function getTimeHint(item: TodoItem) {
 
 function getSummaryLabel(item: TodoItem) {
   if (item.bucket === "closed") {
-    return item.status === "completed" ? "Archived" : "Cancelled";
+    return item.status === "completed" ? "已归档" : "已取消";
   }
 
   if (item.bucket === "recurring_rule") {
-    return "Recurring reminder";
+    return "重复提醒";
   }
 
   if (item.bucket === "later") {
-    return "Scheduled later";
+    return "后续安排";
   }
 
-  return item.status === "overdue" ? "Needs attention" : "Ready soon";
+  return item.status === "overdue" ? "优先处理" : "待进入执行";
 }
 
 function getTypeLabel(item: TodoItem) {
   const normalizedType = item.type.replace(/[_-]/g, " ").trim();
+  const normalizedKey = normalizedType.toLowerCase();
+
+  const typeLabelMap: Record<string, string> = {
+    archive: "已结束记录",
+    "follow up": "跟进事项",
+    note: "便签事项",
+    recurring: "重复事项",
+    reminder: "提醒事项",
+    task: "任务事项",
+    template: "模板事项",
+  };
 
   if (!normalizedType) {
-    return item.bucket === "recurring_rule" ? "Recurring item" : "Note item";
+    return item.bucket === "recurring_rule" ? "重复事项" : "便签事项";
   }
 
-  return normalizedType
-    .split(/\s+/)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
+  if (typeLabelMap[normalizedKey]) {
+    return typeLabelMap[normalizedKey];
+  }
+
+  if (/[\u4e00-\u9fff]/.test(normalizedType)) {
+    return normalizedType;
+  }
+
+  return item.bucket === "recurring_rule" ? "重复事项" : "便签事项";
 }
 
 function normalizeResourceOpenAction(action: DeliveryType | null, payload: DeliveryPayload | null): NoteResource["openAction"] {
@@ -205,27 +221,27 @@ function createResourceHints(item: TodoItem) {
   if (normalizedTitle.includes("template") || normalizedTitle.includes("模板")) {
     resources.push({
       id: `${item.item_id}_template`,
-      label: "Linked template",
+      label: "关联模板",
       path: "workspace/templates",
-      type: "Template directory",
+      type: "模板目录",
     });
   }
 
   if (normalizedTitle.includes("report") || normalizedTitle.includes("周报") || normalizedTitle.includes("报告")) {
     resources.push({
       id: `${item.item_id}_report`,
-      label: "Draft workspace",
+      label: "文档草稿区",
       path: "workspace/drafts",
-      type: "Draft directory",
+      type: "草稿目录",
     });
   }
 
   if (normalizedTitle.includes("design") || normalizedTitle.includes("设计") || normalizedTitle.includes("page") || normalizedTitle.includes("页面")) {
     resources.push({
       id: `${item.item_id}_ui`,
-      label: "Dashboard frontend",
+      label: "Dashboard 前端目录",
       path: "apps/desktop/src/features/dashboard",
-      type: "Code directory",
+      type: "代码目录",
     });
   }
 
@@ -250,36 +266,36 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     agentSuggestion: {
       detail:
         item.agent_suggestion ??
-        "This note only returned the formal notepad fields. Add more context before turning it into a task.",
-      label: "Next step",
+        "当前拿到的是协议中的基础便签数据，建议补一条更明确的上下文后再决定是否转交给 Agent。",
+      label: "下一步建议",
     },
     canConvertToTask: item.bucket !== "closed" && !item.linked_task_id,
     detailStatus,
     detailStatusTone: item.status === "overdue" ? "overdue" : item.status === "completed" || item.status === "cancelled" ? "done" : "normal",
     effectiveScope:
-      item.effective_scope ?? (item.bucket === "recurring_rule" ? "This rule stays active until it is paused or cancelled." : null),
+      item.effective_scope ?? (item.bucket === "recurring_rule" ? "规则持续生效，直到手动暂停或取消。" : null),
     endedAt: item.ended_at ?? (item.status === "completed" || item.status === "cancelled" ? item.due_at : null),
     isRecurringEnabled: item.bucket === "recurring_rule" ? item.recurring_enabled !== false : false,
     nextOccurrenceAt: item.next_occurrence_at ?? (item.bucket === "recurring_rule" ? item.due_at : null),
     noteText:
       item.note_text ??
       (item.agent_suggestion
-        ? `${item.title}. ${item.agent_suggestion}`
-        : `${item.title}. The frontend is using a minimal fallback summary for this note.`),
+        ? `${item.title}。${item.agent_suggestion}`
+        : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`),
     noteType: fallbackNoteType,
     plannedAt: item.due_at,
     previewStatus,
     prerequisite:
       item.prerequisite ??
       (item.bucket === "later"
-        ? "This note is intentionally parked until a later execution window."
+        ? "当前还没进入处理窗口，先保留上下文即可。"
         : item.bucket === "recurring_rule"
-          ? "Confirm that this recurring rule should keep producing future instances."
+          ? "确认这条规则仍然需要继续生效。"
           : null),
     recentInstanceStatus: item.recent_instance_status ?? null,
     relatedResources: createResourceHints(item),
     repeatRule:
-      item.repeat_rule ?? (item.bucket === "recurring_rule" ? "The protocol has not returned a concrete repeat rule yet." : null),
+      item.repeat_rule ?? (item.bucket === "recurring_rule" ? "协议暂未返回具体重复规则，当前只展示规则条目。" : null),
     summaryLabel: getSummaryLabel(item),
     timeHint: getTimeHint(item),
     title: item.title,
@@ -298,7 +314,7 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error(`${label} request timed out`)), NOTEPAD_RPC_TIMEOUT_MS);
+      window.setTimeout(() => reject(new Error(`${label} 请求超时`)), NOTEPAD_RPC_TIMEOUT_MS);
     }),
   ]);
 }
@@ -330,7 +346,7 @@ export async function loadNoteBucket(group: TodoBucket, source: NotePageDataMode
     request_meta: createRequestMeta(`notepad_${group}`),
   };
 
-  const result = await withTimeout(listNotepad(params), `notepad bucket ${group}`);
+  const result = await withTimeout(listNotepad(params), `便签分组 ${group}`);
   return {
     items: mapItems(result.items),
     page: result.page,
@@ -348,7 +364,7 @@ export async function convertNoteToTask(itemId: string, source: NotePageDataMode
     request_meta: createRequestMeta(`notepad_convert_${itemId}`),
   };
 
-  const result = await withTimeout(convertNotepadToTask(params), `convert note ${itemId} to task`);
+  const result = await withTimeout(convertNotepadToTask(params), `将便签 ${itemId} 转为任务`);
   return {
     result,
     source: "rpc",
@@ -366,7 +382,7 @@ export async function updateNote(itemId: string, action: NotepadAction, source: 
     request_meta: createRequestMeta(`notepad_update_${action}_${itemId}`),
   };
 
-  const result = await withTimeout(updateNotepad(params), `update note ${itemId} with ${action}`);
+  const result = await withTimeout(updateNotepad(params), `更新便签 ${itemId}（${action}）`);
   return {
     result,
     source: "rpc",
@@ -376,7 +392,7 @@ export async function updateNote(itemId: string, action: NotepadAction, source: 
 export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): NoteResourceOpenExecutionPlan {
   if (resource.openAction === "task_detail" && resource.taskId) {
     return {
-      feedback: `Focused task ${resource.label}.`,
+      feedback: `已定位到任务 ${resource.label}。`,
       mode: "task_detail",
       path: resource.path,
       taskId: resource.taskId,
@@ -386,7 +402,7 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
 
   if (resource.openAction === "open_url" && resource.url) {
     return {
-      feedback: `Opened ${resource.label}.`,
+      feedback: `已打开 ${resource.label}。`,
       mode: "open_url",
       path: resource.path || null,
       taskId: resource.taskId ?? null,
@@ -395,7 +411,7 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
   }
 
   return {
-    feedback: resource.path || resource.url ? `Prepared ${resource.label} for copy.` : `No openable target available for ${resource.label}.`,
+    feedback: resource.path || resource.url ? `已准备 ${resource.label} 的地址。` : `当前资源 ${resource.label} 缺少可打开地址。`,
     mode: "copy_path",
     path: resource.path || resource.url || null,
     taskId: resource.taskId ?? null,
@@ -406,7 +422,7 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
 export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExecutionPlan): Promise<string> {
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedNoteOpenUrl(plan.url)) {
-      return "Blocked an unsupported note resource URL.";
+      return "已拦截不受支持的便签资源链接。";
     }
 
     window.open(plan.url, "_blank", "noopener,noreferrer");
@@ -417,13 +433,13 @@ export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExe
     if (navigator.clipboard?.writeText) {
       try {
         await navigator.clipboard.writeText(plan.path);
-        return `${plan.feedback} Copied the path.`;
+        return `${plan.feedback} 已复制路径。`;
       } catch {
-        return `${plan.feedback} Path: ${plan.path}`;
+        return `${plan.feedback} 路径：${plan.path}`;
       }
     }
 
-    return `${plan.feedback} Path: ${plan.path}`;
+    return `${plan.feedback} 路径：${plan.path}`;
   }
 
   return plan.feedback;
