@@ -519,7 +519,7 @@ function renderDashboardRouteSurface(hash: string) {
   const originalSVGElement = globalThis.SVGElement;
   const fakeDocument = {
     location: null as unknown,
-    querySelector() {
+    querySelector(): Element | null {
       return null;
     },
     defaultView: null as unknown,
@@ -535,7 +535,7 @@ function renderDashboardRouteSurface(hash: string) {
     addEventListener() {},
     removeEventListener() {},
     history: {
-      state: null,
+      state: null as unknown,
       replaceState() {},
       pushState() {},
     },
@@ -2966,7 +2966,7 @@ test("shell-ball bubble zone keeps the latest message visible on feed updates", 
       },
     },
     "./ShellBallBubbleMessage": {
-      ShellBallBubbleMessage() {
+      ShellBallBubbleMessage(): null {
         return null;
       },
     },
@@ -3033,7 +3033,7 @@ test("shell-ball bubble window resolves bubble items from the helper-window snap
     },
     "./useShellBallWindowMetrics": {
       useShellBallWindowMetrics() {
-        return { rootRef: null };
+        return { rootRef: { current: null } as { current: HTMLDivElement | null } };
       },
     },
     "./components/ShellBallBubbleZone": {
@@ -3091,7 +3091,7 @@ test("shell-ball bubble window does not depend on only visualState to render its
     "./useShellBallWindowMetrics": {
       useShellBallWindowMetrics(input: Record<string, unknown>) {
         capturedProps = { ...(capturedProps ?? {}), metricsInput: input };
-        return { rootRef: null };
+        return { rootRef: { current: null } as { current: HTMLDivElement | null } };
       },
     },
     "./components/ShellBallBubbleZone": {
@@ -3574,7 +3574,7 @@ test("shell-ball selected-text prompt stays below an existing intent bubble even
         emitToShellBallWindowLabel() {
           return Promise.resolve();
         },
-        getShellBallPinnedBubbleIdFromLabel() {
+        getShellBallPinnedBubbleIdFromLabel(): string | null {
           return null;
         },
         getShellBallPinnedBubbleWindowAnchor() {
@@ -3752,7 +3752,7 @@ test("shell-ball detached bubble actions close pinned windows and delete detache
       emitToShellBallWindowLabel() {
         return Promise.resolve();
       },
-      getShellBallPinnedBubbleIdFromLabel() {
+      getShellBallPinnedBubbleIdFromLabel(): string | null {
         return null;
       },
       getShellBallPinnedBubbleWindowAnchor() {

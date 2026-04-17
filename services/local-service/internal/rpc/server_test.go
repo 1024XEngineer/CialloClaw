@@ -4,6 +4,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"path/filepath"
@@ -831,6 +832,67 @@ func TestDispatchMapsTaskControlMissingActionToInvalidParams(t *testing.T) {
 	}
 	if errEnvelope.Error.Code != 1002001 || errEnvelope.Error.Message != "INVALID_PARAMS" {
 		t.Fatalf("expected INVALID_PARAMS mapping for missing action, got code=%d message=%s", errEnvelope.Error.Code, errEnvelope.Error.Message)
+	}
+}
+
+func TestDispatchTaskListClampsPagingParams(t *testing.T) {
+	server := newTestServer()
+
+	for index := 0; index < 25; index++ {
+		_, err := server.orchestrator.StartTask(map[string]any{
+			"session_id": fmt.Sprintf("sess_rpc_task_list_%02d", index),
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("rpc task list clamp %02d", index),
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("start task %d: %v", index, err)
+		}
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-list-clamp"`),
+		Method:  "agent.task.list",
+		Params: mustMarshal(t, map[string]any{
+			"group":      "unfinished",
+			"limit":      0,
+			"offset":     -5,
+			"sort_by":    "updated_at",
+			"sort_order": "desc",
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 20 {
+		t.Fatalf("expected rpc task.list to clamp zero limit to 20 items, got %d", len(items))
+	}
+	page := data["page"].(map[string]any)
+	if numericValue(t, page["limit"]) != 20 {
+		t.Fatalf("expected clamped rpc page limit 20, got %+v", page)
+	}
+	if numericValue(t, page["offset"]) != 0 {
+		t.Fatalf("expected clamped rpc page offset 0, got %+v", page)
+	}
+	if page["has_more"] != true {
+		t.Fatalf("expected rpc page has_more to remain true after clamping, got %+v", page)
+	}
+	if numericValue(t, page["total"]) != 25 {
+		t.Fatalf("expected rpc page total 25, got %+v", page)
 	}
 }
 

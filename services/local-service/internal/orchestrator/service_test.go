@@ -200,6 +200,11 @@ func (s failingEvalSnapshotStore) ListEvalSnapshots(context.Context, string, int
 	return nil, 0, s.err
 }
 
+type countingTaskRunStore struct {
+	base      storage.TaskRunStore
+	loadCalls int
+}
+
 func (s failingTodoStore) ReplaceTodoState(ctx context.Context, items []storage.TodoItemRecord, rules []storage.RecurringRuleRecord) error {
 	if s.replaceErr != nil {
 		return s.replaceErr
@@ -215,6 +220,23 @@ func (s failingTodoStore) LoadTodoState(ctx context.Context) ([]storage.TodoItem
 		return nil, nil, nil
 	}
 	return s.base.LoadTodoState(ctx)
+}
+
+func (s *countingTaskRunStore) AllocateIdentifier(ctx context.Context, prefix string) (string, error) {
+	return s.base.AllocateIdentifier(ctx, prefix)
+}
+
+func (s *countingTaskRunStore) DeleteTaskRun(ctx context.Context, taskID string) error {
+	return s.base.DeleteTaskRun(ctx, taskID)
+}
+
+func (s *countingTaskRunStore) SaveTaskRun(ctx context.Context, record storage.TaskRunRecord) error {
+	return s.base.SaveTaskRun(ctx, record)
+}
+
+func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.TaskRunRecord, error) {
+	s.loadCalls++
+	return s.base.LoadTaskRuns(ctx)
 }
 
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -357,6 +379,14 @@ func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mu
 	}
 	record := recordValue.Interface().(*runengine.TaskRecord)
 	mutate(record)
+}
+
+func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.TaskRunStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("taskRunStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
 }
 
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
@@ -3012,6 +3042,74 @@ func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T
 	}
 }
 
+func TestServiceTaskListClampsPagingParams(t *testing.T) {
+	service := newTestService()
+
+	for index := 0; index < 25; index++ {
+		_, err := service.StartTask(map[string]any{
+			"session_id": fmt.Sprintf("sess_clamp_%02d", index),
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("task %02d for task list clamp", index),
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("start task %d failed: %v", index, err)
+		}
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"limit":      float64(0),
+		"offset":     float64(-5),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list with clamped defaults failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 20 {
+		t.Fatalf("expected zero limit to clamp to default page size 20, got %d", len(items))
+	}
+	page := result["page"].(map[string]any)
+	if page["limit"] != 20 {
+		t.Fatalf("expected clamped page limit 20, got %+v", page)
+	}
+	if page["offset"] != 0 {
+		t.Fatalf("expected negative offset to clamp to 0, got %+v", page)
+	}
+
+	largeResult, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"limit":      float64(999),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list with large limit failed: %v", err)
+	}
+
+	largeItems := largeResult["items"].([]map[string]any)
+	if len(largeItems) != 25 {
+		t.Fatalf("expected large limit to return all 25 tasks after clamping to 100, got %d", len(largeItems))
+	}
+	largePage := largeResult["page"].(map[string]any)
+	if largePage["limit"] != 100 {
+		t.Fatalf("expected oversized limit to clamp to 100, got %+v", largePage)
+	}
+}
+
 func TestServiceTaskListFallbackMatchesRuntimeUnknownGroupSemantics(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "stored unknown group")
 	if service.storage == nil {
@@ -3578,6 +3676,138 @@ func TestServiceDashboardOverviewFallsBackToStoredTaskRuns(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardOverviewResortsMergedRuntimeAndStoredTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "merged dashboard overview")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_merge_overview",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime task should not win when stored task is newer",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime task failed: %v", err)
+	}
+	runtimeTask := runtimeResult["task"].(map[string]any)
+	runtimeUpdatedAt, err := time.Parse(dateTimeLayout, runtimeTask["updated_at"].(string))
+	if err != nil {
+		t.Fatalf("parse runtime updated_at failed: %v", err)
+	}
+
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_waiting_newer",
+		SessionID:   "sess_merge_overview",
+		RunID:       "run_dashboard_waiting_newer",
+		Title:       "stored waiting task should become focus",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   runtimeUpdatedAt.Add(-5 * time.Minute),
+		UpdatedAt:   runtimeUpdatedAt.Add(1 * time.Minute),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_dashboard_newer",
+			"task_id":     "task_dashboard_waiting_newer",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save newer waiting task run failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	overview := result["overview"].(map[string]any)
+	focusSummary := overview["focus_summary"].(map[string]any)
+	if focusSummary["task_id"] != "task_dashboard_waiting_newer" {
+		t.Fatalf("expected merged overview to re-sort and focus the newer stored task, got %+v", focusSummary)
+	}
+	if focusSummary["task_id"] == runtimeResult["task"].(map[string]any)["task_id"] {
+		t.Fatalf("expected newer stored task to outrank runtime task in merged overview, got %+v", focusSummary)
+	}
+	trustSummary := overview["trust_summary"].(map[string]any)
+	if trustSummary["pending_authorizations"] != 2 {
+		t.Fatalf("expected merged overview to count runtime and stored pending authorizations, got %+v", trustSummary)
+	}
+}
+
+func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "single storage scan")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer func() {
+		replaceTaskRunStore(t, service.storage, originalStore)
+		if service.storage != nil {
+			_ = service.storage.Close()
+		}
+	}()
+
+	countingStore := &countingTaskRunStore{base: service.storage.TaskRunStore()}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if _, err := service.StartTask(map[string]any{
+		"session_id": "sess_overview_count",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime task for overview count",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("start runtime task failed: %v", err)
+	}
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_count",
+		SessionID:   "sess_overview_count",
+		RunID:       "run_dashboard_count",
+		Title:       "stored task for overview count",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 12, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 12, 6, 0, 0, time.UTC)),
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	if _, err := service.DashboardOverviewGet(map[string]any{}); err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	if countingStore.loadCalls != 1 {
+		t.Fatalf("expected dashboard overview to load stored tasks once per request, got %d", countingStore.loadCalls)
+	}
+}
+
 func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	service := newTestService()
 
@@ -4041,6 +4271,303 @@ func TestServiceSecuritySummaryCountsStoredPendingAuthorizations(t *testing.T) {
 	summary := result["summary"].(map[string]any)
 	if summary["pending_authorizations"] != 1 {
 		t.Fatalf("expected stored waiting_auth task to count as pending authorization, got %+v", summary)
+	}
+}
+
+func TestServiceDashboardModuleCountsRuntimeAndStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "dashboard mixed waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_dashboard_module_mixed",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for dashboard module",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTaskID := runtimeResult["task"].(map[string]any)["task_id"].(string)
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_module_waiting_stored",
+		SessionID:   "sess_dashboard_module_mixed",
+		RunID:       "run_dashboard_module_waiting_stored",
+		Title:       "stored waiting auth task for dashboard module",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 18, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 18, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_dashboard_module_stored",
+			"task_id":     "task_dashboard_module_waiting_stored",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "security",
+		"tab":    "audit",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	highlights := moduleResult["highlights"].([]string)
+	foundPendingHighlight := false
+	for _, highlight := range highlights {
+		if strings.Contains(highlight, "当前仍有 2 个待授权任务等待处理。") {
+			foundPendingHighlight = true
+			break
+		}
+	}
+	if !foundPendingHighlight {
+		t.Fatalf("expected merged pending authorization highlight for runtime task %s, got %+v", runtimeTaskID, highlights)
+	}
+}
+
+func TestServiceSecuritySummaryCountsRuntimeAndStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security mixed waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_security_summary_mixed",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for security summary",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTaskID := runtimeResult["task"].(map[string]any)["task_id"].(string)
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_waiting_stored",
+		SessionID:   "sess_security_summary_mixed",
+		RunID:       "run_security_waiting_stored",
+		Title:       "stored waiting auth task for security summary",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 19, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 19, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_security_stored",
+			"task_id":     "task_security_waiting_stored",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	summary := result["summary"].(map[string]any)
+	if summary["pending_authorizations"] != 2 {
+		t.Fatalf("expected merged pending authorizations for runtime task %s, got %+v", runtimeTaskID, summary)
+	}
+	if summary["security_status"] != "pending_confirmation" {
+		t.Fatalf("expected pending_confirmation status when merged pending authorizations remain, got %+v", summary)
+	}
+}
+
+func TestServiceSecurityPendingListMergesRuntimeAndStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending mixed waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_security_pending_list_mixed",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for pending list",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTask := runtimeResult["task"].(map[string]any)
+	runtimeUpdatedAt, err := time.Parse(dateTimeLayout, runtimeTask["updated_at"].(string))
+	if err != nil {
+		t.Fatalf("parse runtime updated_at failed: %v", err)
+	}
+
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_pending_list_stored",
+		SessionID:   "sess_security_pending_list_mixed",
+		RunID:       "run_security_pending_list_stored",
+		Title:       "stored waiting auth task for pending list",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "red",
+		StartedAt:   runtimeUpdatedAt.Add(-5 * time.Minute),
+		UpdatedAt:   runtimeUpdatedAt.Add(1 * time.Minute),
+		ApprovalRequest: map[string]any{
+			"approval_id":    "appr_security_pending_list_stored",
+			"task_id":        "task_security_pending_list_stored",
+			"operation_name": "write_file",
+			"target_object":  "/workspace/security.txt",
+			"reason":         "Stored high-risk write still needs authorization.",
+			"status":         "pending",
+			"risk_level":     "red",
+			"created_at":     runtimeUpdatedAt.Add(1 * time.Minute).Format(time.RFC3339Nano),
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	}); err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{
+		"limit":  float64(20),
+		"offset": float64(0),
+	})
+	if err != nil {
+		t.Fatalf("security pending list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected merged pending authorization list to return two items, got %+v", items)
+	}
+	if items[0]["task_id"] != "task_security_pending_list_stored" {
+		t.Fatalf("expected newer stored pending task to lead merged list, got %+v", items)
+	}
+
+	page := result["page"].(map[string]any)
+	if page["total"] != 2 || page["has_more"] != false {
+		t.Fatalf("expected merged pending list page metadata, got %+v", page)
+	}
+}
+
+func TestServiceSecurityPendingListPaginatesMergedPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending pagination")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_security_pending_list_page",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for pending pagination",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTask := runtimeResult["task"].(map[string]any)
+	runtimeUpdatedAt, err := time.Parse(dateTimeLayout, runtimeTask["updated_at"].(string))
+	if err != nil {
+		t.Fatalf("parse runtime updated_at failed: %v", err)
+	}
+
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_pending_page_stored",
+		SessionID:   "sess_security_pending_list_page",
+		RunID:       "run_security_pending_page_stored",
+		Title:       "stored waiting auth task for pending pagination",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   runtimeUpdatedAt.Add(-5 * time.Minute),
+		UpdatedAt:   runtimeUpdatedAt.Add(1 * time.Minute),
+		ApprovalRequest: map[string]any{
+			"approval_id":    "appr_security_pending_page_stored",
+			"task_id":        "task_security_pending_page_stored",
+			"operation_name": "write_file",
+			"target_object":  "/workspace/pending.txt",
+			"reason":         "Stored task should occupy the first merged page slot.",
+			"status":         "pending",
+			"risk_level":     "yellow",
+			"created_at":     runtimeUpdatedAt.Add(1 * time.Minute).Format(time.RFC3339Nano),
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	}); err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{
+		"limit":  float64(1),
+		"offset": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("security pending list with pagination failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one paged pending authorization item, got %+v", items)
+	}
+	if items[0]["task_id"] != runtimeTask["task_id"] {
+		t.Fatalf("expected offset page to return runtime task after stored task, got %+v", items)
+	}
+
+	page := result["page"].(map[string]any)
+	if page["limit"] != 1 || page["offset"] != 1 || page["total"] != 2 || page["has_more"] != false {
+		t.Fatalf("expected paged merged pending list metadata, got %+v", page)
 	}
 }
 
@@ -5432,6 +5959,62 @@ func TestServiceTaskControlRejectsFinishedTaskOperations(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTaskAlreadyFinished) {
 		t.Fatalf("expected cancel on completed task to return ErrTaskAlreadyFinished, got %v", err)
+	}
+}
+
+func TestServiceTaskControlReturnsUpdatedTaskAndBubbleForWaitingAuthCancel(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_task_control_payload",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task control should return stable payload",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	result, err := service.TaskControl(map[string]any{
+		"task_id":   taskID,
+		"action":    "cancel",
+		"arguments": map[string]any{"reason": "user_cancelled_from_dashboard"},
+	})
+	if err != nil {
+		t.Fatalf("task control failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] != taskID {
+		t.Fatalf("expected task control to keep task_id %s, got %+v", taskID, task)
+	}
+	if task["status"] != "cancelled" {
+		t.Fatalf("expected cancelled task after task.control cancel, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["task_id"] != taskID || bubble["type"] != "status" {
+		t.Fatalf("expected stable status bubble payload, got %+v", bubble)
+	}
+	if bubble["text"] != "任务已取消" {
+		t.Fatalf("expected cancel bubble text, got %+v", bubble)
+	}
+
+	recordedTask, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected cancelled task to remain available in runtime")
+	}
+	if recordedTask.Status != "cancelled" || recordedTask.CurrentStep != "task_cancelled" {
+		t.Fatalf("expected runtime task to stay aligned with task.control payload, got %+v", recordedTask)
 	}
 }
 

@@ -106,6 +106,40 @@ function createShellBallBubbleDesktopState(turnOrder: ShellBallBubbleTurnOrder =
   };
 }
 
+function createShellBallAgentLoadingBubbleItem(input: {
+  createdAt: string;
+  taskId?: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  const bubbleItem = createShellBallTextBubbleItem({
+    role: "agent",
+    text: "正在思考…",
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+
+  return {
+    ...bubbleItem,
+    desktop: {
+      ...bubbleItem.desktop,
+      presentationHint: "loading" as const,
+    },
+  } satisfies ShellBallBubbleItem;
+}
+
+function replaceShellBallPendingBubble(
+  items: ShellBallBubbleItem[],
+  pendingBubbleId: string,
+  nextItem?: ShellBallBubbleItem,
+) {
+  const nextItems = items.filter((item) => item.bubble.bubble_id !== pendingBubbleId);
+  return nextItem === undefined ? sortShellBallBubbleItemsByTimestamp(nextItems) : sortShellBallBubbleItemsByTimestamp([...nextItems, nextItem]);
+}
+
 export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem, right: ShellBallBubbleItem) {
   // Anchor late agent replies to the user turn that created them before falling back to timestamps.
   const leftTurnIndex = left.desktop.turnIndex;
@@ -622,6 +656,18 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     scheduleBubbleRegionHide();
   }, [applyBubbleVisibilityPhase, clearBubbleVisibilityTimers, helpersVisible, revealBubbleRegion, scheduleBubbleRegionHide]);
 
+  const handleCoordinatorRegionEnter = useCallback(() => {
+    regionActiveRef.current = true;
+    revealBubbleRegion();
+    handlersRef.current.onRegionEnter();
+  }, [revealBubbleRegion]);
+
+  const handleCoordinatorRegionLeave = useCallback(() => {
+    regionActiveRef.current = false;
+    scheduleBubbleRegionHide();
+    handlersRef.current.onRegionLeave();
+  }, [scheduleBubbleRegionHide]);
+
   useEffect(() => {
     if (snapshot.visibility.input) {
       return;
@@ -814,18 +860,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       );
     }
 
-    function handleCoordinatorRegionEnter() {
-      regionActiveRef.current = true;
-      revealBubbleRegion();
-      handlersRef.current.onRegionEnter();
-    }
-
-    function handleCoordinatorRegionLeave() {
-      regionActiveRef.current = false;
-      scheduleBubbleRegionHide();
-      handlersRef.current.onRegionLeave();
-    }
-
     function handleCoordinatorInputFocusChange(focused: boolean) {
       inputFocusedRef.current = focused;
 
@@ -908,10 +942,16 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             turnIndex,
             turnPhase: 0,
           });
+          const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+            createdAt,
+            turnIndex,
+            turnPhase: 1,
+          });
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
               ...currentItems,
               userBubbleItem,
+              pendingAgentBubbleItem,
             ]),
           );
           revealBubbleRegion();
@@ -933,17 +973,20 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                   : item,
               );
 
-              return sortShellBallBubbleItemsByTimestamp([
-                ...nextItems,
+              return replaceShellBallPendingBubble(
+                nextItems,
+                pendingAgentBubbleItem.bubble.bubble_id,
                 createShellBallAgentBubbleItem(result, new Date().toISOString(), {
                   turnIndex,
                   turnPhase: 1,
                 }),
-              ]);
+              );
             });
             revealBubbleRegion();
+            break;
           }
 
+          setBubbleItems((currentItems) => replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id));
           break;
         }
         case "primary_click":
@@ -1116,9 +1159,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         cleanup();
       }
     };
-  }, [revealBubbleRegion, scheduleBubbleRegionHide]);
+  }, [handleCoordinatorRegionEnter, handleCoordinatorRegionLeave, revealBubbleRegion, scheduleBubbleRegionHide]);
 
-  return { snapshot, handleDroppedFiles, handleSelectedTextPrompt };
+  return {
+    snapshot,
+    handleDroppedFiles,
+    handleSelectedTextPrompt,
+    handleRegionEnter: handleCoordinatorRegionEnter,
+    handleRegionLeave: handleCoordinatorRegionLeave,
+  };
 }
 
 export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {

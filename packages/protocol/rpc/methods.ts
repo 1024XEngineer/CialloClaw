@@ -588,12 +588,24 @@ export interface AgentSecurityRespondParams {
 }
 
 // AgentSecurityRespondResult 定义当前模块的接口约束。
-export interface AgentSecurityRespondResult {
+export interface AgentSecurityApprovalRespondResult {
   authorization_record: AuthorizationRecord;
   task: Task;
   bubble_message: BubbleMessage | null;
   impact_scope?: ImpactScope;
 }
+
+export interface AgentSecurityRestoreRespondResult {
+  applied: boolean;
+  task: Task;
+  recovery_point: RecoveryPoint;
+  audit_record: AuditRecord | null;
+  bubble_message: BubbleMessage | null;
+}
+
+export type AgentSecurityRespondResult =
+  | AgentSecurityApprovalRespondResult
+  | AgentSecurityRestoreRespondResult;
 
 // AgentSettingsGetParams 定义当前模块的接口约束。
 export interface AgentSettingsGetParams {
