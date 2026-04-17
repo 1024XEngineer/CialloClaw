@@ -259,6 +259,8 @@ export const RPC_METHODS_STABLE = {
   AGENT_RECOMMENDATION_FEEDBACK_SUBMIT: "agent.recommendation.feedback.submit",
   AGENT_TASK_LIST: "agent.task.list",
   AGENT_TASK_DETAIL_GET: "agent.task.detail.get",
+  AGENT_TASK_EVENTS_LIST: "agent.task.events.list",
+  AGENT_TASK_STEER: "agent.task.steer",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
   AGENT_TASK_CONTROL: "agent.task.control",
@@ -465,6 +467,29 @@ export interface AgentTaskDetailGetResult {
   security_summary: SecuritySummary;
 }
 
+export interface TaskEvent {
+	 event_id: string;
+	 run_id: string;
+	 task_id: string;
+	 step_id?: string;
+	 type: string;
+	 level: string;
+	 payload_json: string;
+	 created_at: string;
+}
+
+export interface AgentTaskEventsListParams {
+	 request_meta: RequestMeta;
+	 task_id: string;
+	 limit?: number;
+	 offset?: number;
+}
+
+export interface AgentTaskEventsListResult {
+	 items: TaskEvent[];
+	 page: JsonRpcPage;
+}
+
 export interface AgentTaskArtifactListParams {
   request_meta: RequestMeta;
   task_id: string;
@@ -513,6 +538,17 @@ export interface AgentTaskControlParams {
 export interface AgentTaskControlResult {
   task: Task;
   bubble_message: BubbleMessage | null;
+}
+
+export interface AgentTaskSteerParams {
+	 request_meta: RequestMeta;
+	 task_id: string;
+	 message: string;
+}
+
+export interface AgentTaskSteerResult {
+	 task: Task;
+	 bubble_message: BubbleMessage | null;
 }
 
 export interface AgentTaskInspectorConfigGetParams {
