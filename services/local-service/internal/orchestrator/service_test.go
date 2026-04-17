@@ -563,7 +563,7 @@ func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *tes
 	}
 }
 
-func TestServiceConfirmTaskQueuesConfirmedTaskBehindSameSessionWork(t *testing.T) {
+func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued confirm output.")
 
 	firstResult, err := service.StartTask(map[string]any{
@@ -605,7 +605,7 @@ func TestServiceConfirmTaskQueuesConfirmedTaskBehindSameSessionWork(t *testing.T
 
 	confirmResult, err := service.ConfirmTask(map[string]any{
 		"task_id":   secondTaskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name":      "agent_loop",
 			"arguments": map[string]any{},
@@ -616,10 +616,10 @@ func TestServiceConfirmTaskQueuesConfirmedTaskBehindSameSessionWork(t *testing.T
 	}
 	confirmedTask := confirmResult["task"].(map[string]any)
 	if confirmedTask["status"] != "blocked" || confirmedTask["current_step"] != "session_queue" {
-		t.Fatalf("expected confirmed task to queue behind active session work, got %+v", confirmedTask)
+		t.Fatalf("expected corrected task to queue behind active session work, got %+v", confirmedTask)
 	}
 	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected queued confirmed task not to return delivery_result, got %+v", confirmResult["delivery_result"])
+		t.Fatalf("expected queued corrected task not to return delivery_result, got %+v", confirmResult["delivery_result"])
 	}
 }
 
