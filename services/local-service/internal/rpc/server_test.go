@@ -458,6 +458,38 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsNotepadUpdateResult(t *testing.T) {
+	server := newTestServer()
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-notepad-update"`),
+		Method:  "agent.notepad.update",
+		Params: mustMarshal(t, map[string]any{
+			"item_id": "todo_002",
+			"action":  "move_upcoming",
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+
+	data := success.Result.Data.(map[string]any)
+	notepadItem, ok := data["notepad_item"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected notepad_item payload, got %+v", data)
+	}
+	if notepadItem["bucket"] != "upcoming" {
+		t.Fatalf("expected updated notepad item bucket upcoming, got %+v", notepadItem)
+	}
+	refreshGroups := data["refresh_groups"].([]string)
+	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
+		t.Fatalf("expected refresh_groups to include source and target buckets, got %+v", refreshGroups)
+	}
+}
+
 func TestDispatchReturnsTaskArtifactList(t *testing.T) {
 	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-list.db")))

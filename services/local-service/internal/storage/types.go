@@ -8,6 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -94,12 +95,16 @@ type TodoItemRecord struct {
 	Status               string
 	SourcePath           string
 	SourceLine           int
+	SourceBucket         string
 	DueAt                string
 	TagsJSON             string
 	AgentSuggestion      string
 	NoteText             string
 	Prerequisite         string
 	PlannedAt            string
+	PreviousBucket       string
+	PreviousDueAt        string
+	PreviousStatus       string
 	EndedAt              string
 	RelatedResourcesJSON string
 	LinkedTaskID         string
@@ -186,6 +191,7 @@ type TaskRunRecord struct {
 	Artifacts         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
+	Snapshot          contextsvc.TaskContextSnapshot
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
@@ -205,6 +211,7 @@ type TaskRunRecord struct {
 // TaskRunStore 定义 task/run 主状态的持久化契约。
 type TaskRunStore interface {
 	AllocateIdentifier(ctx context.Context, prefix string) (string, error)
+	DeleteTaskRun(ctx context.Context, taskID string) error
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
 }

@@ -9,17 +9,27 @@ import "strings"
 // 它的职责是把前端输入、页面环境、选区、文件列表等来源差异统一收口成一个稳定结构，
 // 让 intent、orchestrator、memory 等后续模块都只依赖这一份归一化结果。
 type TaskContextSnapshot struct {
-	Source        string
-	Trigger       string
-	InputType     string
-	InputMode     string
-	Text          string
-	SelectionText string
-	ErrorText     string
-	Files         []string
-	PageTitle     string
-	PageURL       string
-	AppName       string
+	Source         string
+	Trigger        string
+	InputType      string
+	InputMode      string
+	Text           string
+	SelectionText  string
+	ErrorText      string
+	Files          []string
+	PageTitle      string
+	PageURL        string
+	AppName        string
+	WindowTitle    string
+	VisibleText    string
+	ScreenSummary  string
+	ClipboardText  string
+	HoverTarget    string
+	LastAction     string
+	DwellMillis    int
+	CopyCount      int
+	WindowSwitches int
+	PageSwitches   int
 }
 
 // Service 提供当前模块的服务能力。
@@ -59,6 +69,9 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 		page = mapValue(contextValue, "page")
 	}
 	errorValue := mapValue(contextValue, "error")
+	clipboard := mapValue(contextValue, "clipboard")
+	screen := mapValue(contextValue, "screen")
+	behavior := mapValue(contextValue, "behavior")
 
 	selectionText := firstNonEmpty(
 		stringValue(selection, "text"),
@@ -90,17 +103,27 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 	}
 
 	return TaskContextSnapshot{
-		Source:        stringValue(params, "source"),
-		Trigger:       firstNonEmpty(stringValue(params, "trigger"), inferTrigger(inputType, selectionText, errorText, files)),
-		InputType:     inputType,
-		InputMode:     firstNonEmpty(stringValue(input, "input_mode"), inferInputMode(text)),
-		Text:          text,
-		SelectionText: selectionText,
-		ErrorText:     errorText,
-		Files:         files,
-		PageTitle:     stringValue(page, "title"),
-		PageURL:       stringValue(page, "url"),
-		AppName:       stringValue(page, "app_name"),
+		Source:         stringValue(params, "source"),
+		Trigger:        firstNonEmpty(stringValue(params, "trigger"), inferTrigger(inputType, selectionText, errorText, files)),
+		InputType:      inputType,
+		InputMode:      firstNonEmpty(stringValue(input, "input_mode"), inferInputMode(text)),
+		Text:           text,
+		SelectionText:  selectionText,
+		ErrorText:      errorText,
+		Files:          files,
+		PageTitle:      stringValue(page, "title"),
+		PageURL:        stringValue(page, "url"),
+		AppName:        stringValue(page, "app_name"),
+		WindowTitle:    firstNonEmpty(stringValue(page, "window_title"), stringValue(screen, "window_title")),
+		VisibleText:    firstNonEmpty(stringValue(page, "visible_text"), stringValue(screen, "visible_text")),
+		ScreenSummary:  firstNonEmpty(stringValue(contextValue, "screen_summary"), stringValue(screen, "summary"), stringValue(screen, "screen_summary")),
+		ClipboardText:  firstNonEmpty(stringValue(contextValue, "clipboard_text"), stringValue(clipboard, "text")),
+		HoverTarget:    firstNonEmpty(stringValue(contextValue, "hover_target"), stringValue(page, "hover_target"), stringValue(screen, "hover_target")),
+		LastAction:     firstNonEmpty(stringValue(contextValue, "last_action"), stringValue(behavior, "last_action")),
+		DwellMillis:    intValue(contextValue, "dwell_millis", intValue(behavior, "dwell_millis", 0)),
+		CopyCount:      intValue(contextValue, "copy_count", intValue(behavior, "copy_count", 0)),
+		WindowSwitches: intValue(contextValue, "window_switch_count", intValue(behavior, "window_switch_count", 0)),
+		PageSwitches:   intValue(contextValue, "page_switch_count", intValue(behavior, "page_switch_count", 0)),
 	}
 }
 
@@ -230,4 +253,21 @@ func dedupeStrings(values []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func intValue(values map[string]any, key string, fallback int) int {
+	rawValue, ok := values[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := rawValue.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return fallback
+	}
 }

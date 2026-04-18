@@ -6,6 +6,9 @@
     "dev": "pnpm --dir apps/desktop dev",
     "dev:desktop": "pnpm --dir apps/desktop dev",
     "dev:service": "go run ./services/local-service/cmd/server",
-    "test:service": "go test ./services/local-service/..."
+    "lint": "pnpm --dir apps/desktop lint",
+    "lint:fix": "pnpm --dir apps/desktop lint:fix",
+    "test:service": "go test ./services/local-service/...",
+    "typecheck": "pnpm --dir apps/desktop typecheck"
   }
 }

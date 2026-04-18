@@ -1,6 +1,11 @@
+/**
+ * Control panel editing flow keeps a local draft so desktop settings can be
+ * reviewed and persisted without mutating the last loaded snapshot in place.
+ */
 import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { GripHorizontal, X } from "lucide-react";
 import { Button, Heading, SegmentedControl, Slider, Switch, Text, TextArea, TextField } from "@radix-ui/themes";
+import isEqual from "react-fast-compare";
 import {
   loadControlPanelData,
   runControlPanelInspection,
@@ -40,6 +45,13 @@ type InfoRowProps = {
   className?: string;
 };
 
+/**
+ * Maps the current data source into a presentational badge for the control
+ * panel header.
+ *
+ * @param source Control-panel data source mode.
+ * @returns Badge copy and color metadata for the UI.
+ */
 function getSourceCopy(source: ControlPanelData["source"]) {
   if (source === "rpc") {
     return {
@@ -56,6 +68,13 @@ function getSourceCopy(source: ControlPanelData["source"]) {
   };
 }
 
+/**
+ * Resolves the save feedback copy shown after settings are persisted.
+ *
+ * @param applyMode Backend apply mode returned by the settings snapshot.
+ * @param needRestart Whether the current change set requires an app restart.
+ * @returns User-facing save feedback copy.
+ */
 function getApplyModeCopy(applyMode: string, needRestart: boolean) {
   if (needRestart) {
     return "部分设置需要重启桌面端后生效。";
@@ -68,6 +87,12 @@ function getApplyModeCopy(applyMode: string, needRestart: boolean) {
   return "设置已即时生效。";
 }
 
+/**
+ * Renders the visual section header used by control panel setting groups.
+ *
+ * @param props Heading metadata for the current section.
+ * @returns A stylized heading row for the section.
+ */
 function SectionHeader({ titleId, title }: SectionHeaderProps) {
   return (
     <div className="control-panel-page__section-header">
@@ -162,6 +187,8 @@ export function ControlPanelApp() {
 
   const sourceCopy = useMemo(() => (draft ? getSourceCopy(draft.source) : null), [draft]);
 
+  const hasChanges = !isEqual(draft, panelData);
+
   if (!draft || !panelData || !sourceCopy) {
     return (
       <main className="app-shell control-panel-page">
@@ -174,7 +201,6 @@ export function ControlPanelApp() {
     );
   }
 
-  const hasChanges = JSON.stringify(draft) !== JSON.stringify(panelData);
   const latestRestorePoint = draft.securitySummary.latest_restore_point?.summary ?? "暂无恢复点";
   const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;

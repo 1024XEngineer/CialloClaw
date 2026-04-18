@@ -99,6 +99,10 @@ export const POSITION_MODES = ["fixed", "draggable"] as const;
 // TODO_STATUSES 定义共享常量。
 export const TODO_STATUSES = ["normal", "due_today", "overdue", "completed", "cancelled"] as const;
 
+// NOTEPAD_ACTIONS defines the stable note-state mutation actions supported by
+// the RPC boundary.
+export const NOTEPAD_ACTIONS = ["complete", "cancel", "move_upcoming", "toggle_recurring", "cancel_recurring", "restore", "delete"] as const;
+
 // RECOMMENDATION_SCENES 定义共享常量。
 export const RECOMMENDATION_SCENES = ["hover", "selected_text", "idle", "error"] as const;
 
@@ -160,6 +164,8 @@ export type ThemeMode = (typeof THEME_MODES)[number];
 export type PositionMode = (typeof POSITION_MODES)[number];
 // TodoStatus 定义当前模块的数据结构。
 export type TodoStatus = (typeof TODO_STATUSES)[number];
+// NotepadAction 定义当前模块的数据结构。
+export type NotepadAction = (typeof NOTEPAD_ACTIONS)[number];
 // RecommendationScene 定义当前模块的数据结构。
 export type RecommendationScene = (typeof RECOMMENDATION_SCENES)[number];
 // RecommendationFeedback 定义当前模块的数据结构。
@@ -244,6 +250,16 @@ export interface Artifact {
   mime_type: string;
 }
 
+// TodoResource 定义 notes 详情里相关资料的最小稳定结构。
+export interface TodoResource {
+  resource_id: string;
+  label: string;
+  path: string;
+  resource_type: string;
+  open_action?: DeliveryType | null;
+  open_payload?: DeliveryPayload | null;
+}
+
 // TodoItem 定义当前模块的接口约束。
 export interface TodoItem {
   item_id: string;
@@ -253,6 +269,16 @@ export interface TodoItem {
   type: string;
   due_at: string | null;
   agent_suggestion: string | null;
+  recurring_enabled?: boolean;
+  note_text?: string | null;
+  prerequisite?: string | null;
+  repeat_rule?: string | null;
+  next_occurrence_at?: string | null;
+  recent_instance_status?: string | null;
+  effective_scope?: string | null;
+  ended_at?: string | null;
+  related_resources?: TodoResource[];
+  linked_task_id?: string | null;
 }
 
 // RecurringRule 定义当前模块的接口约束。

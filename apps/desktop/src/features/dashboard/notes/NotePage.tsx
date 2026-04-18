@@ -1,24 +1,37 @@
+/**
+ * Note dashboard page keeps nearby notes, future arrangements, and recurring
+ * reminders grouped for quick conversion into formal tasks.
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useUnmount } from "ahooks";
 import type { CSSProperties } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { useMutation, useQueries } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, CircleDashed, NotebookPen, RefreshCcw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import type { NotepadAction } from "@cialloclaw/protocol";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
-import { convertNoteToTask, loadNoteBucket, type NotePageDataMode } from "./notePage.service";
+import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import type { NoteDetailAction, NoteListItem } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NotePreviewCard } from "./components/NotePreviewCard";
 import { NotePreviewSection } from "./components/NotePreviewSection";
 import "./notePage.css";
 
+/**
+ * Renders the note dashboard page and coordinates note selection, feedback, and
+ * lightweight conversion actions.
+ *
+ * @returns The note dashboard route content.
+ */
 export function NotePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showMoreClosed, setShowMoreClosed] = useState(false);
@@ -93,6 +106,11 @@ export function NotePage() {
     "--note-copy": "rgba(95, 84, 75, 0.68)",
   } as CSSProperties;
 
+  /**
+   * Shows short-lived feedback after placeholder actions and conversion flows.
+   *
+   * @param message User-facing feedback copy to render in the page chrome.
+   */
   function showFeedback(message: string) {
     setFeedback(message);
     if (feedbackTimeoutRef.current) {
@@ -103,7 +121,14 @@ export function NotePage() {
 
   const convertMutation = useMutation({
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
-    onSuccess: (outcome) => {
+    onSuccess: async (outcome) => {
+      await Promise.all(
+        outcome.result.refresh_groups.map((group) =>
+          queryClient.invalidateQueries({
+            queryKey: ["dashboard", "notes", "bucket", dataMode, group],
+          }),
+        ),
+      );
       showFeedback("已为这条事项生成任务，正在跳转到任务页。");
       navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: outcome.result.task.task_id, openDetail: true } });
     },
@@ -112,6 +137,60 @@ export function NotePage() {
       showFeedback(`转交给 Agent 失败：${message}`);
     },
   });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ action, itemId }: { action: NotepadAction; itemId: string }) => updateNote(itemId, action, dataMode),
+    onSuccess: async (outcome, variables) => {
+      await Promise.all(
+        outcome.result.refresh_groups.map((group) =>
+          queryClient.invalidateQueries({
+            queryKey: ["dashboard", "notes", "bucket", dataMode, group],
+          }),
+        ),
+      );
+
+      const feedbackByAction: Record<NotepadAction, string> = {
+        cancel: "已取消这条事项。",
+        cancel_recurring: "已取消整个重复规则。",
+        complete: "已将事项标记为完成。",
+        delete: "已删除这条记录。",
+        move_upcoming: "已提前到近期要做。",
+        restore: "已恢复为未完成事项。",
+        toggle_recurring:
+          outcome.result.notepad_item?.recurring_enabled === false ? "已暂停重复规则。" : "已重新开启重复规则。",
+      };
+
+      showFeedback(feedbackByAction[variables.action]);
+      if (!outcome.result.notepad_item && outcome.result.deleted_item_id === selectedItem?.item.item_id) {
+        setDetailOpen(false);
+      }
+    },
+    onError: (error, variables) => {
+      const message = error instanceof Error ? error.message : "事项更新失败，请稍后再试。";
+      showFeedback(`事项更新失败（${variables.action}）：${message}`);
+    },
+  });
+
+  function mapActionToMutation(action: NoteDetailAction): NotepadAction | null {
+    switch (action) {
+      case "complete":
+        return "complete";
+      case "cancel":
+        return "cancel";
+      case "move-upcoming":
+        return "move_upcoming";
+      case "toggle-recurring":
+        return "toggle_recurring";
+      case "cancel-recurring":
+        return "cancel_recurring";
+      case "restore":
+        return "restore";
+      case "delete":
+        return "delete";
+      default:
+        return null;
+    }
+  }
 
   function handleDetailAction(action: NoteDetailAction) {
     if (!selectedItem) {
@@ -123,20 +202,48 @@ export function NotePage() {
       return;
     }
 
-    const placeholders: Record<Exclude<NoteDetailAction, "convert-to-task">, string> = {
-      cancel: "取消本次事项的真实动作稍后接入。",
-      "cancel-recurring": "取消整个重复事项的真实动作稍后接入。",
-      complete: "标记完成的真实动作稍后接入。",
-      delete: "删除记录的真实动作稍后接入。",
-      edit: "编辑能力稍后接入。",
-      "move-upcoming": "提前到近期要做的真实动作稍后接入。",
-      "open-resource": "当前先展示相关资料入口，后续再接稳定的打开能力。",
-      restore: "恢复为未完成的真实动作稍后接入。",
-      "skip-once": "跳过本次的真实动作稍后接入。",
-      "toggle-recurring": "重复规则开关的真实动作稍后接入。",
-    };
+    if (action === "open-resource") {
+      const firstResource = selectedItem.experience.relatedResources[0];
+      if (!firstResource) {
+        showFeedback("当前没有可打开的相关资料。");
+        return;
+      }
+      void handleResourceOpen(firstResource.id);
+      return;
+    }
 
-    showFeedback(placeholders[action]);
+    const mutationAction = mapActionToMutation(action);
+    if (mutationAction) {
+      updateMutation.mutate({
+        action: mutationAction,
+        itemId: selectedItem.item.item_id,
+      });
+      return;
+    }
+
+    const placeholderMessage = action === "edit" ? "编辑能力稍后接入。" : "跳过本次的真实动作稍后接入。";
+    showFeedback(placeholderMessage);
+  }
+
+  async function handleResourceOpen(resourceId: string) {
+    if (!selectedItem) {
+      return;
+    }
+
+    const resource = selectedItem.experience.relatedResources.find((item) => item.id === resourceId);
+    if (!resource) {
+      showFeedback("未找到对应的相关资料。");
+      return;
+    }
+
+    const plan = resolveNoteResourceOpenExecutionPlan(resource);
+    if (plan.mode === "task_detail" && plan.taskId) {
+      navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: plan.taskId, openDetail: true } });
+      showFeedback(plan.feedback);
+      return;
+    }
+
+    showFeedback(await performNoteResourceOpenExecution(plan));
   }
 
   useEffect(() => {
@@ -155,13 +262,11 @@ export function NotePage() {
     }
   }, [allItems, closedItems, laterItems, recurringItems, selectedItemId, upcomingItems]);
 
-  useEffect(() => {
-    return () => {
-      if (feedbackTimeoutRef.current) {
-        window.clearTimeout(feedbackTimeoutRef.current);
-      }
-    };
-  }, []);
+  useUnmount(() => {
+    if (feedbackTimeoutRef.current) {
+      window.clearTimeout(feedbackTimeoutRef.current);
+    }
+  });
 
   const queryErrors = [
     { label: "近期要做", error: upcomingQuery.error },
@@ -330,7 +435,7 @@ export function NotePage() {
                   initial={{ opacity: 0, scale: 0.98, y: 16 }}
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} />
+                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} onResourceOpen={handleResourceOpen} />
                 </motion.div>
               </>
             ) : null}

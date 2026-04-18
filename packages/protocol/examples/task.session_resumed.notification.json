@@ -1,0 +1,7 @@
+{
+  "jsonrpc": "2.0",
+  "method": "task.session_resumed",
+  "params": {
+    "task_id": "task_002"
+  }
+}

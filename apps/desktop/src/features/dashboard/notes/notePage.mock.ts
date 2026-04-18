@@ -1,5 +1,5 @@
 import type { TodoItem } from "@cialloclaw/protocol";
-import type { NoteBucketsData, NoteConvertOutcome, NoteDetailExperience, NoteListItem } from "./notePage.types";
+import type { NoteBucketsData, NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteUpdateOutcome } from "./notePage.types";
 
 const now = Date.now();
 const HOUR = 1000 * 60 * 60;
@@ -109,8 +109,8 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这次周报想先把固定结构整理干净，后续每周只需要替换数据与结论。",
     prerequisite: "先确认这周重点结论和图表截图已经齐全。",
     relatedResources: [
-      { id: "res_001", label: "上周周报模板", path: "workspace/templates/weekly-report.md", type: "模板" },
-      { id: "res_002", label: "本周数据草稿", path: "workspace/drafts/weekly-report-data.md", type: "草稿" },
+      { id: "res_001", label: "上周周报模板", path: "workspace/templates/weekly-report.md", type: "模板", openAction: "copy_path", taskId: null, url: null },
+      { id: "res_002", label: "本周数据草稿", path: "workspace/drafts/weekly-report-data.md", type: "草稿", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -137,7 +137,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "主要是确认长按语音、事件球调度和入口球拖动这三块的视觉打磨排期。",
     prerequisite: "先整理出想确认的 3 个问题和期望结果。",
     relatedResources: [
-      { id: "res_003", label: "首页交互说明", path: "docs/home-interaction-notes.md", type: "说明" },
+      { id: "res_003", label: "首页交互说明", path: "docs/home-interaction-notes.md", type: "说明", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -164,7 +164,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "当前风险摘要仍然偏技术表达，需要再压缩成更容易理解的一版。",
     prerequisite: "先明确今天最重要的风险提示语气。",
     relatedResources: [
-      { id: "res_004", label: "安全页草稿", path: "apps/desktop/src/features/dashboard/safety/SecurityApp.tsx", type: "页面" },
+      { id: "res_004", label: "安全页草稿", path: "apps/desktop/src/features/dashboard/safety/SecurityApp.tsx", type: "页面", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -191,7 +191,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这件事已记下，但不需要现在处理，等本月 dashboard 子页样式稳定后再统一梳理。",
     prerequisite: "先积累任务页、便签页、镜子页的视觉 token。",
     relatedResources: [
-      { id: "res_005", label: "UI token 草稿", path: "docs/ui-token-notes.md", type: "草稿" },
+      { id: "res_005", label: "UI token 草稿", path: "docs/ui-token-notes.md", type: "草稿", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -218,7 +218,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "跨页联动的演示要等镜子页和任务页都稳定之后再做。",
     prerequisite: "镜子页、任务页交互和样式都已收口。",
     relatedResources: [
-      { id: "res_006", label: "镜子页入口", path: "apps/desktop/src/features/dashboard/memory/MirrorApp.tsx", type: "页面" },
+      { id: "res_006", label: "镜子页入口", path: "apps/desktop/src/features/dashboard/memory/MirrorApp.tsx", type: "页面", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -245,7 +245,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "每周一固定整理一次周报，若当天进入处理窗口，就会在“近期要做”中生成当天实例。",
     prerequisite: "周日晚上或周一早上先汇总本周数据。",
     relatedResources: [
-      { id: "res_007", label: "周报模板", path: "workspace/templates/weekly-report.md", type: "模板" },
+      { id: "res_007", label: "周报模板", path: "workspace/templates/weekly-report.md", type: "模板", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "流程化建议",
@@ -272,7 +272,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "每天 09:00 做一轮邮件巡检，重要邮件进入近期要做，其余归档。",
     prerequisite: "需要邮箱接入和当前白名单规则已生效。",
     relatedResources: [
-      { id: "res_008", label: "邮件巡检说明", path: "docs/mail-inspection.md", type: "说明" },
+      { id: "res_008", label: "邮件巡检说明", path: "docs/mail-inspection.md", type: "说明", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "流程化建议",
@@ -299,7 +299,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这条事项对应的首页交互截图已经完成并归档，可作为后续风格参考。",
     prerequisite: null,
     relatedResources: [
-      { id: "res_009", label: "铃兰截图目录", path: "workspace/exports/lily-home", type: "文件夹" },
+      { id: "res_009", label: "铃兰截图目录", path: "workspace/exports/lily-home", type: "文件夹", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "后续建议",
@@ -326,7 +326,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这件事已取消，原因是当前阶段不适合扩大重构范围。",
     prerequisite: null,
     relatedResources: [
-      { id: "res_010", label: "原型文件清单", path: "docs/prototype-audit.md", type: "清单" },
+      { id: "res_010", label: "原型文件清单", path: "docs/prototype-audit.md", type: "清单", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "后续建议",
@@ -382,6 +382,79 @@ export function runMockConvertNoteToTask(itemId: string): NoteConvertOutcome {
         title: item.title,
         updated_at: new Date().toISOString(),
       },
+      notepad_item: {
+        ...item,
+        linked_task_id: `task_from_${item.item_id}`,
+      },
+      refresh_groups: [item.bucket],
+    },
+    source: "mock",
+  };
+}
+
+export function runMockUpdateNote(itemId: string, action: string): NoteUpdateOutcome {
+  const index = itemsState.findIndex((entry) => entry.item_id === itemId);
+  const item = index >= 0 ? itemsState[index] : itemsState[0];
+  const nowIso = new Date().toISOString();
+  if (!item) {
+    throw new Error(`mock note not found: ${itemId}`);
+  }
+
+  let updatedItem: typeof item | null = { ...item };
+  let refreshGroups: string[] = [item.bucket];
+  let deletedItemId: string | null = null;
+
+  switch (action) {
+    case "complete":
+      updatedItem = { ...updatedItem, bucket: "closed", status: "completed", ended_at: nowIso, due_at: null };
+      refreshGroups = [item.bucket, "closed"];
+      break;
+    case "cancel":
+      updatedItem = { ...updatedItem, bucket: "closed", status: "cancelled", ended_at: nowIso, due_at: null };
+      refreshGroups = [item.bucket, "closed"];
+      break;
+    case "move_upcoming":
+      updatedItem = { ...updatedItem, bucket: "upcoming", status: "normal" };
+      refreshGroups = [item.bucket, "upcoming"];
+      break;
+    case "toggle_recurring":
+      updatedItem = {
+        ...updatedItem,
+        recurring_enabled: !updatedItem.recurring_enabled,
+        status: updatedItem.recurring_enabled ? "cancelled" : "normal",
+        recent_instance_status: updatedItem.recurring_enabled ? "重复规则已暂停" : "重复规则已恢复",
+      };
+      break;
+    case "cancel_recurring":
+      updatedItem = { ...updatedItem, bucket: "closed", status: "cancelled", recurring_enabled: false, ended_at: nowIso };
+      refreshGroups = [item.bucket, "closed"];
+      break;
+    case "restore":
+      updatedItem = { ...updatedItem, bucket: "upcoming", status: "normal", ended_at: null };
+      refreshGroups = [item.bucket, "upcoming"];
+      break;
+    case "delete":
+      updatedItem = null;
+      deletedItemId = itemId;
+      refreshGroups = [item.bucket];
+      break;
+    default:
+      throw new Error(`unsupported mock notepad action: ${action}`);
+  }
+
+  if (index >= 0) {
+    if (updatedItem) {
+      itemsState[index] = updatedItem;
+    } else {
+      itemsState.splice(index, 1);
+    }
+  }
+
+  return {
+    result: {
+      deleted_item_id: deletedItemId,
+      notepad_item: updatedItem,
+      refresh_groups: refreshGroups as Array<"upcoming" | "later" | "recurring_rule" | "closed">,
     },
     source: "mock",
   };

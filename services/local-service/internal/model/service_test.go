@@ -63,9 +63,12 @@ func (m *mockClient) GenerateText(_ context.Context, request GenerateTextRequest
 // TestNewServiceStoresConfig 验证NewServiceStoresConfig。
 func TestNewServiceStoresConfig(t *testing.T) {
 	cfg := config.ModelConfig{
-		Provider: "openai_responses",
-		ModelID:  "gpt-5.4",
-		Endpoint: "https://api.openai.com/v1/responses",
+		Provider:             "openai_responses",
+		ModelID:              "gpt-5.4",
+		Endpoint:             "https://api.openai.com/v1/responses",
+		MaxToolIterations:    6,
+		ContextCompressChars: 3200,
+		ContextKeepRecent:    5,
 	}
 
 	service := NewService(cfg, nil)
@@ -84,6 +87,29 @@ func TestNewServiceStoresConfig(t *testing.T) {
 
 	if service.Descriptor() != "openai_responses:gpt-5.4" {
 		t.Fatalf("descriptor mismatch: got %q", service.Descriptor())
+	}
+	if service.MaxToolIterations() != 6 {
+		t.Fatalf("max tool iterations mismatch: got %d", service.MaxToolIterations())
+	}
+	if service.ContextCompressChars() != 3200 {
+		t.Fatalf("context compress chars mismatch: got %d", service.ContextCompressChars())
+	}
+	if service.ContextKeepRecent() != 5 {
+		t.Fatalf("context keep recent mismatch: got %d", service.ContextKeepRecent())
+	}
+}
+
+func TestNewServiceAppliesLoopConfigDefaults(t *testing.T) {
+	service := NewService(config.ModelConfig{}, nil)
+
+	if service.MaxToolIterations() != defaultMaxToolIterations {
+		t.Fatalf("expected default max tool iterations, got %d", service.MaxToolIterations())
+	}
+	if service.ContextCompressChars() != defaultContextCompressChars {
+		t.Fatalf("expected default compress chars, got %d", service.ContextCompressChars())
+	}
+	if service.ContextKeepRecent() != defaultContextKeepRecent {
+		t.Fatalf("expected default keep recent, got %d", service.ContextKeepRecent())
 	}
 }
 

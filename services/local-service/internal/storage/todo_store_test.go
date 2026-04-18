@@ -12,13 +12,17 @@ import (
 func TestInMemoryTodoStoreReplacesAndLoadsState(t *testing.T) {
 	store := NewInMemoryTodoStore()
 	err := store.ReplaceTodoState(context.Background(), []TodoItemRecord{{
-		ItemID:     "todo_001",
-		Title:      "review notes",
-		Bucket:     "upcoming",
-		Status:     "normal",
-		SourcePath: "workspace/todos/inbox.md",
-		CreatedAt:  "2026-04-20T10:00:00Z",
-		UpdatedAt:  "2026-04-20T10:00:00Z",
+		ItemID:         "todo_001",
+		Title:          "review notes",
+		Bucket:         "upcoming",
+		Status:         "normal",
+		SourcePath:     "workspace/todos/inbox.md",
+		SourceBucket:   "later",
+		PreviousBucket: "later",
+		PreviousDueAt:  "2026-04-21T10:00:00Z",
+		PreviousStatus: "normal",
+		CreatedAt:      "2026-04-20T10:00:00Z",
+		UpdatedAt:      "2026-04-20T10:00:00Z",
 	}}, []RecurringRuleRecord{{
 		RuleID:           "rule_001",
 		ItemID:           "todo_001",
@@ -40,6 +44,9 @@ func TestInMemoryTodoStoreReplacesAndLoadsState(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ItemID != "todo_001" {
 		t.Fatalf("expected one persisted todo item, got %+v", items)
+	}
+	if items[0].PreviousBucket != "later" || items[0].PreviousDueAt != "2026-04-21T10:00:00Z" || items[0].PreviousStatus != "normal" {
+		t.Fatalf("expected previous close metadata to round-trip in memory store, got %+v", items[0])
 	}
 	if len(rules) != 1 || rules[0].RuleID != "rule_001" {
 		t.Fatalf("expected one persisted recurring rule, got %+v", rules)
@@ -80,8 +87,12 @@ func TestSQLiteTodoStorePersistsAndLoadsState(t *testing.T) {
 			Status:               "normal",
 			SourcePath:           "workspace/todos/weekly.md",
 			SourceLine:           1,
+			SourceBucket:         "upcoming",
 			DueAt:                "2026-04-25T10:00:00Z",
 			NoteText:             "review blockers",
+			PreviousBucket:       "upcoming",
+			PreviousDueAt:        "2026-04-25T10:00:00Z",
+			PreviousStatus:       "normal",
 			RelatedResourcesJSON: `[{"id":"res_001","path":"workspace/templates/retro.md"}]`,
 			CreatedAt:            "2026-04-20T10:00:00Z",
 			UpdatedAt:            "2026-04-20T10:00:00Z",
@@ -111,6 +122,9 @@ func TestSQLiteTodoStorePersistsAndLoadsState(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ItemID != "todo_sql_001" || items[0].RelatedResourcesJSON == "" {
 		t.Fatalf("expected sqlite todo item payload to persist, got %+v", items)
+	}
+	if items[0].SourceBucket != "upcoming" || items[0].PreviousBucket != "upcoming" || items[0].PreviousDueAt != "2026-04-25T10:00:00Z" || items[0].PreviousStatus != "normal" {
+		t.Fatalf("expected sqlite todo item close metadata to persist, got %+v", items[0])
 	}
 	if len(rules) != 1 || rules[0].RuleID != "rule_sql_001" || rules[0].NextOccurrenceAt != "2026-05-09T10:00:00Z" {
 		t.Fatalf("expected sqlite recurring rule payload to persist, got %+v", rules)
@@ -150,6 +164,7 @@ func TestSQLiteTodoStoreMigratesExistingTablesBeforeLoadingAndReplacing(t *testi
 			status TEXT NOT NULL,
 			source_path TEXT,
 			source_line INTEGER,
+			source_bucket TEXT,
 			due_at TEXT,
 			tags_json TEXT,
 			agent_suggestion TEXT,
@@ -198,7 +213,11 @@ func TestSQLiteTodoStoreMigratesExistingTablesBeforeLoadingAndReplacing(t *testi
 		Title:                "legacy todo updated",
 		Bucket:               "later",
 		Status:               "normal",
+		SourceBucket:         "upcoming",
 		NoteText:             "now with richer fields",
+		PreviousBucket:       "upcoming",
+		PreviousDueAt:        "2026-04-21T10:00:00Z",
+		PreviousStatus:       "normal",
 		RelatedResourcesJSON: `[{"id":"res_legacy"}]`,
 		CreatedAt:            "2026-04-20T10:00:00Z",
 		UpdatedAt:            "2026-04-20T12:00:00Z",
@@ -224,7 +243,7 @@ func TestSQLiteTodoStoreMigratesExistingTablesBeforeLoadingAndReplacing(t *testi
 	if err != nil {
 		t.Fatalf("reload migrated todo state failed: %v", err)
 	}
-	if items[0].NoteText != "now with richer fields" || rules[0].RepeatRuleText != "每周一次" {
+	if items[0].NoteText != "now with richer fields" || items[0].SourceBucket != "upcoming" || items[0].PreviousBucket != "upcoming" || items[0].PreviousDueAt != "2026-04-21T10:00:00Z" || items[0].PreviousStatus != "normal" || rules[0].RepeatRuleText != "每周一次" {
 		t.Fatalf("expected migrated schema to support new columns, got items=%+v rules=%+v", items, rules)
 	}
 }

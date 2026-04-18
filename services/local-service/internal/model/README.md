@@ -15,12 +15,12 @@ This module is the only backend entry point for LLM provider access inside `serv
 - Provider: `openai_responses`
 - Request shape: single text input
 - Response shape: single text output
+- Function tool calling with custom function definitions
 - Transport: synchronous HTTP request/response
 
 ## Explicitly Not Supported Yet
 
 - Streaming output
-- Tool calling
 - Multi-modal input
 - Structured JSON output contracts
 - Provider failover or routing strategies
@@ -37,7 +37,7 @@ This module is the only backend entry point for LLM provider access inside `serv
 ## Planned Extension Direction
 
 - Keep `GenerateText` as the stable minimum path
-- Add optional extension interfaces for streaming and tool calling without breaking existing callers
+- Keep optional extension interfaces for streaming and richer tool-calling flows without breaking existing callers
 - Expand provider implementations behind the same module-local abstractions
 
 ## Known Unfrozen Decisions
@@ -86,8 +86,15 @@ The live smoke test stays skipped by default unless `RUN_LIVE_OPENAI_RESPONSES_T
   - `single_task_limit`
   - `daily_limit`
   - `budget_auto_downgrade`
+  - `max_tool_iterations`
+  - `context_compress_chars`
+  - `context_keep_recent`
 - `bootstrap` consumes the config-backed API key instead of directly reading the environment
 - `ServiceConfig.APIKey` remains as a temporary fallback input so the module can migrate without breaking existing tests and callers in one step
+
+The loop-related fields are consumed by the execution layer through `model.Service`
+so the first Agent Loop runtime remains configurable without wiring a second
+parallel config object through every caller.
 
 ## Secret Integration Boundary
 

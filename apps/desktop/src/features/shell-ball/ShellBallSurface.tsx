@@ -15,7 +15,10 @@ type ShellBallSurfaceProps = {
   voiceHoldProgress?: number;
   inputFocused?: boolean;
   motionConfig: ShellBallMotionConfig;
-  onDragStart: () => void;
+  onDragStart: (event: PointerEvent<HTMLButtonElement>) => void;
+  onDragMove: (event: PointerEvent<HTMLButtonElement>) => void;
+  onDragEnd: (event: PointerEvent<HTMLButtonElement>) => void;
+  onDragCancel: (event: PointerEvent<HTMLButtonElement>) => void;
   onPrimaryClick: () => void;
   onDoubleClick: () => void;
   onRegionEnter: () => void;
@@ -84,6 +87,9 @@ export function ShellBallSurface({
   inputFocused = false,
   motionConfig,
   onDragStart,
+  onDragMove,
+  onDragEnd,
+  onDragCancel,
   onPrimaryClick,
   onDoubleClick,
   onRegionEnter,
@@ -170,6 +176,9 @@ export function ShellBallSurface({
                     onPrimaryClick={onPrimaryClick}
                     onDoubleClick={onDoubleClick}
                     onHotspotDragStart={onDragStart}
+                    onHotspotDragMove={onDragMove}
+                    onHotspotDragEnd={onDragEnd}
+                    onHotspotDragCancel={onDragCancel}
                     onPressStart={onPressStart}
                     onPressMove={onPressMove}
                     onPressEnd={onPressEnd}

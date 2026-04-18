@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 )
 
 func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
@@ -36,6 +38,18 @@ func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	}
 	if records[0].TaskID != record.TaskID || records[0].RunID != record.RunID {
 		t.Fatalf("unexpected task run record: %+v", records[0])
+	}
+
+	if err := store.DeleteTaskRun(context.Background(), record.TaskID); err != nil {
+		t.Fatalf("DeleteTaskRun returned error: %v", err)
+	}
+
+	records, err = store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns after delete returned error: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected task run record to be deleted, got %d records", len(records))
 	}
 }
 
@@ -105,6 +119,18 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if len(records[0].Notifications) != 1 || records[0].Notifications[0].Method != "task.updated" {
 		t.Fatalf("expected notifications to round-trip, got %+v", records[0].Notifications)
 	}
+
+	if err := store.DeleteTaskRun(context.Background(), taskID); err != nil {
+		t.Fatalf("DeleteTaskRun returned error: %v", err)
+	}
+
+	records, err = store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns after delete returned error: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected sqlite task run record to be deleted, got %d records", len(records))
+	}
 }
 
 func TestSQLiteTaskRunStoreRejectsInvalidRecord(t *testing.T) {
@@ -154,6 +180,18 @@ func sampleTaskRunRecord() TaskRunRecord {
 		BubbleMessage:  map[string]any{"task_id": "task_001", "type": "result", "text": "completed"},
 		DeliveryResult: map[string]any{"type": "workspace_document", "payload": map[string]any{"path": "workspace/result.md"}},
 		Artifacts:      []map[string]any{{"artifact_id": "art_001", "task_id": "task_001"}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:        "floating_ball",
+			Trigger:       "hover_text_input",
+			InputType:     "text",
+			InputMode:     "text",
+			Text:          "sample input",
+			SelectionText: "selected text",
+			Files:         []string{"workspace/input.md"},
+			PageTitle:     "Sample Page",
+			PageURL:       "https://example.com",
+			AppName:       "browser",
+		},
 		MirrorReferences: []map[string]any{{
 			"memory_id": "mem_001",
 		}},

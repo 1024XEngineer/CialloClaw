@@ -7,7 +7,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
-func TestEngineNotepadListProjectsProtocolShapeOnly(t *testing.T) {
+func TestEngineNotepadListProjectsExpandedProtocolShape(t *testing.T) {
 	engine := NewEngine()
 	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	engine.now = func() time.Time { return now }
@@ -36,11 +36,15 @@ func TestEngineNotepadListProjectsProtocolShapeOnly(t *testing.T) {
 	if items[0]["status"] != "due_today" {
 		t.Fatalf("expected projected item to keep normalized status, got %+v", items[0])
 	}
-	if _, ok := items[0]["note_text"]; ok {
-		t.Fatalf("expected list projection to omit internal note_text, got %+v", items[0])
+	if items[0]["note_text"] != "这是内部详情正文，不应直接泄漏到 TodoItem 列表。" {
+		t.Fatalf("expected list projection to expose protocol note_text, got %+v", items[0])
 	}
-	if _, ok := items[0]["related_resources"]; ok {
-		t.Fatalf("expected list projection to omit internal related_resources, got %+v", items[0])
+	resources, ok := items[0]["related_resources"].([]map[string]any)
+	if !ok || len(resources) != 1 {
+		t.Fatalf("expected list projection to expose related_resources, got %+v", items[0]["related_resources"])
+	}
+	if resources[0]["resource_id"] != "res_protocol" || resources[0]["open_action"] != "reveal_in_folder" {
+		t.Fatalf("expected projected resource shape to match protocol contract, got %+v", resources[0])
 	}
 
 	detail, ok := engine.NotepadItem("todo_protocol_only")
@@ -50,7 +54,7 @@ func TestEngineNotepadListProjectsProtocolShapeOnly(t *testing.T) {
 	if detail["note_text"] == nil || detail["planned_at"] == nil {
 		t.Fatalf("expected internal detail fields to be preserved, got %+v", detail)
 	}
-	resources, ok := detail["related_resources"].([]map[string]any)
+	resources, ok = detail["related_resources"].([]map[string]any)
 	if !ok || len(resources) != 1 {
 		t.Fatalf("expected internal related resources to stay available, got %+v", detail["related_resources"])
 	}
@@ -278,6 +282,172 @@ func TestEngineCompleteNotepadItemPersistsThroughTodoStore(t *testing.T) {
 	detail, ok := reloaded.NotepadItem("todo_complete_persist")
 	if !ok || detail["bucket"] != notepadBucketClosed || detail["status"] != "completed" {
 		t.Fatalf("expected completed note to persist across reload, got %+v ok=%v", detail, ok)
+	}
+}
+
+func TestEngineRestoreNotepadItemPersistsLatestClosedStateAcrossReloads(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	plannedAt := now.Add(48 * time.Hour).Format(time.RFC3339)
+
+	engine, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine with store failed: %v", err)
+	}
+	engine.now = func() time.Time { return now }
+	if err := engine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":    "todo_restore_reload",
+		"title":      "persist restore metadata",
+		"bucket":     notepadBucketLater,
+		"status":     "normal",
+		"type":       "one_time",
+		"planned_at": plannedAt,
+		"due_at":     plannedAt,
+		"created_at": now.Format(time.RFC3339),
+		"updated_at": now.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatalf("sync notepad items failed: %v", err)
+	}
+	if completed, ok := engine.CompleteNotepadItem("todo_restore_reload"); !ok || completed["previous_bucket"] != notepadBucketLater {
+		t.Fatalf("expected initial close to preserve previous bucket, got %+v ok=%v", completed, ok)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+	restored, ok := reloaded.RestoreNotepadItem("todo_restore_reload")
+	if !ok || restored["bucket"] != notepadBucketLater || restored["status"] != "normal" || restored["due_at"] != plannedAt {
+		t.Fatalf("expected restore after reload to recover latest closed state, got %+v ok=%v", restored, ok)
+	}
+	moved, refreshGroups, deletedItemID, handled, err := reloaded.UpdateNotepadItem("todo_restore_reload", "move_upcoming")
+	if err != nil || !handled || deletedItemID != "" {
+		t.Fatalf("move_upcoming after restore failed, handled=%v deleted=%q err=%v", handled, deletedItemID, err)
+	}
+	if moved["bucket"] != notepadBucketUpcoming || len(refreshGroups) != 2 {
+		t.Fatalf("expected move_upcoming to change bucket before re-close, got %+v refresh=%+v", moved, refreshGroups)
+	}
+	if cancelled, ok := reloaded.CancelNotepadItem("todo_restore_reload"); !ok || cancelled["previous_bucket"] != notepadBucketUpcoming {
+		t.Fatalf("expected re-close to overwrite previous bucket before reload, got %+v ok=%v", cancelled, ok)
+	}
+
+	reloadedAgain, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new second reload engine failed: %v", err)
+	}
+	reloadedAgain.now = func() time.Time { return now }
+	if err := reloadedAgain.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on second reload failed: %v", err)
+	}
+	restoredAgain, ok := reloadedAgain.RestoreNotepadItem("todo_restore_reload")
+	if !ok || restoredAgain["bucket"] != notepadBucketUpcoming || restoredAgain["status"] != "normal" || restoredAgain["due_at"] != plannedAt {
+		t.Fatalf("expected second restore after reload to use latest pre-close state, got %+v ok=%v", restoredAgain, ok)
+	}
+}
+
+func TestEngineLinkNotepadItemTaskPersistsThroughTodoStore(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	engine, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine with store failed: %v", err)
+	}
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	if err := engine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":     "todo_link_persist",
+		"title":       "persist linked task",
+		"bucket":      notepadBucketUpcoming,
+		"status":      "normal",
+		"type":        "one_time",
+		"planned_at":  now.Add(4 * time.Hour).Format(time.RFC3339),
+		"due_at":      now.Add(4 * time.Hour).Format(time.RFC3339),
+		"created_at":  now.Format(time.RFC3339),
+		"updated_at":  now.Format(time.RFC3339),
+		"note_text":   "persist linked task",
+		"source_path": "workspace/todos/inbox.md",
+	}}); err != nil {
+		t.Fatalf("sync notepad items failed: %v", err)
+	}
+	if _, handled, err := engine.ClaimNotepadItemTask("todo_link_persist"); err != nil || !handled {
+		t.Fatalf("claim before link failed, handled=%v err=%v", handled, err)
+	}
+	linked, ok := engine.LinkNotepadItemTask("todo_link_persist", "task_999")
+	if !ok || linked["linked_task_id"] != "task_999" {
+		t.Fatalf("expected linked task id to be written, got %+v ok=%v", linked, ok)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+	detail, ok := reloaded.NotepadItem("todo_link_persist")
+	if !ok || detail["linked_task_id"] != "task_999" {
+		t.Fatalf("expected linked_task_id to persist across reload, got %+v ok=%v", detail, ok)
+	}
+}
+
+func TestEngineUpdateNotepadItemPersistsThroughTodoStore(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	engine, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new engine with store failed: %v", err)
+	}
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	if err := engine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":            "todo_update_persist",
+		"title":              "persist recurring rule",
+		"bucket":             notepadBucketRecurringRule,
+		"status":             "normal",
+		"type":               "recurring",
+		"due_at":             now.Add(24 * time.Hour).Format(time.RFC3339),
+		"next_occurrence_at": now.Add(24 * time.Hour).Format(time.RFC3339),
+		"recurring_enabled":  true,
+		"created_at":         now.Format(time.RFC3339),
+		"updated_at":         now.Format(time.RFC3339),
+		"note_text":          "persist recurring update",
+	}}); err != nil {
+		t.Fatalf("sync notepad items failed: %v", err)
+	}
+	updated, refreshGroups, deletedItemID, handled, err := engine.UpdateNotepadItem("todo_update_persist", "toggle_recurring")
+	if err != nil || !handled {
+		t.Fatalf("toggle recurring failed, handled=%v err=%v", handled, err)
+	}
+	if deletedItemID != "" || len(refreshGroups) != 1 || refreshGroups[0] != notepadBucketRecurringRule {
+		t.Fatalf("unexpected update result, deleted=%q refresh=%+v", deletedItemID, refreshGroups)
+	}
+	if updated["recurring_enabled"] != false {
+		t.Fatalf("expected recurring_enabled=false after toggle, got %+v", updated)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+	detail, ok := reloaded.NotepadItem("todo_update_persist")
+	if !ok || detail["recurring_enabled"] != false || detail["status"] != "cancelled" {
+		t.Fatalf("expected recurring update to persist across reload, got %+v ok=%v", detail, ok)
 	}
 }
 

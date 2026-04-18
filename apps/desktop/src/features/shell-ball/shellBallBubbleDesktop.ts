@@ -12,6 +12,8 @@ export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
   motionHint?: ShellBallBubbleDesktopMotionHint;
+  turnIndex?: number;
+  turnPhase?: number;
 };
 
 export type ShellBallBubbleItem = {

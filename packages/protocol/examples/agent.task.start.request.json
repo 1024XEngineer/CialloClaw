@@ -5,31 +5,31 @@
   "params": {
     "request_meta": {
       "trace_id": "trace_demo_task_start",
-      "client_time": "2026-04-07T10:20:00+08:00"
+      "client_time": "2026-04-07T10:31:00+08:00"
     },
     "session_id": "sess_demo_001",
     "source": "floating_ball",
-    "trigger": "file_drop",
+    "trigger": "text_selected_click",
     "input": {
-      "type": "file",
-      "files": [
-        "D:/CialloClawWorkspace/demo/notes.md"
-      ],
+      "type": "text_selection",
+      "text": "这里放用户选中的文本内容",
       "page_context": {
-        "title": "Notes",
-        "url": "local://notes",
-        "app_name": "editor"
+        "title": "当前页面标题",
+        "url": "local://current-page",
+        "app_name": "browser"
       }
     },
-    "intent": {
-      "name": "summarize",
-      "arguments": {
-        "style": "key_points"
-      }
+    "context": {
+      "selection": {
+        "text": "这里是补充上下文"
+      },
+      "files": [
+        "D:/CialloClawWorkspace/demo/context.md"
+      ]
     },
     "delivery": {
-      "preferred": "workspace_document",
-      "fallback": "bubble"
+      "preferred": "bubble",
+      "fallback": "task_detail"
     }
   }
 }

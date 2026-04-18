@@ -27,15 +27,74 @@ func protocolNotepadItemMap(item map[string]any, now time.Time) map[string]any {
 	}
 
 	result := map[string]any{
-		"item_id":          stringValue(normalized, "item_id", ""),
-		"title":            stringValue(normalized, "title", ""),
-		"bucket":           stringValue(normalized, "bucket", ""),
-		"status":           stringValue(normalized, "status", "normal"),
-		"type":             stringValue(normalized, "type", ""),
-		"agent_suggestion": normalized["agent_suggestion"],
-		"due_at":           normalized["due_at"],
+		"item_id":                stringValue(normalized, "item_id", ""),
+		"title":                  stringValue(normalized, "title", ""),
+		"bucket":                 stringValue(normalized, "bucket", ""),
+		"status":                 stringValue(normalized, "status", "normal"),
+		"type":                   stringValue(normalized, "type", ""),
+		"agent_suggestion":       normalized["agent_suggestion"],
+		"due_at":                 normalized["due_at"],
+		"recurring_enabled":      normalized["recurring_enabled"],
+		"note_text":              normalized["note_text"],
+		"prerequisite":           normalized["prerequisite"],
+		"repeat_rule":            normalized["repeat_rule_text"],
+		"next_occurrence_at":     normalized["next_occurrence_at"],
+		"recent_instance_status": normalized["recent_instance_status"],
+		"effective_scope":        normalized["effective_scope"],
+		"ended_at":               normalized["ended_at"],
+		"related_resources":      protocolNotepadResourceList(normalized["related_resources"]),
+		"linked_task_id":         normalized["linked_task_id"],
 	}
 	return result
+}
+
+func protocolNotepadResourceList(rawValue any) []map[string]any {
+	resources := cloneResourceList(rawValue)
+	if len(resources) == 0 {
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(resources))
+	for _, resource := range resources {
+		projected := map[string]any{
+			"resource_id":   firstNonEmpty(stringValue(resource, "resource_id", ""), stringValue(resource, "id", "")),
+			"label":         stringValue(resource, "label", ""),
+			"path":          stringValue(resource, "path", ""),
+			"resource_type": firstNonEmpty(stringValue(resource, "resource_type", ""), stringValue(resource, "type", "")),
+		}
+
+		if openAction := firstNonEmpty(stringValue(resource, "open_action", ""), resourceTargetKindToOpenAction(stringValue(resource, "target_kind", ""))); openAction != "" {
+			projected["open_action"] = openAction
+		}
+		if payload := protocolNotepadResourcePayload(projected["open_action"], projected["path"].(string)); len(payload) > 0 {
+			projected["open_payload"] = payload
+		}
+		result = append(result, projected)
+	}
+	return result
+}
+
+func resourceTargetKindToOpenAction(targetKind string) string {
+	switch strings.TrimSpace(targetKind) {
+	case "file":
+		return "open_file"
+	case "folder":
+		return "reveal_in_folder"
+	default:
+		return ""
+	}
+}
+
+func protocolNotepadResourcePayload(action any, path string) map[string]any {
+	actionValue, _ := action.(string)
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(actionValue) == "" {
+		return nil
+	}
+	return map[string]any{
+		"path":    path,
+		"task_id": nil,
+		"url":     nil,
+	}
 }
 
 // normalizeNotepadItem enriches the internal note foundation fields that owner
@@ -207,10 +266,13 @@ func (e *Engine) updatedNotepadItem(itemID string) (map[string]any, int, bool) {
 func closeNotepadItem(item map[string]any, status string, now time.Time) {
 	if openBucket := stringValue(item, "bucket", ""); openBucket != "" && openBucket != notepadBucketClosed {
 		item["source_bucket"] = openBucket
+		item["previous_bucket"] = openBucket
 	}
 	if plannedAt := deriveNotepadPlannedAt(item); plannedAt != "" {
 		item["planned_at"] = plannedAt
+		item["previous_due_at"] = plannedAt
 	}
+	item["previous_status"] = stringValue(item, "status", "normal")
 	item["bucket"] = notepadBucketClosed
 	item["status"] = status
 	item["ended_at"] = now.UTC().Format(time.RFC3339)
@@ -222,7 +284,7 @@ func closeNotepadItem(item map[string]any, status string, now time.Time) {
 }
 
 func restoreNotepadItem(item map[string]any, now time.Time) {
-	bucket := stringValue(item, "source_bucket", "")
+	bucket := firstNonEmpty(stringValue(item, "previous_bucket", ""), stringValue(item, "source_bucket", ""))
 	if bucket == "" {
 		if stringValue(item, "type", "") == "recurring" || notepadBoolValue(item, "recurring_enabled", false) {
 			bucket = notepadBucketRecurringRule
@@ -231,7 +293,7 @@ func restoreNotepadItem(item map[string]any, now time.Time) {
 		}
 	}
 	item["bucket"] = bucket
-	item["status"] = "normal"
+	item["status"] = firstNonEmpty(stringValue(item, "previous_status", ""), "normal")
 	item["ended_at"] = nil
 	item["updated_at"] = now.UTC().Format(time.RFC3339)
 	if bucket == notepadBucketRecurringRule {
@@ -240,7 +302,7 @@ func restoreNotepadItem(item map[string]any, now time.Time) {
 		}
 		return
 	}
-	if plannedAt := deriveNotepadPlannedAt(item); plannedAt != "" {
+	if plannedAt := firstNonEmpty(stringValue(item, "previous_due_at", ""), deriveNotepadPlannedAt(item)); plannedAt != "" {
 		item["due_at"] = plannedAt
 	}
 }
@@ -656,6 +718,18 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 			"created_at":       record.CreatedAt,
 			"updated_at":       record.UpdatedAt,
 		}
+		if record.SourceBucket != "" {
+			item["source_bucket"] = record.SourceBucket
+		}
+		if record.PreviousBucket != "" {
+			item["previous_bucket"] = record.PreviousBucket
+		}
+		if record.PreviousDueAt != "" {
+			item["previous_due_at"] = record.PreviousDueAt
+		}
+		if record.PreviousStatus != "" {
+			item["previous_status"] = record.PreviousStatus
+		}
 		if record.LinkedTaskID != "" {
 			item["linked_task_id"] = record.LinkedTaskID
 		}
@@ -707,12 +781,16 @@ func todoItemRecordFromMap(item map[string]any, now time.Time) (storage.TodoItem
 		Status:               stringValue(item, "status", ""),
 		SourcePath:           stringValue(item, "source_path", ""),
 		SourceLine:           itemIntValue(item, "source_line", 0),
+		SourceBucket:         stringValue(item, "source_bucket", ""),
 		DueAt:                stringValue(item, "due_at", ""),
 		TagsJSON:             tagsJSON,
 		AgentSuggestion:      stringValue(item, "agent_suggestion", ""),
 		NoteText:             stringValue(item, "note_text", ""),
 		Prerequisite:         stringValue(item, "prerequisite", ""),
 		PlannedAt:            stringValue(item, "planned_at", ""),
+		PreviousBucket:       stringValue(item, "previous_bucket", ""),
+		PreviousDueAt:        stringValue(item, "previous_due_at", ""),
+		PreviousStatus:       stringValue(item, "previous_status", ""),
 		EndedAt:              stringValue(item, "ended_at", ""),
 		RelatedResourcesJSON: relatedResourcesJSON,
 		LinkedTaskID:         stringValue(item, "linked_task_id", ""),

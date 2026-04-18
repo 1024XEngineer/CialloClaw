@@ -65,11 +65,11 @@ func (s *SQLiteTodoStore) ReplaceTodoState(ctx context.Context, items []TodoItem
 	for _, item := range items {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO todo_items (
-				item_id, title, bucket, status, source_path, source_line, due_at, tags_json,
-				agent_suggestion, note_text, prerequisite, planned_at, ended_at,
+				item_id, title, bucket, status, source_path, source_line, source_bucket, due_at, tags_json,
+				agent_suggestion, note_text, prerequisite, planned_at, previous_bucket, previous_due_at, previous_status, ended_at,
 				related_resources_json, linked_task_id, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, item.ItemID, item.Title, item.Bucket, item.Status, item.SourcePath, item.SourceLine, nullableString(item.DueAt), nullableString(item.TagsJSON), nullableString(item.AgentSuggestion), nullableString(item.NoteText), nullableString(item.Prerequisite), nullableString(item.PlannedAt), nullableString(item.EndedAt), nullableString(item.RelatedResourcesJSON), nullableString(item.LinkedTaskID), item.CreatedAt, item.UpdatedAt); err != nil {
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, item.ItemID, item.Title, item.Bucket, item.Status, item.SourcePath, item.SourceLine, nullableString(item.SourceBucket), nullableString(item.DueAt), nullableString(item.TagsJSON), nullableString(item.AgentSuggestion), nullableString(item.NoteText), nullableString(item.Prerequisite), nullableString(item.PlannedAt), nullableString(item.PreviousBucket), nullableString(item.PreviousDueAt), nullableString(item.PreviousStatus), nullableString(item.EndedAt), nullableString(item.RelatedResourcesJSON), nullableString(item.LinkedTaskID), item.CreatedAt, item.UpdatedAt); err != nil {
 			return fmt.Errorf("insert todo item %s: %w", item.ItemID, err)
 		}
 	}
@@ -99,8 +99,8 @@ func (s *SQLiteTodoStore) ReplaceTodoState(ctx context.Context, items []TodoItem
 // LoadTodoState returns the persisted todo and recurring snapshots.
 func (s *SQLiteTodoStore) LoadTodoState(ctx context.Context) ([]TodoItemRecord, []RecurringRuleRecord, error) {
 	itemRows, err := s.db.QueryContext(ctx, `
-		SELECT item_id, title, bucket, status, source_path, source_line, due_at, tags_json,
-		       agent_suggestion, note_text, prerequisite, planned_at, ended_at,
+		SELECT item_id, title, bucket, status, source_path, source_line, source_bucket, due_at, tags_json,
+		       agent_suggestion, note_text, prerequisite, planned_at, previous_bucket, previous_due_at, previous_status, ended_at,
 		       related_resources_json, linked_task_id, created_at, updated_at
 		FROM todo_items ORDER BY updated_at DESC, item_id DESC
 	`)
@@ -112,21 +112,25 @@ func (s *SQLiteTodoStore) LoadTodoState(ctx context.Context) ([]TodoItemRecord, 
 	items := make([]TodoItemRecord, 0)
 	for itemRows.Next() {
 		var item TodoItemRecord
-		var sourcePath, dueAt, tagsJSON, agentSuggestion, noteText, prerequisite, plannedAt, endedAt, relatedResourcesJSON, linkedTaskID sql.NullString
+		var sourcePath, sourceBucket, dueAt, tagsJSON, agentSuggestion, noteText, prerequisite, plannedAt, previousBucket, previousDueAt, previousStatus, endedAt, relatedResourcesJSON, linkedTaskID sql.NullString
 		var sourceLine sql.NullInt64
-		if err := itemRows.Scan(&item.ItemID, &item.Title, &item.Bucket, &item.Status, &sourcePath, &sourceLine, &dueAt, &tagsJSON, &agentSuggestion, &noteText, &prerequisite, &plannedAt, &endedAt, &relatedResourcesJSON, &linkedTaskID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := itemRows.Scan(&item.ItemID, &item.Title, &item.Bucket, &item.Status, &sourcePath, &sourceLine, &sourceBucket, &dueAt, &tagsJSON, &agentSuggestion, &noteText, &prerequisite, &plannedAt, &previousBucket, &previousDueAt, &previousStatus, &endedAt, &relatedResourcesJSON, &linkedTaskID, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, nil, fmt.Errorf("scan todo item row: %w", err)
 		}
 		item.SourcePath = sourcePath.String
 		if sourceLine.Valid {
 			item.SourceLine = int(sourceLine.Int64)
 		}
+		item.SourceBucket = sourceBucket.String
 		item.DueAt = dueAt.String
 		item.TagsJSON = tagsJSON.String
 		item.AgentSuggestion = agentSuggestion.String
 		item.NoteText = noteText.String
 		item.Prerequisite = prerequisite.String
 		item.PlannedAt = plannedAt.String
+		item.PreviousBucket = previousBucket.String
+		item.PreviousDueAt = previousDueAt.String
+		item.PreviousStatus = previousStatus.String
 		item.EndedAt = endedAt.String
 		item.RelatedResourcesJSON = relatedResourcesJSON.String
 		item.LinkedTaskID = linkedTaskID.String
@@ -198,12 +202,16 @@ func (s *SQLiteTodoStore) initialize(ctx context.Context) error {
 			status TEXT NOT NULL,
 			source_path TEXT,
 			source_line INTEGER,
+			source_bucket TEXT,
 			due_at TEXT,
 			tags_json TEXT,
 			agent_suggestion TEXT,
 			note_text TEXT,
 			prerequisite TEXT,
 			planned_at TEXT,
+			previous_bucket TEXT,
+			previous_due_at TEXT,
+			previous_status TEXT,
 			ended_at TEXT,
 			related_resources_json TEXT,
 			linked_task_id TEXT,
@@ -254,11 +262,15 @@ func (s *SQLiteTodoStore) initialize(ctx context.Context) error {
 
 func (s *SQLiteTodoStore) ensureTodoItemColumns(ctx context.Context) error {
 	requiredColumns := map[string]string{
+		"previous_bucket":        "TEXT",
+		"previous_due_at":        "TEXT",
+		"previous_status":        "TEXT",
 		"note_text":              "TEXT",
 		"prerequisite":           "TEXT",
 		"planned_at":             "TEXT",
 		"ended_at":               "TEXT",
 		"related_resources_json": "TEXT",
+		"source_bucket":          "TEXT",
 	}
 	return s.ensureColumns(ctx, sqliteTodoTableName, requiredColumns)
 }

@@ -9,6 +9,8 @@ import (
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 )
 
+const defaultAgentLoopIntent = "agent_loop"
+
 // Suggestion 定义当前模块的数据结构。
 
 // Suggestion 描述 intent 模块对一次输入给出的最小建议结果。
@@ -100,37 +102,16 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 
 // defaultIntent 处理当前模块的相关逻辑。
 
-// defaultIntent 在前端没有显式传入 intent 时，根据输入对象推断一个默认意图。
-// 这条默认路径服务于 P0 主链路的“先承接，再确认或执行”流程。
+// defaultIntent chooses the minimum default route when the client does not provide
+// an explicit intent payload. The current correction path no longer classifies
+// free-form requests into summarize / translate / explain via keyword matching.
+// Instead, non-trivial inputs fall back to the generic agent loop path.
 func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[string]any {
-	if snapshot.ErrorText != "" || snapshot.InputType == "error" {
-		return intentPayload("explain")
-	}
-
-	if detected := detectIntentFromText(snapshot.Text); detected != "" {
-		return intentPayload(detected)
-	}
-
-	if len(snapshot.Files) > 0 || snapshot.InputType == "file" {
-		return intentPayload("summarize")
-	}
-
-	if snapshot.SelectionText != "" || snapshot.InputType == "text_selection" {
-		if isLongContent(snapshot.SelectionText) {
-			return intentPayload("summarize")
-		}
-		return intentPayload("explain")
-	}
-
-	if isQuestionText(snapshot.Text) {
-		return intentPayload("explain")
-	}
-
 	if shouldConfirmTextGoal(snapshot) {
 		return map[string]any{}
 	}
 
-	return intentPayload("summarize")
+	return intentPayload(defaultAgentLoopIntent)
 }
 
 // buildTaskTitle 处理当前模块的相关逻辑。
@@ -142,6 +123,8 @@ func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intent
 	switch intentName {
 	case "":
 		return "确认处理方式：" + subject
+	case defaultAgentLoopIntent:
+		return "处理：" + subject
 	case "rewrite":
 		return "改写：" + subject
 	case "translate":
@@ -168,6 +151,8 @@ func (s *Service) buildResultTitle(intentName string) string {
 	switch intentName {
 	case "":
 		return "待确认处理方式"
+	case defaultAgentLoopIntent:
+		return "处理结果"
 	case "rewrite":
 		return "改写结果"
 	case "translate":
@@ -186,6 +171,8 @@ func (s *Service) buildResultBubbleText(intentName string) string {
 	switch intentName {
 	case "":
 		return "请先告诉我希望如何处理这段内容。"
+	case defaultAgentLoopIntent:
+		return "结果已经生成，可直接查看。"
 	case "rewrite":
 		return "内容已经按要求改写完成，可直接查看。"
 	case "translate":
@@ -233,6 +220,8 @@ func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName st
 	switch {
 	case intentName == "":
 		return true
+	case intentName == defaultAgentLoopIntent:
+		return false
 	case snapshot.InputType == "file":
 		return true
 	case snapshot.InputType == "text_selection":
@@ -255,11 +244,15 @@ func shouldConfirmTextGoal(snapshot contextsvc.TaskContextSnapshot) bool {
 	if isLongContent(trimmed) || isQuestionText(trimmed) {
 		return false
 	}
-	return utf8.RuneCountInString(trimmed) <= 12
+	return utf8.RuneCountInString(trimmed) <= 4
 }
 
 func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
 	switch intentName {
+	case defaultAgentLoopIntent:
+		if len(snapshot.Files) > 0 || isLongContent(snapshot.SelectionText) || isLongContent(snapshot.Text) {
+			return "workspace_document"
+		}
 	case "rewrite":
 		return "workspace_document"
 	case "summarize":
@@ -281,26 +274,13 @@ func previewForDeliveryType(deliveryType string) string {
 	return "结果已通过气泡返回"
 }
 
-func detectIntentFromText(text string) string {
-	value := strings.ToLower(strings.TrimSpace(text))
-	switch {
-	case value == "":
-		return ""
-	case strings.Contains(value, "总结") || strings.Contains(value, "概括") || strings.HasPrefix(value, "summarize") || strings.HasPrefix(value, "summary"):
-		return "summarize"
-	case strings.Contains(value, "翻译") || strings.HasPrefix(value, "translate") || strings.HasPrefix(value, "翻成"):
-		return "translate"
-	case strings.Contains(value, "改写") || strings.HasPrefix(value, "rewrite") || strings.Contains(value, "润色"):
-		return "rewrite"
-	case strings.Contains(value, "解释") || strings.HasPrefix(value, "explain") || isQuestionText(value):
-		return "explain"
-	default:
-		return ""
-	}
-}
-
 func intentPayload(name string) map[string]any {
 	switch name {
+	case defaultAgentLoopIntent:
+		return map[string]any{
+			"name":      defaultAgentLoopIntent,
+			"arguments": map[string]any{},
+		}
 	case "rewrite":
 		return map[string]any{
 			"name": "rewrite",

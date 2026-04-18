@@ -14,6 +14,7 @@ import type {
   InputType,
   IntentPayload,
   MirrorReference,
+  NotepadAction,
   RecommendationFeedback,
   RecommendationScene,
   RecoveryPoint,
@@ -52,6 +53,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_INSPECTOR_RUN: "agent.task_inspector.run",
   AGENT_NOTEPAD_LIST: "agent.notepad.list",
   AGENT_NOTEPAD_CONVERT_TO_TASK: "agent.notepad.convert_to_task",
+  AGENT_NOTEPAD_UPDATE: "agent.notepad.update",
   AGENT_DASHBOARD_OVERVIEW_GET: "agent.dashboard.overview.get",
   AGENT_DASHBOARD_MODULE_GET: "agent.dashboard.module.get",
   AGENT_MIRROR_OVERVIEW_GET: "agent.mirror.overview.get",
@@ -83,6 +85,8 @@ export const NOTIFICATION_METHODS = {
   TASK_UPDATED: "task.updated",
   DELIVERY_READY: "delivery.ready",
   APPROVAL_PENDING: "approval.pending",
+  TASK_SESSION_QUEUED: "task.session_queued",
+  TASK_SESSION_RESUMED: "task.session_resumed",
   MIRROR_OVERVIEW_UPDATED: "mirror.overview.updated",
   PLUGIN_UPDATED: "plugin.updated",
   PLUGIN_METRIC_UPDATED: "plugin.metric.updated",
@@ -159,6 +163,7 @@ export interface AgentInputSubmitParams {
 export interface AgentInputSubmitResult {
   task: Task;
   bubble_message: BubbleMessage | null;
+  delivery_result: DeliveryResult | null;
 }
 
 // AgentTaskStartParams 定义当前模块的接口约束。
@@ -174,7 +179,7 @@ export interface AgentTaskStartParams {
     page_context?: PageContext;
     error_message?: string;
   };
-  intent?: IntentPayload;
+  context?: InputContext;
   delivery?: DeliveryPreference;
 }
 
@@ -414,6 +419,22 @@ export interface AgentNotepadConvertToTaskParams {
 // AgentNotepadConvertToTaskResult 定义当前模块的接口约束。
 export interface AgentNotepadConvertToTaskResult {
   task: Task;
+  notepad_item: TodoItem;
+  refresh_groups: TodoBucket[];
+}
+
+// AgentNotepadUpdateParams defines the parameters for `agent.notepad.update`.
+export interface AgentNotepadUpdateParams {
+  request_meta: RequestMeta;
+  item_id: string;
+  action: NotepadAction;
+}
+
+// AgentNotepadUpdateResult defines the result for `agent.notepad.update`.
+export interface AgentNotepadUpdateResult {
+  notepad_item: TodoItem | null;
+  refresh_groups: TodoBucket[];
+  deleted_item_id?: string | null;
 }
 
 // AgentDashboardOverviewGetParams 定义当前模块的接口约束。
@@ -621,6 +642,15 @@ export interface DeliveryReadyNotification {
 export interface ApprovalPendingNotification {
   task_id: string;
   approval_request: ApprovalRequest;
+}
+
+export interface TaskSessionQueuedNotification {
+  task_id: string;
+  blocking_task_id: string;
+}
+
+export interface TaskSessionResumedNotification {
+  task_id: string;
 }
 
 export interface MirrorOverviewUpdatedNotification {

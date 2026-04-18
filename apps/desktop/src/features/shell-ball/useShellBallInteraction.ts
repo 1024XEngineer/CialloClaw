@@ -1,10 +1,16 @@
+/**
+ * Shell-ball interaction state owns the floating hover input, voice capture, and
+ * lightweight submission gestures that sit on top of the task-centric backend.
+ */
 import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
+import { useLatest, useUnmount } from "ahooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
+  SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX,
   getShellBallVoicePreviewForHintMode,
   getShellBallVisualStateForTaskStatus,
   SHELL_BALL_LOCKED_CANCEL_HOLD_MS,
@@ -45,6 +51,10 @@ const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
   "service-not-allowed",
 ]);
 
+/**
+ * Describes the normalized submission result shape reused by shell-ball follow-up
+ * UI such as local bubbles and delivery previews.
+ */
 export type ShellBallInputSubmitResult = NonNullable<Awaited<ReturnType<typeof submitTextInput>>> & {
   delivery_result?: {
     type?: string;
@@ -94,10 +104,23 @@ function mergeShellBallPendingFiles(currentPaths: string[], incomingPaths: strin
   return normalizeShellBallPendingFiles([...currentPaths, ...incomingPaths]);
 }
 
+/**
+ * Normalizes dropped text before it is merged into the hover input draft.
+ *
+ * @param text Raw drag-and-drop text payload.
+ * @returns Trimmed text with canonical newlines.
+ */
 export function normalizeShellBallDroppedText(text: string) {
   return text.replace(/\r\n/g, "\n").trim();
 }
 
+/**
+ * Appends dropped text to the current hover-input draft while preserving the
+ * shell-ball formatting rules for empty and multiline drafts.
+ *
+ * @param input Current draft and the dropped text payload.
+ * @returns The next draft value that should be rendered.
+ */
 export function appendShellBallDroppedText(input: {
   currentValue: string;
   droppedText: string;
@@ -119,6 +142,13 @@ export function appendShellBallDroppedText(input: {
   return `${input.currentValue}\n${normalizedDroppedText}`;
 }
 
+/**
+ * Builds the formal `agent.input.submit` payload used by shell-ball text and
+ * voice submissions.
+ *
+ * @param input Trigger metadata together with the draft text to submit.
+ * @returns The normalized RPC payload, or `null` when the draft is empty.
+ */
 export function createShellBallInputSubmitParams(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
@@ -136,6 +166,13 @@ export function createShellBallInputSubmitParams(input: {
   });
 }
 
+/**
+ * Builds the formal `agent.task.start` payload used when shell-ball submission
+ * includes file attachments.
+ *
+ * @param input Draft text plus pending file attachments.
+ * @returns The normalized task-start payload, or `null` when no files exist.
+ */
 export function createShellBallTaskStartParams(input: {
   text: string;
   files: string[];
@@ -222,12 +259,18 @@ export function getShellBallDashboardOpenGesturePolicy(input: {
   return canOpenFromState && !input.interactionConsumed;
 }
 
+/**
+ * Recomputes the active voice gesture preview from the final pointer position.
+ *
+ * @param input Pointer coordinates and the currently armed voice hint mode.
+ * @returns The lock or cancel preview that should remain highlighted.
+ */
 export function getShellBallVoicePreviewFromEvent(input: {
   hintMode: Exclude<ShellBallVoiceHintMode, "hidden">;
   startX: number | null;
   startY: number | null;
-  clientX: number;
-  clientY: number;
+  pointerX: number;
+  pointerY: number;
   fallbackPreview: ShellBallVoicePreview;
 }) {
   if (input.startX === null || input.startY === null) {
@@ -236,8 +279,8 @@ export function getShellBallVoicePreviewFromEvent(input: {
 
   return getShellBallVoicePreviewForHintMode({
     hintMode: input.hintMode,
-    deltaX: input.clientX - input.startX,
-    deltaY: input.clientY - input.startY,
+    deltaX: input.pointerX - input.startX,
+    deltaY: input.pointerY - input.startY,
   });
 }
 
@@ -336,6 +379,12 @@ export function resolveShellBallVoiceRecognitionFinalState(input: {
   };
 }
 
+/**
+ * Owns shell-ball hover input, file intake, and voice capture state while the
+ * mascot stays docked as the near-field desktop entry point.
+ *
+ * @returns The shell-ball interaction view model and event handlers.
+ */
 export function useShellBallInteraction() {
   const visualState = useShellBallStore((state) => state.visualState);
   const setVisualState = useShellBallStore((state) => state.setVisualState);
@@ -356,9 +405,9 @@ export function useShellBallInteraction() {
   const longPressHandleRef = useRef<TimeoutHandle | null>(null);
   const longPressProgressHandleRef = useRef<number | null>(null);
   const longPressStartAtRef = useRef<number | null>(null);
-  const setVisualStateRef = useRef(setVisualState);
+  const setVisualStateRef = useLatest<typeof setVisualState>(setVisualState);
   const controllerRef = useRef<ShellBallInteractionController | null>(null);
-  const inputValueRef = useRef(inputValue);
+  const inputValueRef = useLatest<string>(inputValue);
   const recognitionRef = useRef<ShellBallSpeechRecognition | null>(null);
   const recognitionSessionIdRef = useRef(0);
   const recognitionStopReasonRef = useRef<ShellBallVoiceRecognitionStopReason>("none");
@@ -367,16 +416,13 @@ export function useShellBallInteraction() {
   const voiceTranscriptRef = useRef("");
   const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
 
-  setVisualStateRef.current = setVisualState;
-  inputValueRef.current = inputValue;
-
   if (controllerRef.current === null) {
     controllerRef.current = createShellBallInteractionController({
       initialState: visualState,
       schedule: (callback, ms) =>
         globalThis.setTimeout(() => {
           callback();
-          setVisualStateRef.current(controllerRef.current?.getState() ?? visualState);
+          setVisualStateRef.current?.(controllerRef.current?.getState() ?? visualState);
         }, ms),
       cancel: (handle) => {
         globalThis.clearTimeout(handle as TimeoutHandle);
@@ -460,8 +506,8 @@ export function useShellBallInteraction() {
   }
 
   function getVoicePreviewForPointer(input: {
-    clientX: number;
-    clientY: number;
+    pointerX: number;
+    pointerY: number;
     fallbackPreview: ShellBallVoicePreview;
   }) {
     const hintMode = voiceHintModeRef.current;
@@ -474,8 +520,8 @@ export function useShellBallInteraction() {
       hintMode,
       startX: pressStartXRef.current,
       startY: pressStartYRef.current,
-      clientX: input.clientX,
-      clientY: input.clientY,
+      pointerX: input.pointerX,
+      pointerY: input.pointerY,
       fallbackPreview: input.fallbackPreview,
     });
   }
@@ -772,8 +818,8 @@ export function useShellBallInteraction() {
   function handlePressStart(event: PointerEvent<HTMLButtonElement>) {
     regionActiveRef.current = true;
     resetInteractionConsumed();
-    pressStartXRef.current = event.clientX;
-    pressStartYRef.current = event.clientY;
+    pressStartXRef.current = event.screenX;
+    pressStartYRef.current = event.screenY;
     setCurrentVoicePreview(null);
     clearLongPressTimer();
 
@@ -828,7 +874,7 @@ export function useShellBallInteraction() {
     longPressHandleRef.current = globalThis.setTimeout(() => {
       longPressHandleRef.current = null;
       voiceStartStateRef.current = controllerRef.current?.getState() ?? visualState;
-      voiceBaseDraftRef.current = inputValueRef.current;
+      voiceBaseDraftRef.current = inputValueRef.current ?? "";
       if (longPressProgressHandleRef.current !== null) {
         cancelAnimationFrame(longPressProgressHandleRef.current);
         longPressProgressHandleRef.current = null;
@@ -857,13 +903,23 @@ export function useShellBallInteraction() {
     }
 
     const currentState = controllerRef.current?.getState();
+    if ((currentState === "idle" || currentState === "hover_input") && longPressHandleRef.current !== null) {
+      const driftDistance = Math.hypot(event.screenX - pressStartXRef.current, event.screenY - pressStartYRef.current);
+
+      if (driftDistance > SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX) {
+        clearLongPressTimer();
+      }
+
+      return;
+    }
+
     if (currentState !== "voice_listening" && !(currentState === "voice_locked" && voiceHintModeRef.current === "cancel")) {
       return;
     }
 
     setCurrentVoicePreview(getVoicePreviewForPointer({
-      clientX: event.clientX,
-      clientY: event.clientY,
+      pointerX: event.screenX,
+      pointerY: event.screenY,
       fallbackPreview: voicePreviewRef.current,
     }));
   }
@@ -874,8 +930,8 @@ export function useShellBallInteraction() {
     if (controllerRef.current?.getState() === "voice_listening") {
       consumeInteraction();
       const finalPreview = getVoicePreviewForPointer({
-        clientX: event.clientX,
-        clientY: event.clientY,
+        pointerX: event.screenX,
+        pointerY: event.screenY,
         fallbackPreview: voicePreviewRef.current,
       });
 
@@ -902,8 +958,8 @@ export function useShellBallInteraction() {
     if (controllerRef.current?.getState() === "voice_locked" && voiceHintModeRef.current === "cancel") {
       consumeInteraction();
       const finalPreview = getVoicePreviewForPointer({
-        clientX: event.clientX,
-        clientY: event.clientY,
+        pointerX: event.screenX,
+        pointerY: event.screenY,
         fallbackPreview: voicePreviewRef.current,
       });
 
@@ -967,11 +1023,11 @@ export function useShellBallInteraction() {
 
   function handleDroppedText(text: string) {
     const nextInputValue = appendShellBallDroppedText({
-      currentValue: inputValueRef.current,
+      currentValue: inputValueRef.current ?? "",
       droppedText: text,
     });
 
-    if (nextInputValue === inputValueRef.current) {
+    if (nextInputValue === (inputValueRef.current ?? "")) {
       return;
     }
 
@@ -1015,17 +1071,15 @@ export function useShellBallInteraction() {
     }
   }, [setCurrentVoiceHintMode, visualState]);
 
-  useEffect(() => {
-    return () => {
-      clearLongPressTimer();
-      disposeVoiceRecognition();
-      pressStartXRef.current = null;
-      pressStartYRef.current = null;
-      voicePreviewRef.current = null;
-      voiceHintModeRef.current = "hidden";
-      controllerRef.current?.dispose();
-    };
-  }, [clearLongPressTimer, disposeVoiceRecognition]);
+  useUnmount(() => {
+    clearLongPressTimer();
+    disposeVoiceRecognition();
+    pressStartXRef.current = null;
+    pressStartYRef.current = null;
+    voicePreviewRef.current = null;
+    voiceHintModeRef.current = "hidden";
+    controllerRef.current?.dispose();
+  });
 
   return {
     visualState,

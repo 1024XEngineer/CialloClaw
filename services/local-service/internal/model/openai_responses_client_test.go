@@ -256,6 +256,101 @@ func TestGenerateTextFallsBackToOutputContent(t *testing.T) {
 	}
 }
 
+func TestGenerateToolCallsSuccess(t *testing.T) {
+	type capturedRequest struct {
+		Model      string        `json:"model"`
+		Input      string        `json:"input"`
+		Tools      []interface{} `json:"tools"`
+		ToolChoice string        `json:"tool_choice"`
+	}
+
+	var received capturedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &received); err != nil {
+			t.Fatalf("failed to parse request body: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_tool_123",
+			"model":"gpt-5.4",
+			"output_text":"",
+			"output":[
+				{
+					"type":"function_call",
+					"name":"read_file",
+					"call_id":"call_001",
+					"arguments":"{\"path\":\"notes/todo.md\"}"
+				}
+			],
+			"usage":{"input_tokens":21,"output_tokens":9,"total_tokens":30}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
+		APIKey:     "test-key",
+		Endpoint:   server.URL,
+		ModelID:    "gpt-5.4",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIResponsesClient returned error: %v", err)
+	}
+
+	result, err := client.GenerateToolCalls(context.Background(), ToolCallRequest{
+		TaskID: "task_001",
+		RunID:  "run_001",
+		Input:  "Please inspect the workspace note before answering.",
+		Tools: []ToolDefinition{
+			{
+				Name:        "read_file",
+				Description: "Read a workspace file",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateToolCalls returned error: %v", err)
+	}
+
+	if received.Model != "gpt-5.4" {
+		t.Fatalf("request model mismatch: got %q", received.Model)
+	}
+	if received.Input != "Please inspect the workspace note before answering." {
+		t.Fatalf("request input mismatch: got %q", received.Input)
+	}
+	if received.ToolChoice != "auto" {
+		t.Fatalf("tool choice mismatch: got %q", received.ToolChoice)
+	}
+	if len(received.Tools) != 1 {
+		t.Fatalf("expected one tool definition, got %d", len(received.Tools))
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %+v", result.ToolCalls)
+	}
+	if result.ToolCalls[0].Name != "read_file" {
+		t.Fatalf("unexpected tool name: %+v", result.ToolCalls[0])
+	}
+	if result.ToolCalls[0].Arguments["path"] != "notes/todo.md" {
+		t.Fatalf("unexpected tool arguments: %+v", result.ToolCalls[0].Arguments)
+	}
+	if result.RequestID != "resp_tool_123" {
+		t.Fatalf("request id mismatch: got %q", result.RequestID)
+	}
+}
+
 // TestGenerateTextReturnsHTTPStatusError 验证GenerateTextReturnsHTTPStatusError。
 func TestGenerateTextReturnsHTTPStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

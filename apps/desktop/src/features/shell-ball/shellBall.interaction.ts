@@ -10,6 +10,7 @@ import type { TaskStatus } from "@cialloclaw/protocol";
 export const SHELL_BALL_HOVER_INTENT_MS = 360;
 export const SHELL_BALL_LEAVE_GRACE_MS = 180;
 export const SHELL_BALL_LONG_PRESS_MS = 1000;
+export const SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX = 12;
 export const SHELL_BALL_LOCKED_CANCEL_HOLD_MS = 200;
 export const SHELL_BALL_LOCK_DELTA_PX = 48;
 export const SHELL_BALL_CANCEL_DELTA_PX = 48;

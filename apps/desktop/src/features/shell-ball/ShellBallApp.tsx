@@ -1,4 +1,9 @@
+/**
+ * Shell-ball app renders the floating mascot window and coordinates helper
+ * windows, drag/drop affordances, and dashboard transitions around it.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useEventListener } from "ahooks";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import { useShellBallInteraction } from "./useShellBallInteraction";
@@ -14,7 +19,6 @@ import {
   hideShellBallWindow,
   shellBallWindowLabels,
   showShellBallWindow,
-  startShellBallWindowDragging,
 } from "../../platform/shellBallWindowController";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 
@@ -31,12 +35,26 @@ type ShellBallWindowAnchor = {
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 
+/**
+ * Determines whether the file-drop overlay should be visible for the current
+ * floating ball state.
+ *
+ * @param input File-drop visibility inputs from the ball window.
+ * @returns Whether the overlay should be rendered.
+ */
 export function shouldShowShellBallFileDropOverlay(input: {
   fileDropActive: boolean;
 }) {
   return input.fileDropActive;
 }
 
+/**
+ * Decides when the shell-ball should arm its text drop target without fighting
+ * with file drop or voice-only states.
+ *
+ * @param input Drag and state metadata from the shell-ball window.
+ * @returns Whether text drag affordances should be active.
+ */
 export function shouldArmShellBallTextDropTarget(input: {
   fileDropActive: boolean;
   textDragActive: boolean;
@@ -59,6 +77,12 @@ function waitForAnimationFrame() {
   });
 }
 
+/**
+ * Controls the red text-selection marker that appears above the floating ball.
+ *
+ * @param input Selection availability plus the current shell-ball state.
+ * @returns Whether the marker should be shown.
+ */
 export function shouldShowShellBallSelectionIndicator(input: {
   available: boolean;
   visualState: ShellBallVisualState;
@@ -181,7 +205,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
-  const { rootRef, windowFrame } = useShellBallWindowMetrics({ role: "ball" });
+  const {
+    beginBallWindowPointerDrag,
+    endBallWindowPointerDrag,
+    rootRef,
+    updateBallWindowPointerDrag,
+    windowFrame,
+  } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
@@ -194,6 +224,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }>({
     handleDroppedFiles: () => undefined,
   });
+  const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -357,47 +388,44 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     });
   }, [handleDroppedText]);
 
-  useEffect(() => {
-    const currentWindow = getCurrentWindow();
+  const clearTextDragState = useCallback(() => {
+    setTextDragActive(false);
+  }, []);
 
-    if (currentWindow.label !== shellBallWindowLabels.ball) {
+  const handleWindowTextDrag = useCallback((event: DragEvent) => {
+    if (!shouldAcceptShellBallTextDrop(event.dataTransfer)) {
+      clearTextDragState();
       return;
     }
 
-    function clearTextDragState() {
-      setTextDragActive(false);
+    if (!shouldArmShellBallTextDropTarget({
+      fileDropActive,
+      textDragActive: true,
+      visualState,
+    })) {
+      clearTextDragState();
+      return;
     }
 
-    function handleWindowTextDrag(event: DragEvent) {
-      if (!shouldAcceptShellBallTextDrop(event.dataTransfer)) {
-        clearTextDragState();
-        return;
-      }
+    setTextDragActive(true);
+  }, [clearTextDragState, fileDropActive, visualState]);
 
-      if (!shouldArmShellBallTextDropTarget({
-        fileDropActive,
-        textDragActive: true,
-        visualState,
-      })) {
-        clearTextDragState();
-        return;
-      }
-
-      setTextDragActive(true);
-    }
-
-    window.addEventListener("dragenter", handleWindowTextDrag);
-    window.addEventListener("dragover", handleWindowTextDrag);
-    window.addEventListener("dragleave", clearTextDragState);
-    window.addEventListener("drop", clearTextDragState);
-
-    return () => {
-      window.removeEventListener("dragenter", handleWindowTextDrag);
-      window.removeEventListener("dragover", handleWindowTextDrag);
-      window.removeEventListener("dragleave", clearTextDragState);
-      window.removeEventListener("drop", clearTextDragState);
-    };
-  }, [fileDropActive, visualState]);
+  useEventListener("dragenter", handleWindowTextDrag, {
+    target: shellBallWindowTarget,
+    enable: shellBallWindowTarget !== undefined,
+  });
+  useEventListener("dragover", handleWindowTextDrag, {
+    target: shellBallWindowTarget,
+    enable: shellBallWindowTarget !== undefined,
+  });
+  useEventListener("dragleave", clearTextDragState, {
+    target: shellBallWindowTarget,
+    enable: shellBallWindowTarget !== undefined,
+  });
+  useEventListener("drop", clearTextDragState, {
+    target: shellBallWindowTarget,
+    enable: shellBallWindowTarget !== undefined,
+  });
 
   useEffect(() => {
     if (!fileDropActive && visualState !== "voice_listening" && visualState !== "voice_locked") {
@@ -461,7 +489,9 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
-  dragDropHandlersRef.current = { handleDroppedFiles: handleCoordinatorDroppedFiles };
+  dragDropHandlersRef.current = {
+    handleDroppedFiles: handleCoordinatorDroppedFiles,
+  };
 
   const handleMascotPrimaryAction = useCallback(() => {
     if (selectionPromptActive) {
@@ -495,8 +525,29 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}
       motionConfig={motionConfig}
-      onDragStart={() => {
-        void startShellBallWindowDragging();
+      onDragStart={(event) => {
+        beginBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
+      }}
+      onDragMove={(event) => {
+        updateBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
+      }}
+      onDragEnd={(event) => {
+        void endBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
+      }}
+      onDragCancel={(event) => {
+        void endBallWindowPointerDrag({
+          x: event.screenX,
+          y: event.screenY,
+        });
       }}
       onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}

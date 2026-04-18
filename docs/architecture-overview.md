@@ -87,7 +87,7 @@ flowchart TB
 
 - **桌面入口层** 从悬浮球近场入口开始承接用户动作，在需要完整视图时再进入仪表盘和控制面板；
 - **本地接入层** 负责把所有桌面请求收口成正式方法调用，并维护任务对象、事件通知和状态回流；
-- **任务处理层** 负责把输入装配成正式 `task`，并完成上下文准备、意图判断和运行推进；
+- **任务处理层** 负责把输入装配成正式 `task`，并完成上下文准备、入口判断 / 澄清、规划骨架生成和 Agent Loop 运行推进；
 - **结果与安全层** 位于主链路末端，负责高风险动作确认、正式交付、记忆沉淀、审计记录和恢复点；
 - **存储与能力层** 作为底层支撑，负责结构化真源、模型与工具接入、worker 调度、工作区文件和隔离执行后端。
 
@@ -256,7 +256,7 @@ flowchart TB
 - **方法路由**：负责把稳定的 `agent.*` 方法映射到后端主链路服务；
 - **任务与事件中心**：负责请求对象锚定、`session / task / event` 绑定与状态回流；
 - **查询组装**：负责把任务详情、仪表盘、安全摘要、镜子概览等结果装配为前端可消费对象；
-- **通知订阅**：负责 `task.updated`、`delivery.ready`、`approval.pending` 等事件回流与订阅刷新。
+- **通知订阅**：负责 `task.updated`、`delivery.ready`、`approval.pending`、`task.session_queued`、`task.session_resumed` 等事件回流与订阅刷新。
 
 #### 3.2.4 主要边界
 
@@ -299,7 +299,7 @@ flowchart TB
 - 列表类接口统一返回 `items + page`；
 - 安全类接口统一返回 `approval_request / authorization_record / audit_record / recovery_point` 相关对象；
 - 查询类接口统一返回结构化视图结果，不让前端自行拼装底层对象；
-- 通知类事件统一使用 `task.updated`、`delivery.ready`、`approval.pending` 等正式事件名。
+- 通知类事件统一使用 `task.updated`、`delivery.ready`、`approval.pending`、`task.session_queued`、`task.session_resumed` 等正式事件名。
 
 #### 3.2.7 数据结构
 
@@ -342,7 +342,7 @@ sequenceDiagram
 
 #### 3.3.1 模块功能
 
-任务处理层负责把标准请求组织成正式 `task` 链路，完成任务装配、上下文准备、意图判断和运行推进。当前项目中，这一层的职责已经拆分在 `orchestrator`、`context`、`intent`、`runengine`、`recommendation`、`taskinspector` 等目录中。
+任务处理层负责把标准请求组织成正式 `task` 链路，完成任务装配、上下文准备、入口判断 / 澄清、规划骨架生成和运行推进。当前项目中，这一层的职责已经拆分在 `orchestrator`、`context`、`intent`、`runengine`、`recommendation`、`taskinspector` 等目录中。
 
 #### 3.3.2 子模块图
 
@@ -354,7 +354,7 @@ flowchart TB
         direction TB
         T1[任务编排器]
         T2[上下文准备器]
-        T3[意图判断器]
+        T3[入口判断与规划器]
         T4[运行控制器]
         T5[推荐 / 巡检处理器]
     end
@@ -375,7 +375,7 @@ flowchart TB
 
 - **任务编排器**：负责把接入层请求装配成正式 `task` 主链路输入；
 - **上下文准备器**：负责收集页面、选区、文件、记忆命中、规则和预算信息；
-- **意图判断器**：负责识别任务意图、路由 Blueprint / Prompt 方向和候选步骤骨架；
+- **入口判断与规划器**：负责决定是否需要澄清或确认、生成候选步骤骨架，并把自由输入路由到后续 Agent Loop / ReAct 执行路径；
 - **运行控制器**：负责维护 `task / run / step` 的状态推进和执行循环；
 - **推荐 / 巡检处理器**：负责主动推荐机会判断、任务巡检和事项升级等辅助主链路逻辑。
 
@@ -384,6 +384,7 @@ flowchart TB
 - 该层是唯一正式任务中枢，worker / plugin / sidecar / subagent 不能自持 `task / run` 状态机；
 - 对外产品对象统一围绕 `task` 组织，对内执行对象统一回流到 `run / step / event / tool_call`；
 - 任务处理层只负责把任务推进起来，不单独拥有交付真源和治理真源；
+- 同一 `session` 下的 Agent Loop 执行必须保持串行，后续任务需要通过正式状态与通知进入等待队列，而不是并行抢占同一会话运行时；
 - 所有能力调用结果都必须继续回流到正式对象链，而不是由调用者私自返回给前端。
 
 #### 3.3.5 关键接口
@@ -435,7 +436,7 @@ sequenceDiagram
     participant SAFE as 结果与安全层
 
     ACCESS->>TASK: 标准 task 请求
-    TASK->>TASK: 装配 task + context + intent
+    TASK->>TASK: 装配 task + context + planning entry
     TASK->>SUP: 请求模型 / 工具 / 存储能力
     SUP-->>TASK: 返回执行结果
     TASK->>SAFE: 提交风险、交付和记忆处理请求

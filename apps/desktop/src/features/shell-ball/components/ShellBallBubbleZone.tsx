@@ -6,17 +6,13 @@ import { ShellBallBubbleMessage as ShellBallBubbleMessageView } from "./ShellBal
 type ShellBallBubbleZoneProps = {
   visualState: ShellBallVisualState;
   bubbleItems?: ShellBallBubbleItem[];
-  onCancelIntent?: (taskId: string) => void;
   onDeleteBubble?: (bubbleId: string) => void;
-  onConfirmIntent?: (taskId: string) => void;
   onPinBubble?: (bubbleId: string) => void;
 };
 
 export function ShellBallBubbleZone({
   visualState,
   bubbleItems = [],
-  onCancelIntent,
-  onConfirmIntent,
   onDeleteBubble,
   onPinBubble,
 }: ShellBallBubbleZoneProps) {
@@ -87,8 +83,6 @@ export function ShellBallBubbleZone({
           >
             <ShellBallBubbleMessageView
               item={item}
-              onCancelIntent={onCancelIntent}
-              onConfirmIntent={onConfirmIntent}
               onDelete={onDeleteBubble}
               onPin={onPinBubble}
             />
