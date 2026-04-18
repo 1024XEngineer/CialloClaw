@@ -1,0 +1,40 @@
+{
+  "summaries": [
+    {
+      "memory_summary_id": "mem_beta_001",
+      "task_id": "task_beta_done_001",
+      "run_id": "run_beta_done_001",
+      "summary": "The beta release checklist captured the current install blockers, the first-launch seed expectations, and the minimum release gate for setup.exe.",
+      "created_at": "2026-04-18T15:34:00Z"
+    },
+    {
+      "memory_summary_id": "mem_beta_002",
+      "task_id": "task_beta_done_002",
+      "run_id": "run_beta_done_002",
+      "summary": "The mirror digest captured a calm work rhythm: one active packaging task, one authorization checkpoint, and two completed workspace documents ready for review.",
+      "created_at": "2026-04-18T09:24:00Z"
+    }
+  ],
+  "retrieval_hits": [
+    {
+      "retrieval_hit_id": "hit_beta_001",
+      "task_id": "task_beta_focus_001",
+      "run_id": "run_beta_focus_001",
+      "memory_id": "mem_beta_001",
+      "score": 0.92,
+      "source": "seed_import",
+      "summary": "Use the latest release checklist when validating the installer output.",
+      "created_at": "2026-04-19T08:42:00Z"
+    },
+    {
+      "retrieval_hit_id": "hit_beta_002",
+      "task_id": "task_beta_focus_001",
+      "run_id": "run_beta_focus_001",
+      "memory_id": "mem_beta_002",
+      "score": 0.87,
+      "source": "seed_import",
+      "summary": "Keep the mirror digest aligned with the seeded dashboard and notes copy.",
+      "created_at": "2026-04-19T08:41:00Z"
+    }
+  ]
+}

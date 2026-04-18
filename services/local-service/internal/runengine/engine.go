@@ -1467,7 +1467,14 @@ func (e *Engine) UpdateInspectorConfig(values map[string]any) map[string]any {
 		e.inspector.RemindWhenStale = value
 	}
 
-	return e.InspectorConfig()
+	return map[string]any{
+		"task_sources":           append([]string(nil), e.inspector.TaskSources...),
+		"inspection_interval":    cloneMap(e.inspector.InspectionInterval),
+		"inspect_on_file_change": e.inspector.InspectOnFileChange,
+		"inspect_on_startup":     e.inspector.InspectOnStartup,
+		"remind_before_deadline": e.inspector.RemindBeforeDeadline,
+		"remind_when_stale":      e.inspector.RemindWhenStale,
+	}
 }
 
 // Settings returns the current in-memory settings snapshot.

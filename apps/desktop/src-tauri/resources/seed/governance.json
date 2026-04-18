@@ -1,0 +1,77 @@
+{
+  "approval_requests": [
+    {
+      "approval_id": "approval_beta_001",
+      "task_id": "task_beta_auth_001",
+      "operation_name": "Initialize user data with beta seed content",
+      "risk_level": "red",
+      "target_object": "workspace/reports/beta-release-readiness.md",
+      "reason": "The bundled beta seed needs to copy workspace files and formal task data into the user data directory on first launch.",
+      "status": "pending",
+      "impact_scope": {
+        "files": [
+          "workspace/reports/beta-release-readiness.md",
+          "workspace/todos/inbox.md"
+        ],
+        "out_of_workspace": false,
+        "overwrite_or_delete_risk": false
+      },
+      "created_at": "2026-04-19T08:20:00Z",
+      "updated_at": "2026-04-19T08:28:00Z"
+    }
+  ],
+  "authorization_records": [
+    {
+      "authorization_record_id": "auth_beta_001",
+      "task_id": "task_beta_done_001",
+      "approval_id": "approval_beta_legacy",
+      "decision": "allow_once",
+      "operator": "beta_seed",
+      "remember_rule": false,
+      "created_at": "2026-04-18T15:18:00Z"
+    }
+  ],
+  "audit_records": [
+    {
+      "audit_id": "audit_beta_001",
+      "task_id": "task_beta_done_001",
+      "type": "file",
+      "action": "write_file",
+      "summary": "Published the release checklist into the seeded workspace reports folder.",
+      "target": "workspace/reports/beta-release-readiness.md",
+      "result": "success",
+      "created_at": "2026-04-18T15:34:00Z"
+    },
+    {
+      "audit_id": "audit_beta_002",
+      "task_id": "task_beta_done_002",
+      "type": "delivery",
+      "action": "publish_result",
+      "summary": "Published the mirror daily digest used by the beta dashboard seed.",
+      "target": "workspace/reports/daily-mirror-digest.md",
+      "result": "success",
+      "created_at": "2026-04-18T09:24:00Z"
+    }
+  ],
+  "recovery_points": [
+    {
+      "recovery_point_id": "rp_beta_001",
+      "task_id": "task_beta_auth_001",
+      "summary": "Checkpoint created before importing the bundled beta seed.",
+      "created_at": "2026-04-19T08:18:00Z",
+      "objects": [
+        "workspace/todos/inbox.md",
+        "workspace/reports/beta-release-readiness.md"
+      ]
+    },
+    {
+      "recovery_point_id": "rp_beta_002",
+      "task_id": "task_beta_done_001",
+      "summary": "Checkpoint created before publishing the beta readiness report.",
+      "created_at": "2026-04-18T15:20:00Z",
+      "objects": [
+        "workspace/reports/beta-release-readiness.md"
+      ]
+    }
+  ]
+}

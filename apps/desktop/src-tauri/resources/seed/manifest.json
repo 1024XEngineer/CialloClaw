@@ -1,6 +1,22 @@
 {
   "seed_version": "0.1.0-beta.1",
   "seed_name": "beta_seed",
-  "description": "Beta seed resource scaffold for the Windows installer.",
-  "files": []
+  "description": "Beta seed data for the first Windows installer release.",
+  "todo_state_file": "todo_state.json",
+  "tasks_file": "tasks.json",
+  "memory_file": "memory.json",
+  "governance_file": "governance.json",
+  "settings_file": "settings.json",
+  "workspace_dir": "workspace",
+  "files": [
+    "todo_state.json",
+    "tasks.json",
+    "memory.json",
+    "governance.json",
+    "settings.json",
+    "workspace/todos/inbox.md",
+    "workspace/reports/beta-release-readiness.md",
+    "workspace/reports/daily-mirror-digest.md",
+    "workspace/templates/weekly-report.md"
+  ]
 }

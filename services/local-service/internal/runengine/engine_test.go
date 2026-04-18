@@ -727,6 +727,30 @@ func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
 	}
 }
 
+func TestEngineUpdateInspectorConfigReturnsUpdatedSnapshot(t *testing.T) {
+	engine := NewEngine()
+	updated := engine.UpdateInspectorConfig(map[string]any{
+		"task_sources":           []string{"workspace/todos", "workspace/reports"},
+		"inspection_interval":    map[string]any{"unit": "minute", "value": 30},
+		"inspect_on_file_change": false,
+		"inspect_on_startup":     true,
+		"remind_before_deadline": false,
+		"remind_when_stale":      true,
+	})
+
+	taskSources, ok := updated["task_sources"].([]string)
+	if !ok || len(taskSources) != 2 || taskSources[1] != "workspace/reports" {
+		t.Fatalf("expected updated task_sources snapshot, got %+v", updated)
+	}
+	inspectionInterval, ok := updated["inspection_interval"].(map[string]any)
+	if !ok || inspectionInterval["value"] != 30 {
+		t.Fatalf("expected updated inspection interval snapshot, got %+v", updated)
+	}
+	if updated["inspect_on_file_change"] != false || updated["remind_when_stale"] != true {
+		t.Fatalf("expected updated inspector flags, got %+v", updated)
+	}
+}
+
 func TestEngineNotepadItemsNormalizeAndSortRuntimeState(t *testing.T) {
 	engine := NewEngine()
 	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)

@@ -1,4 +1,4 @@
-// 该文件负责本地服务依赖装配与启动初始化。
+// Package bootstrap wires local-service dependencies and startup defaults.
 package bootstrap
 
 import (
@@ -28,7 +28,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
-// App 定义当前模块的数据结构。
+// App groups the assembled local-service dependencies.
 type App struct {
 	server       *rpc.Server
 	storage      *storage.Service
@@ -39,7 +39,7 @@ type App struct {
 	media        *sidecarclient.MediaWorkerRuntime
 }
 
-// New 创建并返回当前能力。
+// New builds the local-service application graph.
 func New(cfg config.Config) (*App, error) {
 	pathPolicy, err := platform.NewLocalPathPolicy(cfg.WorkspaceRoot)
 	if err != nil {
@@ -47,6 +47,11 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	seedBundle, err := applyBootstrapSeedIfNeeded(cfg, storageService)
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 	auditService := audit.NewService(storageService.AuditWriter())
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -127,6 +132,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = storageService.Close()
 		return nil, err
 	}
+	applyBootstrapRuntimeSettings(runEngine, seedBundle)
 
 	orchestratorService := orchestrator.NewService(
 		contextsvc.NewService(),
@@ -151,7 +157,7 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
-// Start 启动当前能力。
+// Start begins serving the configured local transport endpoints.
 func (a *App) Start(ctx context.Context) error {
 	return a.server.Start(ctx)
 }

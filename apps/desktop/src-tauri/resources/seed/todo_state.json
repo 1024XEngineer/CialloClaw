@@ -1,0 +1,136 @@
+{
+  "items": [
+    {
+      "item_id": "todo_beta_001",
+      "title": "Confirm the beta installer release checklist",
+      "bucket": "upcoming",
+      "status": "due_today",
+      "source_path": "workspace/todos/inbox.md",
+      "source_line": 1,
+      "due_at": "2026-04-19T17:30:00Z",
+      "agent_suggestion": "Open the latest release checklist and confirm the remaining blockers before cutting the installer.",
+      "note_text": "Make sure the packaged desktop shell, bundled local service, and seeded workspace all launch cleanly on a fresh machine.",
+      "prerequisite": "Verify the setup.exe output and confirm the seeded dashboard surfaces are visible after first launch.",
+      "planned_at": "2026-04-19T16:00:00Z",
+      "related_resources": [
+        {
+          "resource_id": "todo_beta_release_checklist",
+          "label": "Beta release checklist",
+          "path": "workspace/reports/beta-release-readiness.md",
+          "resource_type": "file",
+          "open_action": "open_file",
+          "open_payload": {
+            "path": "workspace/reports/beta-release-readiness.md",
+            "task_id": null,
+            "url": null
+          }
+        }
+      ],
+      "created_at": "2026-04-19T08:00:00Z",
+      "updated_at": "2026-04-19T08:35:00Z"
+    },
+    {
+      "item_id": "todo_beta_002",
+      "title": "Polish the first-launch notes and mirror copy",
+      "bucket": "upcoming",
+      "status": "normal",
+      "source_path": "workspace/todos/inbox.md",
+      "source_line": 5,
+      "due_at": "2026-04-20T09:00:00Z",
+      "agent_suggestion": "Reuse the beta mirror digest so notes, dashboard, and mirror all tell the same first-run story.",
+      "note_text": "The first launch should feel intentionally populated rather than demo-empty. Keep the copy calm, useful, and release-oriented.",
+      "prerequisite": "Mirror references and task summaries need to point at the same generated workspace documents.",
+      "planned_at": "2026-04-19T18:00:00Z",
+      "related_resources": [
+        {
+          "resource_id": "todo_beta_mirror_digest",
+          "label": "Mirror digest draft",
+          "path": "workspace/reports/daily-mirror-digest.md",
+          "resource_type": "file",
+          "open_action": "open_file",
+          "open_payload": {
+            "path": "workspace/reports/daily-mirror-digest.md",
+            "task_id": null,
+            "url": null
+          }
+        }
+      ],
+      "created_at": "2026-04-19T08:05:00Z",
+      "updated_at": "2026-04-19T08:32:00Z"
+    },
+    {
+      "item_id": "todo_beta_003",
+      "title": "Collect beta feedback into the next triage round",
+      "bucket": "later",
+      "status": "normal",
+      "source_path": "workspace/todos/inbox.md",
+      "source_line": 9,
+      "due_at": "2026-04-23T10:00:00Z",
+      "agent_suggestion": "Keep the first feedback batch focused on install success, launch health, and seed quality before wider feature requests.",
+      "note_text": "After the beta release lands, collect the first round of install and startup feedback before broadening the roadmap.",
+      "prerequisite": "Wait for at least one full install cycle from a fresh machine and one upgrade rehearsal.",
+      "planned_at": "2026-04-22T15:00:00Z",
+      "created_at": "2026-04-19T08:10:00Z",
+      "updated_at": "2026-04-19T08:20:00Z"
+    },
+    {
+      "item_id": "todo_beta_004",
+      "title": "Review the beta installer metrics every Monday",
+      "bucket": "recurring_rule",
+      "status": "normal",
+      "source_path": "workspace/todos/inbox.md",
+      "source_line": 13,
+      "agent_suggestion": "Use the same review template each Monday so installer regressions are easy to compare across beta drops.",
+      "note_text": "Each Monday, scan installer success, launch health, notes visibility, mirror summary quality, and settings defaults before planning the next beta cut.",
+      "planned_at": "2026-04-21T09:00:00Z",
+      "related_resources": [
+        {
+          "resource_id": "todo_beta_weekly_template",
+          "label": "Weekly review template",
+          "path": "workspace/templates/weekly-report.md",
+          "resource_type": "file",
+          "open_action": "open_file",
+          "open_payload": {
+            "path": "workspace/templates/weekly-report.md",
+            "task_id": null,
+            "url": null
+          }
+        }
+      ],
+      "created_at": "2026-04-19T08:12:00Z",
+      "updated_at": "2026-04-19T08:12:00Z"
+    },
+    {
+      "item_id": "todo_beta_005",
+      "title": "Archive the beta packaging dry run notes",
+      "bucket": "closed",
+      "status": "completed",
+      "source_path": "workspace/todos/inbox.md",
+      "source_line": 17,
+      "due_at": "2026-04-18T18:30:00Z",
+      "agent_suggestion": "Keep the dry run notes nearby so regression reports can reference the original baseline.",
+      "note_text": "The first dry run is already complete and archived for future comparisons.",
+      "planned_at": "2026-04-18T17:00:00Z",
+      "ended_at": "2026-04-18T18:20:00Z",
+      "created_at": "2026-04-18T16:40:00Z",
+      "updated_at": "2026-04-18T18:20:00Z"
+    }
+  ],
+  "rules": [
+    {
+      "rule_id": "rule_beta_004",
+      "item_id": "todo_beta_004",
+      "rule_type": "interval",
+      "interval_value": 1,
+      "interval_unit": "week",
+      "reminder_strategy": "default",
+      "enabled": true,
+      "repeat_rule_text": "Every Monday 09:00",
+      "next_occurrence_at": "2026-04-21T09:00:00Z",
+      "recent_instance_status": "Last review completed",
+      "effective_scope": "Beta release operations",
+      "created_at": "2026-04-19T08:12:00Z",
+      "updated_at": "2026-04-19T08:12:00Z"
+    }
+  ]
+}

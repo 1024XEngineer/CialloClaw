@@ -1,0 +1,408 @@
+{
+  "tasks": [
+    {
+      "task_id": "task_beta_focus_001",
+      "session_id": "sess_beta_release",
+      "run_id": "run_beta_focus_001",
+      "title": "Prepare the beta installer mainline and verify the startup chain",
+      "source_type": "todo",
+      "status": "processing",
+      "intent": {
+        "name": "prepare_beta_bundle",
+        "arguments": {
+          "channel": "beta",
+          "target": "windows-installer"
+        }
+      },
+      "preferred_delivery": "workspace_document",
+      "fallback_delivery": "bubble",
+      "current_step": "package_validation",
+      "current_step_status": "running",
+      "risk_level": "green",
+      "started_at": "2026-04-19T08:30:00Z",
+      "updated_at": "2026-04-19T08:42:00Z",
+      "timeline": [
+        {
+          "step_id": "step_beta_focus_001",
+          "task_id": "task_beta_focus_001",
+          "name": "confirm scope",
+          "status": "completed",
+          "order_index": 1,
+          "input_summary": "Installer scope and seed requirements confirmed.",
+          "output_summary": "The beta package will ship the desktop shell, bundled local service, and seeded workspace."
+        },
+        {
+          "step_id": "step_beta_focus_002",
+          "task_id": "task_beta_focus_001",
+          "name": "validate package chain",
+          "status": "processing",
+          "order_index": 2,
+          "input_summary": "Build scripts and bundle paths are in place.",
+          "output_summary": "Running the installer packaging chain and checking first-launch expectations."
+        }
+      ],
+      "security_summary": {
+        "security_status": "normal",
+        "risk_level": "green",
+        "pending_authorizations": 0,
+        "latest_restore_point": null
+      },
+      "token_usage": {
+        "total_tokens": 13240,
+        "estimated_cost": 1.24
+      },
+      "latest_event": {
+        "event_id": "evt_beta_focus_001",
+        "type": "run.progress",
+        "created_at": "2026-04-19T08:42:00Z",
+        "level": "info"
+      },
+      "latest_tool_call": {
+        "tool_call_id": "tool_beta_focus_001",
+        "tool_name": "exec_command",
+        "status": "success"
+      },
+      "events": [
+        {
+          "event_id": "evt_beta_focus_001",
+          "run_id": "run_beta_focus_001",
+          "task_id": "task_beta_focus_001",
+          "step_id": "step_beta_focus_002",
+          "type": "run.progress",
+          "level": "info",
+          "payload": {
+            "summary": "Installer packaging validation is running.",
+            "task_id": "task_beta_focus_001"
+          },
+          "created_at": "2026-04-19T08:42:00Z"
+        }
+      ]
+    },
+    {
+      "task_id": "task_beta_auth_001",
+      "session_id": "sess_beta_release",
+      "run_id": "run_beta_auth_001",
+      "title": "Authorize the first-launch seed import into the user workspace",
+      "source_type": "dragged_file",
+      "status": "waiting_auth",
+      "intent": {
+        "name": "authorize_seed_import",
+        "arguments": {
+          "target": "user-data-dir"
+        }
+      },
+      "preferred_delivery": "bubble",
+      "fallback_delivery": "bubble",
+      "current_step": "authorization_pending",
+      "current_step_status": "waiting_auth",
+      "risk_level": "red",
+      "started_at": "2026-04-19T08:15:00Z",
+      "updated_at": "2026-04-19T08:28:00Z",
+      "bubble_message": {
+        "bubble_id": "bubble_task_beta_auth_001",
+        "task_id": "task_beta_auth_001",
+        "type": "status",
+        "text": "Seed import is waiting for authorization before the user workspace is initialized.",
+        "pinned": false,
+        "hidden": false,
+        "created_at": "2026-04-19T08:28:00Z"
+      },
+      "approval_request": {
+        "approval_id": "approval_beta_001",
+        "task_id": "task_beta_auth_001",
+        "operation_name": "Initialize user data with beta seed content",
+        "risk_level": "red",
+        "target_object": "workspace/reports/beta-release-readiness.md",
+        "reason": "The first launch needs to copy bundled workspace files and seed formal task data into the user data directory.",
+        "status": "pending",
+        "created_at": "2026-04-19T08:20:00Z"
+      },
+      "impact_scope": {
+        "files": [
+          "workspace/reports/beta-release-readiness.md",
+          "workspace/todos/inbox.md"
+        ],
+        "apps": [
+          "CialloClaw Desktop"
+        ],
+        "out_of_workspace": false,
+        "overwrite_or_delete_risk": false
+      },
+      "security_summary": {
+        "security_status": "pending_confirmation",
+        "risk_level": "red",
+        "pending_authorizations": 1,
+        "latest_restore_point": {
+          "recovery_point_id": "rp_beta_001",
+          "task_id": "task_beta_auth_001",
+          "summary": "Checkpoint created before importing the bundled beta seed.",
+          "created_at": "2026-04-19T08:18:00Z",
+          "objects": [
+            "workspace/todos/inbox.md",
+            "workspace/reports/beta-release-readiness.md"
+          ]
+        }
+      },
+      "token_usage": {
+        "total_tokens": 4820,
+        "estimated_cost": 0.32
+      },
+      "latest_event": {
+        "event_id": "evt_beta_auth_001",
+        "type": "run.waiting_auth",
+        "created_at": "2026-04-19T08:28:00Z",
+        "level": "warn"
+      },
+      "events": [
+        {
+          "event_id": "evt_beta_auth_001",
+          "run_id": "run_beta_auth_001",
+          "task_id": "task_beta_auth_001",
+          "step_id": "",
+          "type": "run.waiting_auth",
+          "level": "warn",
+          "payload": {
+            "summary": "Waiting for authorization before importing beta seed data.",
+            "approval_id": "approval_beta_001"
+          },
+          "created_at": "2026-04-19T08:28:00Z"
+        }
+      ]
+    },
+    {
+      "task_id": "task_beta_done_001",
+      "session_id": "sess_beta_release",
+      "run_id": "run_beta_done_001",
+      "title": "Publish the beta release readiness checklist",
+      "source_type": "selected_text",
+      "status": "completed",
+      "intent": {
+        "name": "publish_release_checklist",
+        "arguments": {
+          "format": "workspace_document"
+        }
+      },
+      "preferred_delivery": "workspace_document",
+      "fallback_delivery": "bubble",
+      "current_step": "delivery_ready",
+      "current_step_status": "completed",
+      "risk_level": "green",
+      "started_at": "2026-04-18T15:10:00Z",
+      "updated_at": "2026-04-18T15:34:00Z",
+      "finished_at": "2026-04-18T15:34:00Z",
+      "timeline": [
+        {
+          "step_id": "step_beta_done_001",
+          "task_id": "task_beta_done_001",
+          "name": "draft checklist",
+          "status": "completed",
+          "order_index": 1,
+          "input_summary": "Collected installer, runtime, and seed launch requirements.",
+          "output_summary": "Drafted the beta release checklist."
+        },
+        {
+          "step_id": "step_beta_done_002",
+          "task_id": "task_beta_done_001",
+          "name": "publish checklist",
+          "status": "completed",
+          "order_index": 2,
+          "input_summary": "Checklist draft approved.",
+          "output_summary": "Published the readiness report into the workspace."
+        }
+      ],
+      "delivery_result_id": "delivery_task_beta_done_001",
+      "delivery_result": {
+        "type": "workspace_document",
+        "title": "Beta release readiness checklist",
+        "payload": {
+          "path": "workspace/reports/beta-release-readiness.md",
+          "url": null,
+          "task_id": "task_beta_done_001"
+        },
+        "preview_text": "The beta checklist is ready for the first installer release review."
+      },
+      "artifacts": [
+        {
+          "artifact_id": "art_task_beta_done_001",
+          "task_id": "task_beta_done_001",
+          "artifact_type": "generated_doc",
+          "title": "beta-release-readiness.md",
+          "path": "workspace/reports/beta-release-readiness.md",
+          "mime_type": "text/markdown",
+          "delivery_type": "workspace_document",
+          "delivery_payload": {
+            "path": "workspace/reports/beta-release-readiness.md",
+            "task_id": "task_beta_done_001"
+          },
+          "created_at": "2026-04-18T15:34:00Z"
+        }
+      ],
+      "audit_records": [
+        {
+          "audit_id": "audit_beta_001",
+          "task_id": "task_beta_done_001",
+          "type": "file",
+          "action": "write_file",
+          "summary": "Published the release checklist into the seeded workspace reports folder.",
+          "target": "workspace/reports/beta-release-readiness.md",
+          "result": "success",
+          "created_at": "2026-04-18T15:34:00Z"
+        }
+      ],
+      "mirror_references": [
+        {
+          "memory_id": "mem_beta_001",
+          "reason": "The latest release checklist captured the main installer blockers.",
+          "summary": "The latest release checklist captured the main installer blockers."
+        }
+      ],
+      "security_summary": {
+        "security_status": "normal",
+        "risk_level": "green",
+        "pending_authorizations": 0,
+        "latest_restore_point": {
+          "recovery_point_id": "rp_beta_002",
+          "task_id": "task_beta_done_001",
+          "summary": "Checkpoint created before publishing the beta readiness report.",
+          "created_at": "2026-04-18T15:20:00Z",
+          "objects": [
+            "workspace/reports/beta-release-readiness.md"
+          ]
+        }
+      },
+      "authorization": {
+        "authorization_record_id": "auth_beta_001",
+        "task_id": "task_beta_done_001",
+        "approval_id": "approval_beta_legacy",
+        "decision": "allow_once",
+        "operator": "beta_seed",
+        "remember_rule": false,
+        "created_at": "2026-04-18T15:18:00Z"
+      },
+      "token_usage": {
+        "total_tokens": 9860,
+        "estimated_cost": 0.71
+      },
+      "latest_event": {
+        "event_id": "evt_beta_done_001",
+        "type": "run.completed",
+        "created_at": "2026-04-18T15:34:00Z",
+        "level": "info"
+      },
+      "events": [
+        {
+          "event_id": "evt_beta_done_001",
+          "run_id": "run_beta_done_001",
+          "task_id": "task_beta_done_001",
+          "step_id": "step_beta_done_002",
+          "type": "run.completed",
+          "level": "info",
+          "payload": {
+            "summary": "Published the beta release readiness checklist.",
+            "path": "workspace/reports/beta-release-readiness.md"
+          },
+          "created_at": "2026-04-18T15:34:00Z"
+        }
+      ]
+    },
+    {
+      "task_id": "task_beta_done_002",
+      "session_id": "sess_beta_release",
+      "run_id": "run_beta_done_002",
+      "title": "Publish the mirror daily digest for the beta dashboard",
+      "source_type": "todo",
+      "status": "completed",
+      "intent": {
+        "name": "publish_mirror_digest",
+        "arguments": {
+          "format": "workspace_document"
+        }
+      },
+      "preferred_delivery": "workspace_document",
+      "fallback_delivery": "bubble",
+      "current_step": "delivery_ready",
+      "current_step_status": "completed",
+      "risk_level": "green",
+      "started_at": "2026-04-18T09:00:00Z",
+      "updated_at": "2026-04-18T09:24:00Z",
+      "finished_at": "2026-04-18T09:24:00Z",
+      "delivery_result_id": "delivery_task_beta_done_002",
+      "delivery_result": {
+        "type": "workspace_document",
+        "title": "Mirror daily digest",
+        "payload": {
+          "path": "workspace/reports/daily-mirror-digest.md",
+          "url": null,
+          "task_id": "task_beta_done_002"
+        },
+        "preview_text": "The mirror digest is ready for the seeded dashboard overview."
+      },
+      "artifacts": [
+        {
+          "artifact_id": "art_task_beta_done_002",
+          "task_id": "task_beta_done_002",
+          "artifact_type": "generated_doc",
+          "title": "daily-mirror-digest.md",
+          "path": "workspace/reports/daily-mirror-digest.md",
+          "mime_type": "text/markdown",
+          "delivery_type": "workspace_document",
+          "delivery_payload": {
+            "path": "workspace/reports/daily-mirror-digest.md",
+            "task_id": "task_beta_done_002"
+          },
+          "created_at": "2026-04-18T09:24:00Z"
+        }
+      ],
+      "audit_records": [
+        {
+          "audit_id": "audit_beta_002",
+          "task_id": "task_beta_done_002",
+          "type": "delivery",
+          "action": "publish_result",
+          "summary": "Published the mirror daily digest used by the beta dashboard seed.",
+          "target": "workspace/reports/daily-mirror-digest.md",
+          "result": "success",
+          "created_at": "2026-04-18T09:24:00Z"
+        }
+      ],
+      "mirror_references": [
+        {
+          "memory_id": "mem_beta_002",
+          "reason": "The mirror digest captured the current beta work rhythm and review cadence.",
+          "summary": "The mirror digest captured the current beta work rhythm and review cadence."
+        }
+      ],
+      "security_summary": {
+        "security_status": "normal",
+        "risk_level": "green",
+        "pending_authorizations": 0,
+        "latest_restore_point": null
+      },
+      "token_usage": {
+        "total_tokens": 7640,
+        "estimated_cost": 0.58
+      },
+      "latest_event": {
+        "event_id": "evt_beta_done_002",
+        "type": "run.completed",
+        "created_at": "2026-04-18T09:24:00Z",
+        "level": "info"
+      },
+      "events": [
+        {
+          "event_id": "evt_beta_done_002",
+          "run_id": "run_beta_done_002",
+          "task_id": "task_beta_done_002",
+          "step_id": "",
+          "type": "run.completed",
+          "level": "info",
+          "payload": {
+            "summary": "Published the mirror daily digest.",
+            "path": "workspace/reports/daily-mirror-digest.md"
+          },
+          "created_at": "2026-04-18T09:24:00Z"
+        }
+      ]
+    }
+  ]
+}
