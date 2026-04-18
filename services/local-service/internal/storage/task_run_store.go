@@ -114,6 +114,9 @@ func (s *InMemoryTaskRunStore) LoadTaskRuns(_ context.Context) ([]TaskRunRecord,
 	return records, nil
 }
 
+// writeStructuredTaskState keeps the new product-facing tasks/task_steps tables
+// in sync with the legacy task_runs snapshot so the migration can stay dual-write
+// until all read paths fully leave the compatibility record_json layer.
 func writeStructuredTaskState(ctx context.Context, taskStore TaskStore, stepStore TaskStepStore, record TaskRunRecord) error {
 	if taskStore != nil {
 		taskRecord, err := taskRecordFromSnapshot(record)
@@ -132,6 +135,8 @@ func writeStructuredTaskState(ctx context.Context, taskStore TaskStore, stepStor
 	return nil
 }
 
+// taskRecordFromSnapshot projects one compatibility snapshot into the formal
+// tasks row while still preserving the full snapshot payload for gradual reads.
 func taskRecordFromSnapshot(record TaskRunRecord) (TaskRecord, error) {
 	intentArgumentsJSON := "{}"
 	if arguments, ok := record.Intent["arguments"]; ok {

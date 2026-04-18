@@ -2136,6 +2136,12 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 	if s.storage == nil {
 		return nil, 0, false
 	}
+	if s.storage.TaskStore() != nil {
+		tasks, total, ok := s.listTasksFromStructuredStorage(group, sortBy, sortOrder, limit, offset)
+		if ok {
+			return tasks, total, true
+		}
+	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil || len(records) == 0 {
 		return nil, 0, false
@@ -2160,9 +2166,45 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 	return tasks[offset:end], total, true
 }
 
+func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
+	records, total, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil, 0, false
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		task, ok := s.structuredTaskRecordToRuntime(record)
+		if !ok {
+			continue
+		}
+		if !matchesTaskGroup(task, group) {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	if len(tasks) == 0 {
+		return nil, 0, false
+	}
+	runengineSortTaskRecords(tasks, sortBy, sortOrder)
+	total = len(tasks)
+	if offset >= total {
+		return []runengine.TaskRecord{}, total, true
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return tasks[offset:end], total, true
+}
+
 func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	if s.storage == nil {
 		return nil
+	}
+	if s.storage.TaskStore() != nil {
+		if tasks := s.loadAllTasksFromStructuredStorage(); len(tasks) > 0 {
+			return tasks
+		}
 	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil || len(records) == 0 {
@@ -2171,6 +2213,22 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
 		tasks = append(tasks, taskRecordFromStorage(record))
+	}
+	return tasks
+}
+
+func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
+	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		task, ok := s.structuredTaskRecordToRuntime(record)
+		if !ok {
+			continue
+		}
+		tasks = append(tasks, task)
 	}
 	return tasks
 }
@@ -2279,6 +2337,11 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 	if s.storage == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
+	if s.storage.TaskStore() != nil {
+		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			return task, true
+		}
+	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil {
 		return runengine.TaskRecord{}, false
@@ -2287,6 +2350,20 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 		if record.TaskID == taskID {
 			return taskRecordFromStorage(record), true
 		}
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
+	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	for _, record := range records {
+		if record.TaskID != taskID {
+			continue
+		}
+		return s.structuredTaskRecordToRuntime(record)
 	}
 	return runengine.TaskRecord{}, false
 }
@@ -2481,6 +2558,86 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		SteeringMessages:  append([]string(nil), record.SteeringMessages...),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
+}
+
+// structuredTaskRecordToRuntime hydrates one task-centric read model from the
+// new first-class tasks/task_steps tables while still honoring snapshot_json as
+// the compatibility bridge during the migration away from task_runs-only reads.
+func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (runengine.TaskRecord, bool) {
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
+		if err == nil {
+			runtime := taskRecordFromStorage(snapshot)
+			if len(runtime.Timeline) == 0 {
+				runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
+			}
+			return runtime, true
+		}
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, record.StartedAt)
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, record.UpdatedAt)
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	var finishedAt *time.Time
+	if strings.TrimSpace(record.FinishedAt) != "" {
+		parsedFinishedAt, err := time.Parse(time.RFC3339Nano, record.FinishedAt)
+		if err == nil {
+			finishedAt = &parsedFinishedAt
+		}
+	}
+	return runengine.TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            map[string]any{"name": record.IntentName},
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         startedAt,
+		UpdatedAt:         updatedAt,
+		FinishedAt:        finishedAt,
+		Timeline:          s.taskTimelineFromStructuredStorage(record.TaskID),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}, true
+}
+
+func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.TaskStepRecord {
+	if s.storage == nil || s.storage.TaskStepStore() == nil {
+		return nil
+	}
+	records, _, err := s.storage.TaskStepStore().ListTaskSteps(context.Background(), taskID, 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	result := make([]runengine.TaskStepRecord, 0, len(records))
+	for _, step := range records {
+		result = append(result, runengine.TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		})
+	}
+	return result
+}
+
+func storageTaskRunRecordFromSnapshotJSON(payload string) (storage.TaskRunRecord, error) {
+	var record storage.TaskRunRecord
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
+		return storage.TaskRunRecord{}, err
+	}
+	return record, nil
 }
 
 func timelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {

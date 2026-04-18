@@ -266,6 +266,11 @@ type countingTaskRunStore struct {
 	loadCalls int
 }
 
+type countingTaskStore struct {
+	base      storage.TaskStore
+	listCalls int
+}
+
 func (s failingTodoStore) ReplaceTodoState(ctx context.Context, items []storage.TodoItemRecord, rules []storage.RecurringRuleRecord) error {
 	if s.replaceErr != nil {
 		return s.replaceErr
@@ -298,6 +303,19 @@ func (s *countingTaskRunStore) SaveTaskRun(ctx context.Context, record storage.T
 func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.TaskRunRecord, error) {
 	s.loadCalls++
 	return s.base.LoadTaskRuns(ctx)
+}
+
+func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
+	return s.base.WriteTask(ctx, record)
+}
+
+func (s *countingTaskStore) DeleteTask(ctx context.Context, taskID string) error {
+	return s.base.DeleteTask(ctx, taskID)
+}
+
+func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]storage.TaskRecord, int, error) {
+	s.listCalls++
+	return s.base.ListTasks(ctx, limit, offset)
 }
 
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -447,6 +465,14 @@ func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.T
 
 	serviceValue := reflect.ValueOf(service).Elem()
 	field := serviceValue.FieldByName("taskRunStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceTaskStore(t *testing.T, service *storage.Service, store storage.TaskStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("taskStore")
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
 }
 
@@ -3757,6 +3783,61 @@ func TestServiceTaskListFallsBackToStoredTaskRuns(t *testing.T) {
 	}
 }
 
+func TestServiceTaskListPrefersStructuredTaskStoreFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored task list from structured store")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_001",
+		SessionID:           "sess_structured",
+		RunID:               "run_structured_001",
+		Title:               "structured finished task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 9, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), "task_structured_001", []storage.TaskStepRecord{{
+		StepID:        "step_structured_001",
+		TaskID:        "task_structured_001",
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != "task_structured_001" {
+		t.Fatalf("expected structured task store fallback item, got %+v", items)
+	}
+}
+
 func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime paging")
 
@@ -4531,16 +4612,16 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	originalStore := service.storage.TaskRunStore()
+	originalStore := service.storage.TaskStore()
 	defer func() {
-		replaceTaskRunStore(t, service.storage, originalStore)
+		replaceTaskStore(t, service.storage, originalStore)
 		if service.storage != nil {
 			_ = service.storage.Close()
 		}
 	}()
 
-	countingStore := &countingTaskRunStore{base: service.storage.TaskRunStore()}
-	replaceTaskRunStore(t, service.storage, countingStore)
+	countingStore := &countingTaskStore{base: service.storage.TaskStore()}
+	replaceTaskStore(t, service.storage, countingStore)
 
 	if _, err := service.StartTask(map[string]any{
 		"session_id": "sess_overview_count",
@@ -4560,28 +4641,33 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 		t.Fatalf("start runtime task failed: %v", err)
 	}
 
-	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
-		TaskID:      "task_dashboard_count",
-		SessionID:   "sess_overview_count",
-		RunID:       "run_dashboard_count",
-		Title:       "stored task for overview count",
-		SourceType:  "hover_input",
-		Status:      "completed",
-		CurrentStep: "deliver_result",
-		RiskLevel:   "green",
-		StartedAt:   time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, 4, 14, 12, 5, 0, 0, time.UTC),
-		FinishedAt:  timePointer(time.Date(2026, 4, 14, 12, 6, 0, 0, time.UTC)),
+	if err := countingStore.WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_dashboard_count",
+		SessionID:           "sess_overview_count",
+		RunID:               "run_dashboard_count",
+		Title:               "stored task for overview count",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 14, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 14, 12, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
 	}); err != nil {
-		t.Fatalf("save task run failed: %v", err)
+		t.Fatalf("write structured task failed: %v", err)
 	}
 
 	if _, err := service.DashboardOverviewGet(map[string]any{}); err != nil {
 		t.Fatalf("dashboard overview failed: %v", err)
 	}
 
-	if countingStore.loadCalls != 1 {
-		t.Fatalf("expected dashboard overview to load stored tasks once per request, got %d", countingStore.loadCalls)
+	if countingStore.listCalls != 1 {
+		t.Fatalf("expected dashboard overview to load structured tasks once per request, got %d", countingStore.listCalls)
 	}
 }
 
@@ -6398,6 +6484,59 @@ func TestServiceTaskDetailGetFallsBackToStoredTaskRun(t *testing.T) {
 	artifacts := detailResult["artifacts"].([]map[string]any)
 	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_task_stored_detail" {
 		t.Fatalf("expected storage-backed artifacts, got %+v", artifacts)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_detail",
+		SessionID:           "sess_structured",
+		RunID:               "run_structured_detail",
+		Title:               "structured detail task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 10, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), "task_structured_detail", []storage.TaskStepRecord{{
+		StepID:        "step_structured_detail",
+		TaskID:        "task_structured_detail",
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_detail"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	task := detailResult["task"].(map[string]any)
+	if task["task_id"] != "task_structured_detail" || task["title"] != "structured detail task" {
+		t.Fatalf("expected structured task detail fallback, got %+v", task)
+	}
+	timeline := detailResult["timeline"].([]map[string]any)
+	if len(timeline) != 1 || timeline[0]["step_id"] != "step_structured_detail" {
+		t.Fatalf("expected structured timeline fallback, got %+v", timeline)
 	}
 }
 
