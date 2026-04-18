@@ -1077,6 +1077,9 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 	if !ok {
 		return TaskRecord{}, false
 	}
+	if record.Status != "waiting_auth" || record.CurrentStep != "waiting_authorization" || len(record.ApprovalRequest) == 0 {
+		return TaskRecord{}, false
+	}
 
 	now := e.now()
 	record.Status = "processing"
@@ -1107,6 +1110,9 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 
 	record, ok := e.tasks[taskID]
 	if !ok {
+		return TaskRecord{}, false
+	}
+	if record.Status != "waiting_auth" || record.CurrentStep != "waiting_authorization" || len(record.ApprovalRequest) == 0 {
 		return TaskRecord{}, false
 	}
 

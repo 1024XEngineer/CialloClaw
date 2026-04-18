@@ -465,6 +465,9 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 	if !ok {
 		return nil, false, ErrTaskNotFound
 	}
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, mapValue(pendingExecution, "impact_scope")); err != nil {
+		return nil, false, err
+	}
 	return map[string]any{
 		"task":            taskMap(updatedTask),
 		"bubble_message":  bubble,
@@ -525,7 +528,95 @@ func (s *Service) resumeQueuedControlledTask(task runengine.TaskRecord) (runengi
 	if !ok {
 		return runengine.TaskRecord{}, true, ErrTaskNotFound
 	}
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, mapValue(pendingExecution, "impact_scope")); err != nil {
+		return runengine.TaskRecord{}, true, err
+	}
 	return updatedTask, true, nil
+}
+
+func (s *Service) persistApprovalRequestState(taskID string, approvalRequest map[string]any, impactScope map[string]any) error {
+	if s.storage == nil {
+		return nil
+	}
+	if err := s.persistApprovalRequest(taskID, approvalRequest, impactScope); err != nil {
+		return fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	return nil
+}
+
+func (s *Service) persistAuthorizationState(taskID string, authorizationRecord map[string]any) error {
+	if s.storage == nil {
+		return nil
+	}
+	if err := s.persistAuthorizationDecision(taskID, authorizationRecord); err != nil {
+		return fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	return nil
+}
+
+func (s *Service) persistApprovalRequest(taskID string, approvalRequest map[string]any, impactScope map[string]any) error {
+	if s == nil || s.storage == nil || len(approvalRequest) == 0 {
+		return nil
+	}
+	impactScopeJSON := ""
+	if len(impactScope) > 0 {
+		if encoded, err := json.Marshal(impactScope); err == nil {
+			impactScopeJSON = string(encoded)
+		}
+	}
+	record := storage.ApprovalRequestRecord{
+		ApprovalID:      stringValue(approvalRequest, "approval_id", ""),
+		TaskID:          firstNonEmptyString(stringValue(approvalRequest, "task_id", ""), taskID),
+		OperationName:   stringValue(approvalRequest, "operation_name", ""),
+		RiskLevel:       stringValue(approvalRequest, "risk_level", ""),
+		TargetObject:    stringValue(approvalRequest, "target_object", ""),
+		Reason:          stringValue(approvalRequest, "reason", ""),
+		Status:          stringValue(approvalRequest, "status", "pending"),
+		ImpactScopeJSON: impactScopeJSON,
+		CreatedAt:       stringValue(approvalRequest, "created_at", time.Now().Format(dateTimeLayout)),
+		UpdatedAt:       firstNonEmptyString(stringValue(approvalRequest, "updated_at", ""), stringValue(approvalRequest, "created_at", time.Now().Format(dateTimeLayout))),
+	}
+	return s.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), record)
+}
+
+func (s *Service) persistAuthorizationDecision(taskID string, authorizationRecord map[string]any) error {
+	if s == nil || s.storage == nil || len(authorizationRecord) == 0 {
+		return nil
+	}
+	approvalID := stringValue(authorizationRecord, "approval_id", "")
+	recordID := stringValue(authorizationRecord, "authorization_record_id", "")
+	if approvalID != "" {
+		recordID = fmt.Sprintf("auth_%s_%d", approvalID, time.Now().UnixNano())
+	}
+	createdAt := stringValue(authorizationRecord, "created_at", time.Now().Format(dateTimeLayout))
+	record := storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: recordID,
+		TaskID:                firstNonEmptyString(stringValue(authorizationRecord, "task_id", ""), taskID),
+		ApprovalID:            approvalID,
+		Decision:              stringValue(authorizationRecord, "decision", ""),
+		Operator:              stringValue(authorizationRecord, "operator", "user"),
+		RememberRule:          boolValue(authorizationRecord, "remember_rule", false),
+		CreatedAt:             createdAt,
+	}
+	decision := record.Decision
+	status := "resolved"
+	if decision == "deny_once" || decision == "deny_always" {
+		status = "denied"
+	} else if decision == "allow_once" || decision == "allow_always" {
+		status = "approved"
+	}
+	return s.storage.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), record, status, createdAt)
+}
+
+func (s *Service) activeApprovalIDForTask(task runengine.TaskRecord) (string, bool) {
+	if task.Status != "waiting_auth" || task.CurrentStep != "waiting_authorization" {
+		return "", false
+	}
+	approvalID := strings.TrimSpace(stringValue(task.ApprovalRequest, "approval_id", ""))
+	if approvalID == "" {
+		return "", false
+	}
+	return approvalID, true
 }
 
 // ConfirmTask handles agent.task.confirm.
@@ -1338,6 +1429,31 @@ func pendingApprovalsFromTasks(tasks []runengine.TaskRecord) []map[string]any {
 	return items
 }
 
+func approvalRequestRecordsToItems(records []storage.ApprovalRequestRecord) []map[string]any {
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		item := map[string]any{
+			"approval_id":    record.ApprovalID,
+			"task_id":        record.TaskID,
+			"operation_name": record.OperationName,
+			"risk_level":     record.RiskLevel,
+			"target_object":  record.TargetObject,
+			"reason":         record.Reason,
+			"status":         record.Status,
+			"created_at":     record.CreatedAt,
+			"updated_at":     record.UpdatedAt,
+		}
+		if strings.TrimSpace(record.ImpactScopeJSON) != "" {
+			var scope map[string]any
+			if err := json.Unmarshal([]byte(record.ImpactScopeJSON), &scope); err == nil && len(scope) > 0 {
+				item["impact_scope"] = scope
+			}
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
 // mergedPendingApprovalTotal prefers the task-centric merged view so mixed
 // runtime and storage snapshots report one stable pending-authorization count.
 func mergedPendingApprovalTotal(unfinishedTasks []runengine.TaskRecord, runtimePendingTotal int) int {
@@ -1426,9 +1542,21 @@ func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, er
 	// Keep the legacy runtime response as a safety net when runtime approval
 	// requests exist but the task snapshots do not expose a structured payload.
 	if total == 0 {
-		runtimeItems, runtimeTotal := s.runEngine.PendingApprovalRequests(limit, offset)
-		items = runtimeItems
-		total = runtimeTotal
+		if s.storage != nil {
+			storedRecords, storedTotal, err := s.storage.ApprovalRequestStore().ListPendingApprovalRequests(context.Background(), limit, offset)
+			if err == nil && storedTotal > 0 {
+				items = approvalRequestRecordsToItems(storedRecords)
+				total = storedTotal
+			} else {
+				runtimeItems, runtimeTotal := s.runEngine.PendingApprovalRequests(limit, offset)
+				items = runtimeItems
+				total = runtimeTotal
+			}
+		} else {
+			runtimeItems, runtimeTotal := s.runEngine.PendingApprovalRequests(limit, offset)
+			items = runtimeItems
+			total = runtimeTotal
+		}
 	} else if offset >= total {
 		items = []map[string]any{}
 	} else {
@@ -1534,6 +1662,9 @@ func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, e
 	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	if !ok {
 		return nil, ErrTaskNotFound
+	}
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, assessment.ImpactScope); err != nil {
+		return nil, err
 	}
 	return map[string]any{
 		"applied":        false,
@@ -1652,17 +1783,24 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	approvalID, ok := s.activeApprovalIDForTask(task)
+	if !ok {
+		return nil, ErrTaskStatusInvalid
+	}
 
 	decision := stringValue(params, "decision", "allow_once")
 	rememberRule := boolValue(params, "remember_rule", false)
 	authorizationRecord := map[string]any{
-		"authorization_record_id": fmt.Sprintf("auth_%s", task.TaskID),
+		"authorization_record_id": fmt.Sprintf("auth_%s_%d", task.TaskID, time.Now().UnixNano()),
 		"task_id":                 task.TaskID,
-		"approval_id":             stringValue(params, "approval_id", "appr_001"),
+		"approval_id":             approvalID,
 		"decision":                decision,
 		"remember_rule":           rememberRule,
 		"operator":                "user",
 		"created_at":              time.Now().Format(dateTimeLayout),
+	}
+	if err := s.persistAuthorizationState(task.TaskID, authorizationRecord); err != nil {
+		return nil, err
 	}
 	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
 	if !ok {
@@ -3610,7 +3748,7 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment e
 	}
 
 	return map[string]any{
-		"approval_id":    fmt.Sprintf("appr_%s", taskID),
+		"approval_id":    fmt.Sprintf("appr_%s_%d", taskID, time.Now().UnixNano()),
 		"task_id":        taskID,
 		"operation_name": firstNonEmptyString(assessment.OperationName, firstNonEmptyString(stringValue(taskIntent, "name", ""), "write_file")),
 		"risk_level":     firstNonEmptyString(assessment.RiskLevel, "red"),
@@ -3896,6 +4034,9 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 	updatedTask, changed := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	if !changed {
 		return task, nil, false, ErrTaskNotFound
+	}
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, assessment.ImpactScope); err != nil {
+		return task, nil, false, err
 	}
 	return updatedTask, map[string]any{
 		"task":            taskMap(updatedTask),

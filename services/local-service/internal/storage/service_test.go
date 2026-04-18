@@ -227,6 +227,147 @@ func TestMemoryStoreReturnsWorkingImplementation(t *testing.T) {
 	}
 }
 
+func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval-auth.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	err := service.ApprovalRequestStore().WriteApprovalRequest(context.Background(), ApprovalRequestRecord{
+		ApprovalID:      "appr_001",
+		TaskID:          "task_approval_001",
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "inputs/screen.png",
+		Reason:          "screen_capture_requires_authorization",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["inputs/screen.png"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_001",
+		TaskID:                "task_approval_001",
+		ApprovalID:            "appr_001",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          true,
+		CreatedAt:             "2026-04-18T10:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write authorization record failed: %v", err)
+	}
+	approvalItems, approvalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("unexpected approval records total=%d len=%d err=%v", approvalTotal, len(approvalItems), err)
+	}
+	if approvalItems[0].OperationName != "screen_capture" || approvalItems[0].Status != "pending" {
+		t.Fatalf("unexpected approval record: %+v", approvalItems[0])
+	}
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("unexpected authorization records total=%d len=%d err=%v", authorizationTotal, len(authorizationItems), err)
+	}
+	if authorizationItems[0].Decision != "allow_once" || !authorizationItems[0].RememberRule {
+		t.Fatalf("unexpected authorization record: %+v", authorizationItems[0])
+	}
+	if err := service.ApprovalRequestStore().UpdateApprovalRequestStatus(context.Background(), "appr_001", "approved", "2026-04-18T10:02:00Z"); err != nil {
+		t.Fatalf("update approval request status failed: %v", err)
+	}
+	updatedApprovalItems, updatedApprovalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || updatedApprovalTotal != 1 || len(updatedApprovalItems) != 1 {
+		t.Fatalf("unexpected updated approval records total=%d len=%d err=%v", updatedApprovalTotal, len(updatedApprovalItems), err)
+	}
+	if updatedApprovalItems[0].Status != "approved" || updatedApprovalItems[0].UpdatedAt != "2026-04-18T10:02:00Z" {
+		t.Fatalf("expected updated approval record status, got %+v", updatedApprovalItems[0])
+	}
+	pendingApprovalItems, pendingApprovalTotal, err := service.ApprovalRequestStore().ListPendingApprovalRequests(context.Background(), 10, 0)
+	if err != nil || pendingApprovalTotal != 0 || len(pendingApprovalItems) != 0 {
+		t.Fatalf("expected no pending approvals after approval update, got total=%d len=%d err=%v items=%+v", pendingApprovalTotal, len(pendingApprovalItems), err, pendingApprovalItems)
+	}
+	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_002",
+		TaskID:                "task_approval_001",
+		ApprovalID:            "appr_001",
+		Decision:              "deny_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-18T10:03:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write second authorization record failed: %v", err)
+	}
+	updatedAuthorizationItems, updatedAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || updatedAuthorizationTotal != 2 || len(updatedAuthorizationItems) != 2 {
+		t.Fatalf("expected full authorization history total=%d len=%d err=%v items=%+v", updatedAuthorizationTotal, len(updatedAuthorizationItems), err, updatedAuthorizationItems)
+	}
+	if updatedAuthorizationItems[0].AuthorizationRecordID != "auth_002" || updatedAuthorizationItems[1].AuthorizationRecordID != "auth_001" {
+		t.Fatalf("expected authorization history ordering to preserve both records, got %+v", updatedAuthorizationItems)
+	}
+}
+
+func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval-auth-atomic.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	if err := service.ApprovalRequestStore().WriteApprovalRequest(context.Background(), ApprovalRequestRecord{
+		ApprovalID:      "appr_atomic_001",
+		TaskID:          "task_atomic_001",
+		OperationName:   "write_file",
+		RiskLevel:       "yellow",
+		TargetObject:    "workspace/result.md",
+		Reason:          "atomic authorization persistence",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/result.md"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+	if err := service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_atomic_001",
+		TaskID:                "task_atomic_001",
+		ApprovalID:            "appr_atomic_001",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          true,
+		CreatedAt:             "2026-04-18T10:01:00Z",
+	}, "approved", "2026-04-18T10:01:00Z"); err != nil {
+		t.Fatalf("write atomic authorization decision failed: %v", err)
+	}
+
+	approvalItems, approvalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_atomic_001", 10, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("unexpected approval records after atomic authorization write total=%d len=%d err=%v", approvalTotal, len(approvalItems), err)
+	}
+	if approvalItems[0].Status != "approved" {
+		t.Fatalf("expected atomic authorization write to update approval status, got %+v", approvalItems[0])
+	}
+
+	err = service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_atomic_missing",
+		TaskID:                "task_atomic_missing",
+		ApprovalID:            "appr_missing",
+		Decision:              "deny_once",
+		Operator:              "user",
+		CreatedAt:             "2026-04-18T10:02:00Z",
+	}, "denied", "2026-04-18T10:02:00Z")
+	if !errors.Is(err, ErrApprovalRequestNotFound) {
+		t.Fatalf("expected missing approval to fail atomic authorization write, got %v", err)
+	}
+
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("expected failed atomic authorization write to leave history unchanged total=%d len=%d err=%v items=%+v", authorizationTotal, len(authorizationItems), err, authorizationItems)
+	}
+	if authorizationItems[0].AuthorizationRecordID != "auth_atomic_001" {
+		t.Fatalf("expected only committed authorization decision to remain, got %+v", authorizationItems)
+	}
+}
+
 // TestCloseIsSafeWithoutConfiguredStore 验证CloseIsSafeWithoutConfiguredStore。
 func TestCloseIsSafeWithoutConfiguredStore(t *testing.T) {
 	service := NewService(nil)
