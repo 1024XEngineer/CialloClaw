@@ -1,4 +1,4 @@
-// 该文件负责内存态 task/run 运行时与状态流转。
+// Package runengine owns the in-memory task/run runtime state machine.
 package runengine
 
 import (
@@ -26,10 +26,8 @@ var (
 	ErrTaskAlreadyFinished = errors.New("task already finished")
 )
 
-// TaskRecord 描述当前模块记录。
-
-// TaskRecord 是 runengine 在内存中维护的任务主记录。
-// 它同时承载对外 task 语义和对内 run 执行态之间的映射结果，是 4 号主链路最核心的状态对象。
+// TaskRecord is the canonical in-memory record that bridges external task
+// semantics with internal run execution state.
 type TaskRecord struct {
 	TaskID            string
 	SessionID         string
@@ -68,10 +66,7 @@ type TaskRecord struct {
 	CurrentStepStatus string
 }
 
-// TaskStepRecord 描述当前模块记录。
-
-// TaskStepRecord 表示 task 视角下的时间线步骤。
-// orchestrator 会根据它构造 timeline，用于 dashboard、task detail 和运行态追踪。
+// TaskStepRecord represents one task-facing timeline step.
 type TaskStepRecord struct {
 	StepID        string
 	TaskID        string
@@ -82,20 +77,15 @@ type TaskStepRecord struct {
 	OutputSummary string
 }
 
-// NotificationRecord 描述当前模块记录。
-
-// NotificationRecord 保存尚未被前端消费的通知事件。
-// RPC 层会在响应之后继续回放这些通知，形成 task.updated / delivery.ready 等事件流。
+// NotificationRecord stores a buffered notification that the transport will
+// replay after the main RPC response is sent.
 type NotificationRecord struct {
 	Method    string
 	Params    map[string]any
 	CreatedAt time.Time
 }
 
-// CreateTaskInput 定义当前模块的数据结构。
-
-// CreateTaskInput 描述创建任务时 runengine 需要的一揽子初始化参数。
-// orchestrator 会在这里一次性传入标题、状态、intent、timeline 和初始展示信息。
+// CreateTaskInput contains the runtime initialization payload for a new task.
 type CreateTaskInput struct {
 	SessionID         string
 	Title             string
@@ -114,9 +104,7 @@ type CreateTaskInput struct {
 	Snapshot          contextsvc.TaskContextSnapshot
 }
 
-// InspectorConfig 描述当前模块配置。
-
-// InspectorConfig 保存任务巡检模块的当前配置快照。
+// InspectorConfig stores the current task-inspector runtime settings.
 type InspectorConfig struct {
 	TaskSources          []string
 	InspectionInterval   map[string]any
@@ -126,10 +114,7 @@ type InspectorConfig struct {
 	RemindWhenStale      bool
 }
 
-// Engine 维护当前模块的运行状态。
-
-// Engine 是主链路运行态的内存状态机。
-// 它负责维护 task/run 映射、时间线推进、授权等待、交付计划、通知缓存以及设置项快照。
+// Engine is the in-memory runtime state machine for the main task pipeline.
 type Engine struct {
 	mu            sync.RWMutex
 	nextID        uint64
@@ -145,15 +130,15 @@ type Engine struct {
 	notepadClaims map[string]struct{}
 }
 
-// NewEngine 创建并返回Engine。
-
-// NewEngine 创建一套新的内存态引擎，并填充主链路需要的默认设置和巡检配置。
+// NewEngine constructs a runtime engine with default settings and inspector
+// configuration.
 func NewEngine() *Engine {
 	engine, _ := newEngine(nil)
 	return engine
 }
 
-// NewEngineWithStore 创建带有 task/run 持久化存储的引擎实例。
+// NewEngineWithStore constructs a runtime engine backed by persisted task/run
+// storage.
 func NewEngineWithStore(taskStore storage.TaskRunStore) (*Engine, error) {
 	return newEngine(taskStore)
 }
@@ -205,10 +190,8 @@ func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 	return engine, nil
 }
 
-// CurrentState 处理当前模块的相关逻辑。
-
-// CurrentState 返回兼容层的 run_status。
-// 对外产品态仍以 task_status 为主，这里只保留 processing/completed 两态兼容。
+// CurrentState returns the compatibility-layer run_status for the current lead
+// task.
 func (e *Engine) CurrentState() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -220,9 +203,7 @@ func (e *Engine) CurrentState() string {
 	return e.tasks[e.taskOrder[0]].runStatus()
 }
 
-// CurrentTaskStatus 处理当前模块的相关逻辑。
-
-// CurrentTaskStatus 返回当前主任务的 task_status。
+// CurrentTaskStatus returns the task_status of the current lead task.
 func (e *Engine) CurrentTaskStatus() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -234,9 +215,8 @@ func (e *Engine) CurrentTaskStatus() string {
 	return e.tasks[e.taskOrder[0]].Status
 }
 
-// CreateTask 创建Task。
-
-// CreateTask 创建 task/run 映射，并把初始时间线、展示信息和安全摘要写入内存态。
+// CreateTask creates the task/run mapping and seeds initial timeline,
+// presentation, and security state.
 func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -390,9 +370,8 @@ func (e *Engine) HydrateTaskFromStorage(record TaskRecord) TaskRecord {
 	return stored.clone()
 }
 
-// ListTasks 列出Tasks。
-
-// ListTasks 按未完成/已完成分组列出任务，并在分页前应用统一排序规则。
+// ListTasks returns unfinished or finished tasks with the shared runtime sort
+// order applied before paging.
 func (e *Engine) ListTasks(group, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -424,10 +403,8 @@ func (e *Engine) ListTasks(group, sortBy, sortOrder string, limit, offset int) (
 	return filtered[offset:end], total
 }
 
-// ConfirmTask 确认Task。
-
-// ConfirmTask 把处于 confirming_intent 的任务推进到 processing。
-// 这里会更新标题、intent、当前步骤和气泡展示，并推进 timeline。
+// ConfirmTask advances a task from confirming_intent to processing and updates
+// the task-facing title, intent, bubble, and timeline state.
 func (e *Engine) ConfirmTask(taskID, title string, intent map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -480,9 +457,8 @@ func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRec
 	return record.clone(), true
 }
 
-// UpdateIntent 更新Task当前生效意图。
-
-// UpdateIntent 在不改变整体任务身份的前提下覆盖当前生效意图与标题。
+// UpdateIntent replaces the effective intent and title without changing task
+// identity.
 func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -505,10 +481,8 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 	return record.clone(), true
 }
 
-// SetPresentation 设置Presentation。
-
-// SetPresentation 只更新任务的展示层信息，不改变主状态机结论。
-// 它常用于确认态、等待输入态或仅更新气泡的场景。
+// SetPresentation updates task-facing presentation fields without changing the
+// state-machine conclusion.
 func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, deliveryResult map[string]any, artifacts []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -825,16 +799,14 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 	return record.clone(), nil
 }
 
-// MarkWaitingApproval 处理当前模块的相关逻辑。
-
-// MarkWaitingApproval 是等待授权态的简化入口。
+// MarkWaitingApproval is the shorthand entrypoint for moving a task into the
+// waiting_auth state.
 func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	return e.MarkWaitingApprovalWithPlan(taskID, approvalRequest, nil, bubbleMessage)
 }
 
-// MarkWaitingApprovalWithPlan 将任务切换为等待授权，并附带待恢复执行计划。
-
-// MarkWaitingApprovalWithPlan 把任务切换到 waiting_auth，并附带后续恢复执行所需的计划。
+// MarkWaitingApprovalWithPlan moves a task into waiting_auth and stores the
+// execution plan required to resume after approval.
 func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[string]any, pendingExecution map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -877,9 +849,8 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 	return record.clone(), true
 }
 
-// ResolveAuthorization 处理Authorization。
-
-// ResolveAuthorization 记录本次授权结果，并清理挂起中的审批请求与待执行计划。
+// ResolveAuthorization records the final authorization outcome and clears the
+// pending approval state.
 func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]any, impactScope map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -902,9 +873,8 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 	return record.clone(), true
 }
 
-// ResumeAfterApproval 将已授权任务恢复到处理中状态，并保留后续执行计划。
-
-// ResumeAfterApproval 在用户允许后把任务从 waiting_auth 恢复到 processing。
+// ResumeAfterApproval returns an approved task from waiting_auth to processing
+// while preserving the follow-up execution plan.
 func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -935,9 +905,8 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 	return record.clone(), true
 }
 
-// DenyAfterApproval 将已拒绝授权的任务收敛到结束状态。
-
-// DenyAfterApproval 在用户拒绝授权时终止任务，并保留授权记录与影响范围摘要。
+// DenyAfterApproval terminates a task after the user rejects authorization and
+// keeps the final authorization and impact summary attached.
 func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -975,9 +944,8 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 	return record.clone(), true
 }
 
-// PendingExecutionPlan 返回等待授权任务保存的执行计划。
-
-// PendingExecutionPlan 返回任务在等待授权期间缓存的恢复执行计划。
+// PendingExecutionPlan returns the buffered resume plan for a waiting_auth
+// task.
 func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -1205,16 +1173,12 @@ func (e *Engine) PendingApprovalRequests(limit, offset int) ([]map[string]any, i
 	return items[offset:end], total
 }
 
-// TaskDetail 处理当前模块的相关逻辑。
-
-// TaskDetail 返回任务详情视图所需的完整任务快照。
+// TaskDetail returns the full task snapshot used by the task detail view.
 func (e *Engine) TaskDetail(taskID string) (TaskRecord, bool) {
 	return e.GetTask(taskID)
 }
 
-// InspectorConfig 处理当前模块的相关逻辑。
-
-// InspectorConfig 返回任务巡检配置的当前有效值。
+// InspectorConfig returns the current effective task-inspector config.
 func (e *Engine) InspectorConfig() map[string]any {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -1229,9 +1193,8 @@ func (e *Engine) InspectorConfig() map[string]any {
 	}
 }
 
-// UpdateInspectorConfig 更新InspectorConfig。
-
-// UpdateInspectorConfig 用补丁方式更新巡检配置，并返回更新后的完整快照。
+// UpdateInspectorConfig patches inspector settings and returns the full updated
+// snapshot.
 func (e *Engine) UpdateInspectorConfig(values map[string]any) map[string]any {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1258,18 +1221,15 @@ func (e *Engine) UpdateInspectorConfig(values map[string]any) map[string]any {
 	return e.InspectorConfig()
 }
 
-// Settings 设置tings。
-
-// Settings 返回当前内存中的设置快照。
+// Settings returns the current in-memory settings snapshot.
 func (e *Engine) Settings() map[string]any {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return cloneMap(e.settings)
 }
 
-// UpdateSettings 更新Settings。
-
-// UpdateSettings 合并设置补丁，并计算受影响字段、应用模式和是否需要重启。
+// UpdateSettings merges a settings patch and reports affected fields, apply
+// mode, and restart requirements.
 func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string, string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
