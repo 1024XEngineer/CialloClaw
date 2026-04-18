@@ -461,7 +461,7 @@ func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
 	if result.Content != "Loop runtime finished cleanly." {
 		t.Fatalf("unexpected loop runtime result: %+v", result)
 	}
-	events, total, err := loopStore.ListEvents(context.Background(), "task_loop_runtime", 20, 0)
+	events, total, err := loopStore.ListEvents(context.Background(), "task_loop_runtime", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListEvents returned error: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestExecuteAgentLoopPersistsPlannerErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected planner error to surface")
 	}
-	events, total, listErr := loopStore.ListEvents(context.Background(), "task_loop_planner_error", 20, 0)
+	events, total, listErr := loopStore.ListEvents(context.Background(), "task_loop_planner_error", "", "", 20, 0)
 	if listErr != nil {
 		t.Fatalf("ListEvents returned error: %v", listErr)
 	}

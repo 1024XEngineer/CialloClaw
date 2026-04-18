@@ -772,7 +772,7 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return summary
 	}
-	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, task.RunID, "", 1, 0)
+	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, "", "", 1, 0)
 	if err == nil {
 		summary["events_count"] = total
 		if len(records) > 0 && strings.TrimSpace(records[0].Type) != "" {

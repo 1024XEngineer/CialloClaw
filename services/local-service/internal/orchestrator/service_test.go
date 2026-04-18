@@ -3960,6 +3960,15 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 		Level:       "error",
 		PayloadJSON: `{"stop_reason":"tool_retry_exhausted"}`,
 		CreatedAt:   "2026-04-18T11:00:00Z",
+	}, {
+		EventID:     "evt_detail_runtime_002",
+		RunID:       "run_previous_attempt",
+		TaskID:      taskID,
+		StepID:      "run_previous_attempt_step_loop_01",
+		Type:        "loop.round.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-18T10:59:00Z",
 	}}); err != nil {
 		t.Fatalf("save runtime events failed: %v", err)
 	}
@@ -3978,8 +3987,8 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 	if runtimeSummary["loop_stop_reason"] != "tool_retry_exhausted" {
 		t.Fatalf("expected loop_stop_reason in runtime_summary, got %+v", runtimeSummary)
 	}
-	if runtimeSummary["events_count"] != 1 {
-		t.Fatalf("expected events_count 1, got %+v", runtimeSummary)
+	if runtimeSummary["events_count"] != 2 {
+		t.Fatalf("expected task-level events_count 2, got %+v", runtimeSummary)
 	}
 	if runtimeSummary["latest_event_type"] != "loop.failed" {
 		t.Fatalf("expected latest_event_type loop.failed, got %+v", runtimeSummary)
