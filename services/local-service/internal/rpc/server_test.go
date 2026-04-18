@@ -478,6 +478,96 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmi
 	}
 }
 
+func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime should not replay live events.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-no-replay"`),
+		Method:  "agent.input.submit",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_input_submit_no_replay",
+			"input": map[string]any{
+				"type": "text",
+				"text": "inspect this workspace and answer directly",
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set first notification deadline: %v", err)
+	}
+
+	var firstEnvelope notificationEnvelope
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first notification: %v", err)
+	}
+	if !strings.HasPrefix(firstEnvelope.Method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set replay deadline: %v", err)
+	}
+	for {
+		var envelope notificationEnvelope
+		if err := decoder.Decode(&envelope); err != nil {
+			break
+		}
+		if isLiveRuntimeMethod(envelope.Method) {
+			t.Fatalf("expected streamed runtime notifications to be skipped after response, got %+v", envelope)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear replay deadline: %v", err)
+	}
+}
+
 func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
 	modelClient := &selectiveWaitLoopModelClient{
 		stubLoopModelClient: stubLoopModelClient{

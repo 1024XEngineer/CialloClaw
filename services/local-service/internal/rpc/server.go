@@ -1,4 +1,4 @@
-// 该文件负责 JSON-RPC 服务端、调试 HTTP 和事件流入口。
+// This file owns the JSON-RPC transport, debug HTTP endpoints, and stream entrypoints.
 package rpc
 
 import (
@@ -17,8 +17,6 @@ import (
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 )
-
-// Server 定义当前模块的数据结构。
 
 // Server 是 local-service 在传输层的统一入口。
 // 它负责承接 debug HTTP、named pipe 连接，以及把稳定 JSON-RPC 方法派发给 orchestrator。
@@ -285,8 +283,6 @@ func setDebugCORSOrigin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Origin")
 }
 
-// handleStreamConn 处理当前模块的相关逻辑。
-
 // handleStreamConn 处理长连接上的 JSON-RPC 请求和后续通知回写。
 // named pipe 场景下，请求响应和 notification 都在同一条连接上串行输出。
 func (s *Server) handleStreamConn(conn net.Conn) {
@@ -356,7 +352,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-					streamedRuntimeCounts[notificationKey(method, params)]++
+					streamedRuntimeCounts[notificationKey(method, notificationTaskID, params)]++
 				}
 			})
 		}
@@ -391,7 +387,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			for _, notification := range notifications {
 				method := stringValue(notification, "method", "task.updated")
 				params := mapValue(notification, "params")
-				key := notificationKey(method, params)
+				key := notificationKey(method, taskID, params)
 				if isLiveRuntimeMethod(method) && streamedRuntimeCounts[key] > 0 {
 					streamedRuntimeCounts[key]--
 					continue
@@ -509,12 +505,44 @@ func runtimeNotificationTaskID(taskID string, params map[string]any) string {
 	return strings.TrimSpace(rawTaskID)
 }
 
-func notificationKey(method string, params map[string]any) string {
-	encoded, err := json.Marshal(params)
+func notificationKey(method, taskID string, params map[string]any) string {
+	encoded, err := json.Marshal(normalizeNotificationKey(method, taskID, params))
 	if err != nil {
 		return method
 	}
 	return method + ":" + string(encoded)
+}
+
+func normalizeNotificationKey(method, taskID string, params map[string]any) map[string]any {
+	if !isLiveRuntimeMethod(method) {
+		return map[string]any{
+			"task_id": strings.TrimSpace(taskID),
+			"params":  params,
+		}
+	}
+
+	normalizedTaskID := strings.TrimSpace(taskID)
+	if normalizedTaskID == "" {
+		normalizedTaskID = runtimeNotificationTaskID("", params)
+	}
+
+	payload := map[string]any{}
+	if event := mapValue(params, "event"); len(event) > 0 {
+		payload = mapValue(event, "payload")
+	} else {
+		for key, value := range params {
+			if key == "task_id" {
+				continue
+			}
+			payload[key] = value
+		}
+	}
+
+	return map[string]any{
+		"task_id": normalizedTaskID,
+		"type":    method,
+		"payload": payload,
+	}
 }
 
 // collectTaskIDs 处理当前模块的相关逻辑。
