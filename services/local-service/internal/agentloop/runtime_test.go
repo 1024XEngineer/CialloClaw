@@ -256,6 +256,60 @@ func TestRunStopsAfterRepeatedToolChoices(t *testing.T) {
 	}
 }
 
+func TestPlannerRetryReasonClassifiesRetryableErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+		wantRetry  bool
+	}{
+		{name: "timeout", err: model.ErrOpenAIRequestTimeout, wantReason: "timeout", wantRetry: true},
+		{name: "rate_limited", err: &model.OpenAIHTTPStatusError{StatusCode: 429}, wantReason: "rate_limited", wantRetry: true},
+		{name: "provider_5xx", err: &model.OpenAIHTTPStatusError{StatusCode: 503}, wantReason: "provider_unavailable", wantRetry: true},
+		{name: "validation_4xx", err: &model.OpenAIHTTPStatusError{StatusCode: 400}, wantReason: "non_retryable_status", wantRetry: false},
+		{name: "generic_failure", err: errors.New("planner failed"), wantReason: "non_retryable_error", wantRetry: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := plannerRetryReason(test.err); got != test.wantReason {
+				t.Fatalf("plannerRetryReason() = %q, want %q", got, test.wantReason)
+			}
+			if got := shouldRetryPlannerError(test.err); got != test.wantRetry {
+				t.Fatalf("shouldRetryPlannerError() = %v, want %v", got, test.wantRetry)
+			}
+		})
+	}
+}
+
+func TestToolRetryReasonOnlyRetriesTimeouts(t *testing.T) {
+	timeoutCode := tools.ToolErrorCodeTimeout
+	executionCode := tools.ToolErrorCodeExecutionFailed
+	validationCode := tools.ToolErrorCodeOutputInvalid
+	tests := []struct {
+		name       string
+		record     tools.ToolCallRecord
+		wantReason string
+		wantRetry  bool
+	}{
+		{name: "timeout_status", record: tools.ToolCallRecord{Status: tools.ToolCallStatusTimeout, ErrorCode: &timeoutCode}, wantReason: "timeout", wantRetry: true},
+		{name: "execution_failed", record: tools.ToolCallRecord{Status: tools.ToolCallStatusFailed, ErrorCode: &executionCode}, wantReason: "non_retryable_failure", wantRetry: false},
+		{name: "validation_failed", record: tools.ToolCallRecord{Status: tools.ToolCallStatusFailed, ErrorCode: &validationCode}, wantReason: "validation", wantRetry: false},
+		{name: "plain_failure", record: tools.ToolCallRecord{Status: tools.ToolCallStatusFailed}, wantReason: "non_retryable", wantRetry: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := toolRetryReason(test.record); got != test.wantReason {
+				t.Fatalf("toolRetryReason() = %q, want %q", got, test.wantReason)
+			}
+			if got := shouldRetryToolRecord(test.record); got != test.wantRetry {
+				t.Fatalf("shouldRetryToolRecord() = %v, want %v", got, test.wantRetry)
+			}
+		})
+	}
+}
+
 func testRuntimeRequest() Request {
 	now := time.Date(2026, 4, 19, 10, 0, 0, 0, time.UTC)
 	return Request{

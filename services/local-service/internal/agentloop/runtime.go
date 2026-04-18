@@ -3,7 +3,9 @@ package agentloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -230,6 +232,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 					"loop_round": round.LoopRound,
 					"phase":      "planner",
 					"attempt":    attempt + 1,
+					"reason":     plannerRetryReason(err),
 					"error":      err.Error(),
 				}))
 			}
@@ -322,12 +325,13 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			}
 
 			observation, record := request.ExecuteTool(ctx, call, turn+1)
-			for attempt := 0; attempt < request.ToolRetryBudget && record.Status == tools.ToolCallStatusTimeout; attempt++ {
+			for attempt := 0; attempt < request.ToolRetryBudget && shouldRetryToolRecord(record); attempt++ {
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 					"loop_round": round.LoopRound,
 					"phase":      "tool",
 					"attempt":    attempt + 1,
 					"tool_name":  toolName,
+					"reason":     toolRetryReason(record),
 				}))
 				observation, record = request.ExecuteTool(ctx, call, turn+1)
 			}
@@ -630,4 +634,59 @@ func marshalJSON(input map[string]any) string {
 		return "{}"
 	}
 	return string(payload)
+}
+
+// shouldRetryPlannerError keeps planner retries narrow and deterministic so
+// runtime behavior stays explainable across timeout, rate-limit, and hard-fail
+// branches.
+func shouldRetryPlannerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch plannerRetryReason(err) {
+	case "timeout", "rate_limited", "provider_unavailable":
+		return true
+	default:
+		return false
+	}
+}
+
+func plannerRetryReason(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if errors.Is(err, model.ErrOpenAIRequestTimeout) {
+		return "timeout"
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if errors.As(err, &statusErr) {
+		switch {
+		case statusErr.StatusCode == http.StatusTooManyRequests:
+			return "rate_limited"
+		case statusErr.StatusCode >= 500 && statusErr.StatusCode <= 599:
+			return "provider_unavailable"
+		default:
+			return "non_retryable_status"
+		}
+	}
+	return "non_retryable_error"
+}
+
+func shouldRetryToolRecord(record tools.ToolCallRecord) bool {
+	return toolRetryReason(record) == "timeout"
+}
+
+func toolRetryReason(record tools.ToolCallRecord) string {
+	if record.Status == tools.ToolCallStatusTimeout {
+		return "timeout"
+	}
+	if record.Status == tools.ToolCallStatusFailed && record.ErrorCode != nil {
+		switch *record.ErrorCode {
+		case tools.ToolErrorCodeExecutionFailed, tools.ToolErrorCodeWorkerNotAvailable, tools.ToolErrorCodePlaywrightSidecarFail, tools.ToolErrorCodeOCRWorkerFailed, tools.ToolErrorCodeMediaWorkerFailed:
+			return "non_retryable_failure"
+		case tools.ToolErrorCodeOutputInvalid, tools.ToolErrorCodeNotFound:
+			return "validation"
+		}
+	}
+	return "non_retryable"
 }
