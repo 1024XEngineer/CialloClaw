@@ -2172,6 +2172,12 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 	if s.storage == nil {
 		return nil, 0, false
 	}
+	if s.storage.TaskStore() != nil {
+		tasks, total, ok := s.listTasksFromStructuredStorage(group, sortBy, sortOrder, limit, offset)
+		if ok {
+			return tasks, total, true
+		}
+	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil || len(records) == 0 {
 		return nil, 0, false
@@ -2196,9 +2202,45 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 	return tasks[offset:end], total, true
 }
 
+func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
+	records, total, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil, 0, false
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		task, ok := s.structuredTaskRecordToRuntime(record)
+		if !ok {
+			continue
+		}
+		if !matchesTaskGroup(task, group) {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	if len(tasks) == 0 {
+		return nil, 0, false
+	}
+	runengineSortTaskRecords(tasks, sortBy, sortOrder)
+	total = len(tasks)
+	if offset >= total {
+		return []runengine.TaskRecord{}, total, true
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return tasks[offset:end], total, true
+}
+
 func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	if s.storage == nil {
 		return nil
+	}
+	if s.storage.TaskStore() != nil {
+		if tasks := s.loadAllTasksFromStructuredStorage(); len(tasks) > 0 {
+			return tasks
+		}
 	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil || len(records) == 0 {
@@ -2207,6 +2249,22 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
 		tasks = append(tasks, taskRecordFromStorage(record))
+	}
+	return tasks
+}
+
+func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
+	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		task, ok := s.structuredTaskRecordToRuntime(record)
+		if !ok {
+			continue
+		}
+		tasks = append(tasks, task)
 	}
 	return tasks
 }
@@ -2315,6 +2373,11 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 	if s.storage == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
+	if s.storage.TaskStore() != nil {
+		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			return task, true
+		}
+	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil {
 		return runengine.TaskRecord{}, false
@@ -2325,6 +2388,17 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 		}
 	}
 	return runengine.TaskRecord{}, false
+}
+
+func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
+	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
+	if err != nil {
+		if storage.IsTaskRecordNotFound(err) {
+			return runengine.TaskRecord{}, false
+		}
+		return runengine.TaskRecord{}, false
+	}
+	return s.structuredTaskRecordToRuntime(record)
 }
 
 func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (map[string]any, error) {
@@ -2517,6 +2591,157 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		SteeringMessages:  append([]string(nil), record.SteeringMessages...),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
+}
+
+// structuredTaskRecordToRuntime hydrates one task-centric read model from the
+// new first-class tasks/task_steps tables while still honoring snapshot_json as
+// the compatibility bridge during the migration away from task_runs-only reads.
+func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (runengine.TaskRecord, bool) {
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
+		if err == nil {
+			runtime := taskRecordFromStorage(snapshot)
+			if len(runtime.Timeline) == 0 {
+				runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
+			}
+			return runtime, true
+		}
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, record.StartedAt)
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, record.UpdatedAt)
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	var finishedAt *time.Time
+	if strings.TrimSpace(record.FinishedAt) != "" {
+		parsedFinishedAt, err := time.Parse(time.RFC3339Nano, record.FinishedAt)
+		if err == nil {
+			finishedAt = &parsedFinishedAt
+		}
+	}
+	intentArguments := map[string]any{}
+	if strings.TrimSpace(record.IntentArgumentsJSON) != "" {
+		if err := json.Unmarshal([]byte(record.IntentArgumentsJSON), &intentArguments); err != nil {
+			intentArguments = map[string]any{}
+		}
+	}
+	runtime := runengine.TaskRecord{
+		TaskID:            record.TaskID,
+		SessionID:         record.SessionID,
+		RunID:             record.RunID,
+		Title:             record.Title,
+		SourceType:        record.SourceType,
+		Status:            record.Status,
+		Intent:            map[string]any{"name": record.IntentName, "arguments": intentArguments},
+		PreferredDelivery: record.PreferredDelivery,
+		FallbackDelivery:  record.FallbackDelivery,
+		CurrentStep:       record.CurrentStep,
+		RiskLevel:         record.RiskLevel,
+		StartedAt:         startedAt,
+		UpdatedAt:         updatedAt,
+		FinishedAt:        finishedAt,
+		Timeline:          s.taskTimelineFromStructuredStorage(record.TaskID),
+		CurrentStepStatus: record.CurrentStepStatus,
+	}
+	s.hydrateStructuredTaskGovernance(&runtime)
+	return runtime, true
+}
+
+// hydrateStructuredTaskGovernance rebuilds the task-facing governance fields
+// from first-class stores when the snapshot bridge is unavailable.
+func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
+	if s == nil || s.storage == nil || task == nil {
+		return
+	}
+	securitySummary := cloneMap(task.SecuritySummary)
+	if securitySummary == nil {
+		securitySummary = map[string]any{}
+	}
+	if approvalRequest := s.pendingApprovalRequestFromStorage(task.TaskID, task.RiskLevel); approvalRequest != nil {
+		task.ApprovalRequest = approvalRequest
+		securitySummary["pending_authorizations"] = 1
+		if strings.TrimSpace(stringValue(approvalRequest, "risk_level", "")) != "" {
+			securitySummary["security_status"] = "pending_confirmation"
+		}
+	} else if task.Status == "waiting_auth" {
+		securitySummary["pending_authorizations"] = 0
+	}
+	if latestRestorePoint := s.latestRestorePointFromStorage(task.TaskID); latestRestorePoint != nil {
+		securitySummary["latest_restore_point"] = latestRestorePoint
+	}
+	task.SecuritySummary = securitySummary
+}
+
+func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.ApprovalRequestStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	records, _, err := s.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), taskID, 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	for _, record := range records {
+		approvalRequest := normalizeTaskDetailApprovalRequest(taskID, fallbackRiskLevel, approvalRequestRecordToMap(record))
+		if approvalRequest != nil {
+			return approvalRequest
+		}
+	}
+	return nil
+}
+
+func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string]any {
+	result := map[string]any{
+		"approval_id":    record.ApprovalID,
+		"task_id":        record.TaskID,
+		"operation_name": record.OperationName,
+		"risk_level":     record.RiskLevel,
+		"target_object":  record.TargetObject,
+		"reason":         record.Reason,
+		"status":         record.Status,
+		"created_at":     record.CreatedAt,
+		"updated_at":     record.UpdatedAt,
+	}
+	if strings.TrimSpace(record.ImpactScopeJSON) != "" {
+		var scope map[string]any
+		if err := json.Unmarshal([]byte(record.ImpactScopeJSON), &scope); err == nil && len(scope) > 0 {
+			result["impact_scope"] = scope
+		}
+	}
+	return result
+}
+
+func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.TaskStepRecord {
+	if s.storage == nil || s.storage.TaskStepStore() == nil {
+		return nil
+	}
+	records, _, err := s.storage.TaskStepStore().ListTaskSteps(context.Background(), taskID, 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	result := make([]runengine.TaskStepRecord, 0, len(records))
+	for _, step := range records {
+		result = append(result, runengine.TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		})
+	}
+	return result
+}
+
+func storageTaskRunRecordFromSnapshotJSON(payload string) (storage.TaskRunRecord, error) {
+	var record storage.TaskRunRecord
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
+		return storage.TaskRunRecord{}, err
+	}
+	return record, nil
 }
 
 func timelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {

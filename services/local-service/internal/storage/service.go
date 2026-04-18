@@ -57,6 +57,8 @@ type Service struct {
 	taskRunStore             TaskRunStore
 	toolCallStore            ToolCallStore
 	loopRuntimeStore         LoopRuntimeStore
+	taskStore                TaskStore
+	taskStepStore            TaskStepStore
 	artifactStore            ArtifactStore
 	todoStore                TodoStore
 	traceStore               TraceStore
@@ -79,9 +81,11 @@ type Service struct {
 // NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
-	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	loopRuntimeStore := LoopRuntimeStore(newInMemoryLoopRuntimeStore())
+	taskStore := TaskStore(newInMemoryTaskStore())
+	taskStepStore := TaskStepStore(newInMemoryTaskStepStore())
+	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore().WithStructuredStores(taskStore, taskStepStore))
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
 	todoStore := TodoStore(NewInMemoryTodoStore())
 	traceStore := TraceStore(newInMemoryTraceStore())
@@ -143,6 +147,24 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			}
 			if err != nil {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite loop runtime store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteTaskStore, err := NewSQLiteTaskStore(databasePath)
+			if err == nil {
+				taskStore = sqliteTaskStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite task store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteTaskStepStore, err := NewSQLiteTaskStepStore(databasePath)
+			if err == nil {
+				taskStepStore = sqliteTaskStepStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite task_step store: %w", err))
 				fallbackActive = true
 			}
 
@@ -233,6 +255,8 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		taskRunStore:             taskRunStore,
 		toolCallStore:            toolCallStore,
 		loopRuntimeStore:         loopRuntimeStore,
+		taskStore:                taskStore,
+		taskStepStore:            taskStepStore,
 		artifactStore:            artifactStore,
 		todoStore:                todoStore,
 		traceStore:               traceStore,
@@ -368,6 +392,16 @@ func (s *Service) LoopRuntimeStore() LoopRuntimeStore {
 	return s.loopRuntimeStore
 }
 
+// TaskStore returns the configured first-class tasks store.
+func (s *Service) TaskStore() TaskStore {
+	return s.taskStore
+}
+
+// TaskStepStore returns the configured first-class task_steps store.
+func (s *Service) TaskStepStore() TaskStepStore {
+	return s.taskStepStore
+}
+
 // ArtifactStore returns the configured artifact store.
 func (s *Service) ArtifactStore() ArtifactStore {
 	return s.artifactStore
@@ -437,6 +471,12 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.loopRuntimeStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.taskStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.taskStepStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.artifactStore.(interface{ Close() error }); ok {

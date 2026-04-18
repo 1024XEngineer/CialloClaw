@@ -308,6 +308,79 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	}
 }
 
+func TestTaskStoresCloseAndErrorHelpers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-store-close.db")
+	taskStore, err := NewSQLiteTaskStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskStore returned error: %v", err)
+	}
+	if err := taskStore.WriteTask(context.Background(), TaskRecord{
+		TaskID:              "task_close_001",
+		SessionID:           "sess_close_001",
+		RunID:               "run_close_001",
+		Title:               "close helper task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "return_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           "2026-04-18T10:00:00Z",
+		UpdatedAt:           "2026-04-18T10:01:00Z",
+		SnapshotJSON:        `{}`,
+	}); err != nil {
+		t.Fatalf("WriteTask returned error: %v", err)
+	}
+	if err := taskStore.DeleteTask(context.Background(), "task_close_001"); err != nil {
+		t.Fatalf("DeleteTask returned error: %v", err)
+	}
+	if _, err := taskStore.GetTask(context.Background(), "task_close_001"); !IsTaskRecordNotFound(err) {
+		t.Fatalf("expected IsTaskRecordNotFound to detect deleted row, got %v", err)
+	}
+	if err := taskStore.Close(); err != nil {
+		t.Fatalf("expected SQLiteTaskStore close to succeed, got %v", err)
+	}
+	var nilTaskStore SQLiteTaskStore
+	if err := nilTaskStore.Close(); err != nil {
+		t.Fatalf("expected nil SQLiteTaskStore close to succeed, got %v", err)
+	}
+
+	stepStore, err := NewSQLiteTaskStepStore(filepath.Join(t.TempDir(), "task-step-close.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskStepStore returned error: %v", err)
+	}
+	if err := stepStore.ReplaceTaskSteps(context.Background(), "task_close_001", []TaskStepRecord{{
+		StepID:        "step_close_001",
+		TaskID:        "task_close_001",
+		Name:          "return_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "input",
+		OutputSummary: "output",
+		CreatedAt:     "2026-04-18T10:00:00Z",
+		UpdatedAt:     "2026-04-18T10:01:00Z",
+	}}); err != nil {
+		t.Fatalf("ReplaceTaskSteps returned error: %v", err)
+	}
+	if err := stepStore.Close(); err != nil {
+		t.Fatalf("expected SQLiteTaskStepStore close to succeed, got %v", err)
+	}
+	var nilStepStore SQLiteTaskStepStore
+	if err := nilStepStore.Close(); err != nil {
+		t.Fatalf("expected nil SQLiteTaskStepStore close to succeed, got %v", err)
+	}
+
+	if nullableText("") != nil || nullableText("value") != "value" {
+		t.Fatalf("expected nullableText helper to preserve empty/non-empty semantics")
+	}
+	if IsTaskRecordNotFound(nil) || IsTaskRecordNotFound(sql.ErrConnDone) {
+		t.Fatalf("expected IsTaskRecordNotFound to reject nil and unrelated errors")
+	}
+}
+
 func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "approval-auth-atomic.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -489,6 +562,39 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
+	}
+}
+
+func TestServiceTaskStoresTrackStructuredTaskRecordsFromTaskRunSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-structured.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	record := sampleTaskRunRecord()
+	if err := service.TaskRunStore().SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("SaveTaskRun returned error: %v", err)
+	}
+
+	taskItems, taskTotal, err := service.TaskStore().ListTasks(context.Background(), 10, 0)
+	if err != nil || taskTotal != 1 || len(taskItems) != 1 {
+		t.Fatalf("expected one first-class task record, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
+	}
+	if taskItems[0].TaskID != record.TaskID || taskItems[0].IntentName != "summarize" {
+		t.Fatalf("unexpected first-class task record: %+v", taskItems[0])
+	}
+	stepItems, stepTotal, err := service.TaskStepStore().ListTaskSteps(context.Background(), record.TaskID, 10, 0)
+	if err != nil || stepTotal != 1 || len(stepItems) != 1 {
+		t.Fatalf("expected one first-class task_step record, got total=%d items=%+v err=%v", stepTotal, stepItems, err)
+	}
+	if stepItems[0].StepID != record.Timeline[0].StepID || stepItems[0].Name != "return_result" {
+		t.Fatalf("unexpected first-class task_step record: %+v", stepItems[0])
+	}
+	if err := service.TaskRunStore().DeleteTaskRun(context.Background(), record.TaskID); err != nil {
+		t.Fatalf("DeleteTaskRun returned error: %v", err)
+	}
+	taskItems, taskTotal, err = service.TaskStore().ListTasks(context.Background(), 10, 0)
+	if err != nil || taskTotal != 0 || len(taskItems) != 0 {
+		t.Fatalf("expected first-class task record to be deleted, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
 	}
 }
 

@@ -257,6 +257,54 @@ type TaskRunStore interface {
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
 }
 
+// TaskRecord describes one first-class tasks row aligned with the product layer.
+type TaskRecord struct {
+	TaskID              string
+	SessionID           string
+	RunID               string
+	Title               string
+	SourceType          string
+	Status              string
+	IntentName          string
+	IntentArgumentsJSON string
+	PreferredDelivery   string
+	FallbackDelivery    string
+	CurrentStep         string
+	CurrentStepStatus   string
+	RiskLevel           string
+	StartedAt           string
+	UpdatedAt           string
+	FinishedAt          string
+	SnapshotJSON        string
+}
+
+// TaskStepRecord describes one first-class task_steps row for user-facing timelines.
+type TaskStepRecord struct {
+	StepID        string
+	TaskID        string
+	Name          string
+	Status        string
+	OrderIndex    int
+	InputSummary  string
+	OutputSummary string
+	CreatedAt     string
+	UpdatedAt     string
+}
+
+// TaskStore persists first-class tasks rows alongside task_runs snapshots.
+type TaskStore interface {
+	WriteTask(ctx context.Context, record TaskRecord) error
+	DeleteTask(ctx context.Context, taskID string) error
+	GetTask(ctx context.Context, taskID string) (TaskRecord, error)
+	ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error)
+}
+
+// TaskStepStore persists first-class task_steps rows for task-facing timelines.
+type TaskStepStore interface {
+	ReplaceTaskSteps(ctx context.Context, taskID string, records []TaskStepRecord) error
+	ListTaskSteps(ctx context.Context, taskID string, limit, offset int) ([]TaskStepRecord, int, error)
+}
+
 // LoopRuntimeStore defines normalized run/step/event/delivery_result persistence.
 type LoopRuntimeStore interface {
 	SaveRun(ctx context.Context, record RunRecord) error

@@ -244,6 +244,7 @@
 - 主要表：`tasks / task_steps / events / delivery_results / artifacts / approval_requests / trace_records`
 - 关键字段：`events.type / payload_json`
 - 作用：为任务列表、详情、安全摘要和结果区提供统一真源和事件驱动刷新。
+- 当前 owner-5 P0-2 迁移策略采用 `task_runs` 兼容快照与 `tasks / task_steps` 一等记录双写；任务列表、详情和部分 overview 回退读侧应优先读取 `tasks / task_steps`，仅在正式表缺失时再回退 `task_runs`。
 
 ### 6.7 结果审查、Trace 与熔断
 - 主要表：`trace_records / eval_snapshots / events / tool_calls / audit_records`
