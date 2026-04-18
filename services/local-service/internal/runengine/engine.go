@@ -433,7 +433,8 @@ func (e *Engine) ConfirmTask(taskID, title string, intent map[string]any, bubble
 	return record.clone(), true
 }
 
-// BeginExecution 把任务推进到真实执行步骤，并刷新 timeline 与事件。
+// BeginExecution moves a task into its real execution step and refreshes
+// timeline and event state.
 func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1932,7 +1933,7 @@ func cloneMap(values map[string]any) map[string]any {
 	return result
 }
 
-// cloneMapSlice 处理当前模块的相关逻辑。
+// cloneMapSlice recursively copies a []map[string]any payload.
 func cloneMapSlice(values []map[string]any) []map[string]any {
 	if len(values) == 0 {
 		return nil
@@ -1945,7 +1946,7 @@ func cloneMapSlice(values []map[string]any) []map[string]any {
 	return result
 }
 
-// cloneNotifications 处理当前模块的相关逻辑。
+// cloneNotifications copies a notification slice and its nested params maps.
 func cloneNotifications(values []NotificationRecord) []NotificationRecord {
 	if len(values) == 0 {
 		return nil
@@ -1963,9 +1964,7 @@ func cloneNotifications(values []NotificationRecord) []NotificationRecord {
 	return result
 }
 
-// currentTimelineStatus 处理当前模块的相关逻辑。
-
-// currentTimelineStatus 返回当前时间线最后一个步骤的状态。
+// currentTimelineStatus returns the status of the last timeline step.
 func currentTimelineStatus(timeline []TaskStepRecord) string {
 	if len(timeline) == 0 {
 		return "pending"
@@ -2177,7 +2176,7 @@ func normalizeTaskSortOrder(sortOrder string) string {
 	return "desc"
 }
 
-// stringSlice 处理当前模块的相关逻辑。
+// stringSlice converts a JSON-decoded value into a trimmed []string.
 func stringSlice(rawValue any) []string {
 	values, ok := rawValue.([]string)
 	if ok {
@@ -2199,7 +2198,7 @@ func stringSlice(rawValue any) []string {
 	return result
 }
 
-// mergeMaps 处理当前模块的相关逻辑。
+// mergeMaps recursively overlays source values into destination.
 func mergeMaps(target map[string]any, patch map[string]any) {
 	for key, value := range patch {
 		patchMap, ok := value.(map[string]any)
@@ -2478,9 +2477,8 @@ func stringValue(values map[string]any, key, fallback string) string {
 	return value
 }
 
-// buildDefaultSettings 处理当前模块的相关逻辑。
-
-// buildDefaultSettings 构造主链路和工作台使用的默认设置快照。
+// buildDefaultSettings constructs the default settings snapshot used by the
+// main pipeline and dashboard surfaces.
 func buildDefaultSettings() map[string]any {
 	return map[string]any{
 		"general": map[string]any{

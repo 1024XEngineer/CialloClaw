@@ -3594,7 +3594,8 @@ func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	}
 }
 
-// firstNonEmptyString 处理当前模块的相关逻辑。
+// deliveryPreferenceFromSubmit reads preferred delivery settings from
+// agent.input.submit options.
 func deliveryPreferenceFromSubmit(params map[string]any) (string, string) {
 	options := mapValue(params, "options")
 	return stringValue(options, "preferred_delivery", ""), ""
@@ -3615,7 +3616,8 @@ func mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, sugge
 	return preferredDelivery, fallbackDelivery
 }
 
-// buildPendingExecution 生成等待授权任务在恢复执行时需要的交付计划。
+// buildPendingExecution creates the delivery plan required to resume a task
+// after authorization.
 func (s *Service) buildPendingExecution(task runengine.TaskRecord, taskIntent map[string]any) map[string]any {
 	plan := s.delivery.BuildApprovalExecutionPlan(task.TaskID, taskIntent)
 	return s.applyResolvedDeliveryToPlan(task, plan, taskIntent)
