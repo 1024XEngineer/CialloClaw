@@ -767,7 +767,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           createShellBallTextBubbleItem({
             role: "agent",
             text: context
-              ? createShellBallWindowContextReply(context.app_name, context.url)
+              ? createShellBallWindowContextReply(context.app_name, context.title, context.url)
               : "Window context is unavailable.",
             bubbleType: "result",
             createdAt: new Date().toISOString(),
@@ -1640,13 +1640,20 @@ function shouldHandleShellBallWindowCommand(input: {
  * Formats the local shell-ball reply for active-window context lookups.
  *
  * @param appName Active application name.
+ * @param title Active window title, when available.
  * @param url Optional browser URL resolved by the host.
  * @returns The local shell-ball reply bubble text.
  */
-function createShellBallWindowContextReply(appName: string, url: string | null) {
-  if (url && url.trim() !== "") {
-    return `App: ${appName}\nURL: ${url}`;
+function createShellBallWindowContextReply(appName: string, title: string | null, url: string | null) {
+  const lines = [`App: ${appName}`];
+
+  if (title && title.trim() !== "") {
+    lines.push(`Title: ${title}`);
   }
 
-  return `App: ${appName}`;
+  if (url && url.trim() !== "") {
+    lines.push(`URL: ${url}`);
+  }
+
+  return lines.join("\n");
 }

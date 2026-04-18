@@ -4726,7 +4726,7 @@ test("shell-ball window command stays local and replies with active window conte
   assert.match(coordinatorSource, /const SHELL_BALL_WINDOW_COMMAND = "窗口";/);
   assert.match(coordinatorSource, /shouldHandleShellBallWindowCommand\(/);
   assert.match(coordinatorSource, /const context = await getActiveWindowContext\(\);/);
-  assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.url\)/);
+  assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.title, context\.url\)/);
   assert.match(windowContextPlatformSource, /invoke<DesktopWindowContextPayload \| null>\("desktop_get_active_window_context"\)/);
 });
 
