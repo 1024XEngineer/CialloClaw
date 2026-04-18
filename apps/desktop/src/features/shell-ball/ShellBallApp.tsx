@@ -234,14 +234,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
-  const {
-    beginBallWindowPointerDrag,
-    endBallWindowPointerDrag,
-    freezeBallWindowPointerDrag,
-    rootRef,
-    updateBallWindowPointerDrag,
-    windowFrame,
-  } = useShellBallWindowMetrics({ role: "ball" });
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
@@ -259,6 +251,50 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: () => undefined,
   });
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
+  const {
+    handleClipboardPrompt: handleCoordinatorClipboardPrompt,
+    handleDroppedFiles: handleCoordinatorDroppedFiles,
+    handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
+    handleRegionEnter: handleCoordinatorRegionEnter,
+    handleRegionLeave: handleCoordinatorRegionLeave,
+    snapshot,
+  } = useShellBallCoordinator({
+    visualState,
+    helperWindowsVisible: dashboardTransitionPhase === "idle",
+    regionActive,
+    inputValue,
+    inputFocused,
+    pendingFiles,
+    finalizedSpeechPayload,
+    voicePreview,
+    voiceHintMode,
+    setInputValue,
+    onAppendPendingFiles: handleAppendPendingFiles,
+    onRemovePendingFile: handleRemovePendingFile,
+    onFinalizedSpeechHandled: acknowledgeFinalizedSpeechPayload,
+    onRegionEnter: handleRegionEnter,
+    onRegionLeave: handleRegionLeave,
+    onInputHoverChange: handleInputHoverChange,
+    onInputFocusChange: handleInputFocusChange,
+    onSubmitText: handleSubmitText,
+    onAttachFile: handleAttachFile,
+    onPrimaryClick: handlePrimaryClick,
+  });
+  const {
+    beginBallWindowPointerDrag,
+    endBallWindowPointerDrag,
+    freezeBallWindowPointerDrag,
+    rootRef,
+    updateBallWindowPointerDrag,
+    windowFrame,
+  } = useShellBallWindowMetrics({
+    role: "ball",
+    helperVisibility: snapshot.visibility,
+  });
+
+  dragDropHandlersRef.current = {
+    handleDroppedFiles: handleCoordinatorDroppedFiles,
+  };
 
   useEffect(() => {
     const wasVoiceActive =
@@ -606,38 +642,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       cleanup?.();
     };
   }, []);
-
-  const {
-    handleClipboardPrompt: handleCoordinatorClipboardPrompt,
-    handleDroppedFiles: handleCoordinatorDroppedFiles,
-    handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
-    handleRegionEnter: handleCoordinatorRegionEnter,
-    handleRegionLeave: handleCoordinatorRegionLeave,
-  } = useShellBallCoordinator({
-    visualState,
-    helperWindowsVisible: dashboardTransitionPhase === "idle",
-    regionActive,
-    inputValue,
-    inputFocused,
-    pendingFiles,
-    finalizedSpeechPayload,
-    voicePreview,
-    voiceHintMode,
-    setInputValue,
-    onAppendPendingFiles: handleAppendPendingFiles,
-    onRemovePendingFile: handleRemovePendingFile,
-    onFinalizedSpeechHandled: acknowledgeFinalizedSpeechPayload,
-    onRegionEnter: handleRegionEnter,
-    onRegionLeave: handleRegionLeave,
-    onInputHoverChange: handleInputHoverChange,
-    onInputFocusChange: handleInputFocusChange,
-    onSubmitText: handleSubmitText,
-    onAttachFile: handleAttachFile,
-    onPrimaryClick: handlePrimaryClick,
-  });
-  dragDropHandlersRef.current = {
-    handleDroppedFiles: handleCoordinatorDroppedFiles,
-  };
 
   const handleMascotPrimaryAction = useCallback(() => {
     if (selectionPrompt !== null) {
