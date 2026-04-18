@@ -207,7 +207,7 @@ sequenceDiagram
     alt 发起任务
         U->>IN: 长按 / 单击 / 选中点击 / 文件拖拽
         IN->>IN: 收敛动作 + 采集输入对象
-        IN->>ACCESS: agent.input.submit / agent.task.start
+        IN->>ACCESS: agent.input.submit / agent.task.start（文件拖拽需先进入附件队列并由用户手动发送）
     else 查看持续任务
         U->>IN: 双击 / 打开仪表盘
         IN->>ACCESS: agent.dashboard.* / agent.task.detail.get
@@ -682,10 +682,10 @@ flowchart LR
 ```
 
 #### 模块介绍
-该模块用于承接悬浮球长按语音、悬停输入、文本选中点击、文件拖拽与推荐点击等入口，把当前现场对象转为统一任务请求。设计目标是让用户在当前桌面现场完成对象识别、意图确认与轻量修正，而不是跳转到聊天窗口重新描述需求。
+该模块用于承接悬浮球长按语音、悬停输入、文本选中点击、文件拖拽与推荐点击等入口，把当前现场对象收敛为统一任务请求或近场附件草稿。设计目标是让用户在当前桌面现场完成对象识别、意图确认与轻量修正，而不是跳转到聊天窗口重新描述需求。
 
 #### 模块定位
-作为桌面现场的第一入口模块，负责把用户动作收敛为标准任务请求，并决定进入意图确认还是直接创建任务。
+作为桌面现场的第一入口模块，负责把用户动作收敛为标准任务请求或附件队列，并决定进入轻量承接、意图确认还是正式创建任务。
 
 #### 职责
 - 统一入口事件归一化；
@@ -714,7 +714,7 @@ flowchart LR
 | 方法 | 使用时机 | 主要输入 | 主要输出 |
 | --- | --- | --- | --- |
 | `agent.input.submit` | 长按语音提交、轻量文本提交 | `session_id`、`source`、`trigger`、`input`、`context`、`options` | `task`、`bubble_message` |
-| `agent.task.start` | 文本选中、文件拖拽、错误对象承接 | `session_id`、`source`、`trigger`、`input`、`intent`、`delivery` | `task`、`bubble_message`、`delivery_result` |
+| `agent.task.start` | 文本选中、错误对象承接、文件附件手动发送后起任务 | `session_id`、`source`、`trigger`、`input`、`intent`、`delivery` | `task`、`bubble_message`、`delivery_result` |
 | `agent.task.confirm` | 用户确认或修正意图后继续执行 | `task_id`、`confirmed`、`corrected_intent` | 更新后的 `task`、`bubble_message` |
 
 这些方法共同组成主动输入闭环：先承接对象，再确认意图，最后推进正式执行。
@@ -807,7 +807,8 @@ sequenceDiagram
     participant SUP as 存储与能力层
 
     U->>FE: 选中文本 / 文件拖拽 / 输入一句话
-    FE->>ACCESS: agent.task.start / agent.input.submit
+    FE->>FE: 文件拖拽先加入附件队列
+    FE->>ACCESS: agent.task.start / agent.input.submit（文件需手动发送后触发）
     ACCESS->>TASK: 规范化入口请求
     TASK->>TASK: 识别输入对象与候选意图
     TASK->>SUP: 写入 task / run 初始骨架

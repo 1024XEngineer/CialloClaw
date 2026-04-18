@@ -93,6 +93,7 @@ import { respondSecurity } from "./test-stubs/rpcMethods";
 import {
   appendShellBallDroppedText,
   createShellBallInputSubmitParams,
+  createShellBallTaskStartParams,
   getShellBallPostSubmitInputReset,
   getShellBallDashboardOpenGesturePolicy,
   getShellBallVoiceRecognitionUnexpectedEndFallbackState,
@@ -454,6 +455,59 @@ function withShellBallModuleRuntime<T>(
     return callback(transpiledModule.exports);
   } finally {
     NodeModule._load = originalLoad;
+  }
+}
+
+function withSourceModuleRuntime<T>(
+  modulePath: string,
+  mocks: Record<string, unknown>,
+  callback: (moduleExports: Record<string, unknown>) => T,
+) {
+  const NodeModule = require("node:module") as any;
+  const originalLoad = NodeModule._load;
+  const source = readFileSync(modulePath, "utf8");
+  const transpiledModule = { exports: {} as Record<string, unknown> };
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: modulePath,
+  });
+  const moduleFactory = new Function("require", "module", "exports", transpiled.outputText) as (
+    require: NodeRequire,
+    module: { exports: Record<string, unknown> },
+    exports: Record<string, unknown>,
+  ) => void;
+
+  NodeModule._load = function loadSourceModule(request: string, parent: unknown, isMain: boolean) {
+    if (request in mocks) {
+      return mocks[request];
+    }
+
+    return originalLoad(request, parent, isMain);
+  };
+
+  const restoreRuntime = () => {
+    NodeModule._load = originalLoad;
+  };
+
+  try {
+    moduleFactory(require, transpiledModule, transpiledModule.exports);
+    const result = callback(transpiledModule.exports);
+    const maybePromise = result as unknown as PromiseLike<T>;
+
+    if (result && typeof maybePromise.then === "function") {
+      return (result as unknown as Promise<T>).finally(restoreRuntime) as T;
+    }
+
+    restoreRuntime();
+    return result;
+  } catch (error) {
+    restoreRuntime();
+    throw error;
   }
 }
 
@@ -1980,6 +2034,201 @@ test("shell-ball submit params route text and voice through the formal input con
   assert.equal(voiceParams.trigger, "voice_commit");
   assert.equal(voiceParams.input.input_mode, "voice");
   assert.equal(createShellBallInputSubmitParams({ text: "   ", trigger: "hover_text_input", inputMode: "text" }), null);
+});
+
+test("shell-ball file task params preserve attachment descriptions for agent.task.start", () => {
+  const fileParams = createShellBallTaskStartParams({
+    text: "  explain these files  ",
+    files: ["  C:\\workspace\\notes.md  ", "C:\\workspace\\spec.md"],
+  });
+
+  assert.ok(fileParams);
+  assert.equal(fileParams.trigger, "file_drop");
+  assert.deepEqual(fileParams.input, {
+    type: "file",
+    text: "explain these files",
+    files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
+  });
+  assert.equal(createShellBallTaskStartParams({ text: "   ", files: [] }), null);
+});
+
+test("task-entry services keep rpc transport failures visible and forward file descriptions", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+  const mirrorCalls: string[] = [];
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/agentInputService.ts"),
+    {
+      "@/rpc/methods": {
+        submitInput() {
+          return Promise.reject(transportError);
+        },
+      },
+      "./mirrorMemoryService": {
+        recordMirrorConversationFailure() {
+          mirrorCalls.push("failure");
+        },
+        recordMirrorConversationStart() {
+          mirrorCalls.push("start");
+        },
+        recordMirrorConversationSuccess() {
+          mirrorCalls.push("success");
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        submitTextInput: (input: {
+          text: string;
+          source: "floating_ball" | "dashboard" | "tray_panel";
+          trigger: "voice_commit" | "hover_text_input";
+          inputMode: "voice" | "text";
+        }) => Promise<unknown>;
+      };
+
+      await assert.rejects(
+        () =>
+          service.submitTextInput({
+            text: "submit through rpc",
+            source: "floating_ball",
+            trigger: "hover_text_input",
+            inputMode: "text",
+          }),
+        /transport is not wired/i,
+      );
+    },
+  );
+
+  assert.deepEqual(mirrorCalls, ["start", "failure"]);
+
+  const startTaskCalls: Array<Record<string, unknown>> = [];
+  const bootstrapSubmitCalls: Array<Record<string, unknown>> = [];
+  const taskResult: {
+    bubble_message: null;
+    delivery_result: null;
+    task: {
+      task_id: string;
+      title: string;
+      source_type: "dragged_file";
+      status: "processing";
+      intent: null;
+      current_step: string;
+      risk_level: "yellow";
+      started_at: string;
+      updated_at: string;
+      finished_at: null;
+    };
+  } = {
+    bubble_message: null,
+    delivery_result: null,
+    task: {
+      task_id: "task_shell_ball_001",
+      title: "Process files",
+      source_type: "dragged_file",
+      status: "processing",
+      intent: null,
+      current_step: "processing",
+      risk_level: "yellow",
+      started_at: "2026-04-18T10:00:00.000Z",
+      updated_at: "2026-04-18T10:00:00.000Z",
+      finished_at: null,
+    },
+  };
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask(params: Record<string, unknown>) {
+          startTaskCalls.push(params);
+          return Promise.resolve(taskResult);
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./agentInputService": {
+        submitTextInput(params: Record<string, unknown>) {
+          bootstrapSubmitCalls.push(params);
+          return Promise.resolve(taskResult);
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        bootstrapTask: (title: string) => Promise<unknown>;
+        startTaskFromErrorSignal: (errorMessage: string, context?: Record<string, unknown>) => Promise<unknown>;
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+        startTaskFromSelectedText: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
+      };
+
+      await service.startTaskFromFiles(
+        ["  C:\\workspace\\notes.md  ", "C:\\workspace\\spec.md"],
+        {
+          source: "floating_ball",
+        },
+        "  explain these files  ",
+      );
+
+      assert.equal(startTaskCalls[0]?.trigger, "file_drop");
+      assert.deepEqual(startTaskCalls[0]?.input, {
+        type: "file",
+        text: "explain these files",
+        files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
+        page_context: {
+          app_name: "desktop",
+          title: "Quick Intake",
+          url: "local://shell-ball",
+        },
+      });
+
+      await service.bootstrapTask("  summarize this  ");
+    },
+  );
+
+  assert.equal(startTaskCalls.length, 1);
+  assert.equal(bootstrapSubmitCalls.length, 1);
+  assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask() {
+          return Promise.reject(transportError);
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./agentInputService": {
+        submitTextInput() {
+          return Promise.reject(transportError);
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        bootstrapTask: (title: string) => Promise<unknown>;
+        startTaskFromErrorSignal: (errorMessage: string, context?: Record<string, unknown>) => Promise<unknown>;
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+        startTaskFromSelectedText: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.startTaskFromSelectedText("selected text"), /transport is not wired/i);
+      await assert.rejects(() => service.startTaskFromFiles(["C:\\workspace\\notes.md"], {}, "details"), /transport is not wired/i);
+      await assert.rejects(() => service.startTaskFromErrorSignal("stack trace"), /transport is not wired/i);
+      await assert.rejects(() => service.bootstrapTask("hover text"), /transport is not wired/i);
+    },
+  );
 });
 
 test("shell-ball text drop helpers only accept non-file drags and extract plain text", () => {
@@ -4397,6 +4646,41 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   assert.match(surfaceSource, /onDropCapture=\{handleDrop\}/);
   assert.doesNotMatch(surfaceSource, /onDrop=\{handleDrop\}/);
   assert.match(surfaceSource, /className="shell-ball-surface__text-drop-target"/);
+});
+
+test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const handleDroppedFiles = useCallback\(async \(paths: string\[\]\) => \{/);
+  assert.match(coordinatorSource, /handlersRef\.current\.onAppendPendingFiles\(normalizedPaths\);/);
+  assert.match(coordinatorSource, /await emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
+  assert.match(coordinatorSource, /console\.warn\("shell-ball file drop focus request failed", error\);/);
+  assert.doesNotMatch(coordinatorSource, /startTaskFromFiles/);
+  assert.doesNotMatch(coordinatorSource, /issue #187/);
+  assert.match(interactionSource, /function handleDroppedFiles\(paths: string\[\]\) \{/);
+  assert.match(interactionSource, /setPendingFiles\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
+  assert.match(interactionSource, /controllerRef\.current\?\.forceState\("hover_input", \{/);
+});
+
+test("shell-ball task entry sources keep rpc failures visible and forward attachment descriptions", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+  const agentInputServiceSource = readFileSync(resolve(desktopRoot, "src/services/agentInputService.ts"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/services/taskService.ts"), "utf8");
+
+  assert.match(interactionSource, /return startTaskFromFiles\(normalizedFiles, \{[\s\S]*source: "floating_ball",[\s\S]*\}, input\.text\);/);
+  assert.match(taskServiceSource, /\.\.\.\(normalizedText === undefined \? \{\} : \{ text: normalizedText \}\)/);
+  assert.match(taskServiceSource, /const taskResult = await submitTextInput\(/);
+  assert.doesNotMatch(taskServiceSource, /createMockTaskStartResult/);
+  assert.doesNotMatch(taskServiceSource, /logRpcMockFallback/);
+  assert.doesNotMatch(taskServiceSource, /isRpcChannelUnavailable/);
+  assert.doesNotMatch(agentInputServiceSource, /createMockAgentInputSubmitResult/);
+  assert.doesNotMatch(agentInputServiceSource, /logRpcMockFallback/);
+  assert.doesNotMatch(agentInputServiceSource, /isRpcChannelUnavailable/);
+  assert.match(coordinatorSource, /createShellBallTaskErrorBubbleItem/);
+  assert.doesNotMatch(coordinatorSource, /createMockShellBallConfirmResult/);
+  assert.doesNotMatch(coordinatorSource, /logRpcMockFallback/);
 });
 
 test("shell-ball selected-text prompt only surfaces in resting states", () => {

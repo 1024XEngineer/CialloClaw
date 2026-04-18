@@ -13,6 +13,7 @@ import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { describeCurrentStep, getFinishedTaskGroups, isTaskEnded, sortTasksByLatest } from "./taskPage.mapper";
 import {
+  buildDashboardTaskArtifactQueryKey,
   buildDashboardTaskBucketQueryKey,
   buildDashboardTaskDetailQueryKey,
   getDashboardTaskSecurityRefreshPlan,
@@ -125,7 +126,7 @@ export function TaskPage() {
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
   const artifactListQuery = useQuery({
     enabled: detailOpen && dataMode === "rpc" && Boolean(selectedTaskId),
-    queryKey: ["dashboard", "tasks", "artifacts", dataMode, selectedTaskId],
+    queryKey: buildDashboardTaskArtifactQueryKey(dataMode, selectedTaskId ?? ""),
     queryFn: () => loadTaskArtifactPage(selectedTaskId!, dataMode),
     refetchOnMount: securityRefreshPlan.refetchOnMount,
     refetchOnReconnect: false,
@@ -157,9 +158,8 @@ export function TaskPage() {
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
-
       if (selectedTaskId && (!deliveryTaskId || deliveryTaskId === selectedTaskId)) {
-        void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "artifacts", dataMode, selectedTaskId] });
+        void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, selectedTaskId) });
       }
     }
 
@@ -197,11 +197,12 @@ export function TaskPage() {
 
   const taskControlMutation = useMutation({
     mutationFn: ({ action, taskId }: { action: "pause" | "resume" | "cancel" | "restart"; taskId: string }) => controlTaskByAction(taskId, action, dataMode),
-    onSuccess: (outcome) => {
+    onSuccess: (outcome, variables) => {
       showFeedback(outcome.result.bubble_message?.text ?? "任务操作已执行。");
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, variables.taskId) });
     },
     onError: () => {
       showFeedback("任务操作暂时没有成功返回，请稍后再试。");

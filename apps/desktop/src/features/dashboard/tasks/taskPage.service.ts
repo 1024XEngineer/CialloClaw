@@ -1,5 +1,4 @@
 import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup } from "@cialloclaw/protocol";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
 import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
@@ -259,33 +258,24 @@ export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit
     return getMockTaskBucketPage(group, options);
   }
 
-  try {
-    const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
-    const offset = options?.offset ?? 0;
-    const result = await withTimeout(
-      listTasks({
-        group,
-        limit,
-        offset,
-        request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
-        sort_by: getTaskListSortBy(group),
-        sort_order: "desc",
-      }),
-      `task bucket ${group}`,
-    );
+  const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
+  const offset = options?.offset ?? 0;
+  const result = await withTimeout(
+    listTasks({
+      group,
+      limit,
+      offset,
+      request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
+      sort_by: getTaskListSortBy(group),
+      sort_order: "desc",
+    }),
+    `task bucket ${group}`,
+  );
 
-    return {
-      items: mapTasks(result.items),
-      page: result.page,
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback(`task bucket ${group}`, error);
-      return getMockTaskBucketPage(group, options);
-    }
-
-    throw error;
-  }
+  return {
+    items: mapTasks(result.items),
+    page: result.page,
+  };
 }
 
 export async function loadTaskBuckets(options?: { unfinishedLimit?: number; finishedLimit?: number; source?: TaskPageDataMode }): Promise<TaskBucketsData> {
@@ -307,32 +297,23 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     return getMockTaskDetail(taskId);
   }
 
-  try {
-    const normalized = normalizeTaskDetailData(
-      await withTimeout(
-        getTaskDetail({
-          request_meta: createRequestMeta(`task_detail_${taskId}`),
-          task_id: taskId,
-        }),
-        `task detail ${taskId}`,
-      ),
-    );
+  const normalized = normalizeTaskDetailData(
+    await withTimeout(
+      getTaskDetail({
+        request_meta: createRequestMeta(`task_detail_${taskId}`),
+        task_id: taskId,
+      }),
+      `task detail ${taskId}`,
+    ),
+  );
 
-    return {
-      detailWarningMessage: normalized.detailWarningMessage,
-      detail: normalized.detail,
-      experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
-      source: "rpc",
-      task: normalized.detail.task,
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback(`task detail ${taskId}`, error);
-      return getMockTaskDetail(taskId);
-    }
-
-    throw error;
-  }
+  return {
+    detailWarningMessage: normalized.detailWarningMessage,
+    detail: normalized.detail,
+    experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
+    source: "rpc",
+    task: normalized.detail.task,
+  };
 }
 
 export async function controlTaskByAction(taskId: string, action: TaskControlAction, source: TaskPageDataMode = "rpc"): Promise<TaskControlOutcome> {
@@ -346,17 +327,8 @@ export async function controlTaskByAction(taskId: string, action: TaskControlAct
     return runMockTaskControl(taskId, action);
   }
 
-  try {
-    return {
-      result: await withTimeout(controlTask(params), `task control ${action}`),
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback(`task control ${action}`, error);
-      return runMockTaskControl(taskId, action);
-    }
-
-    throw error;
-  }
+  return {
+    result: await withTimeout(controlTask(params), `task control ${action}`),
+    source: "rpc",
+  };
 }

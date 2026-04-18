@@ -17,8 +17,7 @@ import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
-import { startTaskFromFiles } from "@/services/taskService";
+import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
   createDefaultShellBallWindowSnapshot,
   createShellBallWindowSnapshot,
@@ -44,7 +43,6 @@ import {
 } from "./shellBall.windowSync";
 import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
 import { getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
-import { createMockShellBallConfirmResult } from "./shellBall.mock";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
 type ShellBallCoordinatorInput = {
@@ -332,6 +330,41 @@ export function createShellBallAgentBubbleItem(
   });
 }
 
+function getShellBallTaskErrorText(error: unknown) {
+  if (isRpcChannelUnavailable(error)) {
+    return "任务入口未连通，请先确认本地服务可用后再重试。";
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message !== "") {
+      return `任务提交失败：${message}`;
+    }
+  }
+
+  return "任务提交失败，请稍后重试。";
+}
+
+// Submission failures stay as local shell-ball status bubbles until the backend
+// accepts a formal task.
+function createShellBallTaskErrorBubbleItem(input: {
+  createdAt: string;
+  error: unknown;
+  taskId?: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: getShellBallTaskErrorText(input.error),
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
 export function applyShellBallBubbleAction(
   items: ShellBallBubbleItem[],
   payload: Pick<ShellBallBubbleActionPayload, "action" | "bubbleId">,
@@ -511,6 +544,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }, SHELL_BALL_BUBBLE_HIDE_DELAY_MS);
   }, [applyBubbleVisibilityPhase, clearBubbleVisibilityTimers]);
 
+  /**
+   * Desktop file drops should reuse the same pending attachment queue as the
+   * picker so the user can review files and send them explicitly.
+   */
   const handleDroppedFiles = useCallback(async (paths: string[]) => {
     const normalizedPaths = paths.map((path) => path.trim()).filter(Boolean);
 
@@ -518,81 +555,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
-    const createdAt = new Date().toISOString();
-    const turnIndex = allocateBubbleTurnIndex();
-    const leadFile = normalizedPaths[0].split(/[\\/]/).pop() ?? normalizedPaths[0];
-    const userText = normalizedPaths.length === 1 ? `拖入文件：${leadFile}` : `拖入 ${normalizedPaths.length} 个文件`;
-
-    const userBubbleItem = createShellBallTextBubbleItem({
-      role: "user",
-      text: userText,
-      bubbleType: "status",
-      createdAt,
-      turnIndex,
-      turnPhase: 0,
-    });
-
-    setBubbleItems((currentItems) =>
-      sortShellBallBubbleItemsByTimestamp([
-        ...currentItems,
-        userBubbleItem,
-      ]),
-    );
-    revealBubbleRegion();
+    handlersRef.current.onAppendPendingFiles(normalizedPaths);
 
     try {
-      const result = await startTaskFromFiles(normalizedPaths, {
-        delivery: {
-          preferred: "bubble",
-          fallback: "task_detail",
-        },
-        source: "floating_ball",
-      });
-      shellBallTaskIdsRef.current.add(result.task.task_id);
-      bindTaskToBubbleTurn(result.task.task_id, turnIndex);
-
-      syncShellBallVisualStateFromTaskStatus(result.task.status);
-
-      setBubbleItems((currentItems) => {
-        const nextItems = currentItems.map((item) =>
-          item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
-            ? {
-                ...item,
-                bubble: {
-                  ...item.bubble,
-                  task_id: result.task.task_id,
-                },
-              }
-            : item,
-        );
-
-        return sortShellBallBubbleItemsByTimestamp([
-          ...nextItems,
-          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
-            turnIndex,
-            turnPhase: 1,
-          }),
-        ]);
-      });
-      revealBubbleRegion();
+      await emitShellBallInputRequestFocus(Date.now());
     } catch (error) {
-      console.warn("shell-ball file drop start failed", error);
-      setBubbleItems((currentItems) =>
-        sortShellBallBubbleItemsByTimestamp([
-          ...currentItems,
-          createShellBallTextBubbleItem({
-            role: "agent",
-            text: error instanceof Error ? error.message : "文件承接失败，请稍后再试。",
-            bubbleType: "status",
-            createdAt: new Date().toISOString(),
-            turnIndex,
-            turnPhase: 1,
-          }),
-        ]),
-      );
-      revealBubbleRegion();
+      console.warn("shell-ball file drop focus request failed", error);
     }
-  }, [revealBubbleRegion]);
+  }, []);
 
   const handleSelectedTextPrompt = useCallback(() => {
     const turnIndex = allocateBubbleTurnIndex();
@@ -901,14 +871,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     async function handlePrimaryAction(action: ShellBallPrimaryAction) {
       switch (action) {
         case "attach_file": {
-          handlersRef.current.onAttachFile();
           const turnIndex = allocateBubbleTurnIndex();
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
               ...currentItems,
               createShellBallTextBubbleItem({
                 role: "agent",
-                text: "把文件拖到悬浮球上，就会按 issue #187 的 file_drop 入口创建任务。",
+                text: "文件选择失败，请重试；也可以把文件拖到悬浮球上先加入附件，再手动发送。",
                 bubbleType: "status",
                 createdAt: new Date().toISOString(),
                 turnIndex,
@@ -956,7 +925,28 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           );
           revealBubbleRegion();
 
-          const result = await handlersRef.current.onSubmitText();
+          let result: ShellBallInputSubmitResult | null | void;
+
+          try {
+            result = await handlersRef.current.onSubmitText();
+          } catch (error) {
+            console.warn("shell-ball text submit failed", error);
+            setBubbleItems((currentItems) =>
+              replaceShellBallPendingBubble(
+                currentItems,
+                pendingAgentBubbleItem.bubble.bubble_id,
+                createShellBallTaskErrorBubbleItem({
+                  createdAt: new Date().toISOString(),
+                  error,
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ),
+            );
+            revealBubbleRegion();
+            break;
+          }
+
           if (isShellBallInputSubmitResult(result)) {
             shellBallTaskIdsRef.current.add(result.task.task_id);
             bindTaskToBubbleTurn(result.task.task_id, turnIndex);
@@ -1004,51 +994,35 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           task_id: string;
         }) => Promise<ShellBallInputSubmitResult>;
       }>;
+      const createdAt = new Date().toISOString();
+      const turnIndex = allocateBubbleTurnIndex();
+      const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
+
+      bindTaskToBubbleTurn(payload.taskId, turnIndex);
+
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            createdAt,
+            role: "user",
+            text: decisionText,
+            bubbleType: "status",
+            taskId: payload.taskId,
+            turnIndex,
+            turnPhase: 0,
+          }),
+        ]),
+      );
 
       try {
         const rpcMethods = await importRpcMethods();
-        const createdAt = new Date().toISOString();
-        const turnIndex = allocateBubbleTurnIndex();
-        const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
-
-        bindTaskToBubbleTurn(payload.taskId, turnIndex);
-
-        setBubbleItems((currentItems) =>
-          sortShellBallBubbleItemsByTimestamp([
-            ...currentItems,
-            createShellBallTextBubbleItem({
-              createdAt,
-              role: "user",
-              text: decisionText,
-              bubbleType: "status",
-              taskId: payload.taskId,
-              turnIndex,
-              turnPhase: 0,
-            }),
-          ]),
-        );
-
-        let result: ShellBallInputSubmitResult;
-
-        try {
-          result = await rpcMethods.confirmTask({
-            confirmed: payload.decision === "confirm",
-            corrected_intent: payload.correctedIntent,
-            request_meta: createShellBallRequestMeta(),
-            task_id: payload.taskId,
-          });
-        } catch (error) {
-          if (!isRpcChannelUnavailable(error)) {
-            throw error;
-          }
-
-          logRpcMockFallback("shell-ball confirm", error);
-          result = createMockShellBallConfirmResult({
-            confirmed: payload.decision === "confirm",
-            correctedIntent: payload.correctedIntent,
-            taskId: payload.taskId,
-          });
-        }
+        const result = await rpcMethods.confirmTask({
+          confirmed: payload.decision === "confirm",
+          corrected_intent: payload.correctedIntent,
+          request_meta: createShellBallRequestMeta(),
+          task_id: payload.taskId,
+        });
 
         syncShellBallVisualStateFromTaskStatus(result.task.status);
         shellBallTaskIdsRef.current.add(result.task.task_id);
@@ -1066,6 +1040,19 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         revealBubbleRegion();
       } catch (error) {
         console.warn("shell-ball intent decision failed", error);
+        setBubbleItems((currentItems) =>
+          sortShellBallBubbleItemsByTimestamp([
+            ...currentItems,
+            createShellBallTaskErrorBubbleItem({
+              createdAt: new Date().toISOString(),
+              error,
+              taskId: payload.taskId,
+              turnIndex,
+              turnPhase: 1,
+            }),
+          ]),
+        );
+        revealBubbleRegion();
       }
     }
 
