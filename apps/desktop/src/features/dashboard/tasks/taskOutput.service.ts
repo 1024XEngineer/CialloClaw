@@ -152,8 +152,12 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan): Pro
 
   if (plan.mode === "copy_path" && plan.path) {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(plan.path);
-      return `${plan.feedback} 已复制路径。`;
+      try {
+        await navigator.clipboard.writeText(plan.path);
+        return `${plan.feedback} 已复制路径。`;
+      } catch {
+        return `${plan.feedback} 路径：${plan.path}`;
+      }
     }
 
     return `${plan.feedback} 路径：${plan.path}`;

@@ -463,7 +463,7 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     }
 
     ballDragPositionQueueRef.current = ballDragPositionQueueRef.current
-      .catch(() => undefined)
+      .catch((): void => undefined)
       .then(async () => {
         const currentWindow = getCurrentWindow();
 
@@ -559,6 +559,32 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
 
     await snapBallWindowToBounds();
   }, [cancelBallWindowDragAnimation, queueBallWindowDragPosition, role, snapBallWindowToBounds]);
+
+  /**
+   * Freezes the active pointer drag at its latest resolved position without
+   * snapping to bounds so voice gestures can continue against a stable orb.
+   */
+  const freezeBallWindowPointerDrag = useCallback(async () => {
+    if (role !== "ball") {
+      return;
+    }
+
+    cancelBallWindowDragAnimation();
+    const dragSession = ballDragSessionRef.current;
+    ballDragSessionRef.current = null;
+
+    if (dragSession === null) {
+      return;
+    }
+
+    const finalFrame = {
+      ...dragSession.frameStart,
+      x: Math.round(dragSession.frameStart.x + (dragSession.latestPointer.x - dragSession.pointerStart.x)),
+      y: Math.round(dragSession.frameStart.y + (dragSession.latestPointer.y - dragSession.pointerStart.y)),
+    };
+
+    await queueBallWindowDragPosition(finalFrame);
+  }, [cancelBallWindowDragAnimation, queueBallWindowDragPosition, role]);
 
   async function animateBubbleWindowToFrame(nextFrame: ShellBallResolvedHelperFrame) {
     const previousFrame = helperWindowFrameRef.current;
@@ -851,6 +877,7 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
   return {
     beginBallWindowPointerDrag,
     endBallWindowPointerDrag,
+    freezeBallWindowPointerDrag,
     rootRef,
     snapBallWindowToBounds,
     updateBallWindowPointerDrag,

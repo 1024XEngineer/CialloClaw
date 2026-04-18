@@ -136,6 +136,44 @@ type TodoStore interface {
 	LoadTodoState(ctx context.Context) ([]TodoItemRecord, []RecurringRuleRecord, error)
 }
 
+// TraceRecord describes one persisted execution trace snapshot.
+type TraceRecord struct {
+	TraceID          string
+	TaskID           string
+	RunID            string
+	LoopRound        int
+	LLMInputSummary  string
+	LLMOutputSummary string
+	LatencyMS        int64
+	Cost             float64
+	RuleHitsJSON     string
+	ReviewResult     string
+	CreatedAt        string
+}
+
+// EvalSnapshotRecord describes one persisted evaluation snapshot.
+type EvalSnapshotRecord struct {
+	EvalSnapshotID string
+	TraceID        string
+	TaskID         string
+	Status         string
+	MetricsJSON    string
+	CreatedAt      string
+}
+
+// TraceStore defines persistence for trace records.
+type TraceStore interface {
+	WriteTraceRecord(ctx context.Context, record TraceRecord) error
+	DeleteTraceRecord(ctx context.Context, traceID string) error
+	ListTraceRecords(ctx context.Context, taskID string, limit, offset int) ([]TraceRecord, int, error)
+}
+
+// EvalStore defines persistence for evaluation snapshots.
+type EvalStore interface {
+	WriteEvalSnapshot(ctx context.Context, record EvalSnapshotRecord) error
+	ListEvalSnapshots(ctx context.Context, taskID string, limit, offset int) ([]EvalSnapshotRecord, int, error)
+}
+
 // SecretRecord captures one secret value persisted outside the normal settings path.
 type SecretRecord struct {
 	Namespace string

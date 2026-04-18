@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 )
@@ -74,7 +75,7 @@ func (s *Server) handleAgentInputSubmit(params map[string]any) (any, *rpcError) 
 
 // handleAgentTaskStart 处理 agent.task.start。
 func (s *Server) handleAgentTaskStart(params map[string]any) (any, *rpcError) {
-	data, err := s.orchestrator.StartTask(params)
+	data, err := s.orchestrator.StartTask(sanitizeTaskStartParams(params))
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -260,6 +261,21 @@ func (s *Server) handleAgentSettingsGet(params map[string]any) (any, *rpcError) 
 func (s *Server) handleAgentSettingsUpdate(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.SettingsUpdate(params)
 	return wrapOrchestratorResult(data, err)
+}
+
+func sanitizeTaskStartParams(params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+
+	sanitized := make(map[string]any, len(params))
+	for key, value := range params {
+		if strings.TrimSpace(key) == "intent" {
+			continue
+		}
+		sanitized[key] = value
+	}
+	return sanitized
 }
 
 // wrapOrchestratorResult maps orchestrator return values into the shared RPC

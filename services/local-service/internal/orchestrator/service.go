@@ -27,6 +27,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // ErrTaskNotFound 定义当前模块的基础变量。
@@ -58,6 +59,7 @@ type Service struct {
 	plugin         *plugin.Service
 	audit          *audit.Service
 	recommendation *recommendation.Service
+	traceEval      *traceeval.Service
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
@@ -89,6 +91,7 @@ func NewService(
 		plugin:         plugin,
 		audit:          audit.NewService(),
 		recommendation: recommendation.NewService(),
+		traceEval:      traceeval.NewService(nil, nil),
 		inspector:      taskinspector.NewService(nil),
 	}
 }
@@ -119,6 +122,14 @@ func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Se
 func (s *Service) WithStorage(storageService *storage.Service) *Service {
 	if storageService != nil {
 		s.storage = storageService
+	}
+	return s
+}
+
+// WithTraceEval attaches the owner-5 trace/eval recording service.
+func (s *Service) WithTraceEval(traceEvalService *traceeval.Service) *Service {
+	if traceEvalService != nil {
+		s.traceEval = traceEvalService
 	}
 	return s
 }
@@ -312,41 +323,41 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	return response, nil
 }
 
-// ConfirmTask 确认Task。
-
-// ConfirmTask 处理 agent.task.confirm。
-// 这条路径会把确认后的意图写回运行态，并继续推进执行、授权挂起或正式交付。
+// ConfirmTask handles agent.task.confirm.
+// It only accepts tasks that are still waiting in the intent confirmation phase,
+// then either keeps clarification open, applies a corrected intent, or confirms
+// the stored intent before continuing through governance and delivery.
 func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.GetTask(taskID)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	if !boolValue(params, "confirmed", false) {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已取消本次处理，请重新告诉我你的目标。", task.UpdatedAt.Format(dateTimeLayout))
-		updatedTask, err := s.runEngine.ControlTask(task.TaskID, "cancel", bubble)
+	if task.Status != "confirming_intent" {
+		return nil, ErrTaskStatusInvalid
+	}
+	confirmed := boolValue(params, "confirmed", false)
+	correctedIntent := mapValue(params, "corrected_intent")
+	intentValue := cloneMap(task.Intent)
+	if !confirmed && len(correctedIntent) > 0 {
+		intentValue = correctedIntent
+	}
+	if !confirmed && len(correctedIntent) == 0 {
+		updatedTask, err := s.revertTaskToIntentConfirmation(task)
 		if err != nil {
-			switch {
-			case errors.Is(err, runengine.ErrTaskNotFound):
-				return nil, ErrTaskNotFound
-			case errors.Is(err, runengine.ErrTaskStatusInvalid):
-				return nil, ErrTaskStatusInvalid
-			case errors.Is(err, runengine.ErrTaskAlreadyFinished):
-				return nil, ErrTaskAlreadyFinished
-			default:
-				return nil, err
-			}
+			return nil, err
+		}
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。", updatedTask.UpdatedAt.Format(dateTimeLayout))
+		if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+			updatedTask = presentedTask
+		} else {
+			return nil, ErrTaskNotFound
 		}
 		return map[string]any{
 			"task":            taskMap(updatedTask),
 			"bubble_message":  bubble,
 			"delivery_result": nil,
 		}, nil
-	}
-
-	intentValue := mapValue(params, "corrected_intent")
-	if len(intentValue) == 0 {
-		intentValue = cloneMap(task.Intent)
 	}
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先明确告诉我你希望执行的处理方式。", task.UpdatedAt.Format(dateTimeLayout))
@@ -404,6 +415,14 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}, nil
 }
 
+func (s *Service) revertTaskToIntentConfirmation(task runengine.TaskRecord) (runengine.TaskRecord, error) {
+	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, confirmationTitleFromTask(task), nil)
+	if !ok {
+		return runengine.TaskRecord{}, ErrTaskNotFound
+	}
+	return updatedTask, nil
+}
+
 // RecommendationGet 处理当前模块的相关逻辑。
 
 // RecommendationGet 处理 agent.recommendation.get，返回轻量推荐动作。
@@ -455,13 +474,14 @@ func (s *Service) RecommendationFeedbackSubmit(params map[string]any) (map[strin
 	}, nil
 }
 
-// TaskList 处理当前模块的相关逻辑。
-
-// TaskList 处理 agent.task.list，返回符合排序规则的任务列表。
+// TaskList handles `agent.task.list` and returns protocol-facing task items
+// with stable paging semantics for both runtime and storage-backed queries.
 func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	group := stringValue(params, "group", "unfinished")
-	limit := intValue(params, "limit", 20)
-	offset := intValue(params, "offset", 0)
+	// Clamp paging params at the RPC boundary so runtime and storage-backed
+	// list flows expose the same contract to dashboard consumers.
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
 	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
@@ -732,6 +752,21 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	if !isSupportedTaskControlAction(action) {
 		return nil, fmt.Errorf("unsupported task control action: %s", action)
 	}
+	wasHumanLoop := false
+	var reviewDecision map[string]any
+	arguments := mapValue(params, "arguments")
+	if action == "resume" {
+		if existingTask, ok := s.runEngine.GetTask(taskID); ok {
+			wasHumanLoop = taskIsBlockedHumanLoop(existingTask)
+		}
+		if wasHumanLoop {
+			decision, decisionErr := humanReviewDecisionFromParams(arguments)
+			if decisionErr != nil {
+				return nil, decisionErr
+			}
+			reviewDecision = decision
+		}
+	}
 	bubble := s.delivery.BuildBubbleMessage(taskID, "status", controlBubbleText(action), currentTimeFromTask(s.runEngine, taskID))
 	updatedTask, err := s.runEngine.ControlTask(taskID, action, bubble)
 	if err != nil {
@@ -744,6 +779,14 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 			return nil, ErrTaskAlreadyFinished
 		default:
 			return nil, err
+		}
+	}
+	if action == "resume" && wasHumanLoop {
+		if traceResumedTask, traceBubble, _, resumed, resumeErr := s.resumeHumanLoopTask(updatedTask, reviewDecision); resumeErr != nil {
+			return nil, resumeErr
+		} else if resumed {
+			updatedTask = traceResumedTask
+			bubble = traceBubble
 		}
 	}
 	if taskIsTerminal(updatedTask.Status) {
@@ -910,26 +953,16 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}, nil
 }
 
-// DashboardOverviewGet 处理当前模块的相关逻辑。
-
-// DashboardOverviewGet 处理 agent.dashboard.overview.get。
+// DashboardOverviewGet handles `agent.dashboard.overview.get`.
 func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, error) {
-	runtimeUnfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	runtimeFinishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	pendingApprovals, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	queryViews := newTaskQueryViews(s)
+	unfinishedTasks := queryViews.tasks("unfinished", "updated_at", "desc")
+	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
+	pendingApprovals, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	needStorageFallback := !queryViews.hasRuntimeState()
 
-	// Always merge storage data with runtime data for complete dashboard view
-	allPersistedTasks := s.loadAllTasksFromStorage()
-	unfinishedTasks := mergeTaskLists(runtimeUnfinishedTasks, filterAndSortTasks(allPersistedTasks, "unfinished", "updated_at", "desc"))
-	finishedTasks := mergeTaskLists(runtimeFinishedTasks, filterAndSortTasks(allPersistedTasks, "finished", "finished_at", "desc"))
-	needStorageFallback := len(runtimeUnfinishedTasks) == 0 && len(runtimeFinishedTasks) == 0
-
-	if pendingTotal == 0 {
-		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
-	}
-	if len(pendingApprovals) == 0 && pendingTotal > 0 {
-		pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
-	}
+	pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
+	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	focusMode := boolValue(params, "focus_mode", false)
 	requestedIncludes := stringSliceValue(params["include"])
 	includeAll := len(requestedIncludes) == 0
@@ -1044,28 +1077,25 @@ func pendingApprovalsFromTasks(tasks []runengine.TaskRecord) []map[string]any {
 	return items
 }
 
-// DashboardModuleGet 处理当前模块的相关逻辑。
+// mergedPendingApprovalTotal prefers the task-centric merged view so mixed
+// runtime and storage snapshots report one stable pending-authorization count.
+func mergedPendingApprovalTotal(unfinishedTasks []runengine.TaskRecord, runtimePendingTotal int) int {
+	pendingTotal := countPendingApprovalTasks(unfinishedTasks)
+	if pendingTotal == 0 && runtimePendingTotal > 0 {
+		return runtimePendingTotal
+	}
+	return pendingTotal
+}
 
-// DashboardModuleGet 处理 agent.dashboard.module.get。
+// DashboardModuleGet handles `agent.dashboard.module.get`.
 func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, error) {
 	module := stringValue(params, "module", "mirror")
 	tab := stringValue(params, "tab", "daily_summary")
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	if len(finishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
-			finishedTasks = persistedTasks
-		}
-	}
-	if len(unfinishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
-			unfinishedTasks = persistedTasks
-		}
-	}
-	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
-	if pendingTotal == 0 {
-		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
-	}
+	queryViews := newTaskQueryViews(s)
+	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
+	unfinishedTasks := queryViews.tasks("unfinished", "updated_at", "desc")
+	_, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...))
 	if latestAudit == nil {
 		latestAudit = s.latestAuditRecordFromStorage("")
@@ -1083,17 +1113,10 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 	}, nil
 }
 
-// MirrorOverviewGet 处理当前模块的相关逻辑。
-
-// MirrorOverviewGet 处理 agent.mirror.overview.get。
+// MirrorOverviewGet handles `agent.mirror.overview.get`.
 func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, error) {
 	_ = params
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	if len(finishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
-			finishedTasks = persistedTasks
-		}
-	}
+	finishedTasks := newTaskQueryViews(s).tasks("finished", "finished_at", "desc")
 	memoryReferences := collectMirrorReferences(finishedTasks)
 	return map[string]any{
 		"history_summary": buildMirrorHistorySummary(finishedTasks, memoryReferences),
@@ -1107,26 +1130,13 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 	}, nil
 }
 
-// SecuritySummaryGet 处理当前模块的相关逻辑。
-
-// SecuritySummaryGet 处理 agent.security.summary.get。
+// SecuritySummaryGet handles `agent.security.summary.get`.
 func (s *Service) SecuritySummaryGet() (map[string]any, error) {
-	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
-	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
-	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
-	if len(unfinishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
-			unfinishedTasks = persistedTasks
-		}
-	}
-	if len(finishedTasks) == 0 {
-		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
-			finishedTasks = persistedTasks
-		}
-	}
-	if pendingTotal == 0 {
-		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
-	}
+	_, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	queryViews := newTaskQueryViews(s)
+	unfinishedTasks := queryViews.tasks("unfinished", "updated_at", "desc")
+	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
+	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
 	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
 	latestRestorePoint := latestRestorePointFromTasks(allTasks)
@@ -1143,32 +1153,29 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 	}, nil
 }
 
-// SecurityPendingList 处理当前模块的相关逻辑。
-
-// SecurityPendingList 处理 agent.security.pending.list。
+// SecurityPendingList handles `agent.security.pending.list` and keeps the
+// pending-authorization list aligned with the merged task-centric read model.
 func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, error) {
-	limit := intValue(params, "limit", 20)
-	offset := intValue(params, "offset", 0)
-	items, total := s.runEngine.PendingApprovalRequests(limit, offset)
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	unfinishedTasks := newTaskQueryViews(s).tasks("unfinished", "updated_at", "desc")
+	items := pendingApprovalsFromTasks(unfinishedTasks)
+	total := len(items)
 
-	// Fallback to storage if runtime has no pending approvals
+	// Keep the legacy runtime response as a safety net when runtime approval
+	// requests exist but the task snapshots do not expose a structured payload.
 	if total == 0 {
-		unfinishedTasks, totalTasks, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0)
-		if ok && totalTasks > 0 {
-			allPendingApprovals := pendingApprovalsFromTasks(unfinishedTasks)
-			total = len(allPendingApprovals)
-			if total > 0 {
-				start := offset
-				if start >= total {
-					start = total
-				}
-				end := start + limit
-				if end > total {
-					end = total
-				}
-				items = allPendingApprovals[start:end]
-			}
+		runtimeItems, runtimeTotal := s.runEngine.PendingApprovalRequests(limit, offset)
+		items = runtimeItems
+		total = runtimeTotal
+	} else if offset >= total {
+		items = []map[string]any{}
+	} else {
+		end := offset + limit
+		if end > total {
+			end = total
 		}
+		items = items[offset:end]
 	}
 
 	return map[string]any{
@@ -1699,6 +1706,66 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 		tasks = append(tasks, taskRecordFromStorage(record))
 	}
 	return tasks
+}
+
+// taskQueryViews caches runtime and storage-backed task snapshots for one
+// request so overview endpoints can reuse one merged task-centric read model
+// without reloading the full task table for every widget.
+type taskQueryViews struct {
+	service      *Service
+	runtimeTasks map[string][]runengine.TaskRecord
+	mergedTasks  map[string][]runengine.TaskRecord
+	storageTasks []runengine.TaskRecord
+	storageReady bool
+}
+
+func newTaskQueryViews(service *Service) *taskQueryViews {
+	return &taskQueryViews{
+		service:      service,
+		runtimeTasks: make(map[string][]runengine.TaskRecord, 2),
+		mergedTasks:  make(map[string][]runengine.TaskRecord, 2),
+	}
+}
+
+// tasks returns one merged task-centric view for the requested group and sort
+// order, reusing the same storage snapshot for the whole RPC request.
+func (q *taskQueryViews) tasks(group, sortBy, sortOrder string) []runengine.TaskRecord {
+	key := strings.Join([]string{group, sortBy, sortOrder}, "|")
+	if tasks, ok := q.mergedTasks[key]; ok {
+		return tasks
+	}
+	runtimeTasks := q.runtime(group, sortBy, sortOrder)
+	storageTasks := filterAndSortTasks(q.loadStorage(), group, sortBy, sortOrder)
+	merged := mergeTaskLists(runtimeTasks, storageTasks)
+	if len(merged) > 0 {
+		runengineSortTaskRecords(merged, sortBy, sortOrder)
+	}
+	q.mergedTasks[key] = merged
+	return merged
+}
+
+func (q *taskQueryViews) hasRuntimeState() bool {
+	return len(q.runtime("unfinished", "updated_at", "desc")) > 0 ||
+		len(q.runtime("finished", "finished_at", "desc")) > 0
+}
+
+func (q *taskQueryViews) runtime(group, sortBy, sortOrder string) []runengine.TaskRecord {
+	key := strings.Join([]string{group, sortBy, sortOrder}, "|")
+	if tasks, ok := q.runtimeTasks[key]; ok {
+		return tasks
+	}
+	tasks, _ := q.service.runEngine.ListTasks(group, sortBy, sortOrder, 0, 0)
+	q.runtimeTasks[key] = tasks
+	return tasks
+}
+
+func (q *taskQueryViews) loadStorage() []runengine.TaskRecord {
+	if q.storageReady {
+		return q.storageTasks
+	}
+	q.storageTasks = q.service.loadAllTasksFromStorage()
+	q.storageReady = true
+	return q.storageTasks
 }
 
 func filterAndSortTasks(tasks []runengine.TaskRecord, group, sortBy, sortOrder string) []runengine.TaskRecord {
@@ -3296,6 +3363,14 @@ func originalTextFromTaskTitle(title string) string {
 	return trimmed
 }
 
+func confirmationTitleFromTask(task runengine.TaskRecord) string {
+	subject := strings.TrimSpace(originalTextFromTaskTitle(task.Title))
+	if subject == "" {
+		subject = "当前任务"
+	}
+	return "确认处理方式：" + subject
+}
+
 // memoryQueryFromSnapshot 处理当前模块的相关逻辑。
 
 // memoryQueryFromSnapshot 从当前上下文挑选最适合作为检索 query 的内容。
@@ -4002,6 +4077,18 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		artifacts := delivery.EnsureArtifactIdentifiers(processingTask.TaskID, s.delivery.BuildArtifact(processingTask.TaskID, resultTitle, deliveryResult))
 		resultBubble := s.delivery.BuildBubbleMessage(processingTask.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
 		processingTask = s.appendAuditData(processingTask, compactAuditRecords(s.audit.BuildDeliveryAudit(processingTask.TaskID, processingTask.RunID, deliveryResult)), nil)
+		traceCapture, traceErr := s.captureExecutionTrace(processingTask, snapshot, taskIntent, execution.Result{
+			Content:        previewTextForDeliveryType(deliveryType),
+			DeliveryResult: deliveryResult,
+			Artifacts:      artifacts,
+		}, nil)
+		if traceErr != nil {
+			failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, execution.Result{}, traceErr)
+			return failedTask, failureBubble, nil, nil, nil
+		}
+		if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture); ok {
+			return escalatedTask, escalatedBubble, nil, nil, nil
+		}
 		updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, deliveryResult, resultBubble, artifacts)
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
@@ -4030,6 +4117,14 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, auditDeliveryResult)
 	processingTask = s.appendAuditData(processingTask, executionAuditRecords, executionTokenUsage)
+	traceCapture, traceErr := s.captureExecutionTrace(processingTask, snapshot, taskIntent, executionResult, err)
+	if traceErr != nil {
+		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, traceErr)
+		return failedTask, failureBubble, nil, nil, nil
+	}
+	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture, executionResult); ok {
+		return escalatedTask, escalatedBubble, nil, nil, nil
+	}
 	if err != nil {
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, err)
 		return failedTask, failureBubble, nil, nil, nil
@@ -4048,6 +4143,174 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) (traceeval.CaptureResult, error) {
+	if s.traceEval == nil {
+		return traceeval.CaptureResult{}, nil
+	}
+	capture, err := s.traceEval.Capture(traceeval.CaptureInput{
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		IntentName:      stringValue(taskIntent, "name", ""),
+		Snapshot:        snapshot,
+		OutputText:      result.Content,
+		DeliveryResult:  cloneMap(result.DeliveryResult),
+		Artifacts:       cloneMapSlice(result.Artifacts),
+		ModelInvocation: cloneMap(result.ModelInvocation),
+		ToolCalls:       append([]tools.ToolCallRecord(nil), result.ToolCalls...),
+		TokenUsage:      cloneMap(task.TokenUsage),
+		DurationMS:      result.DurationMS,
+		ExecutionError:  executionErr,
+	})
+	if err != nil {
+		return traceeval.CaptureResult{}, err
+	}
+	if err := s.traceEval.Record(context.Background(), capture); err != nil {
+		return traceeval.CaptureResult{}, err
+	}
+	return capture, nil
+}
+
+func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, bool, error) {
+	if !resumedFromHumanLoop(task) {
+		return runengine.TaskRecord{}, nil, nil, false, nil
+	}
+	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
+	if !ok {
+		return runengine.TaskRecord{}, nil, nil, false, nil
+	}
+	escalation := mapValue(pendingExecution, "escalation")
+	if len(escalation) == 0 {
+		return runengine.TaskRecord{}, nil, nil, false, nil
+	}
+	decision := strings.TrimSpace(stringValue(reviewDecision, "decision", ""))
+	if decision == "" {
+		return runengine.TaskRecord{}, nil, nil, false, fmt.Errorf("review.decision is required for human review resume")
+	}
+	if decision != "approve" && decision != "replan" {
+		return runengine.TaskRecord{}, nil, nil, false, fmt.Errorf("unsupported review decision: %s", decision)
+	}
+	escalation["review_result"] = decision
+	escalation["reviewed_at"] = currentTimeFromTask(s.runEngine, task.TaskID)
+	if reviewerID := strings.TrimSpace(stringValue(reviewDecision, "reviewer_id", "")); reviewerID != "" {
+		escalation["reviewer_id"] = reviewerID
+	}
+	if notes := strings.TrimSpace(stringValue(reviewDecision, "notes", "")); notes != "" {
+		escalation["review_notes"] = notes
+	}
+	if correctedIntent := mapValue(reviewDecision, "corrected_intent"); len(correctedIntent) > 0 {
+		escalation["corrected_intent"] = cloneMap(correctedIntent)
+	}
+	suggestedAction := firstNonEmptyString(stringValue(escalation, "suggested_action", ""), "review_and_replan")
+	if suggestedAction != "review_and_replan" {
+		return runengine.TaskRecord{}, nil, nil, false, nil
+	}
+	if decision == "replan" {
+		intentValue := cloneMap(task.Intent)
+		if correctedIntent := mapValue(escalation, "corrected_intent"); len(correctedIntent) > 0 {
+			intentValue = correctedIntent
+		}
+		updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+		replanBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "人工复核要求重新规划，请确认新的处理意图。", task.UpdatedAt.Format(dateTimeLayout))
+		replannedTask, ok := s.runEngine.ReopenIntentConfirmation(task.TaskID, updatedTitle, intentValue, replanBubble)
+		if !ok {
+			return runengine.TaskRecord{}, nil, nil, false, ErrTaskNotFound
+		}
+		return replannedTask, replanBubble, nil, true, nil
+	}
+	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "人工复核完成，任务继续执行。", task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), task.Intent)
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, false, err
+	}
+	if bubble == nil {
+		bubble = resultBubble
+	}
+	return updatedTask, bubble, deliveryResult, true, nil
+}
+
+func humanReviewDecisionFromParams(arguments map[string]any) (map[string]any, error) {
+	decision := mapValue(arguments, "review")
+	if len(decision) == 0 {
+		decision = mapValue(arguments, "human_review")
+	}
+	if len(decision) == 0 {
+		return nil, fmt.Errorf("review decision is required to resume a human review task")
+	}
+	if strings.TrimSpace(stringValue(decision, "decision", "")) == "" {
+		return nil, fmt.Errorf("review.decision is required to resume a human review task")
+	}
+	decisionValue := strings.TrimSpace(stringValue(decision, "decision", ""))
+	if decisionValue != "approve" && decisionValue != "replan" {
+		return nil, fmt.Errorf("unsupported review decision: %s", decisionValue)
+	}
+	if decisionValue == "replan" {
+		if correctedIntent := mapValue(decision, "corrected_intent"); len(correctedIntent) == 0 {
+			return nil, fmt.Errorf("review.corrected_intent is required when decision is replan")
+		}
+	}
+	return cloneMap(decision), nil
+}
+
+func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture traceeval.CaptureResult, executionResult ...execution.Result) (runengine.TaskRecord, map[string]any, bool) {
+	if capture.HumanInLoop == nil {
+		return runengine.TaskRecord{}, nil, false
+	}
+	if len(executionResult) > 0 && executionAttemptHasSideEffects(executionResult[0]) {
+		return runengine.TaskRecord{}, nil, false
+	}
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", capture.HumanInLoop.Summary, task.UpdatedAt.Format(dateTimeLayout))
+	escalation := map[string]any{
+		"escalation_id":    capture.HumanInLoop.EscalationID,
+		"reason":           capture.HumanInLoop.Reason,
+		"review_result":    capture.HumanInLoop.ReviewResult,
+		"status":           capture.HumanInLoop.Status,
+		"summary":          capture.HumanInLoop.Summary,
+		"suggested_action": capture.HumanInLoop.SuggestedAction,
+		"created_at":       capture.HumanInLoop.CreatedAt,
+	}
+	updatedTask, ok := s.runEngine.EscalateHumanLoop(task.TaskID, escalation, bubble)
+	if !ok {
+		return runengine.TaskRecord{}, nil, false
+	}
+	return updatedTask, bubble, true
+}
+
+func resumedFromHumanLoop(task runengine.TaskRecord) bool {
+	if task.Status != "processing" || task.CurrentStep != executionStepName(task.Intent) {
+		return false
+	}
+	return true
+}
+
+func taskIsBlockedHumanLoop(task runengine.TaskRecord) bool {
+	if task.Status != "blocked" || task.CurrentStep != "human_in_loop" {
+		return false
+	}
+	return stringValue(task.PendingExecution, "kind", "") == "human_in_loop"
+}
+
+func executionAttemptHasSideEffects(result execution.Result) bool {
+	if len(result.ToolCalls) == 0 {
+		return false
+	}
+	for _, toolCall := range result.ToolCalls {
+		if !isMutatingToolCall(toolCall.ToolName) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isMutatingToolCall(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "write_file", "exec_command", "page_interact", "transcode_media", "normalize_recording", "extract_frames":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord) runengine.TaskRecord {

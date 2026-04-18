@@ -11,6 +11,7 @@ export function ShellBallBubbleMessage({ item, onDelete, onPin }: ShellBallBubbl
   const bubbleId = item.bubble.bubble_id;
   const bubbleText = item.bubble.text;
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
+  const showLoadingState = item.desktop.presentationHint === "loading";
 
   void onDelete;
   void onPin;
@@ -21,7 +22,16 @@ export function ShellBallBubbleMessage({ item, onDelete, onPin }: ShellBallBubbl
       data-role={item.role}
     >
       <div className={`shell-ball-bubble-message shell-ball-bubble-message--${item.role}`} data-message-id={bubbleId}>
-        {showMarkdown ? (
+        {showLoadingState ? (
+          <div className="shell-ball-bubble-message__loading" aria-live="polite" aria-label={bubbleText || "Agent is thinking"}>
+            <span className="shell-ball-bubble-message__loading-dots" aria-hidden="true">
+              <span className="shell-ball-bubble-message__loading-dot" />
+              <span className="shell-ball-bubble-message__loading-dot" />
+              <span className="shell-ball-bubble-message__loading-dot" />
+            </span>
+            {bubbleText.trim() !== "" ? <span className="shell-ball-bubble-message__loading-label">{bubbleText}</span> : null}
+          </div>
+        ) : showMarkdown ? (
           <ShellBallMarkdown text={bubbleText} />
         ) : (
           <p className="shell-ball-bubble-message__text">{bubbleText}</p>

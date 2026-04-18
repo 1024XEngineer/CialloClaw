@@ -391,6 +391,7 @@ export function useShellBallInteraction() {
   const [inputValue, setInputValue] = useState("");
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const [finalizedSpeechPayload, setFinalizedSpeechPayload] = useState<string | null>(null);
+  const [regionActive, setRegionActive] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [voicePreview, setVoicePreview] = useState<ShellBallVoicePreview>(null);
   const [voiceHintMode, setVoiceHintMode] = useState<ShellBallVoiceHintMode>("hidden");
@@ -398,6 +399,7 @@ export function useShellBallInteraction() {
   const [interactionConsumed, setInteractionConsumed] = useState(false);
   const regionActiveRef = useRef(false);
   const inputFocusedRef = useRef(false);
+  const inputHoveredRef = useRef(false);
   const pressStartXRef = useRef<number | null>(null);
   const pressStartYRef = useRef<number | null>(null);
   const voicePreviewRef = useRef<ShellBallVoicePreview>(null);
@@ -485,6 +487,7 @@ export function useShellBallInteraction() {
     return shouldRetainShellBallHoverInput({
       regionActive: regionActiveRef.current,
       inputFocused: inputFocusedRef.current,
+      inputHovered: inputHoveredRef.current,
       hasDraft: inputValue.trim() !== "" || pendingFiles.length > 0,
     });
   }
@@ -734,11 +737,13 @@ export function useShellBallInteraction() {
 
   function handleRegionEnter() {
     regionActiveRef.current = true;
+    setRegionActive(true);
     dispatch("pointer_enter_hotspot", { regionActive: true, hoverRetained: false });
   }
 
   function handleRegionLeave() {
     regionActiveRef.current = false;
+    setRegionActive(false);
     clearLongPressTimer();
 
     if (!shouldKeepShellBallVoicePreviewOnRegionLeave(controllerRef.current?.getState() ?? visualState)) {
@@ -749,6 +754,20 @@ export function useShellBallInteraction() {
       regionActive: false,
       hoverRetained: getHoverRetained(),
     });
+  }
+
+  function handleInputHoverChange(active: boolean) {
+    inputHoveredRef.current = active;
+
+    if (active) {
+      dispatch("pointer_enter_hotspot", {
+        regionActive: regionActiveRef.current,
+        hoverRetained: true,
+      });
+      return;
+    }
+
+    syncHoverRetention();
   }
 
   async function handleSubmitText() {
@@ -801,8 +820,10 @@ export function useShellBallInteraction() {
     setPendingFiles((currentPaths) => mergeShellBallPendingFiles(currentPaths, normalizedPaths));
     inputFocusedRef.current = true;
     setInputFocused(true);
-    regionActiveRef.current = true;
-    controllerRef.current?.forceState("hover_input", { regionActive: true, hoverRetained: false });
+    controllerRef.current?.forceState("hover_input", {
+      regionActive: regionActiveRef.current,
+      hoverRetained: true,
+    });
     syncVisualState();
   }
 
@@ -817,6 +838,7 @@ export function useShellBallInteraction() {
 
   function handlePressStart(event: PointerEvent<HTMLButtonElement>) {
     regionActiveRef.current = true;
+    setRegionActive(true);
     resetInteractionConsumed();
     pressStartXRef.current = event.screenX;
     pressStartYRef.current = event.screenY;
@@ -1002,8 +1024,10 @@ export function useShellBallInteraction() {
     inputFocusedRef.current = focused;
     setInputFocused(focused);
     if (focused) {
-      regionActiveRef.current = true;
-      controllerRef.current?.forceState("hover_input", { regionActive: true });
+      controllerRef.current?.forceState("hover_input", {
+        regionActive: regionActiveRef.current,
+        hoverRetained: true,
+      });
       syncVisualState();
       return;
     }
@@ -1016,8 +1040,10 @@ export function useShellBallInteraction() {
   function handleInputFocusRequest() {
     inputFocusedRef.current = true;
     setInputFocused(true);
-    regionActiveRef.current = true;
-    controllerRef.current?.forceState("hover_input", { regionActive: true, hoverRetained: false });
+    controllerRef.current?.forceState("hover_input", {
+      regionActive: regionActiveRef.current,
+      hoverRetained: true,
+    });
     syncVisualState();
   }
 
@@ -1088,6 +1114,7 @@ export function useShellBallInteraction() {
     setInputValue,
     finalizedSpeechPayload,
     acknowledgeFinalizedSpeechPayload,
+    regionActive,
     voicePreview,
     voiceHintMode,
     voiceHoldProgress,
@@ -1111,6 +1138,7 @@ export function useShellBallInteraction() {
     handlePressMove,
     handlePressEnd,
     handlePressCancel,
+    handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
     handleForceState,

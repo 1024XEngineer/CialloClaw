@@ -412,6 +412,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005003` `CHECKPOINT_CREATE_FAILED`
 - `1005004` `STRONGHOLD_ACCESS_FAILED`
 - `1005005` `RAG_INDEX_UNAVAILABLE`
+- `1005006` `RECOVERY_POINT_NOT_FOUND`
 
 #### Worker / Sidecar / Plugin
 
@@ -787,7 +788,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 补充约束：
 
 - `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时 `corrected_intent` 可省略；若传入也应被忽略，不得覆盖当前意图。
-- `confirmed = false` 时，调用方应传入完整的 `corrected_intent`，后端以该对象覆盖任务当前意图后再推进执行。
+- `confirmed = false` 时，若调用方传入完整的 `corrected_intent`，后端以该对象覆盖任务当前意图后再推进执行。
+- `confirmed = false` 且未传入 `corrected_intent` 时，后端不得直接取消任务；应保留任务在 `confirming_intent`，并返回要求用户重新说明目标或补充修正意图的状态气泡。
 - 本接口只处理“意图确认 / 纠偏”这一承接阶段，不替代 `agent.task.control` 的暂停、继续、取消、重启控制语义。
 
 ### agent.task.confirm 入参说明
@@ -2280,6 +2282,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **入参**：需要包含的镜子区块
 - **出参**：镜子概览数据
 
+补充约束：
+
+- 当前 stable 范围内，镜子域只冻结 `agent.mirror.overview.get`
+- `agent.mirror.memory.manage` 仍属于 planned，前端不得绕过协议真源提前调用
+
 ### agent.mirror.overview.get 入参说明
 
 | 字段      | 中文说明           |
@@ -2514,6 +2521,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **入参**：任务 ID、审批 ID、决策结果、是否记住规则
 - **出参**：授权记录、任务状态、状态气泡
 
+补充约束：
+
+- 普通审批流返回 `authorization_record`、`task`、`bubble_message`，并可按需附带 `impact_scope`
+- 若当前审批对应的是 `agent.security.restore.apply` 的第二阶段执行，则返回形状切换为 `applied`、`task`、`recovery_point`、`audit_record`、`bubble_message`
+- `agent.security.respond` 不再额外暴露 `delivery_result`；正式交付结果仍以任务运行态、`delivery.ready` 通知和交付相关接口为准
+
 ### agent.security.respond 入参说明
 
 | 字段            | 中文说明     |
@@ -2550,6 +2563,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.authorization_record` | 授权记录         |
 | `data.task`                 | 更新后的任务状态 |
 | `data.bubble_message`       | 状态提示气泡     |
+| `data.impact_scope`         | 可选的影响范围摘要 |
 
 ### agent.security.respond 出参示例
 
@@ -2723,7 +2737,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 错误码 | 错误名 | 中文说明 |
 | ------ | ------ | -------- |
 | `1005001` | `SQLITE_WRITE_FAILED` | 恢复点读取或持久化存储查询失败 |
-| `1005002` | `ARTIFACT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
+| `1005006` | `RECOVERY_POINT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
 
 ### agent.security.restore.apply 首次出参示例
 
@@ -2811,16 +2825,21 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 用户在安全卫士中查看审计明细时
   - 任务详情需要展示审计区时
 - **系统处理**：
-  - 按任务或全局范围拉取审计记录
+  - 按任务范围拉取审计记录
   - 返回稳定分页结构供前端展示
-- **入参**：可选任务 ID、分页参数
+- **入参**：任务 ID、分页参数
 - **出参**：审计记录列表、分页信息
+
+补充约束：
+
+- 必须传入 `task_id`
+- 接口当前只返回指定任务的审计记录
 
 ### agent.security.audit.list 入参说明
 
 | 字段      | 中文说明                 |
 | --------- | ------------------------ |
-| `task_id` | 可选的任务 ID            |
+| `task_id` | 必填的任务 ID            |
 | `limit`   | 每页条数                 |
 | `offset`  | 分页偏移                 |
 

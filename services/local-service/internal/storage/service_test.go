@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -154,6 +156,9 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	}
 	if !capabilities.SupportsMemoryStore || !capabilities.SupportsArtifactStore || !capabilities.SupportsSecretStore {
 		t.Fatalf("unexpected unsupported capabilities enabled: %+v", capabilities)
+	}
+	if service.TraceStore() == nil || service.EvalStore() == nil {
+		t.Fatalf("expected trace and eval stores to be wired: %+v", capabilities)
 	}
 	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
 		t.Fatalf("expected retrieval and search skeleton capabilities to be enabled: %+v", capabilities)
@@ -476,6 +481,112 @@ func TestResolveModelAPIKeyReturnsAccessFailureWhenStoreClosed(t *testing.T) {
 	if !errors.Is(err, ErrSecretStoreAccessFailed) {
 		t.Fatalf("expected ErrSecretStoreAccessFailed, got %v", err)
 	}
+}
+
+func TestNewServiceFallsBackTraceAndEvalTogetherWhenEvalInitFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace-eval-fallback.db")
+	originalTraceFactory := newSQLiteTraceStoreForService
+	originalEvalFactory := newSQLiteEvalStoreForService
+	defer func() {
+		newSQLiteTraceStoreForService = originalTraceFactory
+		newSQLiteEvalStoreForService = originalEvalFactory
+	}()
+
+	traceClosed := false
+	traceStore := &stubTraceStoreWithClose{closeFn: func() error {
+		traceClosed = true
+		return nil
+	}}
+	newSQLiteTraceStoreForService = func(databasePath string) (TraceStore, error) {
+		return traceStore, nil
+	}
+	newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) {
+		return nil, fmt.Errorf("eval init failed")
+	}
+
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	if !traceClosed {
+		t.Fatal("expected trace store to close when eval init fails")
+	}
+	if _, ok := service.TraceStore().(*stubTraceStoreWithClose); ok {
+		t.Fatal("expected trace store to fall back with eval store instead of keeping sqlite trace only")
+	}
+	if _, ok := service.EvalStore().(*inMemoryEvalStore); !ok {
+		t.Fatalf("expected eval store to fall back to in-memory, got %T", service.EvalStore())
+	}
+	if err := service.Validate(); err == nil || !strings.Contains(err.Error(), "initialize sqlite trace/eval stores") {
+		t.Fatalf("expected joined trace/eval init error, got %v", err)
+	}
+	if !service.Capabilities().FallbackActive {
+		t.Fatal("expected fallback flag when trace/eval pair downgrades together")
+	}
+}
+
+func TestInitializeSQLiteTraceEvalStoresReturnsPairOnSuccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace-eval-success.db")
+	originalTraceFactory := newSQLiteTraceStoreForService
+	originalEvalFactory := newSQLiteEvalStoreForService
+	defer func() {
+		newSQLiteTraceStoreForService = originalTraceFactory
+		newSQLiteEvalStoreForService = originalEvalFactory
+	}()
+
+	traceStore := newInMemoryTraceStore()
+	evalStore := newInMemoryEvalStore()
+	newSQLiteTraceStoreForService = func(databasePath string) (TraceStore, error) {
+		return traceStore, nil
+	}
+	newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) {
+		return evalStore, nil
+	}
+
+	gotTraceStore, gotEvalStore, err := initializeSQLiteTraceEvalStores(path)
+	if err != nil {
+		t.Fatalf("initializeSQLiteTraceEvalStores returned error: %v", err)
+	}
+	if gotTraceStore != traceStore || gotEvalStore != evalStore {
+		t.Fatalf("expected paired stores to be returned, got trace=%T eval=%T", gotTraceStore, gotEvalStore)
+	}
+}
+
+func TestInitializeSQLiteTraceEvalStoresReturnsTraceError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace-eval-trace-error.db")
+	originalTraceFactory := newSQLiteTraceStoreForService
+	originalEvalFactory := newSQLiteEvalStoreForService
+	defer func() {
+		newSQLiteTraceStoreForService = originalTraceFactory
+		newSQLiteEvalStoreForService = originalEvalFactory
+	}()
+
+	newSQLiteTraceStoreForService = func(databasePath string) (TraceStore, error) {
+		return nil, fmt.Errorf("trace init failed")
+	}
+	newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) {
+		return newInMemoryEvalStore(), nil
+	}
+
+	gotTraceStore, gotEvalStore, err := initializeSQLiteTraceEvalStores(path)
+	if err == nil || !strings.Contains(err.Error(), "trace store") {
+		t.Fatalf("expected trace init error, got trace=%v eval=%v err=%v", gotTraceStore, gotEvalStore, err)
+	}
+}
+
+type stubTraceStoreWithClose struct {
+	closeFn func() error
+}
+
+func (s *stubTraceStoreWithClose) WriteTraceRecord(context.Context, TraceRecord) error { return nil }
+func (s *stubTraceStoreWithClose) DeleteTraceRecord(context.Context, string) error     { return nil }
+func (s *stubTraceStoreWithClose) ListTraceRecords(context.Context, string, int, int) ([]TraceRecord, int, error) {
+	return nil, 0, nil
+}
+func (s *stubTraceStoreWithClose) Close() error {
+	if s.closeFn != nil {
+		return s.closeFn()
+	}
+	return nil
 }
 
 func assertToolCallCount(t *testing.T, db *sql.DB, expected int) {

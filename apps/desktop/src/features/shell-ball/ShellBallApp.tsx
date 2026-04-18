@@ -184,6 +184,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     voicePreview,
     voiceHintMode,
     voiceHoldProgress,
+    regionActive,
     inputFocused,
     handlePrimaryClick,
     shouldOpenDashboardFromDoubleClick,
@@ -198,6 +199,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: handleAppendPendingFiles,
     handleDroppedText,
     handleRemovePendingFile,
+    handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
     setInputValue,
@@ -208,6 +210,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const {
     beginBallWindowPointerDrag,
     endBallWindowPointerDrag,
+    freezeBallWindowPointerDrag,
     rootRef,
     updateBallWindowPointerDrag,
     windowFrame,
@@ -218,6 +221,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [selectionPromptActive, setSelectionPromptActive] = useState(false);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
+  const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
@@ -225,6 +229,19 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: () => undefined,
   });
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
+
+  useEffect(() => {
+    const wasVoiceActive =
+      previousVisualStateRef.current === "voice_listening" || previousVisualStateRef.current === "voice_locked";
+    const isVoiceActive = visualState === "voice_listening" || visualState === "voice_locked";
+
+    // Voice gestures should operate against a stationary orb once capture starts.
+    if (!wasVoiceActive && isVoiceActive) {
+      void freezeBallWindowPointerDrag();
+    }
+
+    previousVisualStateRef.current = visualState;
+  }, [freezeBallWindowPointerDrag, visualState]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -301,7 +318,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     void currentWindow
       .listen<ShellBallDashboardTransitionRequest>(shellBallDashboardTransitionEvents.request, ({ payload }) => {
         transitionQueueRef.current = transitionQueueRef.current
-          .catch(() => undefined)
+          .catch((): void => undefined)
           .then(async () => {
             if (disposed) {
               return;
@@ -470,10 +487,17 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, []);
 
-  const { handleDroppedFiles: handleCoordinatorDroppedFiles, handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt } = useShellBallCoordinator({
+  const {
+    handleDroppedFiles: handleCoordinatorDroppedFiles,
+    handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
+    handleRegionEnter: handleCoordinatorRegionEnter,
+    handleRegionLeave: handleCoordinatorRegionLeave,
+  } = useShellBallCoordinator({
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
+    regionActive,
     inputValue,
+    inputFocused,
     pendingFiles,
     finalizedSpeechPayload,
     voicePreview,
@@ -484,6 +508,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onFinalizedSpeechHandled: acknowledgeFinalizedSpeechPayload,
     onRegionEnter: handleRegionEnter,
     onRegionLeave: handleRegionLeave,
+    onInputHoverChange: handleInputHoverChange,
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
     onAttachFile: handleAttachFile,
@@ -551,8 +576,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }}
       onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}
-      onRegionEnter={handleRegionEnter}
-      onRegionLeave={handleRegionLeave}
+      onRegionEnter={handleCoordinatorRegionEnter}
+      onRegionLeave={handleCoordinatorRegionLeave}
       onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
       onInputProxyClick={() => {

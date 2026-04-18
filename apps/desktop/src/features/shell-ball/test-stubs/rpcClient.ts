@@ -1,9 +1,9 @@
 export class JsonRpcClientError extends Error {
-  readonly code = null;
+  readonly code: number | null = null;
 
-  readonly traceId = null;
+  readonly traceId: string | null = null;
 
-  readonly detail = null;
+  readonly detail: string | null = null;
 
   readonly rpcMessage: string;
 

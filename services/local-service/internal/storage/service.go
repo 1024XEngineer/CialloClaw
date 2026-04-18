@@ -34,6 +34,14 @@ const memoryStoreBackendSQLite = "sqlite_wal"
 const memoryRetrievalBackendInMemory = "in_memory"
 const memoryRetrievalBackendSQLite = "sqlite_fts5+sqlite_vec"
 
+var newSQLiteTraceStoreForService = func(databasePath string) (TraceStore, error) {
+	return NewSQLiteTraceStore(databasePath)
+}
+
+var newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) {
+	return NewSQLiteEvalStore(databasePath)
+}
+
 // Descriptor 定义当前模块的数据结构。
 type Descriptor struct {
 	Backend      string
@@ -50,6 +58,8 @@ type Service struct {
 	toolCallStore      ToolCallStore
 	artifactStore      ArtifactStore
 	todoStore          TodoStore
+	traceStore         TraceStore
+	evalStore          EvalStore
 	secretStore        SecretStore
 	auditStore         AuditStore
 	recoveryPointStore RecoveryPointStore
@@ -70,6 +80,8 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
 	todoStore := TodoStore(NewInMemoryTodoStore())
+	traceStore := TraceStore(newInMemoryTraceStore())
+	evalStore := EvalStore(newInMemoryEvalStore())
 	secretStore := SecretStore(newInMemorySecretStore())
 	auditStore := AuditStore(newInMemoryAuditStore())
 	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
@@ -134,6 +146,16 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			sqliteTraceStore, sqliteEvalStore, err := initializeSQLiteTraceEvalStores(databasePath)
+			if err == nil {
+				traceStore = sqliteTraceStore
+				evalStore = sqliteEvalStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, err)
+				fallbackActive = true
+			}
+
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
 				sqliteSecretStore, err := NewSQLiteSecretStore(secretPath)
 				if err == nil {
@@ -175,6 +197,8 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		toolCallStore:      toolCallStore,
 		artifactStore:      artifactStore,
 		todoStore:          todoStore,
+		traceStore:         traceStore,
+		evalStore:          evalStore,
 		secretStore:        secretStore,
 		auditStore:         auditStore,
 		recoveryPointStore: recoveryPointStore,
@@ -187,6 +211,31 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		storeInitErr:       storeInitErr,
 		fallbackActive:     fallbackActive,
 	}
+}
+
+func initializeSQLiteTraceEvalStores(databasePath string) (TraceStore, EvalStore, error) {
+	traceStore, err := newSQLiteTraceStoreForService(databasePath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialize sqlite trace/eval stores: trace store: %w", err)
+	}
+	evalStore, err := newSQLiteEvalStoreForService(databasePath)
+	if err != nil {
+		if closer, ok := traceStore.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+		return nil, nil, fmt.Errorf("initialize sqlite trace/eval stores: eval store: %w", err)
+	}
+	return traceStore, evalStore, nil
+}
+
+// TraceStore returns the configured trace persistence store.
+func (s *Service) TraceStore() TraceStore {
+	return s.traceStore
+}
+
+// EvalStore returns the configured eval snapshot persistence store.
+func (s *Service) EvalStore() EvalStore {
+	return s.evalStore
 }
 
 // Backend 处理当前模块的相关逻辑。
@@ -335,6 +384,12 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.todoStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.traceStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.evalStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.secretStore.(interface{ Close() error }); ok {

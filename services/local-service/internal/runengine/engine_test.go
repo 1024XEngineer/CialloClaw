@@ -420,6 +420,148 @@ func TestEngineSessionQueueBlocksAndResumesQueuedTasks(t *testing.T) {
 	}
 }
 
+func TestEngineEscalateHumanLoopBlocksTaskWithStructuredPayload(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_hitl",
+		Title:       "trace escalation",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "yellow",
+	})
+	bubble := map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}
+	escalated, ok := engine.EscalateHumanLoop(task.TaskID, map[string]any{"reason": "doom_loop", "status": "pending"}, bubble)
+	if !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+	if escalated.Status != "blocked" || escalated.CurrentStep != "human_in_loop" {
+		t.Fatalf("expected blocked human_in_loop task, got %+v", escalated)
+	}
+	if escalated.PendingExecution["kind"] != "human_in_loop" {
+		t.Fatalf("expected pending execution to carry human loop kind, got %+v", escalated.PendingExecution)
+	}
+	payload, ok := escalated.PendingExecution["escalation"].(map[string]any)
+	if !ok || payload["reason"] != "doom_loop" {
+		t.Fatalf("expected escalation payload to be preserved, got %+v", escalated.PendingExecution)
+	}
+}
+
+func TestEngineControlTaskResumeSupportsHumanLoopBlockedTasks(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_hitl_resume",
+		Title:       "trace escalation",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "yellow",
+	})
+	if _, ok := engine.EscalateHumanLoop(task.TaskID, map[string]any{"reason": "doom_loop", "status": "pending"}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	resumed, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status", "text": "人工复核完成"})
+	if err != nil {
+		t.Fatalf("expected resume from human_in_loop to succeed, got %v", err)
+	}
+	if resumed.Status != "processing" || resumed.CurrentStep != "agent_loop" {
+		t.Fatalf("expected human loop resume to restore processing/agent_loop, got %+v", resumed)
+	}
+	if resumed.PendingExecution == nil || resumed.PendingExecution["kind"] != "human_in_loop" {
+		t.Fatalf("expected human loop resume to preserve pending escalation payload until orchestrator consumes it, got %+v", resumed.PendingExecution)
+	}
+}
+
+func TestEngineCompleteTaskClearsPendingHumanLoopPayload(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_hitl_complete",
+		Title:       "trace escalation",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+	})
+	if _, ok := engine.EscalateHumanLoop(task.TaskID, map[string]any{"reason": "doom_loop", "status": "pending", "suggested_action": "review_and_replan"}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+	if _, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status", "text": "人工复核完成"}); err != nil {
+		t.Fatalf("expected resume from human loop to succeed, got %v", err)
+	}
+	completed, ok := engine.CompleteTask(task.TaskID, map[string]any{"type": "workspace_document"}, map[string]any{"task_id": task.TaskID, "type": "result", "text": "完成"}, nil)
+	if !ok {
+		t.Fatal("expected complete task to succeed")
+	}
+	if completed.PendingExecution != nil || completed.ApprovalRequest != nil {
+		t.Fatalf("expected completion to clear pending human loop payload, got %+v", completed)
+	}
+}
+
+func TestEngineReopenIntentConfirmationResetsExecutionState(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_replan",
+		Title:       "old title",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		DeliveryResult: map[string]any{
+			"type": "workspace_document",
+		},
+		Artifacts:        []map[string]any{{"artifact_id": "art_001"}},
+		MirrorReferences: []map[string]any{{"memory_id": "mem_001"}},
+	})
+	if _, ok := engine.ResolveAuthorization(task.TaskID, map[string]any{"decision": "allow_once"}, map[string]any{"files": []string{"workspace/out.md"}}); !ok {
+		t.Fatal("expected authorization record to be stored before reopen")
+	}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, []map[string]any{{"memory_id": "read_001"}}, []map[string]any{{"memory_id": "write_001"}}); !ok {
+		t.Fatal("expected memory plans to be stored before reopen")
+	}
+	if _, ok := engine.SetDeliveryPlans(task.TaskID, map[string]any{"target_path": "workspace/out.md"}, []map[string]any{{"artifact_id": "plan_001"}}); !ok {
+		t.Fatal("expected delivery plans to be stored before reopen")
+	}
+	if updated, ok := engine.SetMirrorReferences(task.TaskID, []map[string]any{{"memory_id": "mirror_001"}}); !ok {
+		t.Fatal("expected mirror references to be stored before reopen")
+	} else {
+		task = updated
+	}
+	if _, ok := engine.EscalateHumanLoop(task.TaskID, map[string]any{"reason": "doom_loop", "status": "pending"}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed before reopen")
+	}
+	reopened, ok := engine.ReopenIntentConfirmation(task.TaskID, "new title", map[string]any{"name": "translate"}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要重新确认"})
+	if !ok {
+		t.Fatal("expected reopen intent confirmation to succeed")
+	}
+	if reopened.Status != "confirming_intent" || reopened.CurrentStep != "confirming_intent" {
+		t.Fatalf("expected task to return to confirming_intent, got %+v", reopened)
+	}
+	if reopened.PendingExecution != nil || reopened.DeliveryResult != nil || len(reopened.Artifacts) != 0 {
+		t.Fatalf("expected reopen to clear execution outputs, got %+v", reopened)
+	}
+	if reopened.Authorization != nil || reopened.ImpactScope != nil {
+		t.Fatalf("expected reopen to clear authorization state, got %+v", reopened)
+	}
+	if reopened.StorageWritePlan != nil || len(reopened.ArtifactPlans) != 0 || len(reopened.MemoryReadPlans) != 0 || len(reopened.MemoryWritePlans) != 0 || len(reopened.MirrorReferences) != 0 {
+		t.Fatalf("expected reopen to clear handoff plans, got %+v", reopened)
+	}
+	if reopened.Title != "new title" || stringValue(reopened.Intent, "name", "") != "translate" {
+		t.Fatalf("expected reopen to persist updated title/intent, got %+v", reopened)
+	}
+}
+
+func TestEngineReopenIntentConfirmationReturnsFalseForMissingTask(t *testing.T) {
+	engine := NewEngine()
+	if reopened, ok := engine.ReopenIntentConfirmation("task_missing", "new title", map[string]any{"name": "translate"}, nil); ok || reopened.TaskID != "" {
+		t.Fatalf("expected reopen intent confirmation to fail for missing task, got %+v ok=%v", reopened, ok)
+	}
+}
+
 func TestEngineResolveAuthorizationClearsPendingPlanAndKeepsRestorePoint(t *testing.T) {
 	engine := NewEngine()
 	now := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)

@@ -2,6 +2,7 @@ export type {
   ShellBallBubbleDesktopFreshnessHint,
   ShellBallBubbleDesktopLifecycleState,
   ShellBallBubbleDesktopMotionHint,
+  ShellBallBubbleDesktopPresentationHint,
   ShellBallBubbleDesktopState,
   ShellBallBubbleItem,
   ShellBallBubbleRole,

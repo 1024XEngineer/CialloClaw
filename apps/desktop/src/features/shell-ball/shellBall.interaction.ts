@@ -8,7 +8,7 @@ import type {
 import type { TaskStatus } from "@cialloclaw/protocol";
 
 export const SHELL_BALL_HOVER_INTENT_MS = 360;
-export const SHELL_BALL_LEAVE_GRACE_MS = 180;
+export const SHELL_BALL_LEAVE_GRACE_MS = 360;
 export const SHELL_BALL_LONG_PRESS_MS = 1000;
 export const SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX = 12;
 export const SHELL_BALL_LOCKED_CANCEL_HOLD_MS = 200;
@@ -57,6 +57,7 @@ type ShellBallResolvedInteraction = {
 type ShellBallHoverRetentionInput = {
   regionActive: boolean;
   inputFocused: boolean;
+  inputHovered?: boolean;
   hasDraft: boolean;
 };
 
@@ -88,7 +89,7 @@ export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBall
 }
 
 export function shouldRetainShellBallHoverInput(input: ShellBallHoverRetentionInput): boolean {
-  return !input.regionActive && input.inputFocused;
+  return !input.regionActive && (input.inputFocused || input.inputHovered === true || input.hasDraft);
 }
 
 export function getShellBallGestureAxisIntent(input: {

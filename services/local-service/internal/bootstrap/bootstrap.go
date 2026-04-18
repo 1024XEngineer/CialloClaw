@@ -25,6 +25,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // App 定义当前模块的数据结构。
@@ -111,6 +112,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
+	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
 	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
@@ -133,7 +135,7 @@ func New(cfg config.Config) (*App, error) {
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithAudit(auditService).WithExecutor(executionService).WithStorage(storageService).WithTaskInspector(inspectorService)
+	).WithAudit(auditService).WithExecutor(executionService).WithStorage(storageService).WithTaskInspector(inspectorService).WithTraceEval(traceEvalService)
 
 	return &App{
 		server:       rpc.NewServer(cfg.RPC, orchestratorService),

@@ -69,7 +69,7 @@ function adaptMirrorReference(reference: MirrorOverviewMock["memory_references"]
   return {
     memory_id: reference.memory_id,
     reason: reference.reason,
-    summary: reference.summary,
+    summary: reference.summary ?? reference.reason,
   };
 }
 
@@ -155,19 +155,19 @@ export function buildMirrorInsightPreview(
   conversationSummary: MirrorConversationSummary,
 ): MirrorInsightPreview {
   const latestReference = overview.memory_references[0] ?? null;
+  const overviewLead = overview.history_summary[0] ?? latestReference?.reason ?? dailyDigest.lede;
   const localConversationCopy =
     conversationSummary.total_records > 0
-      ? `本地记录 ${conversationSummary.total_records} 条最近对话。`
-      : "当前没有本地对话记录。";
+      ? `本地最近 100 条对话中记录了 ${conversationSummary.total_records} 条可见会话。`
+      : "当前没有本地对话统计。";
 
   return {
     badge: latestReference ? "mirror ready" : "mirror quiet",
     title: dailyDigest.headline,
-    description: `${dailyDigest.lede} ${localConversationCopy}`,
+    description: `${overviewLead} ${localConversationCopy}`,
     primaryReference: latestReference,
   };
 }
-
 function buildMirrorOverviewData(
   overview: AgentMirrorOverviewGetResult,
   source: MirrorOverviewSource,

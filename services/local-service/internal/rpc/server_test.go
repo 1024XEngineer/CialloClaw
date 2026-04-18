@@ -1,9 +1,10 @@
-// 该测试文件验证 RPC 层的响应与通知流行为。
+// RPC server tests verify response envelopes and notification behavior.
 package rpc
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"path/filepath"
@@ -27,9 +28,26 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// TestHandleStreamConnEmitsApprovalNotifications 验证HandleStreamConnEmitsApprovalNotifications。
+// TestHandleStreamConnEmitsApprovalNotifications verifies that approval notifications
+// are emitted on the stream connection after task confirmation enters waiting_auth.
 func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	server := newTestServer()
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请生成一个文件版本",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if startResult["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected seeded task to wait for confirm, got %+v", startResult["task"])
+	}
 	left, right := net.Pipe()
 	defer left.Close()
 	defer right.Close()
@@ -42,16 +60,11 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	request := requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-1"`),
-		Method:  "agent.task.start",
+		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_demo",
-			"source":     "floating_ball",
-			"trigger":    "text_selected_click",
-			"input": map[string]any{
-				"type": "text_selection",
-				"text": "请生成一个文件版本",
-			},
-			"intent": map[string]any{
+			"task_id":   taskID,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
 				"name": "write_file",
 				"arguments": map[string]any{
 					"require_authorization": true,
@@ -69,7 +82,6 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-
 	if response.Result.Data.(map[string]any)["task"].(map[string]any)["status"] != "waiting_auth" {
 		t.Fatalf("expected waiting_auth task status in response")
 	}
@@ -79,7 +91,7 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	}
 
 	seenApprovalPending := false
-	for index := 0; index < 4; index++ {
+	for index := 0; index < 8; index++ {
 		var notification notificationEnvelope
 		if err := decoder.Decode(&notification); err != nil {
 			break
@@ -94,7 +106,46 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	}
 }
 
-// TestHandleDebugEventsReturnsQueuedNotifications 验证HandleDebugEventsReturnsQueuedNotifications。
+func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
+	server := newTestServer()
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-start-ignore-intent"`),
+		Method:  "agent.task.start",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_ignore_intent",
+			"source":     "floating_ball",
+			"trigger":    "text_selected_click",
+			"input": map[string]any{
+				"type": "text_selection",
+				"text": "select this content",
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	task := success.Result.Data.(map[string]any)["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected task.start to stay in confirming_intent when intent is stripped, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected task.start to rely on backend suggestion instead of request intent, got %+v", task["intent"])
+	}
+}
+
+// TestHandleDebugEventsReturnsQueuedNotifications verifies that queued
+// notifications can be fetched through the debug events endpoint.
 func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {
 	server := newTestServer()
 	result, err := server.orchestrator.StartTask(map[string]any{
@@ -240,7 +291,6 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 	}
 }
 
-// newTestServer 处理当前模块的相关逻辑。
 func TestDispatchMapsTaskControlStatusErrors(t *testing.T) {
 	server := newTestServer()
 
@@ -785,6 +835,67 @@ func TestDispatchMapsTaskControlMissingActionToInvalidParams(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskListClampsPagingParams(t *testing.T) {
+	server := newTestServer()
+
+	for index := 0; index < 25; index++ {
+		_, err := server.orchestrator.StartTask(map[string]any{
+			"session_id": fmt.Sprintf("sess_rpc_task_list_%02d", index),
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("rpc task list clamp %02d", index),
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("start task %d: %v", index, err)
+		}
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-list-clamp"`),
+		Method:  "agent.task.list",
+		Params: mustMarshal(t, map[string]any{
+			"group":      "unfinished",
+			"limit":      0,
+			"offset":     -5,
+			"sort_by":    "updated_at",
+			"sort_order": "desc",
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 20 {
+		t.Fatalf("expected rpc task.list to clamp zero limit to 20 items, got %d", len(items))
+	}
+	page := data["page"].(map[string]any)
+	if numericValue(t, page["limit"]) != 20 {
+		t.Fatalf("expected clamped rpc page limit 20, got %+v", page)
+	}
+	if numericValue(t, page["offset"]) != 0 {
+		t.Fatalf("expected clamped rpc page offset 0, got %+v", page)
+	}
+	if page["has_more"] != true {
+		t.Fatalf("expected rpc page has_more to remain true after clamping, got %+v", page)
+	}
+	if numericValue(t, page["total"]) != 25 {
+		t.Fatalf("expected rpc page total 25, got %+v", page)
+	}
+}
+
 func newTestServer() *Server {
 	orch := orchestrator.NewService(
 		contextsvc.NewService(),
@@ -813,7 +924,6 @@ func newTestServer() *Server {
 	return server
 }
 
-// mustMarshal 处理当前模块的相关逻辑。
 func mustMarshal(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	encoded, err := json.Marshal(value)

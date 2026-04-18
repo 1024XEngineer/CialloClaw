@@ -4,6 +4,8 @@ import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import { getShellBallInputBarMode } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 
+import type { IntentPayload } from "@cialloclaw/protocol";
+
 export const shellBallWindowSyncEvents = Object.freeze({
   snapshot: "desktop-shell-ball:snapshot",
   geometry: "desktop-shell-ball:geometry",
@@ -49,6 +51,10 @@ export type ShellBallBubbleRegionState = {
   visibilityPhase: ShellBallBubbleVisibilityPhase;
 };
 
+export type ShellBallInputInteractionState = {
+  clickThrough: boolean;
+};
+
 export type ShellBallWindowSnapshot = {
   visualState: ShellBallVisualState;
   voiceHintMode: ShellBallVoiceHintMode;
@@ -58,6 +64,7 @@ export type ShellBallWindowSnapshot = {
   voicePreview: ShellBallVoicePreview;
   bubbleItems: ShellBallBubbleItem[];
   bubbleRegion: ShellBallBubbleRegionState;
+  inputInteraction: ShellBallInputInteractionState;
   visibility: ShellBallHelperWindowVisibility;
 };
 
@@ -133,6 +140,7 @@ export type ShellBallIntentDecisionPayload = {
   source: ShellBallBubbleActionSource;
   taskId: string;
   decision: ShellBallIntentDecision;
+  correctedIntent?: IntentPayload;
 };
 
 export type ShellBallBubbleActionPayload = {
@@ -180,6 +188,25 @@ export function getShellBallBubbleRegionState(
   };
 }
 
+export function getShellBallInputInteractionState(input: {
+  visualState: ShellBallVisualState;
+  regionActive: boolean;
+  inputFocused: boolean;
+  inputHovered: boolean;
+  hasDraft: boolean;
+}): ShellBallInputInteractionState {
+  const mode = getShellBallInputBarMode(input.visualState);
+  if (mode === "hidden") {
+    return {
+      clickThrough: true,
+    };
+  }
+
+  return {
+    clickThrough: false,
+  };
+}
+
 export function createShellBallWindowSnapshot(input: {
   visualState: ShellBallVisualState;
   voiceHintMode?: ShellBallVoiceHintMode;
@@ -189,6 +216,7 @@ export function createShellBallWindowSnapshot(input: {
   bubbleItems?: ShellBallBubbleItem[];
   helpersVisible?: boolean;
   bubbleVisibilityPhase?: ShellBallBubbleVisibilityPhase;
+  inputInteraction?: ShellBallInputInteractionState;
 }): ShellBallWindowSnapshot {
   const bubbleItems = cloneShellBallBubbleItems(input.bubbleItems ?? []);
   const bubbleVisibilityPhase = input.bubbleVisibilityPhase ?? "hidden";
@@ -203,6 +231,7 @@ export function createShellBallWindowSnapshot(input: {
     voicePreview: input.voicePreview,
     bubbleItems,
     bubbleRegion: getShellBallBubbleRegionState(bubbleItems, bubbleVisibilityPhase),
+    inputInteraction: input.inputInteraction ?? { clickThrough: false },
     visibility: getShellBallHelperWindowVisibility(
       input.visualState,
       input.helpersVisible,

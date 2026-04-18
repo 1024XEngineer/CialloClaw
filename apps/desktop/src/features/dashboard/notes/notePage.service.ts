@@ -394,8 +394,12 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
 export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExecutionPlan): Promise<string> {
   if (plan.mode === "copy_path" && plan.path) {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(plan.path);
-      return `${plan.feedback} 已复制路径。`;
+      try {
+        await navigator.clipboard.writeText(plan.path);
+        return `${plan.feedback} 已复制路径。`;
+      } catch {
+        return `${plan.feedback} 路径：${plan.path}`;
+      }
     }
 
     return `${plan.feedback} 路径：${plan.path}`;
