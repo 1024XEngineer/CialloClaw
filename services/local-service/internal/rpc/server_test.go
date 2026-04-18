@@ -392,6 +392,92 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *test
 	}
 }
 
+func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmitInput(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime finished from input.submit.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-input-submit-loop-stream"`),
+		Method:  "agent.input.submit",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_input_submit_loop_stream",
+			"input": map[string]any{
+				"type": "text",
+				"text": "inspect this workspace and answer directly",
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first envelope: %v", err)
+	}
+	if method, _ := firstEnvelope["method"].(string); !strings.HasPrefix(method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected success result envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected response data payload, got %+v", envelope)
+		}
+		task, ok := data["task"].(map[string]any)
+		if !ok || task["status"] != "completed" {
+			t.Fatalf("expected completed task response, got %+v", envelope)
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
+	}
+}
+
 func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
 	modelClient := &selectiveWaitLoopModelClient{
 		stubLoopModelClient: stubLoopModelClient{

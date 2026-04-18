@@ -313,15 +313,44 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		}
 
 		streamedRuntimeCounts := map[string]int{}
-		requestTaskIDs := taskIDSetFromRequest(request)
-		unsubscribe := func() {}
-		if len(requestTaskIDs) > 0 {
-			unsubscribe = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+		requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
+		var requestTaskMu sync.RWMutex
+		addRequestTaskID := func(taskID string) {
+			trimmed := strings.TrimSpace(taskID)
+			if trimmed == "" {
+				return
+			}
+			requestTaskMu.Lock()
+			if requestTaskIDs == nil {
+				requestTaskIDs = map[string]bool{}
+			}
+			requestTaskIDs[trimmed] = true
+			requestTaskMu.Unlock()
+		}
+		hasRequestTaskID := func(taskID string) bool {
+			requestTaskMu.RLock()
+			defer requestTaskMu.RUnlock()
+			return requestTaskIDs != nil && requestTaskIDs[taskID]
+		}
+		matchesTaskStart := func(sessionID, traceID string) bool {
+			switch {
+			case requestTraceID != "":
+				return requestTraceID == traceID
+			case requestSessionID != "":
+				return requestSessionID == sessionID
+			default:
+				return false
+			}
+		}
+
+		unsubscribeRuntime := func() {}
+		if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
+			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
 				if !isLiveRuntimeMethod(method) {
 					return
 				}
 				notificationTaskID := runtimeNotificationTaskID(taskID, params)
-				if notificationTaskID == "" || !requestTaskIDs[notificationTaskID] {
+				if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
 					return
 				}
 				writeMu.Lock()
@@ -332,8 +361,19 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			})
 		}
 
+		unsubscribeTaskStart := func() {}
+		if shouldTrackStartedTask(request.Method) {
+			unsubscribeTaskStart = s.orchestrator.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
+				if !matchesTaskStart(sessionID, traceID) {
+					return
+				}
+				addRequestTaskID(taskID)
+			})
+		}
+
 		response := s.dispatch(request)
-		unsubscribe()
+		unsubscribeTaskStart()
+		unsubscribeRuntime()
 
 		writeMu.Lock()
 		err := encoder.Encode(response)
@@ -432,23 +472,26 @@ func taskIDsFromResponse(response any) []string {
 	return result
 }
 
-func taskIDSetFromRequest(request requestEnvelope) map[string]bool {
+func requestRoutingHints(request requestEnvelope) (map[string]bool, string, string) {
 	params, rpcErr := decodeParams(request.Params)
 	if rpcErr != nil {
-		return nil
+		return nil, "", ""
 	}
 
 	ids := map[string]struct{}{}
 	collectTaskIDs(params, ids)
-	if len(ids) == 0 {
-		return nil
+	var result map[string]bool
+	if len(ids) > 0 {
+		result = make(map[string]bool, len(ids))
+		for taskID := range ids {
+			result[taskID] = true
+		}
 	}
+	return result, stringValue(params, "session_id", ""), stringValue(mapValue(params, "request_meta"), "trace_id", "")
+}
 
-	result := make(map[string]bool, len(ids))
-	for taskID := range ids {
-		result[taskID] = true
-	}
-	return result
+func shouldTrackStartedTask(method string) bool {
+	return method == "agent.task.start" || method == "agent.input.submit"
 }
 
 func isLiveRuntimeMethod(method string) bool {

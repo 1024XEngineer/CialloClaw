@@ -67,6 +67,7 @@ type Service struct {
 	runtimeMu      sync.RWMutex
 	runtimeNextID  uint64
 	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
+	taskStartTaps  map[uint64]func(taskID, sessionID, traceID string)
 }
 
 // NewService 创建并返回Service。
@@ -98,6 +99,7 @@ func NewService(
 		traceEval:      traceeval.NewService(nil, nil),
 		inspector:      taskinspector.NewService(nil),
 		runtimeTaps:    map[uint64]func(taskID, method string, params map[string]any){},
+		taskStartTaps:  map[uint64]func(taskID, sessionID, traceID string){},
 	}
 }
 
@@ -148,6 +150,27 @@ func (s *Service) SubscribeRuntimeNotifications(listener func(taskID, method str
 	}
 }
 
+// SubscribeTaskStarts registers a temporary tap that reports newly created
+// tasks before execution continues, allowing transports to associate follow-on
+// runtime notifications with requests that did not yet know their task_id.
+func (s *Service) SubscribeTaskStarts(listener func(taskID, sessionID, traceID string)) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+
+	s.runtimeMu.Lock()
+	s.runtimeNextID++
+	listenerID := s.runtimeNextID
+	s.taskStartTaps[listenerID] = listener
+	s.runtimeMu.Unlock()
+
+	return func() {
+		s.runtimeMu.Lock()
+		delete(s.taskStartTaps, listenerID)
+		s.runtimeMu.Unlock()
+	}
+}
+
 func (s *Service) publishRuntimeNotification(taskID, method string, params map[string]any) {
 	if s == nil {
 		return
@@ -166,6 +189,27 @@ func (s *Service) publishRuntimeNotification(taskID, method string, params map[s
 
 	for _, listener := range listeners {
 		listener(taskID, method, cloneMap(params))
+	}
+}
+
+func (s *Service) publishTaskStart(taskID, sessionID, traceID string) {
+	if s == nil {
+		return
+	}
+
+	s.runtimeMu.RLock()
+	if len(s.taskStartTaps) == 0 {
+		s.runtimeMu.RUnlock()
+		return
+	}
+	listeners := make([]func(taskID, sessionID, traceID string), 0, len(s.taskStartTaps))
+	for _, listener := range s.taskStartTaps {
+		listeners = append(listeners, listener)
+	}
+	s.runtimeMu.RUnlock()
+
+	for _, listener := range listeners {
+		listener(taskID, sessionID, traceID)
 	}
 }
 
@@ -273,6 +317,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 		Snapshot:          snapshot,
 	})
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
@@ -342,6 +387,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 		Snapshot:          snapshot,
 	})
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
@@ -4146,6 +4192,10 @@ func stringValue(values map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func requestTraceID(values map[string]any) string {
+	return stringValue(mapValue(values, "request_meta"), "trace_id", "")
 }
 
 // boolValue 处理当前模块的相关逻辑。
