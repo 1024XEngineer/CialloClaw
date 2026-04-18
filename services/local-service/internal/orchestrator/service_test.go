@@ -323,6 +323,10 @@ func (s *countingTaskStore) DeleteTask(ctx context.Context, taskID string) error
 	return s.base.DeleteTask(ctx, taskID)
 }
 
+func (s *countingTaskStore) GetTask(ctx context.Context, taskID string) (storage.TaskRecord, error) {
+	return s.base.GetTask(ctx, taskID)
+}
+
 func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]storage.TaskRecord, int, error) {
 	s.listCalls++
 	return s.base.ListTasks(ctx, limit, offset)
@@ -3894,6 +3898,44 @@ func TestServiceTaskListPrefersStructuredTaskStoreFallback(t *testing.T) {
 	if len(items) != 1 || items[0]["task_id"] != "task_structured_001" {
 		t.Fatalf("expected structured task store fallback item, got %+v", items)
 	}
+	intent := items[0]["intent"].(map[string]any)
+	arguments := intent["arguments"].(map[string]any)
+	if arguments["style"] != "key_points" {
+		t.Fatalf("expected structured task list to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestServiceTaskListUsesStructuredStoreUnlimitedPaginationInMemoryFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list unlimited in-memory")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	for index := 0; index < 25; index++ {
+		if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+			TaskID:              fmt.Sprintf("task_structured_%03d", index),
+			SessionID:           "sess_structured",
+			RunID:               fmt.Sprintf("run_structured_%03d", index),
+			Title:               fmt.Sprintf("structured task %03d", index),
+			SourceType:          "hover_input",
+			Status:              "completed",
+			IntentName:          "summarize",
+			IntentArgumentsJSON: `{"style":"key_points"}`,
+			PreferredDelivery:   "workspace_document",
+			FallbackDelivery:    "bubble",
+			CurrentStep:         "deliver_result",
+			CurrentStepStatus:   "completed",
+			RiskLevel:           "green",
+			StartedAt:           time.Date(2026, 4, 15, 9, 0, index, 0, time.UTC).Format(time.RFC3339Nano),
+			UpdatedAt:           time.Date(2026, 4, 15, 9, 5, index, 0, time.UTC).Format(time.RFC3339Nano),
+			FinishedAt:          time.Date(2026, 4, 15, 9, 6, index, 0, time.UTC).Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("write structured task %d failed: %v", index, err)
+		}
+	}
+	items, total, ok := service.listTasksFromStructuredStorage("finished", "updated_at", "desc", 0, 0)
+	if !ok || total != 25 || len(items) != 25 {
+		t.Fatalf("expected unlimited structured storage pagination to return all tasks, got ok=%v total=%d len=%d", ok, total, len(items))
+	}
 }
 
 func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T) {
@@ -6711,6 +6753,11 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	timeline := detailResult["timeline"].([]map[string]any)
 	if len(timeline) != 1 || timeline[0]["step_id"] != "step_structured_detail" {
 		t.Fatalf("expected structured timeline fallback, got %+v", timeline)
+	}
+	intent := task["intent"].(map[string]any)
+	arguments := intent["arguments"].(map[string]any)
+	if arguments["style"] != "key_points" {
+		t.Fatalf("expected structured task detail to preserve intent arguments, got %+v", intent)
 	}
 }
 

@@ -295,6 +295,7 @@ type TaskStepRecord struct {
 type TaskStore interface {
 	WriteTask(ctx context.Context, record TaskRecord) error
 	DeleteTask(ctx context.Context, taskID string) error
+	GetTask(ctx context.Context, taskID string) (TaskRecord, error)
 	ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error)
 }
 

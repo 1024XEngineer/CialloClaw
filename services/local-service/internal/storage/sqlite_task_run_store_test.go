@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -235,6 +236,86 @@ func TestSQLiteTaskRunStoreSaveTaskRunRollsBackStructuredTaskStateOnFailure(t *t
 	taskItems, taskTotal, err := store.taskStore.ListTasks(context.Background(), 10, 0)
 	if err == nil && (taskTotal != 0 || len(taskItems) != 0) {
 		t.Fatalf("expected structured task rows to rollback too, got total=%d items=%+v", taskTotal, taskItems)
+	}
+}
+
+func TestTaskStoresSupportUnlimitedPaginationAndDirectLookup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-store-pagination.db")
+	taskStore, err := NewSQLiteTaskStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskStore returned error: %v", err)
+	}
+	defer func() { _ = taskStore.Close() }()
+	stepStore, err := NewSQLiteTaskStepStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskStepStore returned error: %v", err)
+	}
+	defer func() { _ = stepStore.Close() }()
+
+	for index := 0; index < 25; index++ {
+		record := sampleTaskRunRecord()
+		record.TaskID = fmt.Sprintf("task_%03d", index)
+		record.RunID = fmt.Sprintf("run_%03d", index)
+		record.Timeline = []TaskStepSnapshot{{
+			StepID:        fmt.Sprintf("step_%03d", index),
+			TaskID:        record.TaskID,
+			Name:          "return_result",
+			Status:        "completed",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "task output",
+		}}
+		record.Title = fmt.Sprintf("task title %03d", index)
+		record.StartedAt = time.Date(2026, 4, 10, 9, 0, index, 0, time.UTC)
+		record.UpdatedAt = time.Date(2026, 4, 10, 9, 5, index, 0, time.UTC)
+		taskRecord, err := taskRecordFromSnapshot(record)
+		if err != nil {
+			t.Fatalf("taskRecordFromSnapshot returned error: %v", err)
+		}
+		if err := taskStore.WriteTask(context.Background(), taskRecord); err != nil {
+			t.Fatalf("WriteTask returned error: %v", err)
+		}
+		if err := stepStore.ReplaceTaskSteps(context.Background(), record.TaskID, taskStepRecordsFromSnapshot(record)); err != nil {
+			t.Fatalf("ReplaceTaskSteps returned error: %v", err)
+		}
+	}
+
+	items, total, err := taskStore.ListTasks(context.Background(), 0, 0)
+	if err != nil || total != 25 || len(items) != 25 {
+		t.Fatalf("expected unlimited ListTasks to return all rows, got total=%d len=%d err=%v", total, len(items), err)
+	}
+	record, err := taskStore.GetTask(context.Background(), "task_005")
+	if err != nil {
+		t.Fatalf("GetTask returned error: %v", err)
+	}
+	if record.TaskID != "task_005" || record.RunID != "run_005" {
+		t.Fatalf("unexpected task lookup result: %+v", record)
+	}
+	stepItems, stepTotal, err := stepStore.ListTaskSteps(context.Background(), "task_005", 0, 0)
+	if err != nil || stepTotal != 1 || len(stepItems) != 1 {
+		t.Fatalf("expected unlimited ListTaskSteps to return full timeline, got total=%d len=%d err=%v", stepTotal, len(stepItems), err)
+	}
+	inMemoryTaskStore := newInMemoryTaskStore()
+	for index := 0; index < 25; index++ {
+		if err := inMemoryTaskStore.WriteTask(context.Background(), TaskRecord{TaskID: fmt.Sprintf("mem_task_%03d", index), StartedAt: time.Date(2026, 4, 10, 9, 0, index, 0, time.UTC).Format(time.RFC3339Nano)}); err != nil {
+			t.Fatalf("in-memory WriteTask returned error: %v", err)
+		}
+	}
+	inMemoryItems, inMemoryTotal, err := inMemoryTaskStore.ListTasks(context.Background(), 0, 0)
+	if err != nil || inMemoryTotal != 25 || len(inMemoryItems) != 25 {
+		t.Fatalf("expected in-memory unlimited ListTasks to return all rows, got total=%d len=%d err=%v", inMemoryTotal, len(inMemoryItems), err)
+	}
+	inMemoryStepStore := newInMemoryTaskStepStore()
+	stepRecords := make([]TaskStepRecord, 0, 25)
+	for index := 0; index < 25; index++ {
+		stepRecords = append(stepRecords, TaskStepRecord{StepID: fmt.Sprintf("step_%03d", index), TaskID: "mem_task", OrderIndex: index})
+	}
+	if err := inMemoryStepStore.ReplaceTaskSteps(context.Background(), "mem_task", stepRecords); err != nil {
+		t.Fatalf("in-memory ReplaceTaskSteps returned error: %v", err)
+	}
+	inMemoryStepItems, inMemoryStepTotal, err := inMemoryStepStore.ListTaskSteps(context.Background(), "mem_task", 0, 0)
+	if err != nil || inMemoryStepTotal != 25 || len(inMemoryStepItems) != 25 {
+		t.Fatalf("expected in-memory unlimited ListTaskSteps to return all rows, got total=%d len=%d err=%v", inMemoryStepTotal, len(inMemoryStepItems), err)
 	}
 }
 

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -29,6 +30,16 @@ func (s *inMemoryTaskStore) DeleteTask(_ context.Context, taskID string) error {
 	defer s.mu.Unlock()
 	delete(s.records, taskID)
 	return nil
+}
+
+func (s *inMemoryTaskStore) GetTask(_ context.Context, taskID string) (TaskRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.records[taskID]
+	if !ok {
+		return TaskRecord{}, sql.ErrNoRows
+	}
+	return record, nil
 }
 
 func (s *inMemoryTaskStore) ListTasks(_ context.Context, limit, offset int) ([]TaskRecord, int, error) {
@@ -111,6 +122,20 @@ func (s *SQLiteTaskStore) DeleteTask(ctx context.Context, taskID string) error {
 		return fmt.Errorf("delete task: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteTaskStore) GetTask(ctx context.Context, taskID string) (TaskRecord, error) {
+	var record TaskRecord
+	err := s.db.QueryRowContext(ctx, `
+		SELECT task_id, session_id, run_id, title, source_type, status, intent_name, intent_arguments_json,
+		       preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level,
+		       started_at, updated_at, COALESCE(finished_at, ''), snapshot_json
+		FROM tasks WHERE task_id = ?
+	`, taskID).Scan(&record.TaskID, &record.SessionID, &record.RunID, &record.Title, &record.SourceType, &record.Status, &record.IntentName, &record.IntentArgumentsJSON, &record.PreferredDelivery, &record.FallbackDelivery, &record.CurrentStep, &record.CurrentStepStatus, &record.RiskLevel, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.SnapshotJSON)
+	if err != nil {
+		return TaskRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *SQLiteTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error) {
@@ -304,7 +329,7 @@ func pageTasks(items []TaskRecord, limit, offset int) []TaskRecord {
 		return nil
 	}
 	if limit <= 0 {
-		limit = 20
+		return append([]TaskRecord(nil), items[offset:]...)
 	}
 	end := offset + limit
 	if end > len(items) {
@@ -321,7 +346,7 @@ func pageTaskSteps(items []TaskStepRecord, limit, offset int) []TaskStepRecord {
 		return nil
 	}
 	if limit <= 0 {
-		limit = 20
+		return append([]TaskStepRecord(nil), items[offset:]...)
 	}
 	end := offset + limit
 	if end > len(items) {
@@ -335,4 +360,8 @@ func nullableText(value string) any {
 		return nil
 	}
 	return value
+}
+
+func IsTaskRecordNotFound(err error) bool {
+	return errors.Is(err, sql.ErrNoRows)
 }

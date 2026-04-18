@@ -2391,17 +2391,14 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 }
 
 func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
-	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
+		if storage.IsTaskRecordNotFound(err) {
+			return runengine.TaskRecord{}, false
+		}
 		return runengine.TaskRecord{}, false
 	}
-	for _, record := range records {
-		if record.TaskID != taskID {
-			continue
-		}
-		return s.structuredTaskRecordToRuntime(record)
-	}
-	return runengine.TaskRecord{}, false
+	return s.structuredTaskRecordToRuntime(record)
 }
 
 func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (map[string]any, error) {
@@ -2625,6 +2622,12 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 			finishedAt = &parsedFinishedAt
 		}
 	}
+	intentArguments := map[string]any{}
+	if strings.TrimSpace(record.IntentArgumentsJSON) != "" {
+		if err := json.Unmarshal([]byte(record.IntentArgumentsJSON), &intentArguments); err != nil {
+			intentArguments = map[string]any{}
+		}
+	}
 	return runengine.TaskRecord{
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
@@ -2632,7 +2635,7 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
-		Intent:            map[string]any{"name": record.IntentName},
+		Intent:            map[string]any{"name": record.IntentName, "arguments": intentArguments},
 		PreferredDelivery: record.PreferredDelivery,
 		FallbackDelivery:  record.FallbackDelivery,
 		CurrentStep:       record.CurrentStep,
