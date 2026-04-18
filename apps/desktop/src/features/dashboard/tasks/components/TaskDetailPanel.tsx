@@ -72,6 +72,7 @@ export function TaskDetailPanel({
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
   const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
   const canSteerTask = !ended && task.status !== "cancelled";
+  const runtimeSummary = detail.runtime_summary;
 
   function handleSubmitSteering() {
     if (!steeringMessage.trim()) {
@@ -194,6 +195,43 @@ export function TaskDetailPanel({
                     <div>
                       <p className="task-detail-current-card__label">当前提醒</p>
                       <p className="task-detail-current-card__text">{experience.nextAction}</p>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <section className="task-detail-card">
+                <div className="task-detail-card__header">
+                  <p className="task-detail-card__eyebrow">Runtime Summary</p>
+                  <h3 className="task-detail-card__title">循环停止原因与调试概览</h3>
+                </div>
+                <div className="task-detail-current-grid">
+                  <article className="task-detail-current-card">
+                    <Clock3 className="h-4 w-4" />
+                    <div>
+                      <p className="task-detail-current-card__label">Loop stop reason</p>
+                      <p className="task-detail-current-card__text">{runtimeSummary.loop_stop_reason ?? "当前还没有停止原因"}</p>
+                    </div>
+                  </article>
+                  <article className="task-detail-current-card">
+                    <AlertTriangle className="h-4 w-4" />
+                    <div>
+                      <p className="task-detail-current-card__label">Latest event</p>
+                      <p className="task-detail-current-card__text">{runtimeSummary.latest_event_type ?? "当前还没有 runtime event"}</p>
+                    </div>
+                  </article>
+                  <article className="task-detail-current-card">
+                    <ShieldAlert className="h-4 w-4" />
+                    <div>
+                      <p className="task-detail-current-card__label">Event count</p>
+                      <p className="task-detail-current-card__text">{runtimeSummary.events_count}</p>
+                    </div>
+                  </article>
+                  <article className="task-detail-current-card">
+                    <SendHorizonal className="h-4 w-4" />
+                    <div>
+                      <p className="task-detail-current-card__label">Pending steering</p>
+                      <p className="task-detail-current-card__text">{runtimeSummary.active_steering_count}</p>
                     </div>
                   </article>
                 </div>

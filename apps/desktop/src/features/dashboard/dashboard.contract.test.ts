@@ -1776,6 +1776,17 @@ test("TaskDetailPanel defers the entire fallback security summary until formal d
   assert.match(panelSource, /等待详情同步后展示风险、授权与恢复点/);
 });
 
+test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /Runtime Summary/);
+  assert.match(panelSource, /循环停止原因与调试概览/);
+  assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前还没有停止原因"/);
+  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前还没有 runtime event"/);
+  assert.match(panelSource, /runtimeSummary\.events_count/);
+  assert.match(panelSource, /runtimeSummary\.active_steering_count/);
+});
+
 test("dashboard validators read enum truth sources from protocol exports", () => {
   const validatorSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardContractValidators.ts"), "utf8");
 
