@@ -75,16 +75,18 @@ function getSourceCopy(source: ControlPanelData["source"]) {
  * @param needRestart Whether the current change set requires an app restart.
  * @returns User-facing save feedback copy.
  */
-function getApplyModeCopy(applyMode: string, needRestart: boolean) {
+function getApplyModeCopy(applyMode: string, needRestart: boolean, source: ControlPanelData["source"]) {
+  const localSnapshotSuffix = source === "mock" ? " 当前仍在使用本地快照，不会写入后端。": "";
+
   if (needRestart) {
-    return "部分设置需要重启桌面端后生效。";
+    return `部分设置需要重启桌面端后生效。${localSnapshotSuffix}`;
   }
 
   if (applyMode === "next_task_effective") {
-    return "设置已保存，将在下一个任务周期生效。";
+    return `设置已保存，将在下一个任务周期生效。${localSnapshotSuffix}`;
   }
 
-  return "设置已即时生效。";
+  return `设置已即时生效。${localSnapshotSuffix}`;
 }
 
 /**
@@ -205,7 +207,11 @@ export function ControlPanelApp() {
   const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
   const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
-  const providerApiKeyStatus = draft.settings.data_log.provider_api_key_configured ? "已配置" : "未配置";
+  const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
+  const providerApiKeyHint =
+    draft.source === "rpc"
+      ? "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
+      : "当前为本地快照模式：不会写入后端 Stronghold，也不会在桌面端保存明文 API key。";
   const sourceValue = (
     <span className="control-panel-page__value-cluster">
       <span
@@ -280,7 +286,7 @@ export function ControlPanelApp() {
       };
       setPanelData(nextData);
       setDraft(nextData);
-      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
+      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart, result.source));
     } catch (error) {
       setSaveFeedback(error instanceof Error ? error.message : "保存控制面板设置失败。");
     } finally {
@@ -680,19 +686,51 @@ export function ControlPanelApp() {
             </section>
 
             <section className="control-panel-page__panel control-panel-page__tone-surface--warm" aria-labelledby="control-panel-budget-title">
-              <SectionHeader titleId="control-panel-budget-title" title="预算与路由" />
+              <SectionHeader titleId="control-panel-budget-title" title="模型与路由" />
 
               <div className="control-panel-page__stack">
                 <ControlLine label="Provider" tone="warm">
                   <TextField.Root
                     className="control-panel-page__input"
-                    value={draft.settings.data_log.provider}
+                    value={draft.settings.models.provider}
                     onChange={(event) =>
                       updateSettings((current) => ({
                         ...current,
                         settings: {
                           ...current.settings,
-                          data_log: { ...current.settings.data_log, provider: event.target.value },
+                          models: { ...current.settings.models, provider: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </ControlLine>
+
+                <ControlLine label="Base URL" tone="warm">
+                  <TextField.Root
+                    className="control-panel-page__input"
+                    value={draft.settings.models.base_url}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          models: { ...current.settings.models, base_url: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </ControlLine>
+
+                <ControlLine label="Model" tone="warm">
+                  <TextField.Root
+                    className="control-panel-page__input"
+                    value={draft.settings.models.model}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          models: { ...current.settings.models, model: event.target.value },
                         },
                       }))
                     }
@@ -701,14 +739,14 @@ export function ControlPanelApp() {
 
                 <ControlLine
                   label="API Key"
-                  hint="通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
+                  hint={providerApiKeyHint}
                   tone="warm"
                 >
                   <TextField.Root
                     className="control-panel-page__input"
                     type="password"
                     value={draft.providerApiKeyInput}
-                    placeholder={draft.settings.data_log.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
+                    placeholder={draft.settings.models.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
                     autoComplete="off"
                     onChange={(event) =>
                       updateSettings((current) => ({
@@ -721,20 +759,21 @@ export function ControlPanelApp() {
 
                 <ToggleLine
                   label="预算自动降级"
-                  checked={draft.settings.data_log.budget_auto_downgrade}
+                  checked={draft.settings.models.budget_auto_downgrade}
                   tone="warm"
                   onCheckedChange={(checked) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        data_log: { ...current.settings.data_log, budget_auto_downgrade: checked },
+                        models: { ...current.settings.models, budget_auto_downgrade: checked },
                       },
                     }))
                   }
                 />
 
                 <div className="control-panel-page__info-list">
+                  <InfoRow label="当前模型" value={draft.settings.models.model} tone="warm" />
                   <InfoRow label="API Key 状态" value={providerApiKeyStatus} tone="warm" />
                   <InfoRow label="安全状态" value={draft.securitySummary.security_status} tone="warm" />
                   <InfoRow label="待确认授权" value={draft.securitySummary.pending_authorizations} tone="warm" />

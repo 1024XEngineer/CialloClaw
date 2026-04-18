@@ -11,7 +11,12 @@ import {
   shellBallWindowLabels,
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
-import { shellBallWindowSyncEvents, type ShellBallHelperWindowRole, type ShellBallWindowGeometry } from "./shellBall.windowSync";
+import {
+  shellBallWindowSyncEvents,
+  type ShellBallHelperWindowRole,
+  type ShellBallHelperWindowVisibility,
+  type ShellBallWindowGeometry,
+} from "./shellBall.windowSync";
 
 type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pinned">;
 
@@ -64,6 +69,7 @@ type UseShellBallWindowMetricsInput = {
   role: "ball" | AnchoredShellBallHelperWindowRole;
   visible?: boolean;
   clickThrough?: boolean;
+  helperVisibility?: ShellBallHelperWindowVisibility;
 };
 
 type ShellBallHelperWindowInteractionMode = {
@@ -368,13 +374,30 @@ function getShellBallBoundsFromMonitor(monitor: Monitor | null, geometry: ShellB
   };
 }
 
-export function useShellBallWindowMetrics({ role, visible = true, clickThrough = false }: UseShellBallWindowMetricsInput) {
+export function useShellBallWindowMetrics({
+  role,
+  visible = true,
+  clickThrough = false,
+  helperVisibility,
+}: UseShellBallWindowMetricsInput) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [windowFrame, setWindowFrame] = useState<ShellBallWindowSize | null>(null);
   const geometryRef = useRef<ShellBallWindowGeometry | null>(null);
   const ballDragSessionRef = useRef<ShellBallBallDragSession | null>(null);
   const ballDragMoveAnimationFrameRef = useRef<number | null>(null);
-  const ballDragPositionQueueRef = useRef(Promise.resolve());
+  const pendingBallDragFrameRef = useRef<ShellBallWindowFrame | null>(null);
+  const ballDragPositionQueueRef = useRef<Promise<void> | null>(null);
+  const ballGeometryEmitAnimationFrameRef = useRef<number | null>(null);
+  const pendingBallGeometryRef = useRef<ShellBallWindowGeometry | null>(null);
+  const ballGeometryPublishAnimationFrameRef = useRef<number | null>(null);
+  const ballGeometryPublishSnapToBoundsRef = useRef(false);
+  const helperVisibilityRef = useRef<ShellBallHelperWindowVisibility>(
+    helperVisibility ?? {
+      bubble: true,
+      input: true,
+      voice: true,
+    },
+  );
   const helperWindowVisibleRef = useRef(false);
   const helperWindowShouldBeVisibleRef = useRef(visible);
   const helperWindowFrameRef = useRef<ShellBallResolvedHelperFrame | null>(null);
@@ -383,6 +406,11 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
   const helperWindowMoveAnimationTokenRef = useRef(0);
 
   helperWindowShouldBeVisibleRef.current = visible;
+  helperVisibilityRef.current = helperVisibility ?? {
+    bubble: true,
+    input: true,
+    voice: true,
+  };
 
   function cancelHelperWindowMoveAnimation() {
     helperWindowMoveAnimationTokenRef.current += 1;
@@ -402,11 +430,81 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
     }
   }, []);
 
+  const cancelBallGeometryEmitAnimation = useCallback(() => {
+    if (ballGeometryEmitAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(ballGeometryEmitAnimationFrameRef.current);
+      ballGeometryEmitAnimationFrameRef.current = null;
+    }
+    pendingBallGeometryRef.current = null;
+  }, []);
+
+  const cancelBallGeometryPublishAnimation = useCallback(() => {
+    if (ballGeometryPublishAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(ballGeometryPublishAnimationFrameRef.current);
+      ballGeometryPublishAnimationFrameRef.current = null;
+    }
+    ballGeometryPublishSnapToBoundsRef.current = false;
+  }, []);
+
   async function snapHelperWindowToFrame(nextFrame: ShellBallResolvedHelperFrame) {
     cancelHelperWindowMoveAnimation();
     await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
     helperWindowFrameRef.current = nextFrame;
   }
+
+  const emitBallGeometry = useCallback(async (geometry: ShellBallWindowGeometry) => {
+    if (role !== "ball") {
+      return;
+    }
+
+    const currentWindow = getCurrentWindow();
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    const visibleHelperRoles = (Object.entries(helperVisibilityRef.current) as Array<
+      [keyof ShellBallHelperWindowVisibility, boolean]
+    >)
+      .filter(([, isVisible]) => isVisible)
+      .map(([helperRole]) => helperRole);
+
+    if (visibleHelperRoles.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      visibleHelperRoles.map((helperRole) =>
+        currentWindow.emitTo(shellBallWindowLabels[helperRole], shellBallWindowSyncEvents.geometry, geometry)
+      ),
+    );
+  }, [role]);
+
+  const scheduleBallGeometryEmit = useCallback((geometry: ShellBallWindowGeometry) => {
+    if (role !== "ball") {
+      return;
+    }
+
+    pendingBallGeometryRef.current = geometry;
+
+    if (ballGeometryEmitAnimationFrameRef.current !== null) {
+      return;
+    }
+
+    // Dragging should stay coupled to raw window movement only. Cross-window
+    // geometry sync is coalesced onto the next frame so the orb never waits on
+    // helper-window IPC while following the pointer.
+    ballGeometryEmitAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      ballGeometryEmitAnimationFrameRef.current = null;
+      const pendingGeometry = pendingBallGeometryRef.current;
+      pendingBallGeometryRef.current = null;
+
+      if (pendingGeometry === null) {
+        return;
+      }
+
+      void emitBallGeometry(pendingGeometry);
+    });
+  }, [emitBallGeometry, role]);
 
   const publishBallGeometry = useCallback(async (input?: { snapToBounds?: boolean }) => {
     if (role !== "ball" || windowFrame === null) {
@@ -446,12 +544,31 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
       await currentWindow.setPosition(createShellBallLogicalPosition(geometry.ballFrame.x, geometry.ballFrame.y));
     }
 
-    await Promise.all([
-      currentWindow.emitTo(shellBallWindowLabels.bubble, shellBallWindowSyncEvents.geometry, geometry),
-      currentWindow.emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.geometry, geometry),
-      currentWindow.emitTo(shellBallWindowLabels.voice, shellBallWindowSyncEvents.geometry, geometry),
-    ]);
-  }, [role, windowFrame]);
+    await emitBallGeometry(geometry);
+  }, [emitBallGeometry, role, windowFrame]);
+
+  const scheduleBallGeometryPublish = useCallback((input?: { snapToBounds?: boolean }) => {
+    if (role !== "ball") {
+      return;
+    }
+
+    ballGeometryPublishSnapToBoundsRef.current = ballGeometryPublishSnapToBoundsRef.current || Boolean(input?.snapToBounds);
+
+    if (ballDragSessionRef.current !== null && !input?.snapToBounds) {
+      return;
+    }
+
+    if (ballGeometryPublishAnimationFrameRef.current !== null) {
+      return;
+    }
+
+    ballGeometryPublishAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      ballGeometryPublishAnimationFrameRef.current = null;
+      const shouldSnapToBounds = ballGeometryPublishSnapToBoundsRef.current;
+      ballGeometryPublishSnapToBoundsRef.current = false;
+      void publishBallGeometry(shouldSnapToBounds ? { snapToBounds: true } : undefined);
+    });
+  }, [publishBallGeometry, role]);
 
   const snapBallWindowToBounds = useCallback(async () => {
     await publishBallGeometry({ snapToBounds: true });
@@ -462,9 +579,19 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
       return Promise.resolve();
     }
 
-    ballDragPositionQueueRef.current = ballDragPositionQueueRef.current
-      .catch((): void => undefined)
-      .then(async () => {
+    // Dragging only cares about the latest pointer sample. Replaying every
+    // historical frame turns slow window moves into a backlog that makes the
+    // orb feel sticky, so keep one pending frame and overwrite stale ones.
+    pendingBallDragFrameRef.current = nextFrame;
+
+    if (ballDragPositionQueueRef.current !== null) {
+      return ballDragPositionQueueRef.current;
+    }
+
+    const flushBallWindowDragPosition = async () => {
+      while (pendingBallDragFrameRef.current !== null) {
+        const frameToApply = pendingBallDragFrameRef.current;
+        pendingBallDragFrameRef.current = null;
         const currentWindow = getCurrentWindow();
 
         if (currentWindow.label !== shellBallWindowLabels.ball) {
@@ -474,15 +601,24 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
         if (geometryRef.current !== null) {
           geometryRef.current = {
             ...geometryRef.current,
-            ballFrame: nextFrame,
+            ballFrame: frameToApply,
           };
         }
 
-        await currentWindow.setPosition(createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
-      });
+        await currentWindow.setPosition(createShellBallLogicalPosition(frameToApply.x, frameToApply.y));
+
+        if (geometryRef.current !== null) {
+          scheduleBallGeometryEmit(geometryRef.current);
+        }
+      }
+    };
+
+    ballDragPositionQueueRef.current = flushBallWindowDragPosition().finally(() => {
+      ballDragPositionQueueRef.current = null;
+    });
 
     return ballDragPositionQueueRef.current;
-  }, [role]);
+  }, [role, scheduleBallGeometryEmit]);
 
   const beginBallWindowPointerDrag = useCallback((pointerStart: ShellBallPointerPosition) => {
     if (role !== "ball" || windowFrame === null) {
@@ -704,6 +840,21 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
       return;
     }
 
+    scheduleBallGeometryPublish();
+  }, [
+    helperVisibility?.bubble,
+    helperVisibility?.input,
+    helperVisibility?.voice,
+    role,
+    scheduleBallGeometryPublish,
+    windowFrame,
+  ]);
+
+  useEffect(() => {
+    if (role !== "ball" || windowFrame === null) {
+      return;
+    }
+
     const currentWindow = getCurrentWindow();
     if (currentWindow.label !== shellBallWindowLabels.ball) {
       return;
@@ -715,13 +866,13 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
 
     void Promise.all([
       currentWindow.onMoved(() => {
-        void publishBallGeometry();
+        scheduleBallGeometryPublish();
       }),
       currentWindow.onResized(() => {
-        void publishBallGeometry();
+        scheduleBallGeometryPublish();
       }),
       currentWindow.listen(shellBallWindowSyncEvents.helperReady, () => {
-        void publishBallGeometry();
+        scheduleBallGeometryPublish();
       }),
     ]).then((unlisteners) => {
       if (disposed) {
@@ -736,18 +887,31 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
 
     return () => {
       disposed = true;
+      cancelBallGeometryEmitAnimation();
+      cancelBallGeometryPublishAnimation();
       for (const cleanup of cleanupFns) {
         cleanup();
       }
     };
-  }, [publishBallGeometry, role, windowFrame]);
+  }, [
+    cancelBallGeometryEmitAnimation,
+    cancelBallGeometryPublishAnimation,
+    publishBallGeometry,
+    role,
+    scheduleBallGeometryPublish,
+    windowFrame,
+  ]);
 
   useEffect(() => {
     return () => {
+      cancelBallGeometryEmitAnimation();
+      cancelBallGeometryPublishAnimation();
       cancelBallWindowDragAnimation();
       ballDragSessionRef.current = null;
+      pendingBallDragFrameRef.current = null;
+      ballDragPositionQueueRef.current = null;
     };
-  }, [cancelBallWindowDragAnimation]);
+  }, [cancelBallGeometryEmitAnimation, cancelBallGeometryPublishAnimation, cancelBallWindowDragAnimation]);
 
   useEffect(() => {
     if (role === "ball" || windowFrame === null) {
@@ -810,8 +974,8 @@ export function useShellBallWindowMetrics({ role, visible = true, clickThrough =
 
       cancelHelperWindowMoveAnimation();
       if (helperWindowVisibleRef.current) {
-        await hideShellBallWindow(helperRole);
         helperWindowVisibleRef.current = false;
+        await hideShellBallWindow(helperRole);
       }
       helperWindowFrameRef.current = nextFrame;
     }

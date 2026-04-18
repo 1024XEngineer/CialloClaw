@@ -32,6 +32,8 @@ export const shellBallWindowPermissions = Object.freeze([
 
 export type ShellBallWindowRole = keyof typeof shellBallWindowLabels;
 
+const shellBallWindowHandleCache = new Map<string, Window>();
+
 export function getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
   return `${shellBallPinnedBubbleWindowLabelPrefix}${bubbleId}`;
 }
@@ -61,17 +63,31 @@ export function getShellBallPinnedBubbleWindowAnchor(input: {
 }
 
 export function getShellBallCurrentWindow() {
-  return getCurrentWindow();
+  const currentWindow = getCurrentWindow();
+  shellBallWindowHandleCache.set(currentWindow.label, currentWindow);
+  return currentWindow;
 }
 
 async function getShellBallWindowByLabel(label: string) {
-  const currentWindow = getCurrentWindow();
+  const currentWindow = getShellBallCurrentWindow();
 
   if (currentWindow.label === label) {
     return currentWindow;
   }
 
-  return Window.getByLabel(label);
+  const cachedWindowHandle = shellBallWindowHandleCache.get(label);
+  if (cachedWindowHandle !== undefined) {
+    return cachedWindowHandle;
+  }
+
+  // Window label lookups cross the Tauri bridge, so cache shell-ball handles
+  // after the first resolution to keep drag-time window updates cheap.
+  const windowHandle = await Window.getByLabel(label);
+  if (windowHandle !== null) {
+    shellBallWindowHandleCache.set(label, windowHandle);
+  }
+
+  return windowHandle;
 }
 
 export async function getShellBallWindow(role: ShellBallWindowRole) {
@@ -159,19 +175,26 @@ export async function openShellBallPinnedBubbleWindow(input: {
     shadow: false,
   };
 
-  new Window(label, pinnedWindowOptions);
+  const pinnedWindow = new Window(label, pinnedWindowOptions);
+  shellBallWindowHandleCache.set(label, pinnedWindow);
 
   return label;
 }
 
 export async function closeShellBallPinnedBubbleWindow(bubbleId: string) {
-  const windowHandle = await getShellBallWindowByLabel(getShellBallPinnedBubbleWindowLabel(bubbleId));
+  const label = getShellBallPinnedBubbleWindowLabel(bubbleId);
+  const windowHandle = await getShellBallWindowByLabel(label);
 
   if (windowHandle === null) {
+    shellBallWindowHandleCache.delete(label);
     return;
   }
 
-  await windowHandle.destroy();
+  try {
+    await windowHandle.destroy();
+  } finally {
+    shellBallWindowHandleCache.delete(label);
+  }
 }
 
 export async function setShellBallPinnedBubbleWindowVisible(bubbleId: string, visible: boolean) {

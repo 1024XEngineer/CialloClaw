@@ -1,4 +1,4 @@
-import type { AgentSettingsUpdateParams, ApplyMode, RequestMeta, SettingsSnapshot } from "@cialloclaw/protocol";
+import type { AgentSettingsUpdateParams, ApplyMode, RequestMeta } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { updateSettings as requestUpdateSettings } from "@/rpc/methods";
 import { loadSettings, saveSettings, type DesktopSettings } from "@/services/settingsService";
@@ -26,9 +26,9 @@ function createRequestMeta(): RequestMeta {
 }
 
 function mergeSettingsSnapshot(
-  current: SettingsSnapshot["settings"],
+  current: DesktopSettings["settings"],
   patch: DashboardSettingsPatch,
-): SettingsSnapshot["settings"] {
+): DesktopSettings["settings"] {
   return {
     ...current,
     general: patch.general

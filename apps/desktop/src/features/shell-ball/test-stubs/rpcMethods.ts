@@ -442,21 +442,6 @@ export async function steerTask(_params?: unknown): Promise<AgentTaskSteerResult
   };
 }
 
-export async function steerTask(_params?: unknown): Promise<AgentTaskSteerResult> {
-	return {
-		task: createTask("waiting_auth", "agent_loop"),
-		bubble_message: {
-			bubble_id: "bubble_steer_stub",
-			task_id: "task_stub",
-			type: "status",
-			text: "The follow-up instruction was recorded for the active task.",
-			pinned: false,
-			hidden: false,
-			created_at: new Date().toISOString(),
-		},
-	};
-}
-
 export async function listTaskArtifacts(_params?: unknown): Promise<AgentTaskArtifactListResult> {
   return {
     items: [],

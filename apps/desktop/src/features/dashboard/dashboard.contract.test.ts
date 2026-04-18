@@ -162,8 +162,16 @@ function loadSettingsServiceModule() {
       loadSettings: () => {
         settings: {
           data_log: {
+            provider: string;
             budget_auto_downgrade: boolean;
             provider_api_key_configured: boolean;
+          };
+          models: {
+            provider: string;
+            budget_auto_downgrade: boolean;
+            provider_api_key_configured: boolean;
+            base_url: string;
+            model: string;
           };
           general: {
             download: {
@@ -961,6 +969,75 @@ test("settings service normalizes legacy stored snapshots before returning and s
     saveSettings(loaded as never);
 
     assert.equal(JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}").settings.data_log.provider_api_key_configured, false);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service keeps RPC data_log fields authoritative over stale desktop model aliases", () => {
+  const { loadSettings, saveSettings } = loadSettingsServiceModule();
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          data_log: {
+            provider: "anthropic",
+            budget_auto_downgrade: false,
+            provider_api_key_configured: true,
+          },
+          models: {
+            provider: "openai",
+            budget_auto_downgrade: true,
+            provider_api_key_configured: false,
+            base_url: "https://local-router.invalid/v1",
+            model: "gpt-local",
+          },
+        },
+      }),
+    );
+
+    const loaded = loadSettings();
+    assert.equal(loaded.settings.data_log.provider, "anthropic");
+    assert.equal(loaded.settings.data_log.budget_auto_downgrade, false);
+    assert.equal(loaded.settings.data_log.provider_api_key_configured, true);
+    assert.equal(loaded.settings.models.provider, "anthropic");
+    assert.equal(loaded.settings.models.budget_auto_downgrade, false);
+    assert.equal(loaded.settings.models.provider_api_key_configured, true);
+    assert.equal(loaded.settings.models.base_url, "https://local-router.invalid/v1");
+    assert.equal(loaded.settings.models.model, "gpt-local");
+
+    saveSettings(loaded as never);
+
+    const persisted = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}");
+    assert.equal(persisted.settings.data_log.provider, "anthropic");
+    assert.equal(persisted.settings.data_log.provider_api_key_configured, true);
+    assert.equal(persisted.settings.models.provider, "anthropic");
+    assert.equal(persisted.settings.models.provider_api_key_configured, true);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
