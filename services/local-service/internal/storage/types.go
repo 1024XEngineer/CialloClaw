@@ -320,5 +320,8 @@ type ApprovalRequestStore interface {
 // AuthorizationRecordStore persists formal authorization_records records.
 type AuthorizationRecordStore interface {
 	WriteAuthorizationRecord(ctx context.Context, record AuthorizationRecordRecord) error
+	// WriteAuthorizationDecision persists one authorization_records row and its
+	// linked approval_requests status transition inside a single storage boundary.
+	WriteAuthorizationDecision(ctx context.Context, record AuthorizationRecordRecord, approvalStatus string, updatedAt string) error
 	ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error)
 }

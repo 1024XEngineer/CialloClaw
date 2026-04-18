@@ -254,6 +254,16 @@ func (s failingAuthorizationRecordStore) WriteAuthorizationRecord(ctx context.Co
 	return s.base.WriteAuthorizationRecord(ctx, record)
 }
 
+func (s failingAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.Context, record storage.AuthorizationRecordRecord, approvalStatus string, updatedAt string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.WriteAuthorizationDecision(ctx, record, approvalStatus, updatedAt)
+}
+
 func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]storage.AuthorizationRecordRecord, int, error) {
 	if s.base == nil {
 		return nil, 0, nil
@@ -3251,6 +3261,54 @@ func TestServiceSecurityRespondReturnsStorageErrorWhenAuthorizationPersistenceFa
 	})
 	if err == nil || !errors.Is(err, ErrStorageQueryFailed) {
 		t.Fatalf("expected ErrStorageQueryFailed from authorization persistence, got %v", err)
+	}
+}
+
+func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "authorization out of phase output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "output.md"), []byte("old content"), 0o644); err != nil {
+		t.Fatalf("seed output file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_authorization_out_of_phase",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); err != nil {
+		t.Fatalf("first security respond failed: %v", err)
+	}
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected repeated out-of-phase respond to return ErrTaskStatusInvalid, got %v", err)
+	}
+
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list authorization records failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected repeated out-of-phase respond to keep one persisted authorization record, got total=%d items=%+v", total, items)
 	}
 }
 

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -184,5 +185,62 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	filtered := filterApprovalRequests([]ApprovalRequestRecord{{ApprovalID: "ap1", TaskID: "task_001", Status: "pending", CreatedAt: "2026-04-17T10:00:00Z"}, {ApprovalID: "ap2", TaskID: "task_001", Status: "approved", CreatedAt: "2026-04-17T10:01:00Z"}, {ApprovalID: "ap3", TaskID: "task_002", Status: "pending", CreatedAt: "2026-04-17T10:02:00Z"}}, "task_001", "pending")
 	if len(filtered) != 1 || filtered[0].ApprovalID != "ap1" {
 		t.Fatalf("unexpected filtered approvals: %+v", filtered)
+	}
+}
+
+func TestInMemoryAuthorizationDecisionIsAtomic(t *testing.T) {
+	state := &inMemoryGovernanceState{
+		approvalRequests:     make([]ApprovalRequestRecord, 0),
+		authorizationRecords: make([]AuthorizationRecordRecord, 0),
+	}
+	approvalStore := newInMemoryApprovalRequestStoreWithState(state)
+	authorizationStore := newInMemoryAuthorizationRecordStoreWithState(state)
+	if err := approvalStore.WriteApprovalRequest(context.Background(), ApprovalRequestRecord{
+		ApprovalID:    "appr_atomic_001",
+		TaskID:        "task_atomic_001",
+		OperationName: "write_file",
+		Status:        "pending",
+		CreatedAt:     "2026-04-18T10:00:00Z",
+		UpdatedAt:     "2026-04-18T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("write in-memory approval request failed: %v", err)
+	}
+	if err := authorizationStore.WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_atomic_001",
+		TaskID:                "task_atomic_001",
+		ApprovalID:            "appr_atomic_001",
+		Decision:              "allow_once",
+		Operator:              "user",
+		CreatedAt:             "2026-04-18T10:01:00Z",
+	}, "approved", "2026-04-18T10:01:00Z"); err != nil {
+		t.Fatalf("write in-memory authorization decision failed: %v", err)
+	}
+
+	approvalItems, approvalTotal, err := approvalStore.ListApprovalRequests(context.Background(), "task_atomic_001", 10, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("unexpected in-memory approval decision state: total=%d items=%+v err=%v", approvalTotal, approvalItems, err)
+	}
+	if approvalItems[0].Status != "approved" {
+		t.Fatalf("expected in-memory approval to be updated atomically, got %+v", approvalItems[0])
+	}
+	authorizationItems, authorizationTotal, err := authorizationStore.ListAuthorizationRecords(context.Background(), "task_atomic_001", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("unexpected in-memory authorization decision history: total=%d items=%+v err=%v", authorizationTotal, authorizationItems, err)
+	}
+
+	err = authorizationStore.WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_atomic_002",
+		TaskID:                "task_atomic_001",
+		ApprovalID:            "appr_missing",
+		Decision:              "deny_once",
+		Operator:              "user",
+		CreatedAt:             "2026-04-18T10:02:00Z",
+	}, "denied", "2026-04-18T10:02:00Z")
+	if !errors.Is(err, ErrApprovalRequestNotFound) {
+		t.Fatalf("expected missing approval to fail atomic write, got %v", err)
+	}
+	authorizationItems, authorizationTotal, err = authorizationStore.ListAuthorizationRecords(context.Background(), "task_atomic_001", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("expected failed in-memory atomic write to leave history unchanged, total=%d items=%+v err=%v", authorizationTotal, authorizationItems, err)
 	}
 }

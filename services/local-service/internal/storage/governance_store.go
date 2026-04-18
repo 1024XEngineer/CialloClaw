@@ -17,78 +17,112 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 )
 
+var ErrApprovalRequestNotFound = errors.New("approval request not found")
+
+type inMemoryGovernanceState struct {
+	mu                   sync.Mutex
+	approvalRequests     []ApprovalRequestRecord
+	authorizationRecords []AuthorizationRecordRecord
+}
+
 type inMemoryApprovalRequestStore struct {
-	mu      sync.Mutex
-	records []ApprovalRequestRecord
+	state *inMemoryGovernanceState
 }
 
 func newInMemoryApprovalRequestStore() *inMemoryApprovalRequestStore {
-	return &inMemoryApprovalRequestStore{records: make([]ApprovalRequestRecord, 0)}
+	return newInMemoryApprovalRequestStoreWithState(&inMemoryGovernanceState{
+		approvalRequests:     make([]ApprovalRequestRecord, 0),
+		authorizationRecords: make([]AuthorizationRecordRecord, 0),
+	})
+}
+
+func newInMemoryApprovalRequestStoreWithState(state *inMemoryGovernanceState) *inMemoryApprovalRequestStore {
+	return &inMemoryApprovalRequestStore{state: state}
 }
 
 func (s *inMemoryApprovalRequestStore) WriteApprovalRequest(_ context.Context, record ApprovalRequestRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.records {
-		if s.records[i].ApprovalID == record.ApprovalID {
-			s.records[i] = record
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	for i := range s.state.approvalRequests {
+		if s.state.approvalRequests[i].ApprovalID == record.ApprovalID {
+			s.state.approvalRequests[i] = record
 			return nil
 		}
 	}
-	s.records = append(s.records, record)
+	s.state.approvalRequests = append(s.state.approvalRequests, record)
 	return nil
 }
 
 func (s *inMemoryApprovalRequestStore) UpdateApprovalRequestStatus(_ context.Context, approvalID string, status string, updatedAt string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.records {
-		if s.records[i].ApprovalID == approvalID {
-			s.records[i].Status = status
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	return updateInMemoryApprovalRequestStatusLocked(s.state.approvalRequests, approvalID, status, updatedAt)
+}
+
+func updateInMemoryApprovalRequestStatusLocked(records []ApprovalRequestRecord, approvalID string, status string, updatedAt string) error {
+	for i := range records {
+		if records[i].ApprovalID == approvalID {
+			records[i].Status = status
 			if updatedAt != "" {
-				s.records[i].UpdatedAt = updatedAt
+				records[i].UpdatedAt = updatedAt
 			}
 			return nil
 		}
 	}
-	return nil
+	return ErrApprovalRequestNotFound
 }
 
 func (s *inMemoryApprovalRequestStore) ListApprovalRequests(_ context.Context, taskID string, limit, offset int) ([]ApprovalRequestRecord, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	items := filterApprovalRequests(s.records, taskID, "")
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	items := filterApprovalRequests(s.state.approvalRequests, taskID, "")
 	return pageApprovalRequests(items, limit, offset), len(items), nil
 }
 
 func (s *inMemoryApprovalRequestStore) ListPendingApprovalRequests(_ context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	items := filterApprovalRequests(s.records, "", "pending")
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	items := filterApprovalRequests(s.state.approvalRequests, "", "pending")
 	return pageApprovalRequests(items, limit, offset), len(items), nil
 }
 
 type inMemoryAuthorizationRecordStore struct {
-	mu      sync.Mutex
-	records []AuthorizationRecordRecord
+	state *inMemoryGovernanceState
 }
 
 func newInMemoryAuthorizationRecordStore() *inMemoryAuthorizationRecordStore {
-	return &inMemoryAuthorizationRecordStore{records: make([]AuthorizationRecordRecord, 0)}
+	return newInMemoryAuthorizationRecordStoreWithState(&inMemoryGovernanceState{
+		approvalRequests:     make([]ApprovalRequestRecord, 0),
+		authorizationRecords: make([]AuthorizationRecordRecord, 0),
+	})
+}
+
+func newInMemoryAuthorizationRecordStoreWithState(state *inMemoryGovernanceState) *inMemoryAuthorizationRecordStore {
+	return &inMemoryAuthorizationRecordStore{state: state}
 }
 
 func (s *inMemoryAuthorizationRecordStore) WriteAuthorizationRecord(_ context.Context, record AuthorizationRecordRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.records = append(s.records, record)
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	s.state.authorizationRecords = append(s.state.authorizationRecords, record)
+	return nil
+}
+
+func (s *inMemoryAuthorizationRecordStore) WriteAuthorizationDecision(_ context.Context, record AuthorizationRecordRecord, approvalStatus string, updatedAt string) error {
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	if err := updateInMemoryApprovalRequestStatusLocked(s.state.approvalRequests, record.ApprovalID, approvalStatus, updatedAt); err != nil {
+		return err
+	}
+	s.state.authorizationRecords = append(s.state.authorizationRecords, record)
 	return nil
 }
 
 func (s *inMemoryAuthorizationRecordStore) ListAuthorizationRecords(_ context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
 	items := make([]AuthorizationRecordRecord, 0)
-	for _, record := range s.records {
+	for _, record := range s.state.authorizationRecords {
 		if taskID == "" || record.TaskID == taskID {
 			items = append(items, record)
 		}
@@ -462,6 +496,56 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationRecord(ctx context.Co
 	if err != nil {
 		return fmt.Errorf("write authorization record: %w", err)
 	}
+	return nil
+}
+
+func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.Context, record AuthorizationRecordRecord, approvalStatus string, updatedAt string) error {
+	if strings.TrimSpace(record.ApprovalID) == "" {
+		return ErrApprovalRequestNotFound
+	}
+	if updatedAt == "" {
+		updatedAt = record.CreatedAt
+	}
+	rememberRule := 0
+	if record.RememberRule {
+		rememberRule = 1
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin authorization decision transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE approval_requests
+		SET status = ?, updated_at = ?
+		WHERE approval_id = ?
+	`, approvalStatus, updatedAt, record.ApprovalID)
+	if err != nil {
+		return fmt.Errorf("update approval request status: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read approval request update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrApprovalRequestNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR REPLACE INTO authorization_records (
+			authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, record.AuthorizationRecordID, record.TaskID, record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt); err != nil {
+		return fmt.Errorf("write authorization record: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit authorization decision transaction: %w", err)
+	}
+	committed = true
 	return nil
 }
 

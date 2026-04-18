@@ -89,8 +89,12 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	secretStore := SecretStore(newInMemorySecretStore())
 	auditStore := AuditStore(newInMemoryAuditStore())
 	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
-	approvalRequestStore := ApprovalRequestStore(newInMemoryApprovalRequestStore())
-	authorizationRecordStore := AuthorizationRecordStore(newInMemoryAuthorizationRecordStore())
+	governanceState := &inMemoryGovernanceState{
+		approvalRequests:     make([]ApprovalRequestRecord, 0),
+		authorizationRecords: make([]AuthorizationRecordRecord, 0),
+	}
+	approvalRequestStore := ApprovalRequestStore(newInMemoryApprovalRequestStoreWithState(governanceState))
+	authorizationRecordStore := AuthorizationRecordStore(newInMemoryAuthorizationRecordStoreWithState(governanceState))
 	memoryStoreName := memoryStoreBackendInMemory
 	taskRunStoreName := memoryStoreBackendInMemory
 	toolCallStoreName := memoryStoreBackendInMemory
