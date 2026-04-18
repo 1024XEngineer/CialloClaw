@@ -531,6 +531,7 @@ dependencies = [
 name = "cialloclaw-desktop"
 version = "0.1.0"
 dependencies = [
+ "image",
  "once_cell",
  "rfd",
  "serde",

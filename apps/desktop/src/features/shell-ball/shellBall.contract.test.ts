@@ -4706,6 +4706,30 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
+test("shell-ball screenshot command stays local and stores captures in apps temp", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const screenPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopScreen.ts"), "utf8");
+  const rootGitIgnoreSource = readFileSync(resolve(desktopRoot, "../../.gitignore"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallScreenshotCommand\(/);
+  assert.match(coordinatorSource, /const screenshot = await captureDesktopScreenshot\(\);/);
+  assert.match(coordinatorSource, /Screenshot saved to \$\{screenshot\.relative_path\}/);
+  assert.match(screenPlatformSource, /invoke<DesktopScreenCapturePayload>\("desktop_capture_screenshot"\)/);
+  assert.match(rootGitIgnoreSource, /apps\/\.temp\/\*/);
+});
+
+test("shell-ball window command stays local and replies with active window context", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const windowContextPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopWindowContext.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_WINDOW_COMMAND = "窗口";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallWindowCommand\(/);
+  assert.match(coordinatorSource, /const context = await getActiveWindowContext\(\);/);
+  assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.title, context\.url\)/);
+  assert.match(windowContextPlatformSource, /invoke<DesktopWindowContextPayload \| null>\("desktop_get_active_window_context"\)/);
+});
+
 test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
