@@ -5,8 +5,34 @@ import { loadStoredValue, saveStoredValue } from "../platform/storage";
 // SETTINGS_KEY is the single storage key for the desktop snapshot.
 const SETTINGS_KEY = "cialloclaw.settings";
 
-// DesktopSettings keeps the local alias aligned with the protocol snapshot.
-export type DesktopSettings = SettingsSnapshot;
+type ProtocolSettings = SettingsSnapshot["settings"];
+type ProtocolDataLogSettings = ProtocolSettings["data_log"];
+
+export type DesktopModelSettings = ProtocolDataLogSettings & {
+  base_url: string;
+  model: string;
+};
+
+export type DesktopSettingsData = Omit<ProtocolSettings, "data_log"> & {
+  data_log: ProtocolDataLogSettings;
+  models: DesktopModelSettings;
+};
+
+export type DesktopSettings = {
+  settings: DesktopSettingsData;
+};
+
+type StoredDataLogSettings = Partial<ProtocolDataLogSettings> & {
+  base_url?: string;
+  model?: string;
+};
+
+type StoredDesktopSettings = {
+  settings?: Partial<Omit<DesktopSettingsData, "data_log" | "models">> & {
+    data_log?: StoredDataLogSettings;
+    models?: Partial<DesktopModelSettings>;
+  };
+};
 
 function createDefaultSettings(): DesktopSettings {
   return {
@@ -56,13 +82,49 @@ function createDefaultSettings(): DesktopSettings {
         budget_auto_downgrade: true,
         provider_api_key_configured: false,
       },
+      models: {
+        provider: "openai",
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-3.5-turbo",
+      },
     },
   };
 }
 
-function normalizeSettingsSnapshot(snapshot: DesktopSettings | null | undefined): DesktopSettings {
+// The desktop control panel carries local-only model routing fields while RPC
+// still persists the shared `data_log` subset. Keep both shapes synchronized so
+// older snapshots and new UI state read back consistently.
+function normalizeSettingsSnapshot(
+  snapshot: StoredDesktopSettings | SettingsSnapshot | DesktopSettings | null | undefined,
+): DesktopSettings {
   const defaults = createDefaultSettings();
-  const settings = snapshot?.settings;
+  const settings = snapshot?.settings as StoredDesktopSettings["settings"];
+  const storedDataLog = settings?.data_log;
+  const storedModels = settings?.models;
+  const normalizedDataLog: ProtocolDataLogSettings = {
+    ...defaults.settings.data_log,
+    ...storedDataLog,
+    provider: storedModels?.provider ?? storedDataLog?.provider ?? defaults.settings.data_log.provider,
+    budget_auto_downgrade:
+      storedModels?.budget_auto_downgrade ??
+      storedDataLog?.budget_auto_downgrade ??
+      defaults.settings.data_log.budget_auto_downgrade,
+    provider_api_key_configured:
+      storedModels?.provider_api_key_configured ??
+      storedDataLog?.provider_api_key_configured ??
+      defaults.settings.data_log.provider_api_key_configured,
+  };
+  const normalizedModels: DesktopModelSettings = {
+    ...defaults.settings.models,
+    ...(storedDataLog?.base_url === undefined ? {} : { base_url: storedDataLog.base_url }),
+    ...(storedDataLog?.model === undefined ? {} : { model: storedDataLog.model }),
+    ...storedModels,
+    provider: normalizedDataLog.provider,
+    budget_auto_downgrade: normalizedDataLog.budget_auto_downgrade,
+    provider_api_key_configured: normalizedDataLog.provider_api_key_configured,
+  };
 
   return {
     settings: {
@@ -98,20 +160,36 @@ function normalizeSettingsSnapshot(snapshot: DesktopSettings | null | undefined)
           ...settings?.task_automation?.inspection_interval,
         },
       },
-      data_log: {
-        ...defaults.settings.data_log,
-        ...settings?.data_log,
-      },
+      data_log: normalizedDataLog,
+      models: normalizedModels,
     },
   };
 }
 
-// loadSettings returns the stored snapshot or a complete default snapshot.
-export function loadSettings(): DesktopSettings {
-  return normalizeSettingsSnapshot(loadStoredValue<DesktopSettings>(SETTINGS_KEY));
+/**
+ * Hydrates shared RPC settings into the desktop-local settings shape.
+ *
+ * @param settings Shared or desktop-local settings snapshot.
+ * @returns Normalized desktop settings data with synchronized `data_log` and `models`.
+ */
+export function hydrateDesktopSettings(settings: ProtocolSettings | DesktopSettingsData): DesktopSettingsData {
+  return normalizeSettingsSnapshot({ settings: settings as StoredDesktopSettings["settings"] }).settings;
 }
 
-// saveSettings persists the latest desktop settings snapshot.
+/**
+ * Loads the persisted desktop settings snapshot.
+ *
+ * @returns A normalized settings snapshot for desktop UI consumers.
+ */
+export function loadSettings(): DesktopSettings {
+  return normalizeSettingsSnapshot(loadStoredValue<StoredDesktopSettings>(SETTINGS_KEY));
+}
+
+/**
+ * Persists the latest desktop settings snapshot.
+ *
+ * @param settings The desktop settings snapshot to store locally.
+ */
 export function saveSettings(settings: DesktopSettings) {
   saveStoredValue(SETTINGS_KEY, normalizeSettingsSnapshot(settings));
 }

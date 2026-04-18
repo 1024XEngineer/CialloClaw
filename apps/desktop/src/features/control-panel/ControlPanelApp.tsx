@@ -205,7 +205,7 @@ export function ControlPanelApp() {
   const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
   const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
-  const providerApiKeyStatus = draft.settings.data_log.provider_api_key_configured ? "已配置" : "未配置";
+  const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
   const sourceValue = (
     <span className="control-panel-page__value-cluster">
       <span
@@ -680,19 +680,51 @@ export function ControlPanelApp() {
             </section>
 
             <section className="control-panel-page__panel control-panel-page__tone-surface--warm" aria-labelledby="control-panel-budget-title">
-              <SectionHeader titleId="control-panel-budget-title" title="预算与路由" />
+              <SectionHeader titleId="control-panel-budget-title" title="模型与路由" />
 
               <div className="control-panel-page__stack">
                 <ControlLine label="Provider" tone="warm">
                   <TextField.Root
                     className="control-panel-page__input"
-                    value={draft.settings.data_log.provider}
+                    value={draft.settings.models.provider}
                     onChange={(event) =>
                       updateSettings((current) => ({
                         ...current,
                         settings: {
                           ...current.settings,
-                          data_log: { ...current.settings.data_log, provider: event.target.value },
+                          models: { ...current.settings.models, provider: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </ControlLine>
+
+                <ControlLine label="Base URL" tone="warm">
+                  <TextField.Root
+                    className="control-panel-page__input"
+                    value={draft.settings.models.base_url}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          models: { ...current.settings.models, base_url: event.target.value },
+                        },
+                      }))
+                    }
+                  />
+                </ControlLine>
+
+                <ControlLine label="Model" tone="warm">
+                  <TextField.Root
+                    className="control-panel-page__input"
+                    value={draft.settings.models.model}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          models: { ...current.settings.models, model: event.target.value },
                         },
                       }))
                     }
@@ -708,7 +740,7 @@ export function ControlPanelApp() {
                     className="control-panel-page__input"
                     type="password"
                     value={draft.providerApiKeyInput}
-                    placeholder={draft.settings.data_log.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
+                    placeholder={draft.settings.models.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
                     autoComplete="off"
                     onChange={(event) =>
                       updateSettings((current) => ({
@@ -721,20 +753,21 @@ export function ControlPanelApp() {
 
                 <ToggleLine
                   label="预算自动降级"
-                  checked={draft.settings.data_log.budget_auto_downgrade}
+                  checked={draft.settings.models.budget_auto_downgrade}
                   tone="warm"
                   onCheckedChange={(checked) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        data_log: { ...current.settings.data_log, budget_auto_downgrade: checked },
+                        models: { ...current.settings.models, budget_auto_downgrade: checked },
                       },
                     }))
                   }
                 />
 
                 <div className="control-panel-page__info-list">
+                  <InfoRow label="当前模型" value={draft.settings.models.model} tone="warm" />
                   <InfoRow label="API Key 状态" value={providerApiKeyStatus} tone="warm" />
                   <InfoRow label="安全状态" value={draft.securitySummary.security_status} tone="warm" />
                   <InfoRow label="待确认授权" value={draft.securitySummary.pending_authorizations} tone="warm" />
