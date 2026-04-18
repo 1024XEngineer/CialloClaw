@@ -947,6 +947,9 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		if !record.isFinished() {
 			return TaskRecord{}, ErrTaskStatusInvalid
 		}
+		// Restart begins a fresh execution attempt for the same task, so it must
+		// allocate a new run identifier before any loop/runtime rows are emitted.
+		record.RunID = e.nextIdentifier("run")
 		record.Status = "processing"
 		record.FinishedAt = nil
 		record.CurrentStep = "generate_output"
@@ -962,6 +965,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		record.MemoryReadPlans = nil
 		record.MemoryWritePlans = nil
 		record.MirrorReferences = nil
+		record.LoopStopReason = ""
 		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
 		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
 	default:

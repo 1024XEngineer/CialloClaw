@@ -1172,6 +1172,7 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	if _, ok := engine.SetMirrorReferences(task.TaskID, []map[string]any{{"memory_id": "mem_write_task_001_1"}}); !ok {
 		t.Fatal("expected mirror references to be stored before restart")
 	}
+	originalRunID := task.RunID
 
 	restarted, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
 	if err != nil {
@@ -1183,11 +1184,17 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	if restarted.FinishedAt != nil {
 		t.Fatal("expected restart to clear finished_at")
 	}
+	if restarted.RunID == originalRunID {
+		t.Fatalf("expected restart to allocate a new run_id, got %s", restarted.RunID)
+	}
 	if restarted.DeliveryResult != nil || len(restarted.Artifacts) != 0 {
 		t.Fatal("expected restart to clear finished delivery outputs")
 	}
 	if restarted.MemoryReadPlans != nil || restarted.MemoryWritePlans != nil || restarted.MirrorReferences != nil {
 		t.Fatal("expected restart to clear handoff and mirror snapshots")
+	}
+	if restarted.LoopStopReason != "" {
+		t.Fatalf("expected restart to clear loop stop reason, got %q", restarted.LoopStopReason)
 	}
 }
 

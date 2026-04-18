@@ -680,6 +680,46 @@ func TestExecuteAgentLoopAppendsMultipleActiveSteeringMessages(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentLoopDoesNotDuplicateQueuedSteeringOnFirstRound(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID:  "req_loop_queued_once",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Loop runtime finished with queued steering.",
+			},
+		},
+	}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	service = service.WithSteeringPoller(func(_ string) []string {
+		return []string{"Keep the answer concise."}
+	})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:           "task_loop_queued_steer",
+		RunID:            "run_loop_queued_steer",
+		Title:            "Loop queued steering",
+		Intent:           map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:         contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the task and answer."},
+		SteeringMessages: []string{"Keep the answer concise."},
+		DeliveryType:     "bubble",
+		ResultTitle:      "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "Loop runtime finished with queued steering." {
+		t.Fatalf("unexpected queued steering result: %+v", result)
+	}
+	if len(modelClient.plannerInputs) != 1 {
+		t.Fatalf("expected a single planner input, got %+v", modelClient.plannerInputs)
+	}
+	if count := strings.Count(modelClient.plannerInputs[0], "Keep the answer concise."); count != 1 {
+		t.Fatalf("expected queued steering to appear once in the first planner input, got %d occurrences in %q", count, modelClient.plannerInputs[0])
+	}
+}
+
 func TestRunStatusFromStopReasonTreatsToolRetryExhaustedAsFailed(t *testing.T) {
 	if status := runStatusFromStopReason(agentloop.StopReasonToolRetryExhausted); status != "failed" {
 		t.Fatalf("expected tool retry exhausted to map to failed, got %q", status)

@@ -925,7 +925,13 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
-	runtimeInput := agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+	runtimeInput := inputText
+	if s.steeringPoller == nil {
+		// Without an active poller, preloaded steering must still reach the first
+		// planner round. When a poller exists it will drain the same queue before
+		// round 1, so appending here would duplicate that guidance.
+		runtimeInput = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+	}
 	runtimeResult, ok, err := s.loop.Run(ctx, agentloop.Request{
 		TaskID:          request.TaskID,
 		RunID:           request.RunID,
