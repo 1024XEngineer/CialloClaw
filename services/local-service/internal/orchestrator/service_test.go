@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -39,7 +40,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
 type stubModelClient struct {
 	output string
 }
@@ -322,7 +322,7 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore())
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -389,6 +389,8 @@ func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.T
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
 }
 
+// TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
+// continues execution and completes delivery.
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -879,6 +881,94 @@ func TestServiceSecurityRespondResumesQueuedSessionTask(t *testing.T) {
 	}
 	if secondTask.CurrentStep != "return_result" {
 		t.Fatalf("expected resumed task to finish through return_result, got %+v", secondTask)
+	}
+}
+
+func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inputs"), 0o755); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.png"), []byte("fake screen capture"), 0o644); err != nil {
+		t.Fatalf("write screen input failed: %v", err)
+	}
+
+	firstResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_queue",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please write this into a file after authorization.",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path":           "workspace_document",
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first start task failed: %v", err)
+	}
+	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
+
+	secondResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_queue",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second start task failed: %v", err)
+	}
+	secondTaskID := secondResult["task"].(map[string]any)["task_id"].(string)
+	if secondResult["task"].(map[string]any)["status"] != "blocked" {
+		t.Fatalf("expected queued screen task to stay blocked before approval is created, got %+v", secondResult["task"])
+	}
+
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":       firstTaskID,
+		"approval_id":   "appr_screen_queue_first",
+		"decision":      "allow_once",
+		"remember_rule": false,
+	}); err != nil {
+		t.Fatalf("security respond failed for first task: %v", err)
+	}
+
+	secondTask, ok := service.runEngine.GetTask(secondTaskID)
+	if !ok {
+		t.Fatal("expected queued screen task to remain available in runtime")
+	}
+	if secondTask.Status != "waiting_auth" || secondTask.CurrentStep != "waiting_authorization" {
+		t.Fatalf("expected queued screen task to re-enter waiting authorization, got %+v", secondTask)
+	}
+	if len(secondTask.ApprovalRequest) == 0 || stringValue(secondTask.PendingExecution, "kind", "") != "screen_analysis" {
+		t.Fatalf("expected queued screen task to rebuild approval state, got %+v", secondTask)
+	}
+
+	screenResult, err := service.SecurityRespond(map[string]any{
+		"task_id":       secondTaskID,
+		"approval_id":   "appr_screen_queue_second",
+		"decision":      "allow_once",
+		"remember_rule": false,
+	})
+	if err != nil {
+		t.Fatalf("security respond failed for queued screen task: %v", err)
+	}
+	if screenResult["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected queued screen task to complete after approval, got %+v", screenResult["task"])
 	}
 }
 
@@ -2251,7 +2341,8 @@ func TestServiceSubmitInputWithFilesDoesNotWaitForInput(t *testing.T) {
 	}
 }
 
-// TestServiceSubmitInputEmptyTextReturnsWaitingInput 验证空文本提交会进入 waiting_input。
+// TestServiceSubmitInputEmptyTextReturnsWaitingInput verifies that empty text
+// submissions enter waiting_input.
 func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2312,7 +2403,8 @@ func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 	}
 }
 
-// TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs 验证ServiceDirectStartBuildsMemoryAndDeliveryHandoffs。
+// TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs verifies direct starts
+// attach memory and delivery handoffs.
 func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2376,7 +2468,8 @@ func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	}
 }
 
-// TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt 验证等待授权前不会提前写入 finished_at。
+// TestServiceStartTaskRespectsPreferredDelivery verifies direct starts preserve
+// preferred and fallback delivery settings.
 func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	service := newTestService()
 
@@ -2572,7 +2665,8 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 	}
 }
 
-// TestServiceConfirmCanEnterWaitingAuth 验证ServiceConfirmCanEnterWaitingAuth。
+// TestServiceConfirmCanEnterWaitingAuth verifies confirm flows can enter
+// waiting_auth.
 func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2647,7 +2741,8 @@ func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	}
 }
 
-// TestServiceSecurityRespondAllowOnceResumesAndCompletes 验证授权通过后任务会继续执行并完成交付。
+// TestServiceSecurityRespondAllowOnceResumesAndCompletes verifies allow-once
+// resumes execution and completes delivery.
 func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2749,7 +2844,8 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	}
 }
 
-// TestServiceSecurityRespondDenyOnceCancelsTask 验证拒绝授权后任务会结束。
+// TestServiceSecurityRespondRespectsFallbackDelivery verifies authorization
+// resume honors fallback delivery resolution.
 func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 	service := newTestService()
 
@@ -3203,7 +3299,7 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 	}
 }
 
-// modelConfig 处理当前模块的相关逻辑。
+// TestServiceTaskListSupportsSortParams verifies task list sorting parameters.
 func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	service := newTestService()
 
@@ -4221,6 +4317,135 @@ func TestServiceStartTaskWritesRealMemorySummary(t *testing.T) {
 	}
 	if querySQLiteCount(t, service.storage.DatabasePath(), `SELECT COUNT(1) FROM memory_summaries WHERE task_id = ?`, taskID) != 1 {
 		t.Fatalf("expected one persisted memory summary for task %s", taskID)
+	}
+}
+
+func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inputs"), 0o755); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.png"), []byte("fake screen capture"), 0o644); err != nil {
+		t.Fatalf("write screen input failed: %v", err)
+	}
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] != "screen_capture" {
+		t.Fatalf("expected screen source_type, got %+v", task)
+	}
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected screen analyze task to require authorization first, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected waiting authorization status bubble, got %+v", bubble)
+	}
+	approvalRequests, total := service.runEngine.PendingApprovalRequests(20, 0)
+	if total != 1 || len(approvalRequests) != 1 {
+		t.Fatalf("expected one pending approval request, got total=%d items=%+v", total, approvalRequests)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.Status != "waiting_auth" {
+		t.Fatalf("expected runtime screen task to wait for auth, got %+v", record)
+	}
+	if record.ApprovalRequest == nil || record.PendingExecution == nil {
+		t.Fatalf("expected approval request and pending execution, got %+v", record)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  task["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "completed" {
+		t.Fatalf("expected authorized screen task to complete, got %+v", respondTask)
+	}
+	record, exists = service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.Status != "completed" {
+		t.Fatalf("expected controlled screen task to complete, got %+v", record)
+	}
+	if len(record.Artifacts) != 1 || record.Artifacts[0]["artifact_type"] != "screen_capture" {
+		t.Fatalf("expected one screen artifact in runtime task, got %+v", record.Artifacts)
+	}
+	if record.Authorization == nil || record.Authorization["decision"] != "allow_once" {
+		t.Fatalf("expected authorization record to be stored, got %+v", record.Authorization)
+	}
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	if err != nil {
+		t.Fatalf("list persisted artifacts failed: %v", err)
+	}
+	if total != 1 || len(artifacts) != 1 {
+		t.Fatalf("expected one persisted screen artifact, total=%d len=%d", total, len(artifacts))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(artifacts[0].DeliveryPayloadJSON), &payload); err != nil {
+		t.Fatalf("decode persisted screen payload failed: %v", err)
+	}
+	if payload["screen_session_id"] == "" || payload["capture_mode"] != "screenshot" || payload["retention_policy"] == "" || payload["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected persisted artifact payload to retain screen metadata, got %+v", payload)
+	}
+}
+
+func TestSecurityRespondScreenAnalyzeFailureReconcilesTaskState(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_fail",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/missing-screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  taskID,
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "failed" {
+		t.Fatalf("expected failed task after approved screen capture error, got %+v", respondTask)
+	}
+	bubble := respondResult["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected failure status bubble, got %+v", bubble)
+	}
+	record, exists := service.runEngine.GetTask(taskID)
+	if !exists || record.Status != "failed" || record.PendingExecution != nil {
+		t.Fatalf("expected runtime task to reconcile to failed terminal state, got %+v", record)
 	}
 }
 

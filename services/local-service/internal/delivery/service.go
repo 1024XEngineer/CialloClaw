@@ -1,4 +1,5 @@
-// 该文件负责交付结果、气泡消息与 artifact 计划的组装。
+// Package delivery assembles task-facing delivery results, bubbles, and
+// persistence plans.
 package delivery
 
 import (
@@ -13,10 +14,8 @@ import (
 
 const defaultWorkspaceRoot = "workspace"
 
-// StorageWritePlan 定义当前模块的数据结构。
-
-// StorageWritePlan 描述正式交付物需要写入 workspace 时的最小落盘计划。
-// runengine 只保存这份计划，不直接执行真实文件写入。
+// StorageWritePlan describes the minimum workspace write plan required for a
+// formal delivery result.
 type StorageWritePlan struct {
 	TaskID       string
 	TargetPath   string
@@ -25,10 +24,8 @@ type StorageWritePlan struct {
 	Source       string
 }
 
-// ArtifactPersistPlan 定义当前模块的数据结构。
-
-// ArtifactPersistPlan 描述 artifact 元数据后续需要如何持久化。
-// 它和 StorageWritePlan 分层存在，避免把大对象落盘和正式交付写入混成一件事。
+// ArtifactPersistPlan describes how artifact metadata should later be persisted
+// without mixing metadata persistence with workspace content writes.
 type ArtifactPersistPlan struct {
 	ArtifactID   string
 	TaskID       string
@@ -37,10 +34,8 @@ type ArtifactPersistPlan struct {
 	MimeType     string
 }
 
-// ApprovalExecutionPlan 描述授权通过后继续执行所需的最小交付计划。
-
-// ApprovalExecutionPlan 描述命中风险并通过授权后，主链路需要恢复的最小交付计划。
-// 这里保存的是“恢复执行需要知道什么”，而不是完整运行态快照。
+// ApprovalExecutionPlan captures the minimum delivery settings required to
+// resume execution after a risky action is approved.
 type ApprovalExecutionPlan struct {
 	TaskID           string
 	DeliveryType     string
@@ -49,30 +44,22 @@ type ApprovalExecutionPlan struct {
 	ResultBubbleText string
 }
 
-// Service 提供当前模块的服务能力。
-
-// Service 负责把 runengine 的执行结果组装成对外 task-centric 语义。
-// 包括 bubble_message、delivery_result、artifact 计划，以及授权恢复后的默认交付配置。
+// Service assembles task-centric delivery outputs from runtime execution data.
 type Service struct{}
 
-// NewService 创建并返回Service。
-
-// NewService 创建交付服务。
+// NewService constructs a delivery service.
 func NewService() *Service {
 	return &Service{}
 }
 
-// DefaultResultType 处理当前模块的相关逻辑。
-
-// DefaultResultType 返回当前主链路的默认正式交付类型。
+// DefaultResultType returns the default formal delivery type for the main
+// pipeline.
 func (s *Service) DefaultResultType() string {
 	return "workspace_document"
 }
 
-// BuildBubbleMessage 构建BubbleMessage。
-
-// BuildBubbleMessage 生成统一的气泡消息结构。
-// orchestrator 在确认、授权、完成等节点都通过它构造对前端可直接消费的 bubble_message。
+// BuildBubbleMessage creates the stable bubble_message payload returned to the
+// frontend across confirmation, authorization, and completion states.
 func (s *Service) BuildBubbleMessage(taskID, bubbleType, text, createdAt string) map[string]any {
 	return map[string]any{
 		"bubble_id":  fmt.Sprintf("bubble_%s", taskID),
@@ -85,15 +72,13 @@ func (s *Service) BuildBubbleMessage(taskID, bubbleType, text, createdAt string)
 	}
 }
 
-// BuildDeliveryResult 构建DeliveryResult。
-
-// BuildDeliveryResult 生成对外返回的 delivery_result。
-// 当交付类型是 workspace_document 时，这里还会同步约定 workspace 内的相对输出路径。
+// BuildDeliveryResult creates the outward-facing delivery_result payload.
 func (s *Service) BuildDeliveryResult(taskID, deliveryType, title, previewText string) map[string]any {
 	return s.BuildDeliveryResultWithTargetPath(taskID, deliveryType, title, previewText, "")
 }
 
-// BuildDeliveryResultWithTargetPath 生成带显式输出路径的 delivery_result。
+// BuildDeliveryResultWithTargetPath creates a delivery_result with an explicit
+// target path when a caller already resolved one.
 func (s *Service) BuildDeliveryResultWithTargetPath(taskID, deliveryType, title, previewText, targetPath string) map[string]any {
 	payload := map[string]any{
 		"path":    nil,
@@ -113,10 +98,7 @@ func (s *Service) BuildDeliveryResultWithTargetPath(taskID, deliveryType, title,
 	}
 }
 
-// BuildArtifact 构建Artifact。
-
-// BuildArtifact 从正式交付结果反推 artifact 列表。
-// 当前主链路只在生成 workspace 文档时附带一个 generated_doc artifact。
+// BuildArtifact derives artifact metadata from a formal delivery result.
 func (s *Service) BuildArtifact(taskID, title string, deliveryResult map[string]any) []map[string]any {
 	payload, ok := deliveryResult["payload"].(map[string]any)
 	if !ok {
@@ -172,9 +154,8 @@ func EnsureArtifactIdentifiers(taskID string, artifacts []map[string]any) []map[
 	return result
 }
 
-// BuildStorageWritePlan 构建StorageWritePlan。
-
-// BuildStorageWritePlan 把 delivery_result 转成 runengine 保存的 workspace 写入计划。
+// BuildStorageWritePlan translates a delivery_result into the workspace write
+// plan that runengine persists for later execution.
 func (s *Service) BuildStorageWritePlan(taskID string, deliveryResult map[string]any) map[string]any {
 	payload, ok := deliveryResult["payload"].(map[string]any)
 	if !ok {
@@ -195,9 +176,8 @@ func (s *Service) BuildStorageWritePlan(taskID string, deliveryResult map[string
 	}
 }
 
-// BuildArtifactPersistPlans 构建ArtifactPersistPlans。
-
-// BuildArtifactPersistPlans 把 artifact 列表转换成后续持久化计划。
+// BuildArtifactPersistPlans converts runtime artifacts into metadata persistence
+// plans.
 func (s *Service) BuildArtifactPersistPlans(taskID string, artifacts []map[string]any) []map[string]any {
 	artifacts = EnsureArtifactIdentifiers(taskID, artifacts)
 	if len(artifacts) == 0 {
@@ -287,10 +267,8 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-// BuildApprovalExecutionPlan 构建授权通过后的继续执行计划。
-
-// BuildApprovalExecutionPlan 为等待授权的任务构造恢复执行计划。
-// 不同 intent 会在这里得到不同的默认交付类型、结果标题和气泡文案。
+// BuildApprovalExecutionPlan builds the minimum delivery plan needed when a
+// task resumes after approval.
 func (s *Service) BuildApprovalExecutionPlan(taskID string, intent map[string]any) map[string]any {
 	intentName, _ := intent["name"].(string)
 	plan := map[string]any{
@@ -326,10 +304,7 @@ func (s *Service) BuildApprovalExecutionPlan(taskID string, intent map[string]an
 	return plan
 }
 
-// slugify 处理当前模块的相关逻辑。
-
-// slugify 把结果标题转换成适合 workspace 文件名的片段。
-// 如果标题清洗后为空，则退回 task_id，避免生成不可用路径。
+// slugify converts a delivery title into a safe workspace filename segment.
 func slugify(title, fallback string) string {
 	trimmed := strings.TrimSpace(title)
 	if trimmed == "" {

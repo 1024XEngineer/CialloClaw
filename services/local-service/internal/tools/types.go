@@ -310,6 +310,123 @@ type MediaFrameExtractResult struct {
 	Source     string
 }
 
+// ScreenCaptureMode classifies one capture request shape.
+type ScreenCaptureMode string
+
+const (
+	ScreenCaptureModeScreenshot ScreenCaptureMode = "screenshot"
+	ScreenCaptureModeKeyframe   ScreenCaptureMode = "keyframe"
+	ScreenCaptureModeClip       ScreenCaptureMode = "clip"
+)
+
+// ScreenAuthorizationState describes the effective authorization state of one
+// screen capture session.
+type ScreenAuthorizationState string
+
+const (
+	ScreenAuthorizationPending ScreenAuthorizationState = "pending"
+	ScreenAuthorizationGranted ScreenAuthorizationState = "granted"
+	ScreenAuthorizationDenied  ScreenAuthorizationState = "denied"
+	ScreenAuthorizationExpired ScreenAuthorizationState = "expired"
+	ScreenAuthorizationEnded   ScreenAuthorizationState = "ended"
+)
+
+// ScreenRetentionPolicy describes how long screen-derived material may live.
+type ScreenRetentionPolicy string
+
+const (
+	ScreenRetentionTemporary ScreenRetentionPolicy = "temporary"
+	ScreenRetentionReview    ScreenRetentionPolicy = "review"
+	ScreenRetentionArtifact  ScreenRetentionPolicy = "artifact"
+)
+
+// ScreenSessionStartInput is the minimal input required to create one managed
+// screen capture session.
+type ScreenSessionStartInput struct {
+	SessionID         string
+	TaskID            string
+	RunID             string
+	Source            string
+	Scope             string
+	CaptureMode       ScreenCaptureMode
+	AuthorizationHint string
+	TTL               time.Duration
+}
+
+// ScreenSessionState is the normalized session carrier shared by platform,
+// execution, and cleanup logic.
+type ScreenSessionState struct {
+	ScreenSessionID    string
+	SessionID          string
+	TaskID             string
+	RunID              string
+	Source             string
+	Scope              string
+	CaptureMode        ScreenCaptureMode
+	AuthorizationState ScreenAuthorizationState
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	EndedAt            *time.Time
+	TerminalReason     string
+}
+
+// ScreenCaptureInput describes one controlled screenshot or keyframe request.
+type ScreenCaptureInput struct {
+	ScreenSessionID string
+	TaskID          string
+	RunID           string
+	CaptureMode     ScreenCaptureMode
+	Source          string
+	SourcePath      string
+	Reason          string
+	AllowPersist    bool
+}
+
+// ScreenFrameCandidate is the storage-agnostic output of one screen capture.
+// It remains a candidate until a later lifecycle step promotes it into an
+// artifact.
+type ScreenFrameCandidate struct {
+	FrameID           string
+	ScreenSessionID   string
+	TaskID            string
+	RunID             string
+	CaptureMode       ScreenCaptureMode
+	Source            string
+	Path              string
+	CapturedAt        time.Time
+	IsKeyframe        bool
+	DedupeFingerprint string
+	RetentionPolicy   ScreenRetentionPolicy
+	CleanupRequired   bool
+}
+
+// KeyframeCaptureResult describes one keyframe sampling decision.
+type KeyframeCaptureResult struct {
+	Candidate         ScreenFrameCandidate
+	Promoted          bool
+	PromotionReason   string
+	DedupeFingerprint string
+}
+
+// ScreenCleanupInput describes one cleanup request for session-bound or
+// expired screen artifacts.
+type ScreenCleanupInput struct {
+	ScreenSessionID string
+	Reason          string
+	Paths           []string
+	ExpiredBefore   time.Time
+}
+
+// ScreenCleanupResult summarizes one cleanup run.
+type ScreenCleanupResult struct {
+	ScreenSessionID string
+	Reason          string
+	DeletedPaths    []string
+	SkippedPaths    []string
+	DeletedCount    int
+	SkippedCount    int
+}
+
 // PlaywrightSidecarClient 是 Playwright sidecar 的最小客户端边界。
 type PlaywrightSidecarClient interface {
 	ReadPage(ctx context.Context, url string) (BrowserPageReadResult, error)
@@ -330,6 +447,20 @@ type MediaWorkerClient interface {
 	TranscodeMedia(ctx context.Context, inputPath, outputPath, format string) (MediaTranscodeResult, error)
 	NormalizeRecording(ctx context.Context, inputPath, outputPath string) (MediaTranscodeResult, error)
 	ExtractFrames(ctx context.Context, inputPath, outputDir string, everySeconds float64, limit int) (MediaFrameExtractResult, error)
+}
+
+// ScreenCaptureClient is the minimal owner-5 screen capture capability
+// boundary. It intentionally models session, capture, and cleanup concerns
+// without freezing any frontend-facing protocol shape.
+type ScreenCaptureClient interface {
+	StartSession(ctx context.Context, input ScreenSessionStartInput) (ScreenSessionState, error)
+	GetSession(ctx context.Context, screenSessionID string) (ScreenSessionState, error)
+	StopSession(ctx context.Context, screenSessionID, reason string) (ScreenSessionState, error)
+	ExpireSession(ctx context.Context, screenSessionID, reason string) (ScreenSessionState, error)
+	CaptureScreenshot(ctx context.Context, input ScreenCaptureInput) (ScreenFrameCandidate, error)
+	CaptureKeyframe(ctx context.Context, input ScreenCaptureInput) (KeyframeCaptureResult, error)
+	CleanupSessionArtifacts(ctx context.Context, input ScreenCleanupInput) (ScreenCleanupResult, error)
+	CleanupExpiredScreenTemps(ctx context.Context, input ScreenCleanupInput) (ScreenCleanupResult, error)
 }
 
 // CheckpointService 是 tools 模块所需的恢复点最小接口。
@@ -380,6 +511,7 @@ type ToolExecuteContext struct {
 	Playwright PlaywrightSidecarClient
 	OCR        OCRWorkerClient
 	Media      MediaWorkerClient
+	Screen     ScreenCaptureClient
 	Risk       RiskEvaluator
 	Audit      AuditWriter
 	Checkpoint CheckpointService
@@ -419,6 +551,18 @@ var (
 	ErrOCRWorkerFailed = errors.New("tools: ocr worker failed")
 	// ErrMediaWorkerFailed indicates the media worker failed.
 	ErrMediaWorkerFailed = errors.New("tools: media worker failed")
+	// ErrScreenCaptureUnauthorized indicates the screen capture request lacks authorization.
+	ErrScreenCaptureUnauthorized = errors.New("tools: screen capture unauthorized")
+	// ErrScreenCaptureSessionExpired indicates the capture session is expired.
+	ErrScreenCaptureSessionExpired = errors.New("tools: screen capture session expired")
+	// ErrScreenCaptureNotSupported indicates the current platform cannot capture screens.
+	ErrScreenCaptureNotSupported = errors.New("tools: screen capture not supported")
+	// ErrScreenCaptureFailed indicates screenshot capture failed.
+	ErrScreenCaptureFailed = errors.New("tools: screen capture failed")
+	// ErrScreenKeyframeSamplingFailed indicates keyframe sampling failed.
+	ErrScreenKeyframeSamplingFailed = errors.New("tools: screen keyframe sampling failed")
+	// ErrScreenCleanupFailed indicates temporary screen artifact cleanup failed.
+	ErrScreenCleanupFailed = errors.New("tools: screen artifact cleanup failed")
 	// ErrToolDryRunNotSupported 表示工具不支持预检查模式。
 	ErrToolDryRunNotSupported = errors.New("tools: tool dry run not supported")
 	// ErrToolDuplicateName 表示注册时发现同名工具已存在。

@@ -117,7 +117,10 @@ type Request struct {
 	PlannerRetryBudget int
 	ToolRetryBudget    int
 	Hook               Hook
-	Now                func() time.Time
+	// EmitEvent mirrors lifecycle events as soon as they happen so transports can
+	// stream loop progress while the enclosing RPC call is still running.
+	EmitEvent func(LifecycleEvent)
+	Now       func() time.Time
 }
 
 // Runtime executes a bounded ReAct-style loop with structured round state,
@@ -166,7 +169,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	history := []string{}
 	allToolCalls := []tools.ToolCallRecord{}
 	rounds := []PersistedRound{}
-	events := []LifecycleEvent{newEvent(request, "loop.started", map[string]any{"status": "processing"})}
+	events := []LifecycleEvent{}
+	events = appendEvent(events, request, newEvent(request, "loop.started", map[string]any{"status": "processing"}))
 	var latestInvocation *model.InvocationRecord
 	repeatedToolName := ""
 	repeatedToolCount := 0
@@ -175,8 +179,10 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		if request.PollSteering != nil {
 			steeringMessages := request.PollSteering(ctx, request.TaskID)
 			if len(steeringMessages) > 0 {
-				activeInputText = appendSteeringInput(request.InputText, steeringMessages)
-				events = append(events, newEvent(request, "task.steered", map[string]any{
+				// Keep every accepted steering message in the planner prompt so
+				// later rounds do not silently discard earlier guidance.
+				activeInputText = appendSteeringInput(activeInputText, steeringMessages)
+				events = appendEvent(events, request, newEvent(request, "task.steered", map[string]any{
 					"task_id":  request.TaskID,
 					"messages": append([]string(nil), steeringMessages...),
 				}))
@@ -205,7 +211,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.PlannerInput = plannerInput
 			round.InputSummary = truncateText(singleLineSummary(plannerInput), 160)
 		}
-		events = append(events, newEventForRound(round, "loop.round.started", map[string]any{"loop_round": round.LoopRound}))
+		events = appendEvent(events, request, newEventForRound(round, "loop.round.started", map[string]any{"loop_round": round.LoopRound}))
 
 		var plan model.ToolCallResult
 		var err error
@@ -220,7 +226,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				break
 			}
 			if attempt < request.PlannerRetryBudget {
-				events = append(events, newEventForRound(round, "loop.retrying", map[string]any{
+				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 					"loop_round": round.LoopRound,
 					"phase":      "planner",
 					"attempt":    attempt + 1,
@@ -234,12 +240,18 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.StopReason = StopReasonPlannerError
 			round.OutputSummary = truncateText(singleLineSummary(err.Error()), 160)
 			rounds = append(rounds, round)
-			events = append(events, newEventForRound(round, "loop.failed", map[string]any{
+			events = appendEvent(events, request, newEventForRound(round, "loop.failed", map[string]any{
 				"loop_round":  round.LoopRound,
 				"stop_reason": string(StopReasonPlannerError),
 				"error":       err.Error(),
 			}))
-			return Result{}, true, fmt.Errorf("agent loop planning turn %d: %w", turn+1, err)
+			return Result{
+				ToolCalls:       allToolCalls,
+				ModelInvocation: invocationRecordMap(latestInvocation),
+				Events:          events,
+				Rounds:          rounds,
+				StopReason:      StopReasonPlannerError,
+			}, true, fmt.Errorf("agent loop planning turn %d: %w", turn+1, err)
 		}
 
 		latestInvocation = &model.InvocationRecord{
@@ -254,7 +266,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		round.PlannerOutput = truncateText(singleLineSummary(plan.OutputText), 240)
 
 		if len(compactedHistory) < len(history) {
-			events = append(events, newEventForRound(round, "loop.compacted", map[string]any{
+			events = appendEvent(events, request, newEventForRound(round, "loop.compacted", map[string]any{
 				"loop_round":          round.LoopRound,
 				"history_before":      len(history),
 				"history_after":       len(compactedHistory),
@@ -278,10 +290,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.StopReason = stopReason
 			round.OutputSummary = truncateText(singleLineSummary(outputText), 160)
 			rounds = append(rounds, round)
-			events = append(events,
-				newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(stopReason)}),
-				newEvent(request, "loop.completed", map[string]any{"stop_reason": string(stopReason)}),
-			)
+			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(stopReason)}))
+			events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(stopReason)}))
 			return Result{
 				OutputText:      outputText,
 				ToolCalls:       allToolCalls,
@@ -313,7 +323,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 
 			observation, record := request.ExecuteTool(ctx, call, turn+1)
 			for attempt := 0; attempt < request.ToolRetryBudget && record.Status == tools.ToolCallStatusTimeout; attempt++ {
-				events = append(events, newEventForRound(round, "loop.retrying", map[string]any{
+				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 					"loop_round": round.LoopRound,
 					"phase":      "tool",
 					"attempt":    attempt + 1,
@@ -332,10 +342,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				round.StopReason = StopReasonToolRetryExhausted
 				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
 				rounds = append(rounds, round)
-				events = append(events,
-					newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonToolRetryExhausted)}),
-					newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonToolRetryExhausted), "tool_name": toolName}),
-				)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonToolRetryExhausted)}))
+				events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonToolRetryExhausted), "tool_name": toolName}))
 				auditRecord, auditErr := request.BuildAuditRecord(ctx, latestInvocation)
 				if auditErr != nil {
 					return Result{}, true, auditErr
@@ -352,7 +360,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			}
 			observations = append(observations, observation)
 			round.Observation = truncateText(singleLineSummary(observation), 240)
-			events = append(events, newEventForRound(round, "tool_call.observed", map[string]any{
+			events = appendEvent(events, request, newEventForRound(round, "tool_call.observed", map[string]any{
 				"loop_round":  round.LoopRound,
 				"tool_name":   round.ToolName,
 				"observation": round.Observation,
@@ -377,10 +385,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				round.StopReason = StopReasonRepeatedToolChoice
 				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
 				rounds = append(rounds, round)
-				events = append(events,
-					newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonRepeatedToolChoice)}),
-					newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonRepeatedToolChoice), "tool_name": round.ToolName}),
-				)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonRepeatedToolChoice)}))
+				events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonRepeatedToolChoice), "tool_name": round.ToolName}))
 				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
 				if err != nil {
 					return Result{}, true, err
@@ -403,7 +409,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		round.StopReason = StopReasonCompleted
 		round.OutputSummary = truncateText(singleLineSummary(strings.Join(observations, " | ")), 160)
 		rounds = append(rounds, round)
-		events = append(events, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+		events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
 		if request.Hook != nil {
 			if err := request.Hook.AfterRound(ctx, round); err != nil {
 				return Result{}, true, err
@@ -415,7 +421,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	if err != nil {
 		return Result{}, true, err
 	}
-	events = append(events, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonMaxIterations)}))
+	events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonMaxIterations)}))
 	return Result{
 		OutputText:      request.FallbackOutput,
 		ToolCalls:       allToolCalls,
@@ -530,6 +536,13 @@ func newEvent(request Request, eventType string, payload map[string]any) Lifecyc
 		Payload:   cloneMap(payload),
 		CreatedAt: request.Now(),
 	}
+}
+
+func appendEvent(events []LifecycleEvent, request Request, event LifecycleEvent) []LifecycleEvent {
+	if request.EmitEvent != nil {
+		request.EmitEvent(event)
+	}
+	return append(events, event)
 }
 
 func newEventForRound(round PersistedRound, eventType string, payload map[string]any) LifecycleEvent {

@@ -16,6 +16,7 @@ import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/fe
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
+import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
 import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import type { NoteDetailAction, NoteListItem } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
@@ -38,6 +39,7 @@ export function NotePage() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [dataMode, setDataMode] = useState<NotePageDataMode>(() => loadDashboardDataMode("notes") as NotePageDataMode);
   const feedbackTimeoutRef = useRef<number | null>(null);
+  const noteRefreshPlan = useMemo(() => getDashboardNoteRefreshPlan(dataMode), [dataMode]);
 
   useEffect(() => {
     saveDashboardDataMode("notes", dataMode);
@@ -46,34 +48,34 @@ export function NotePage() {
   const [upcomingQuery, laterQuery, recurringQuery, closedQuery] = useQueries({
     queries: [
         {
-          queryKey: ["dashboard", "notes", "bucket", dataMode, "upcoming"],
+          queryKey: buildDashboardNoteBucketQueryKey(dataMode, dashboardNoteBucketGroups[0]),
           queryFn: () => loadNoteBucket("upcoming", dataMode),
         retry: false,
-        refetchOnMount: false,
+        refetchOnMount: noteRefreshPlan.refetchOnMount,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
         {
-          queryKey: ["dashboard", "notes", "bucket", dataMode, "later"],
+          queryKey: buildDashboardNoteBucketQueryKey(dataMode, dashboardNoteBucketGroups[1]),
           queryFn: () => loadNoteBucket("later", dataMode),
         retry: false,
-        refetchOnMount: false,
+        refetchOnMount: noteRefreshPlan.refetchOnMount,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
         {
-          queryKey: ["dashboard", "notes", "bucket", dataMode, "recurring_rule"],
+          queryKey: buildDashboardNoteBucketQueryKey(dataMode, dashboardNoteBucketGroups[2]),
           queryFn: () => loadNoteBucket("recurring_rule", dataMode),
         retry: false,
-        refetchOnMount: false,
+        refetchOnMount: noteRefreshPlan.refetchOnMount,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
         {
-          queryKey: ["dashboard", "notes", "bucket", dataMode, "closed"],
+          queryKey: buildDashboardNoteBucketQueryKey(dataMode, dashboardNoteBucketGroups[3]),
           queryFn: () => loadNoteBucket("closed", dataMode),
         retry: false,
-        refetchOnMount: false,
+        refetchOnMount: noteRefreshPlan.refetchOnMount,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
       },
@@ -123,9 +125,9 @@ export function NotePage() {
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
       await Promise.all(
-        outcome.result.refresh_groups.map((group) =>
+        buildDashboardNoteBucketInvalidateKeys(dataMode, outcome.result.refresh_groups).map((queryKey) =>
           queryClient.invalidateQueries({
-            queryKey: ["dashboard", "notes", "bucket", dataMode, group],
+            queryKey,
           }),
         ),
       );
@@ -142,9 +144,9 @@ export function NotePage() {
     mutationFn: ({ action, itemId }: { action: NotepadAction; itemId: string }) => updateNote(itemId, action, dataMode),
     onSuccess: async (outcome, variables) => {
       await Promise.all(
-        outcome.result.refresh_groups.map((group) =>
+        buildDashboardNoteBucketInvalidateKeys(dataMode, outcome.result.refresh_groups).map((queryKey) =>
           queryClient.invalidateQueries({
-            queryKey: ["dashboard", "notes", "bucket", dataMode, group],
+            queryKey,
           }),
         ),
       );

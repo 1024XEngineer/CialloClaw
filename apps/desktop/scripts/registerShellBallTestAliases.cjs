@@ -6,6 +6,15 @@ const desktopRoot = process.cwd();
 const cacheRoot = resolve(desktopRoot, ".cache/shell-ball-tests");
 const sourceRoot = resolve(desktopRoot, "src");
 const originalResolveFilename = Module._resolveFilename;
+const stubAliasMap = {
+  "@/rpc/client": resolve(cacheRoot, "features/shell-ball/test-stubs/rpcClient.js"),
+  "@/rpc/fallback": resolve(cacheRoot, "features/shell-ball/test-stubs/rpcFallback.js"),
+  "@/rpc/methods": resolve(cacheRoot, "features/shell-ball/test-stubs/rpcMethods.js"),
+  "@/rpc/subscriptions": resolve(cacheRoot, "features/shell-ball/test-stubs/rpcSubscriptions.js"),
+  "@/features/dashboard/tasks/TasksPage": resolve(cacheRoot, "features/shell-ball/test-stubs/dashboardTasksPage.js"),
+  "@/features/dashboard/notes/NotesPage": resolve(cacheRoot, "features/shell-ball/test-stubs/dashboardNotesPage.js"),
+  "@/features/dashboard/memory/MemoryPage": resolve(cacheRoot, "features/shell-ball/test-stubs/dashboardMemoryPage.js"),
+};
 
 function resolveCacheModule(modulePath) {
   const emittedBasePath = resolve(cacheRoot, modulePath);
@@ -45,6 +54,12 @@ require.extensions[".png"] = (module, filename) => {
 };
 
 Module._resolveFilename = function resolveShellBallTestAlias(request, parent, isMain, options) {
+  const stubAlias = stubAliasMap[request];
+
+  if (typeof stubAlias === "string" && existsSync(stubAlias)) {
+    return stubAlias;
+  }
+
   if (request.startsWith("@/")) {
     const modulePath = request.slice(2);
 

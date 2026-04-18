@@ -32,6 +32,86 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 )
 
+type stubLoopModelClient struct {
+	toolResult       model.ToolCallResult
+	generateToolWait chan struct{}
+	generateToolSeen chan struct{}
+}
+
+func (s *stubLoopModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_loop_text",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "loop fallback output",
+	}, nil
+}
+
+func (s *stubLoopModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.generateToolSeen != nil {
+		select {
+		case <-s.generateToolSeen:
+		default:
+			close(s.generateToolSeen)
+		}
+	}
+	if s.generateToolWait != nil {
+		<-s.generateToolWait
+	}
+	result := s.toolResult
+	if strings.TrimSpace(result.OutputText) == "" && len(result.ToolCalls) == 0 {
+		result.OutputText = request.Input
+	}
+	if result.RequestID == "" {
+		result.RequestID = "req_loop_tools"
+	}
+	if result.Provider == "" {
+		result.Provider = "openai_responses"
+	}
+	if result.ModelID == "" {
+		result.ModelID = "gpt-5.4"
+	}
+	return result, nil
+}
+
+type selectiveWaitLoopModelClient struct {
+	stubLoopModelClient
+	blockedTaskID string
+}
+
+func (s *selectiveWaitLoopModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return s.stubLoopModelClient.GenerateText(ctx, request)
+}
+
+func (s *selectiveWaitLoopModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.generateToolSeen != nil && request.TaskID == s.blockedTaskID {
+		select {
+		case <-s.generateToolSeen:
+		default:
+			close(s.generateToolSeen)
+		}
+	}
+	if s.generateToolWait != nil && request.TaskID == s.blockedTaskID {
+		<-s.generateToolWait
+	}
+	result := s.toolResult
+	if strings.TrimSpace(result.OutputText) == "" && len(result.ToolCalls) == 0 {
+		result.OutputText = request.Input
+	}
+	if result.RequestID == "" {
+		result.RequestID = "req_loop_tools"
+	}
+	if result.Provider == "" {
+		result.Provider = "openai_responses"
+	}
+	if result.ModelID == "" {
+		result.ModelID = "gpt-5.4"
+	}
+	return result, nil
+}
+
 type testStorageAdapter struct {
 	databasePath string
 }
@@ -211,6 +291,403 @@ func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 	if !seenLoopNotification {
 		t.Fatal("expected loop.* notification to be emitted on stream connection")
 	}
+}
+
+func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime finished in-flight.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_loop_stream",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "inspect this workspace",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if startResult["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected seeded task to wait for confirm, got %+v", startResult["task"])
+	}
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-stream"`),
+		Method:  "agent.task.confirm",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":   taskID,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first envelope: %v", err)
+	}
+	if method, _ := firstEnvelope["method"].(string); !strings.HasPrefix(method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected success result envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected response data payload, got %+v", envelope)
+		}
+		task, ok := data["task"].(map[string]any)
+		if !ok || task["status"] != "completed" {
+			t.Fatalf("expected completed task response, got %+v", envelope)
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
+	}
+}
+
+func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmitInput(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime finished from input.submit.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-input-submit-loop-stream"`),
+		Method:  "agent.input.submit",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_input_submit_loop_stream",
+			"input": map[string]any{
+				"type": "text",
+				"text": "inspect this workspace and answer directly",
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first envelope: %v", err)
+	}
+	if method, _ := firstEnvelope["method"].(string); !strings.HasPrefix(method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected success result envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected response data payload, got %+v", envelope)
+		}
+		task, ok := data["task"].(map[string]any)
+		if !ok || task["status"] != "completed" {
+			t.Fatalf("expected completed task response, got %+v", envelope)
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
+	}
+}
+
+func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime should not replay live events.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-no-replay"`),
+		Method:  "agent.input.submit",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_input_submit_no_replay",
+			"input": map[string]any{
+				"type": "text",
+				"text": "inspect this workspace and answer directly",
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set first notification deadline: %v", err)
+	}
+
+	var firstEnvelope notificationEnvelope
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first notification: %v", err)
+	}
+	if !strings.HasPrefix(firstEnvelope.Method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set replay deadline: %v", err)
+	}
+	for {
+		var envelope notificationEnvelope
+		if err := decoder.Decode(&envelope); err != nil {
+			break
+		}
+		if isLiveRuntimeMethod(envelope.Method) {
+			t.Fatalf("expected streamed runtime notifications to be skipped after response, got %+v", envelope)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear replay deadline: %v", err)
+	}
+}
+
+func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
+	modelClient := &selectiveWaitLoopModelClient{
+		stubLoopModelClient: stubLoopModelClient{
+			toolResult: model.ToolCallResult{
+				OutputText: "Scoped runtime finished.",
+			},
+			generateToolWait: make(chan struct{}),
+		},
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	startTask := func(sessionID string) string {
+		t.Helper()
+		result, err := server.orchestrator.StartTask(map[string]any{
+			"session_id": sessionID,
+			"source":     "floating_ball",
+			"trigger":    "text_selected_click",
+			"input": map[string]any{
+				"type": "text_selection",
+				"text": "inspect this workspace",
+			},
+		})
+		if err != nil {
+			t.Fatalf("seed task.start for %s: %v", sessionID, err)
+		}
+		return result["task"].(map[string]any)["task_id"].(string)
+	}
+
+	taskA := startTask("sess_loop_scope_a")
+	taskB := startTask("sess_loop_scope_b")
+	modelClient.blockedTaskID = taskA
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-scope"`),
+		Method:  "agent.task.confirm",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":   taskA,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set first notification deadline: %v", err)
+	}
+
+	var firstEnvelope notificationEnvelope
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first notification: %v", err)
+	}
+	if !strings.HasPrefix(firstEnvelope.Method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+
+	if _, err := server.orchestrator.TaskSteer(map[string]any{
+		"task_id": taskB,
+		"message": "Mention the unrelated steering marker.",
+	}); err != nil {
+		t.Fatalf("queue steering for unrelated task: %v", err)
+	}
+
+	confirmDone := make(chan error, 1)
+	go func() {
+		_, err := server.orchestrator.ConfirmTask(map[string]any{
+			"task_id":   taskB,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		})
+		confirmDone <- err
+	}()
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set scoped notification deadline: %v", err)
+	}
+	for {
+		var envelope notificationEnvelope
+		if err := decoder.Decode(&envelope); err != nil {
+			break
+		}
+		params, ok := envelope.Params.(map[string]any)
+		if !ok {
+			t.Fatalf("expected notification params map, got %+v", envelope)
+		}
+		taskID := stringValue(params, "task_id", "")
+		if taskID == taskB {
+			t.Fatalf("expected stream to suppress unrelated runtime notification for task %s, got %+v", taskB, envelope)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	select {
+	case err := <-confirmDone:
+		if err != nil {
+			t.Fatalf("confirm unrelated task: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected unrelated task confirmation to complete")
+	}
+
+	close(modelClient.generateToolWait)
 }
 
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
@@ -1092,6 +1569,10 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 }
 
 func newTestServer() *Server {
+	return newTestServerWithModelClient(nil)
+}
+
+func newTestServerWithModelClient(client model.Client) *Server {
 	toolRegistry := tools.NewRegistry()
 	_ = builtin.RegisterBuiltinTools(toolRegistry)
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
@@ -1103,7 +1584,8 @@ func newTestServer() *Server {
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
 		sidecarclient.NewNoopOCRWorkerClient(),
 		sidecarclient.NewNoopMediaWorkerClient(),
-		model.NewService(serviceconfig.ModelConfig{Provider: "openai_responses", ModelID: "gpt-5.4", Endpoint: "https://api.openai.com/v1/responses"}),
+		sidecarclient.NewNoopScreenCaptureClient(),
+		model.NewService(serviceconfig.ModelConfig{Provider: "openai_responses", ModelID: "gpt-5.4", Endpoint: "https://api.openai.com/v1/responses"}, client),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),

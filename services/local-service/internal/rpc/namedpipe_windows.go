@@ -1,6 +1,7 @@
 //go:build windows
 
-// 该文件负责 Windows 下的 Named Pipe 监听骨架。
+// Package rpc provides the Windows named-pipe listener used by the local RPC
+// server.
 package rpc
 
 import (
@@ -11,10 +12,11 @@ import (
 	winio "github.com/Microsoft/go-winio"
 )
 
-// errNamedPipeUnsupported 定义当前模块的基础变量。
+// errNamedPipeUnsupported is kept for parity with other transports.
 var errNamedPipeUnsupported = errors.New("named pipe transport unsupported")
 
-// serveNamedPipe 处理当前模块的相关逻辑。
+// serveNamedPipe accepts Windows named-pipe connections and hands each stream
+// to the server handler.
 func serveNamedPipe(ctx context.Context, pipeName string, handler func(net.Conn)) error {
 	listener, err := winio.ListenPipe(pipeName, &winio.PipeConfig{
 		MessageMode:      true,

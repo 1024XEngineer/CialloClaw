@@ -1,4 +1,4 @@
-// 该文件负责 4 号主链路的任务编排与对外语义收口。
+// Package orchestrator assembles the owner-4 task-centric backend workflow.
 package orchestrator
 
 import (
@@ -9,6 +9,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -30,9 +31,8 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
-// ErrTaskNotFound 定义当前模块的基础变量。
-
-// ErrTaskNotFound 表示调用方给出的 task_id 在当前运行态中不存在。
+// ErrTaskNotFound indicates that the provided task_id does not exist in the
+// current runtime or hydrated query state.
 var (
 	ErrTaskNotFound           = errors.New("task not found")
 	ErrArtifactNotFound       = errors.New("artifact not found")
@@ -43,10 +43,8 @@ var (
 	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
 )
 
-// Service 提供当前模块的服务能力。
-
-// Service 是 4 号后端 Harness 主链路的统一编排入口。
-// 所有稳定的 task-centric RPC 方法都会在这里汇合，并继续拆分到 context、intent、runengine、delivery 等子模块。
+// Service is the task-centric orchestration entrypoint for the local-service
+// backend.
 type Service struct {
 	context        *contextsvc.Service
 	intent         *intent.Service
@@ -63,11 +61,13 @@ type Service struct {
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
+	runtimeMu      sync.RWMutex
+	runtimeNextID  uint64
+	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
+	taskStartTaps  map[uint64]func(taskID, sessionID, traceID string)
 }
 
-// NewService 创建并返回Service。
-
-// NewService 组装主链路编排服务依赖。
+// NewService wires the main orchestration dependencies.
 func NewService(
 	context *contextsvc.Service,
 	intent *intent.Service,
@@ -93,10 +93,13 @@ func NewService(
 		recommendation: recommendation.NewService(),
 		traceEval:      traceeval.NewService(nil, nil),
 		inspector:      taskinspector.NewService(nil),
+		runtimeTaps:    map[uint64]func(taskID, method string, params map[string]any){},
+		taskStartTaps:  map[uint64]func(taskID, sessionID, traceID string){},
 	}
 }
 
-// WithAudit 挂接共享审计服务，避免运行态出现独立计数器。
+// WithAudit attaches the shared audit service so runtime views do not fork
+// their own counters.
 func (s *Service) WithAudit(auditService *audit.Service) *Service {
 	if auditService != nil {
 		s.audit = auditService
@@ -104,11 +107,12 @@ func (s *Service) WithAudit(auditService *audit.Service) *Service {
 	return s
 }
 
-// WithExecutor 把真实执行服务挂入 orchestrator。
+// WithExecutor attaches the execution service used by the main task loop.
 func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 	s.executor = executorService
 	if executorService != nil {
 		executorService.WithNotificationEmitter(func(taskID, method string, params map[string]any) {
+			s.publishRuntimeNotification(taskID, method, params)
 			_, _ = s.runEngine.EmitRuntimeNotification(taskID, method, params)
 		}).WithSteeringPoller(func(taskID string) []string {
 			messages, ok := s.runEngine.DrainSteeringMessages(taskID)
@@ -121,7 +125,91 @@ func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 	return s
 }
 
-// WithTaskInspector 挂接任务巡检运行态服务。
+// SubscribeRuntimeNotifications registers a temporary tap for execution-time
+// runtime notifications so transports can mirror in-flight loop events without
+// waiting for the enclosing RPC response to finish.
+func (s *Service) SubscribeRuntimeNotifications(listener func(taskID, method string, params map[string]any)) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+
+	s.runtimeMu.Lock()
+	s.runtimeNextID++
+	listenerID := s.runtimeNextID
+	s.runtimeTaps[listenerID] = listener
+	s.runtimeMu.Unlock()
+
+	return func() {
+		s.runtimeMu.Lock()
+		delete(s.runtimeTaps, listenerID)
+		s.runtimeMu.Unlock()
+	}
+}
+
+// SubscribeTaskStarts registers a temporary tap that reports newly created
+// tasks before execution continues, allowing transports to associate follow-on
+// runtime notifications with requests that did not yet know their task_id.
+func (s *Service) SubscribeTaskStarts(listener func(taskID, sessionID, traceID string)) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+
+	s.runtimeMu.Lock()
+	s.runtimeNextID++
+	listenerID := s.runtimeNextID
+	s.taskStartTaps[listenerID] = listener
+	s.runtimeMu.Unlock()
+
+	return func() {
+		s.runtimeMu.Lock()
+		delete(s.taskStartTaps, listenerID)
+		s.runtimeMu.Unlock()
+	}
+}
+
+func (s *Service) publishRuntimeNotification(taskID, method string, params map[string]any) {
+	if s == nil {
+		return
+	}
+
+	s.runtimeMu.RLock()
+	if len(s.runtimeTaps) == 0 {
+		s.runtimeMu.RUnlock()
+		return
+	}
+	listeners := make([]func(taskID, method string, params map[string]any), 0, len(s.runtimeTaps))
+	for _, listener := range s.runtimeTaps {
+		listeners = append(listeners, listener)
+	}
+	s.runtimeMu.RUnlock()
+
+	for _, listener := range listeners {
+		listener(taskID, method, cloneMap(params))
+	}
+}
+
+func (s *Service) publishTaskStart(taskID, sessionID, traceID string) {
+	if s == nil {
+		return
+	}
+
+	s.runtimeMu.RLock()
+	if len(s.taskStartTaps) == 0 {
+		s.runtimeMu.RUnlock()
+		return
+	}
+	listeners := make([]func(taskID, sessionID, traceID string), 0, len(s.taskStartTaps))
+	for _, listener := range s.taskStartTaps {
+		listeners = append(listeners, listener)
+	}
+	s.runtimeMu.RUnlock()
+
+	for _, listener := range listeners {
+		listener(taskID, sessionID, traceID)
+	}
+}
+
+// WithTaskInspector attaches the task-inspector runtime service.
 func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Service {
 	if inspectorService != nil {
 		s.inspector = inspectorService
@@ -129,7 +217,7 @@ func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Se
 	return s
 }
 
-// WithStorage 挂接共享 storage 服务，用于治理数据读侧回填。
+// WithStorage attaches shared storage for governance and query-side hydration.
 func (s *Service) WithStorage(storageService *storage.Service) *Service {
 	if storageService != nil {
 		s.storage = storageService
@@ -145,9 +233,8 @@ func (s *Service) WithTraceEval(traceEvalService *traceeval.Service) *Service {
 	return s
 }
 
-// Snapshot 处理当前模块的相关逻辑。
-
-// Snapshot 返回 orchestrator 当前用于调试和健康检查的最小概览。
+// Snapshot returns the minimal orchestrator summary used by debug and health
+// endpoints.
 func (s *Service) Snapshot() map[string]any {
 	pendingApprovals, pendingTotal := s.runEngine.PendingApprovalRequests(100, 0)
 	return map[string]any{
@@ -172,10 +259,9 @@ func (s *Service) RunEngine() *runengine.Engine {
 	return s.runEngine
 }
 
-// SubmitInput 处理当前模块的相关逻辑。
-
-// SubmitInput 处理 agent.input.submit。
-// 这条路径负责承接悬浮球文本输入，根据上下文生成意图建议，并决定进入确认态、等待输入态还是直接执行。
+// SubmitInput handles agent.input.submit.
+// It captures context, derives intent suggestions, and decides whether the task
+// waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	options := mapValue(params, "options")
@@ -225,6 +311,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 		Snapshot:          snapshot,
 	})
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
@@ -268,13 +355,16 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	return response, nil
 }
 
-// StartTask 启动Task。
-
-// StartTask 处理 agent.task.start。
-// 它会基于显式 intent 或默认建议创建 task/run 映射，并决定是否需要确认或授权。
+// StartTask handles agent.task.start and creates the task/run mapping from an
+// explicit or inferred intent.
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
+	if handledResponse, handled, err := s.handleScreenAnalyzeStart(params, snapshot, explicitIntent); err != nil {
+		return nil, err
+	} else if handled {
+		return handledResponse, nil
+	}
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
 	if len(explicitIntent) == 0 && !suggestion.RequiresConfirm {
@@ -294,6 +384,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 		Snapshot:          snapshot,
 	})
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
@@ -338,6 +429,103 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	response["bubble_message"] = bubble
 	response["delivery_result"] = deliveryResult
 	return response, nil
+}
+
+func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
+	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || s.executor.ScreenCapabilitySnapshot().Available == false {
+		return nil, false, nil
+	}
+	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         stringValue(params, "session_id", ""),
+		Title:             firstNonEmptyString(stringValue(explicitIntent, "title", ""), "分析屏幕截图"),
+		SourceType:        "screen_capture",
+		Status:            "waiting_auth",
+		Intent:            cloneMap(explicitIntent),
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "waiting_authorization",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("waiting_auth", "waiting_authorization"),
+		Snapshot:          snapshot,
+	})
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return nil, false, queueErr
+	} else if queued {
+		return map[string]any{
+			"task":            taskMap(queuedTask),
+			"bubble_message":  queueBubble,
+			"delivery_result": nil,
+		}, true, nil
+	}
+	approvalRequest, pendingExecution, bubble, err := s.buildScreenAnalysisApprovalState(task)
+	if err != nil {
+		return nil, false, err
+	}
+	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if !ok {
+		return nil, false, ErrTaskNotFound
+	}
+	return map[string]any{
+		"task":            taskMap(updatedTask),
+		"bubble_message":  bubble,
+		"delivery_result": nil,
+	}, true, nil
+}
+
+// buildScreenAnalysisApprovalState reconstructs the controlled approval plan
+// from the task intent so queued resumes can re-enter the same authorization
+// path instead of falling through to the generic executor.
+func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (map[string]any, map[string]any, map[string]any, error) {
+	arguments := mapValue(task.Intent, "arguments")
+	sourcePath := stringValue(arguments, "path", "")
+	if strings.TrimSpace(sourcePath) == "" {
+		return nil, nil, nil, fmt.Errorf("screen_analyze requires intent.arguments.path")
+	}
+	approvalRequest := map[string]any{
+		"approval_id":    fmt.Sprintf("appr_%s", task.TaskID),
+		"task_id":        task.TaskID,
+		"operation_name": "screen_capture",
+		"risk_level":     "yellow",
+		"target_object":  sourcePath,
+		"reason":         "screen_capture_requires_authorization",
+		"status":         "pending",
+		"created_at":     time.Now().Format(dateTimeLayout),
+	}
+	pendingExecution := map[string]any{
+		"kind":           "screen_analysis",
+		"operation_name": "screen_capture",
+		"source_path":    sourcePath,
+		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
+		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
+		"delivery_type":  "bubble",
+		"result_title":   "屏幕分析结果",
+		"preview_text":   "已准备分析屏幕截图",
+		"impact_scope": map[string]any{
+			"files":                    []string{sourcePath},
+			"webpages":                 []string{},
+			"apps":                     []string{},
+			"out_of_workspace":         false,
+			"overwrite_or_delete_risk": false,
+		},
+	}
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "屏幕截图分析属于敏感能力，请先确认授权。", task.UpdatedAt.Format(dateTimeLayout))
+	return approvalRequest, pendingExecution, bubble, nil
+}
+
+func (s *Service) resumeQueuedControlledTask(task runengine.TaskRecord) (runengine.TaskRecord, bool, error) {
+	if stringValue(task.Intent, "name", "") != "screen_analyze" {
+		return task, false, nil
+	}
+	approvalRequest, pendingExecution, bubble, err := s.buildScreenAnalysisApprovalState(task)
+	if err != nil {
+		failedTask, _ := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		return failedTask, true, nil
+	}
+	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if !ok {
+		return runengine.TaskRecord{}, true, ErrTaskNotFound
+	}
+	return updatedTask, true, nil
 }
 
 // ConfirmTask handles agent.task.confirm.
@@ -440,9 +628,8 @@ func (s *Service) revertTaskToIntentConfirmation(task runengine.TaskRecord) (run
 	return updatedTask, nil
 }
 
-// RecommendationGet 处理当前模块的相关逻辑。
-
-// RecommendationGet 处理 agent.recommendation.get，返回轻量推荐动作。
+// RecommendationGet handles agent.recommendation.get and returns lightweight
+// recommendation actions derived from current context signals.
 func (s *Service) RecommendationGet(params map[string]any) (map[string]any, error) {
 	contextValue := mapValue(params, "context")
 	signals := perception.CaptureContextSignals(stringValue(params, "source", "floating_ball"), stringValue(params, "scene", "hover"), contextValue)
@@ -479,9 +666,7 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 	}, nil
 }
 
-// RecommendationFeedbackSubmit 处理当前模块的相关逻辑。
-
-// RecommendationFeedbackSubmit 处理 agent.recommendation.feedback.submit。
+// RecommendationFeedbackSubmit handles agent.recommendation.feedback.submit.
 func (s *Service) RecommendationFeedbackSubmit(params map[string]any) (map[string]any, error) {
 	return map[string]any{
 		"applied": s.recommendation.SubmitFeedback(
@@ -818,8 +1003,11 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 	return resolved
 }
 
-// TaskControl handles agent.task.control and converts user control actions into
-// state-machine operations.
+// TaskControl handles agent.task.control and converts user actions into runtime
+// state-machine transitions. The orchestration layer owns error translation and
+// post-transition follow-up such as human-loop resume handling and queue drain,
+// because those behaviors depend on task-centric semantics rather than the raw
+// runtime mutation alone.
 func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	if strings.TrimSpace(taskID) == "" {
@@ -1255,7 +1443,7 @@ func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, er
 	}, nil
 }
 
-// SecurityAuditList 处理 agent.security.audit.list。
+// SecurityAuditList handles agent.security.audit.list.
 func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, error) {
 	limit := clampListLimit(intValue(params, "limit", 20))
 	offset := clampListOffset(intValue(params, "offset", 0))
@@ -1280,7 +1468,7 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	}, nil
 }
 
-// SecurityRestorePointsList 处理 agent.security.restore_points.list。
+// SecurityRestorePointsList handles agent.security.restore_points.list.
 func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]any, error) {
 	limit := clampListLimit(intValue(params, "limit", 20))
 	offset := clampListOffset(intValue(params, "offset", 0))
@@ -1308,7 +1496,7 @@ func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]a
 	}, nil
 }
 
-// SecurityRestoreApply 处理 agent.security.restore.apply。
+// SecurityRestoreApply handles agent.security.restore.apply.
 func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, error) {
 	recoveryPointID := stringValue(params, "recovery_point_id", "")
 	if strings.TrimSpace(recoveryPointID) == "" {
@@ -1408,9 +1596,9 @@ func clampListOffset(offset int) int {
 	return offset
 }
 
-// PendingNotifications 返回待处理的Notifications。
-
-// PendingNotifications 读取某个任务当前尚未消费的通知列表。
+// PendingNotifications returns the buffered notification list for a task
+// without consuming it. Debug transports use this read-only path when they need
+// to inspect pending events but must not disturb the ordered replay pipeline.
 func (s *Service) PendingNotifications(taskID string) ([]map[string]any, error) {
 	notifications, ok := s.runEngine.PendingNotifications(taskID)
 	if !ok {
@@ -1429,9 +1617,10 @@ func (s *Service) PendingNotifications(taskID string) ([]map[string]any, error) 
 	return items, nil
 }
 
-// DrainNotifications 取出并清空Notifications。
-
-// DrainNotifications 取出并清空某个任务的通知列表。
+// DrainNotifications returns and clears the buffered notification list for a
+// task. The orchestrator exposes this explicit destructive read so transports
+// can replay notifications exactly once instead of coupling queue semantics to
+// ordinary task detail or list reads.
 func (s *Service) DrainNotifications(taskID string) ([]map[string]any, error) {
 	notifications, ok := s.runEngine.DrainNotifications(taskID)
 	if !ok {
@@ -1450,10 +1639,11 @@ func (s *Service) DrainNotifications(taskID string) ([]map[string]any, error) {
 	return items, nil
 }
 
-// SecurityRespond 处理当前模块的相关逻辑。
-
-// SecurityRespond 处理 agent.security.respond。
-// 它是风险挂起链路的恢复入口，负责把“允许/拒绝”转换成任务状态推进、交付恢复和审计结果。
+// SecurityRespond handles agent.security.respond. It is the single resume
+// entrypoint for risk-gated tasks, so it must translate allow/deny decisions
+// into runtime state changes, delivery continuation, impact scope reporting,
+// and audit data in one place instead of letting transports or callers stitch
+// those pieces together inconsistently.
 func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.GetTask(taskID)
@@ -1524,6 +1714,27 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 			"applied":              response["applied"],
 		}, nil
 	}
+	if stringValue(pendingExecution, "kind", "") == "screen_analysis" {
+		updatedTask, bubble, deliveryResult, err := s.executeScreenAnalysisAfterApproval(processingTask, pendingExecution)
+		if err != nil {
+			return nil, err
+		}
+		if updatedTask.Status == "completed" {
+			updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
+		}
+		if taskIsTerminal(updatedTask.Status) {
+			if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+				return nil, queueErr
+			}
+		}
+		return map[string]any{
+			"authorization_record": authorizationRecord,
+			"task":                 taskMap(updatedTask),
+			"bubble_message":       bubble,
+			"impact_scope":         impactScope,
+			"delivery_result":      deliveryResult,
+		}, nil
+	}
 
 	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
 	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
@@ -1562,9 +1773,7 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	return response, nil
 }
 
-// SettingsGet 设置tingsGet。
-
-// SettingsGet 处理 agent.settings.get。
+// SettingsGet handles agent.settings.get.
 func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 	settings := s.runEngine.Settings()
 	settingsWithSecrets, err := s.attachSensitiveSettingAvailability(settings)
@@ -1585,9 +1794,8 @@ func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 	return map[string]any{"settings": map[string]any{scope: cloneMap(section)}}, nil
 }
 
-// SettingsUpdate 设置tingsUpdate。
-
-// SettingsUpdate 处理 agent.settings.update，并返回生效设置和应用模式。
+// SettingsUpdate handles agent.settings.update and returns the effective
+// settings patch plus apply-mode metadata.
 func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) {
 	if dataLog := mapValue(params, "data_log"); len(dataLog) > 0 {
 		if apiKey := stringValue(dataLog, "api_key", ""); apiKey != "" {
@@ -1613,9 +1821,58 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 	}, nil
 }
 
-// taskMap 处理当前模块的相关逻辑。
+func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
+	if s.executor == nil || s.executor.ScreenClient() == nil {
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, errors.New("screen capability unavailable"))
+		return failedTask, failureBubble, nil, nil
+	}
+	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
+		SessionID:   task.SessionID,
+		TaskID:      task.TaskID,
+		RunID:       task.RunID,
+		Source:      "screen_capture",
+		CaptureMode: tools.ScreenCaptureModeScreenshot,
+	})
+	if err != nil {
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		return failedTask, failureBubble, nil, nil
+	}
+	candidate, err := s.executor.ScreenClient().CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
+		ScreenSessionID: screenSession.ScreenSessionID,
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		CaptureMode:     tools.ScreenCaptureModeScreenshot,
+		Source:          "screen_capture",
+		SourcePath:      stringValue(pendingExecution, "source_path", ""),
+	})
+	if err != nil {
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		return failedTask, failureBubble, nil, nil
+	}
+	execIntent := map[string]any{
+		"name": "screen_analyze_candidate",
+		"arguments": map[string]any{
+			"task_id":           task.TaskID,
+			"run_id":            task.RunID,
+			"screen_session_id": screenSession.ScreenSessionID,
+			"frame_id":          candidate.FrameID,
+			"path":              candidate.Path,
+			"capture_mode":      string(candidate.CaptureMode),
+			"source":            candidate.Source,
+			"captured_at":       candidate.CapturedAt.UTC().Format(time.RFC3339),
+			"retention_policy":  string(candidate.RetentionPolicy),
+			"language":          stringValue(pendingExecution, "language", "eng"),
+			"evidence_role":     stringValue(pendingExecution, "evidence_role", "error_evidence"),
+		},
+	}
+	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), execIntent)
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, err
+	}
+	return updatedTask, bubble, deliveryResult, nil
+}
 
-// taskMap 把 runengine 内部任务记录映射成对外统一的 task 结构。
+// taskMap converts a runengine task record into the protocol-facing task shape.
 func taskMap(record runengine.TaskRecord) map[string]any {
 	result := map[string]any{
 		"task_id":          record.TaskID,
@@ -1674,6 +1931,16 @@ func (s *Service) drainSessionQueue(sessionID string) error {
 		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, executionStepName(nextTask.Intent), bubble)
 		if !changed {
 			return ErrTaskNotFound
+		}
+		resumedTask, handled, controlledErr := s.resumeQueuedControlledTask(resumedTask)
+		if controlledErr != nil {
+			return controlledErr
+		}
+		if handled {
+			if taskIsTerminal(resumedTask.Status) {
+				continue
+			}
+			return nil
 		}
 
 		governedTask, _, handled, governanceErr := s.handleTaskGovernanceDecision(resumedTask, resumedTask.Intent)
@@ -2254,7 +2521,8 @@ func workspacePathFromSettings(settings map[string]any) string {
 	return stringValue(download, "workspace_path", "workspace")
 }
 
-// defaultIntentMap 处理当前模块的相关逻辑。
+// defaultIntentMap creates a minimal default intent payload for notepad
+// conversions.
 func defaultIntentMap(name string) map[string]any {
 	arguments := map[string]any{}
 	if name == "summarize" {
@@ -3277,9 +3545,10 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 	return boolValue(arguments, "overwrite", false) || boolValue(arguments, "delete", false)
 }
 
-// attachMemoryReadPlans 处理当前模块的相关逻辑。
-
-// attachMemoryReadPlans 在任务启动或确认后挂接 memory 读取计划。
+// attachMemoryReadPlans registers the retrieval plans attached at task start or
+// confirmation time. Read plans are persisted before execution so later mirror,
+// debug, or storage-backed views can explain what memory lookup the task was
+// supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
 	readPlans := []map[string]any{
 		{
@@ -3301,9 +3570,10 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsv
 	s.syncTaskReadMirrorReferences(taskID, references, err)
 }
 
-// attachPostDeliveryHandoffs 处理当前模块的相关逻辑。
-
-// attachPostDeliveryHandoffs 在任务完成后挂接 memory 写入和交付落盘计划。
+// attachPostDeliveryHandoffs registers memory-write and delivery persistence
+// handoffs after a task finishes. Keeping these side effects in one post-
+// delivery step prevents runtime execution from mixing formal delivery with
+// memory persistence details while still leaving a durable handoff trail.
 func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any, artifacts []map[string]any) {
 	writePlans := []map[string]any{
 		{
@@ -3327,9 +3597,9 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 	s.persistArtifacts(taskID, artifactPlans)
 }
 
-// buildApprovalRequest 处理当前模块的相关逻辑。
-
-// buildApprovalRequest 构造统一的 approval_request 结构。
+// buildApprovalRequest creates the normalized approval_request payload. The
+// object must already be protocol-facing here because it is persisted, replayed
+// to transports, and later echoed back through agent.security.respond.
 func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment execution.GovernanceAssessment) map[string]any {
 	arguments := mapValue(taskIntent, "arguments")
 	targetObject := firstNonEmptyString(assessment.TargetObject, stringValue(arguments, "target_path", "workspace_document"))
@@ -3349,9 +3619,10 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment e
 	}
 }
 
-// buildImpactScope 处理当前模块的相关逻辑。
-
-// buildImpactScope 构造最小影响范围摘要，用于授权结果回传和安全面板展示。
+// buildImpactScope derives the minimal impact summary used by authorization
+// results and the security views. It intentionally normalizes files around the
+// workspace root so policy, audit, and restore flows all reason about one scope
+// shape instead of transport- or tool-specific paths.
 func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution map[string]any) map[string]any {
 	if impactScope, ok := pendingExecution["impact_scope"].(map[string]any); ok && len(impactScope) > 0 {
 		return cloneMap(impactScope)
@@ -3375,9 +3646,8 @@ func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution m
 	}
 }
 
-// snapshotFromTask 处理当前模块的相关逻辑。
-
-// snapshotFromTask 从任务记录反推一个最小上下文快照，用于授权恢复等场景。
+// snapshotFromTask rebuilds the minimum context snapshot needed for resume and
+// other post-creation flows.
 func snapshotFromTask(task runengine.TaskRecord) contextsvc.TaskContextSnapshot {
 	if !isEmptySnapshot(task.Snapshot) {
 		return cloneTaskSnapshot(task.Snapshot)
@@ -3439,9 +3709,10 @@ func confirmationTitleFromTask(task runengine.TaskRecord) string {
 	return "确认处理方式：" + subject
 }
 
-// memoryQueryFromSnapshot 处理当前模块的相关逻辑。
-
-// memoryQueryFromSnapshot 从当前上下文挑选最适合作为检索 query 的内容。
+// memoryQueryFromSnapshot selects the most representative retrieval query from
+// the current context snapshot. The fallback order intentionally prefers direct
+// user focus, then file context, then broader perception signals so memory
+// lookup stays anchored to what most likely triggered the task.
 func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText} {
 		if value != "" {
@@ -3462,9 +3733,9 @@ func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 	return "task_context"
 }
 
-// buildMemorySummary 处理当前模块的相关逻辑。
-
-// buildMemorySummary 构造任务完成后写入 memory 的简要摘要。
+// buildMemorySummary creates the short post-task memory summary written after
+// delivery completes. It keeps the output compact on purpose because this text
+// is later used as durable memory material rather than a full-fidelity trace.
 func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) string {
 	intentName := stringValue(taskIntent, "name", "summarize")
 	title := stringValue(deliveryResult, "title", "任务结果")
@@ -3492,9 +3763,8 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
 }
 
-// resultSpecFromIntent 处理当前模块的相关逻辑。
-
-// resultSpecFromIntent 根据 intent 返回默认结果标题、预览文案和结果气泡文案。
+// resultSpecFromIntent returns the default result title, preview text, and
+// completion bubble text for an intent.
 func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 	switch stringValue(taskIntent, "name", "summarize") {
 	case "agent_loop":
@@ -3516,9 +3786,7 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 	}
 }
 
-// deliveryTypeFromIntent 处理当前模块的相关逻辑。
-
-// deliveryTypeFromIntent 根据意图类型返回默认交付方式。
+// deliveryTypeFromIntent returns the default delivery type for an intent.
 func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
 	case "agent_loop", "translate", "explain", "page_read", "page_search":
@@ -3528,7 +3796,10 @@ func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	}
 }
 
-// firstNonEmptyString 处理当前模块的相关逻辑。
+// deliveryPreferenceFromSubmit reads delivery preferences from
+// agent.input.submit. Submit uses options.* while agent.task.start uses a
+// dedicated delivery object, so the orchestrator keeps both decoders separate
+// and normalizes them before any execution or approval plan is built.
 func deliveryPreferenceFromSubmit(params map[string]any) (string, string) {
 	options := mapValue(params, "options")
 	return stringValue(options, "preferred_delivery", ""), ""
@@ -3549,7 +3820,11 @@ func mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, sugge
 	return preferredDelivery, fallbackDelivery
 }
 
-// buildPendingExecution 生成等待授权任务在恢复执行时需要的交付计划。
+// buildPendingExecution creates the minimum delivery plan required to resume a
+// task after authorization. The stored plan must be deterministic and task-
+// centric because waiting_auth can outlive the original request and later needs
+// to restart execution without recomputing delivery intent from transport-only
+// inputs.
 func (s *Service) buildPendingExecution(task runengine.TaskRecord, taskIntent map[string]any) map[string]any {
 	plan := s.delivery.BuildApprovalExecutionPlan(task.TaskID, taskIntent)
 	return s.applyResolvedDeliveryToPlan(task, plan, taskIntent)
@@ -3697,8 +3972,12 @@ func attachDeliveryResultToArtifacts(deliveryResult map[string]any, artifacts []
 		if cloned == nil {
 			continue
 		}
-		cloned["delivery_type"] = stringValue(deliveryResult, "type", "")
-		cloned["delivery_payload"] = cloneMap(mapValue(deliveryResult, "payload"))
+		if stringValue(cloned, "delivery_type", "") == "" {
+			cloned["delivery_type"] = stringValue(deliveryResult, "type", "")
+		}
+		if len(mapValue(cloned, "delivery_payload")) == 0 {
+			cloned["delivery_payload"] = cloneMap(mapValue(deliveryResult, "payload"))
+		}
 		if stringValue(cloned, "created_at", "") == "" {
 			cloned["created_at"] = time.Now().UTC().Format(time.RFC3339)
 		}
@@ -3886,7 +4165,8 @@ func impactScopeTarget(impactScope map[string]any, fallback string) string {
 	return firstNonEmptyString(strings.TrimSpace(fallback), "main_flow")
 }
 
-// applyResolvedDeliveryToPlan 把任务级交付偏好解析结果回填到恢复执行计划中。
+// applyResolvedDeliveryToPlan folds the resolved task-level delivery preference
+// back into a pending execution plan.
 func (s *Service) applyResolvedDeliveryToPlan(task runengine.TaskRecord, plan map[string]any, taskIntent map[string]any) map[string]any {
 	if len(plan) == 0 {
 		return nil
@@ -3899,12 +4179,13 @@ func (s *Service) applyResolvedDeliveryToPlan(task runengine.TaskRecord, plan ma
 	return updatedPlan
 }
 
-// resolveTaskDeliveryType 统一计算某个任务当前应采用的交付类型。
+// resolveTaskDeliveryType computes the effective delivery type for a task.
 func resolveTaskDeliveryType(task runengine.TaskRecord, taskIntent map[string]any) string {
 	return resolveDeliveryType(task.PreferredDelivery, task.FallbackDelivery, deliveryTypeFromIntent(taskIntent))
 }
 
-// resolveDeliveryType 按“任务偏好 -> fallback -> 默认值”的顺序解析最终交付类型。
+// resolveDeliveryType resolves the final delivery type in priority order:
+// task preference, fallback, then default.
 func resolveDeliveryType(preferred, fallback, defaultType string) string {
 	if normalized := normalizeDeliveryType(preferred); normalized != "" {
 		return normalized
@@ -3932,7 +4213,7 @@ func normalizeDeliveryType(deliveryType string) string {
 	}
 }
 
-// previewTextForDeliveryType 返回不同交付类型对应的预览文案。
+// previewTextForDeliveryType returns the preview copy for each delivery type.
 func previewTextForDeliveryType(deliveryType string) string {
 	if deliveryType == "bubble" {
 		return "\u7ed3\u679c\u5df2\u901a\u8fc7\u6c14\u6ce1\u8fd4\u56de"
@@ -4075,6 +4356,10 @@ func stringValue(values map[string]any, key, fallback string) string {
 	return value
 }
 
+func requestTraceID(values map[string]any) string {
+	return stringValue(mapValue(values, "request_meta"), "trace_id", "")
+}
+
 // boolValue safely reads a boolean field.
 func boolValue(values map[string]any, key string, fallback bool) bool {
 	rawValue, ok := values[key]
@@ -4200,6 +4485,9 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
 }
+
+// dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
+// payloads.
 
 func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) (traceeval.CaptureResult, error) {
 	if s.traceEval == nil {
@@ -4487,6 +4775,8 @@ func (s *Service) appendAuditData(task runengine.TaskRecord, auditRecords []map[
 	return updatedTask
 }
 
+// dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
+// payloads.
 const dateTimeLayout = time.RFC3339
 
 func stringSliceValue(rawValue any) []string {

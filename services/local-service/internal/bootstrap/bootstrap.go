@@ -79,6 +79,7 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 	mediaClient := mediaRuntime.Client()
+	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	toolRegistry := tools.NewRegistry()
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		return nil, err
@@ -113,7 +114,9 @@ func New(cfg config.Config) (*App, error) {
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
 	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
-	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).WithLoopRuntimeStore(storageService.LoopRuntimeStore())
+	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
+		WithArtifactStore(storageService.ArtifactStore()).
+		WithLoopRuntimeStore(storageService.LoopRuntimeStore())
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
