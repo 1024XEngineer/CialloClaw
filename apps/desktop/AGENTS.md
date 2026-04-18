@@ -1,183 +1,128 @@
-# AGENTS.md
+### **Desktop AGENTS Guidelines**
 
-本文件只补充 `apps/desktop` 及其子目录的前端专项规则。
+#### **Scope**
 
-进入本目录前，必须先读根目录 `AGENTS.md`。
-本文件不重复共享铁律，只补充前端专属边界、阅读路径、实现顺序和注释要求。
+* This file applies to the entire `apps/desktop` directory, including:
 
-------
+  * `src`, `src-tauri`, and relevant config files (e.g., `package.json`, `vite.config.ts`, `tailwind.config.ts`, `tsconfig*.json`, `eslint.config.js`, `components.json`).
+* If changes affect protocol, backend orchestration, or shared schema, refer back to the root `AGENTS.md`.
 
-## 1. 目录范围
+#### **Coding Rules**
 
-本文件覆盖：
+* **Comments**: Use English for all code comments.
+* **Documentation**: Use **TSDoc** or **JSDoc** for exported functions, hooks, React components, and notable helpers.
+* **Change Approach**: Favor small, incremental changes and avoid modifying backend or protocol behavior unless necessary for the desktop-only solution.
+* **Formal Boundaries**: Maintain clear boundaries between formal task, RPC, and delivery processes. Avoid using desktop-only solutions as substitutes for backend logic.
 
-- 整个 `apps/desktop` 目录
-- 包括但不限于 `src`、`src-tauri`、`docs`、`scripts`
-- 以及根级页面与配置文件，例如 `*.html`、`package.json`、`vite.config.ts`、`tailwind.config.ts`、`tsconfig*.json`、`eslint.config.js`、`components.json`
+#### **Verification Rules**
 
-若当前任务会同时修改协议、后端编排或共享 schema，必须回到根目录 `AGENTS.md`，并补读相关上位文档，不得仅凭本文件决策。
+* **Type Checking**: Run `pnpm --dir apps/desktop typecheck` after any desktop-related code changes.
+* **Linting**: Run `pnpm --dir apps/desktop lint` after code changes.
+* **Rust Checks**: Run `cargo check` in `apps/desktop/src-tauri` after any Rust or plugin changes.
 
-------
+#### **Commit Rules**
 
-## 2. 前端文档路由
+* Commit one feature or refactor per change.
+* Avoid mixing unrelated changes into the same commit.
+* Stage only the files required for the current task when the worktree is dirty.
 
-开始修改前，至少先回答：
+#### **Common Mistakes to Avoid**
 
-1. 当前改动承接的是哪条主链路入口：悬浮球、气泡、输入框、仪表盘、控制面板，还是其他平台交互？
-2. UI 展示的数据字段是否已经在 `packages/protocol` 或后端返回对象中定义？
-3. 当前状态是前端局部状态，还是正式业务状态？
-4. 用户动作是否会触发风险动作、授权等待或正式交付分流？
-5. 页面上的结果承接最终是气泡短交付，还是 `delivery_result / artifact / citation` 正式出口？
+* Forgetting to type event or payload parameters.
+* Mixing local state for helper windows with formal business state.
+* Adding **Chinese** comments in files within the desktop scope.
+* Refactoring hooks in ways that inadvertently change behavior.
+* Editing `useShellBallInteraction` when a safer, smaller change in the coordinator or helper window suffices.
+* Introducing desktop shortcuts that silently trigger backend processes.
+* Forgetting **Tauri capability permissions** when adding official plugins.
 
-若任一问题回答不清，优先按下面路由补读：
+---
 
-| 任务类型 | 应优先读取的文档 |
-| --- | --- |
-| 悬浮球、气泡、输入框、轻承接交互 | `docs/product-interaction-design.md`、`docs/work-priority-plan.md` |
-| 仪表盘、任务详情、安全摘要、镜子展示 | `docs/dashboard-design.md`、`docs/work-priority-plan.md` |
-| 控制面板、设置、低频配置页面 | `docs/control-panel-settings.md`、`docs/work-priority-plan.md` |
-| 前端需要新增或调整正式字段、状态、通知、错误处理 | `docs/development-guidelines.md`、`docs/protocol-design.md`，必要时核对 `packages/protocol` |
-| 任务跨域、主链路不清、对象归属不清 | `docs/architecture-overview.md`、`docs/development-guidelines.md`、`docs/work-priority-plan.md` |
+### **AGENTS.md Front-End Specific Guidelines**
 
-禁止：
+#### **Scope**
 
-- 跳过真源直接开始拼页面
-- 只看现有 UI 不核对正式对象
-- 以演示为理由长期保留脱离协议的假链路
+* The guidelines in this file supplement the root `AGENTS.md` and focus on front-end development in `apps/desktop`.
 
-------
+#### **Front-End Documentation Paths**
 
-## 3. 前端边界
+* Before making changes, answer the following questions:
 
-前端只负责：
+  1. Which **main entry point** does the change address (e.g., floating ball, bubble, input field, dashboard, control panel)?
+  2. Is the data **already defined** in the backend (e.g., `packages/protocol`)?
+  3. Is the state you're modifying **formal business state** or just a **local state**?
+  4. Will the user action trigger any **risky actions**, **authorization waits**, or **formal delivery splits**?
+  5. Will the outcome be a **bubble short delivery** or a **formal artifact/citation** output?
 
-- 交互承接
-- 视图呈现
-- 局部状态机
-- ViewModel / Query / Store
-- 平台能力桥接
-- RPC Client
+* If unclear, review relevant documents based on the task type:
 
-前端不负责：
+  * **Floating Ball, Bubble, Input Fields, Light Interactions**: `docs/product-interaction-design.md`, `docs/work-priority-plan.md`.
+  * **Dashboard, Task Details, Safety Summary**: `docs/dashboard-design.md`, `docs/work-priority-plan.md`.
+  * **Control Panel, Settings, Low-Frequency Config Pages**: `docs/control-panel-settings.md`, `docs/work-priority-plan.md`.
+  * **Adding Formal Fields, State, Notifications, Error Handling**: `docs/development-guidelines.md`, `docs/protocol-design.md`.
+  * **Unclear Domain or Main Entry Point**: `docs/architecture-overview.md`, `docs/development-guidelines.md`, `docs/work-priority-plan.md`.
 
-- 编排真源
-- 模型调用决策
-- 风险审查最终裁决
-- 数据真源定义
-- 绕过 JSON-RPC 直接访问数据库、worker、模型 SDK 或后端内部包
+#### **Front-End Boundaries**
 
-必须坚持：
+* **Front-End Responsibility**:
 
-- 对外始终围绕 `task` 组织页面、气泡和详情视图
-- 所有正式数据都通过 RPC client、前端服务层或已登记的平台桥接进入 UI
-- 局部状态命名必须能一眼看出它只是前端状态，不能伪装成正式业务状态
-- 短结果与正式交付出口必须分清，不要把气泡临时结果长期当正式结果
+  * Interaction handling.
+  * Rendering views.
+  * Local state management.
+  * ViewModel, Query, and Store.
+  * Platform capability bridging.
+  * RPC client interaction.
 
-禁止：
+* **Not Front-End's Responsibility**:
 
-- 自造正式状态
-- 自造长期依赖的假数据结构
-- 直接调用后端内部实现或系统能力
-- 让 UI 文案替代业务状态
-- 为了演示先拼一套脱离协议的临时对象长期使用
+  * Backend orchestration.
+  * Model decision making.
+  * Final risk assessments.
+  * Defining true data sources.
+  * Direct database, worker, or internal backend access.
 
-------
+* **Key Guidelines**:
 
-## 4. 前端实现顺序
+  * Organize UI components around **tasks** (e.g., floating balls, bubbles, dashboards).
+  * Ensure **local states** are clearly named and separated from **formal business states**.
+  * Short results (e.g., bubble outcomes) should not be treated as formal outputs.
 
-实现顺序必须优先满足：
+#### **Implementation Order**
 
-1. 真正接入主链路对象和 RPC
-2. 正确承接确认、处理中、完成、失败、待授权等状态
-3. 正确承接短交付与正式交付出口
-4. 在不破坏以上三项的前提下再做样式、动效和体验润色
+1. First, integrate **official backend data** and **RPC**.
+2. Correctly handle states like **confirmation**, **processing**, **authorization**, **failure**, and **completion**.
+3. Handle short vs. formal delivery splits.
+4. Only refine **style** and **animations** once the above steps are implemented.
 
-如果某个视觉方案会推动新增未登记对象、状态或字段，先停下核对真源，不得用 UI 方案倒逼对象模型。
+* Avoid forcing a visual solution that introduces unregistered objects or fields.
+* Don’t rely on **mock data** for functionality that should be connected to official data sources.
 
-如果某个交互只靠本地假数据才能跑通，必须明确标记为未接真链路，不能伪装成正式闭环。
+#### **Pre- and Post-Modification Checks**
 
-------
+* **Before**: Ensure the protocol fields, error codes, and notification sources are well-understood.
+* **After**: Verify field names align with protocol sources, local states are correctly separated from formal business states, and any required documentation is updated.
 
-## 5. 前端改动前后必做事项
+#### **Commenting Standards**
 
-修改前至少确认：
+* **English comments** are mandatory, especially for:
 
-- 本次改动依赖的协议字段、错误码和通知来源
-- 当前页面消费的是正式状态还是局部状态
-- 结果最终落在气泡、仪表盘、任务详情还是正式交付打开动作
-- 是否需要同步产品文档、交互文档或协议文档
+  * Complex interaction state machines (e.g., drag, hover, long press).
+  * Platform bridging and window synchronization.
+  * Logic differentiating **local** and **formal business states**.
+* Comments should explain:
 
-修改后至少自检：
+  * The logic’s role within the main front-end flow.
+  * Why it's **local state** and not formal business state.
+  * Timing, synchronization, and failure conditions.
 
-- 字段名是否与协议真源一致
-- 页面是否把局部状态和正式状态分清楚
-- 是否通过服务层 / RPC client 接入后端
-- 是否覆盖加载、空态、失败、待授权和完成态
-- 是否补齐当前改动需要的英文注释
-- 是否需要同步相关产品或交互文档
+#### **Documentation Sync Rules**
 
-------
+* **Update Documentation** when:
 
-## 6. 前端文档回写规则
+  * Interaction semantics (floating ball, dashboard, etc.) change.
+  * New formal fields, states, or error-handling protocols are introduced.
+  * Page structure or assumptions affect **task completion criteria** in `docs/work-priority-plan.md`.
 
-以下情况发生时，必须同步回写相关文档：
+#### **One-Liner Guideline**
 
-- 调整悬浮球、气泡、输入框、仪表盘或控制面板的正式交互语义
-- 调整主链路入口、确认链路、短交付与正式交付分流方式
-- 页面需要新增正式字段、正式状态或正式错误处理约定
-- 页面结构或交互假设影响 `docs/work-priority-plan.md` 中的任务完成判断
-
-回写时遵循：
-
-- 交互语义优先回写产品 / 仪表盘 / 设置文档
-- 协议字段、事件、状态变化优先回写协议与开发规范文档
-- 若代码已真实完成文档中的任务项，不要让文档长期落后于代码
-
-------
-
-## 7. 前端注释规范
-
-注释在前端不是可选项，尤其以下场景必须写英文注释：
-
-- 多窗口协调、悬浮球与气泡生命周期切换
-- 悬停、拖拽、长按、语音等复杂交互状态机
-- 与平台桥接、窗口同步、托盘或 Named Pipe 交互相关的逻辑
-- 任何需要区分“局部状态”和“正式状态”的代码
-- 失败回退、去抖、竞态规避、延迟同步等不直观逻辑
-
-注释至少要说明：
-
-- 这段逻辑在前端主链路里承担什么作用
-- 为什么这里是局部状态而不是正式状态
-- 为什么需要当前时序、延迟、同步或回退处理
-- 失败路径和边界条件是什么
-
-必须坚持：
-
-- 新增复杂逻辑时同步写英文注释
-- 调整复杂逻辑时同步检查并修正旧注释
-- 当前改动范围内若发现中文注释，必须改成英文注释
-
-禁止：
-
-- 用“组件很短”作为不写注释的理由
-- 让注释只重复 JSX 或变量名表面含义
-- 在状态机切换、窗口同步和副作用边界上省略解释
-
-------
-
-## 8. 建议的前端工作模式
-
-推荐按以下顺序工作：
-
-1. 先读根目录 `AGENTS.md` 与本文件
-2. 再按任务类型补读产品、仪表盘、设置或协议文档
-3. 再看当前页面、服务层、RPC client 和状态管理实现
-4. 先确认正式对象、正式出口和失败路径，再动手改 UI
-5. 改完后补注释、自检并回写相关文档
-
-------
-
-## 9. 一句话总原则
-
-> 前端先保证对象真实、状态清楚、交付路径正确，再追求页面表现和交互质感。
+> **Front-End Focus**: Ensure data integrity, clear state separation, and accurate delivery paths before refining UI aesthetics or interactions.
