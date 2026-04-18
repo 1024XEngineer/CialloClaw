@@ -1,4 +1,4 @@
-// 该测试文件验证运行时状态机与通知队列行为。
+// This test file covers runtime state-machine and notification queue behavior.
 package runengine
 
 import (
@@ -10,7 +10,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
-// TestEngineTaskLifecycle 验证EngineTaskLifecycle。
+// TestEngineTaskLifecycle verifies the end-to-end task lifecycle.
 func TestEngineTaskLifecycle(t *testing.T) {
 	engine := NewEngine()
 	fixedTime := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
@@ -83,7 +83,8 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	}
 }
 
-// TestEngineExecutionProgressAndToolCall 验证真实执行阶段的 timeline 和 tool_call 会被记录。
+// TestEngineExecutionProgressAndToolCall verifies that execution-stage timeline
+// and tool_call records are captured.
 func TestEngineExecutionProgressAndToolCall(t *testing.T) {
 	engine := NewEngine()
 	engine.now = func() time.Time { return time.Date(2026, 4, 8, 10, 30, 0, 0, time.UTC) }
@@ -190,7 +191,8 @@ func TestEngineEmitRuntimeNotificationPersistsLoopStopReason(t *testing.T) {
 	}
 }
 
-// TestEngineAuthorizationAndHandoffState 验证EngineAuthorizationAndHandoffState。
+// TestEngineAppendAuditDataPersistsAuditAndTokenUsage verifies audit and token
+// usage persistence when runtime audit data is appended.
 func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-run-audit.db")
 	store, err := storage.NewSQLiteTaskRunStore(path)
@@ -706,7 +708,8 @@ func TestEngineApplyRecoveryOutcomeSetsTerminalAndNonTerminalStatus(t *testing.T
 	}
 }
 
-// TestEngineDefaultsUseWorkspaceRelativePaths 验证默认配置不会写入平台盘符路径。
+// TestEngineDefaultsUseWorkspaceRelativePaths verifies defaults never write
+// platform-specific drive paths.
 func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
 	engine := NewEngine()
 

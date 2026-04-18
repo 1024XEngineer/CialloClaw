@@ -1,9 +1,10 @@
-// 该测试文件验证交付与落盘计划组装行为。
+// This test file covers delivery and persistence-plan assembly behavior.
 package delivery
 
 import "testing"
 
-// TestBuildStorageAndArtifactPlans 验证BuildStorageAndArtifactPlans。
+// TestBuildStorageAndArtifactPlans verifies storage and artifact plans are
+// assembled together.
 func TestBuildStorageAndArtifactPlans(t *testing.T) {
 	service := NewService()
 	deliveryResult := service.BuildDeliveryResult("task_001", "workspace_document", "测试摘要", "已为你写入文档并打开")
@@ -26,7 +27,8 @@ func TestBuildStorageAndArtifactPlans(t *testing.T) {
 	}
 }
 
-// TestBuildDeliveryResultWithTargetPath 验证显式输出路径会进入 delivery_result 和 artifact。
+// TestBuildDeliveryResultWithTargetPath verifies an explicit output path flows
+// into both delivery_result and artifact payloads.
 func TestBuildDeliveryResultWithTargetPath(t *testing.T) {
 	service := NewService()
 	deliveryResult := service.BuildDeliveryResultWithTargetPath(
