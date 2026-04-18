@@ -827,7 +827,8 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	return record.clone(), true
 }
 
-// ApplyRecoveryOutcome 在恢复点应用后刷新任务的状态、安全摘要与通知回写。
+// ApplyRecoveryOutcome refreshes task status, security summary, and buffered
+// notifications after recovery-point application.
 func (e *Engine) ApplyRecoveryOutcome(taskID, taskStatus, securityStatus string, recoveryPoint map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -874,9 +875,8 @@ func (e *Engine) ApplyRecoveryOutcome(taskID, taskStatus, securityStatus string,
 	return record.clone(), true
 }
 
-// ControlTask 控制Task。
-
-// ControlTask 处理 pause/resume/cancel/restart 等用户控制动作。
+// ControlTask applies user control actions such as pause, resume, cancel, and
+// restart.
 func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1788,7 +1788,8 @@ func toolCallEventPayload(record *TaskRecord, toolName, status string, input, ou
 	return payload
 }
 
-// nextIdentifier 处理当前模块的相关逻辑。
+// nextIdentifier allocates a prefixed identifier, delegating to persistent
+// storage when available.
 func (e *Engine) nextIdentifier(prefix string) string {
 	if e.taskStore != nil {
 		identifier, err := e.taskStore.AllocateIdentifier(context.Background(), prefix)
@@ -1837,9 +1838,8 @@ func (e *Engine) persistTaskLocked(record *TaskRecord) {
 	_ = e.taskStore.SaveTaskRun(context.Background(), taskRecordToStorage(record.clone()))
 }
 
-// clone 处理当前模块的相关逻辑。
-
-// clone 返回 TaskRecord 的深拷贝，避免外部持有内部状态引用。
+// clone returns a deep copy of TaskRecord so callers cannot retain internal
+// state references.
 func (r TaskRecord) clone() TaskRecord {
 	clone := r
 	clone.Intent = cloneMap(r.Intent)
@@ -1870,9 +1870,8 @@ func (r TaskRecord) clone() TaskRecord {
 	return clone
 }
 
-// queueNotification 处理当前模块的相关逻辑。
-
-// queueNotification 把一条通知追加到任务的待发送队列。
+// queueNotification appends one notification to the task's buffered outbound
+// queue.
 func (r *TaskRecord) queueNotification(method string, params map[string]any) {
 	r.Notifications = append(r.Notifications, NotificationRecord{
 		Method:    method,
@@ -1881,7 +1880,7 @@ func (r *TaskRecord) queueNotification(method string, params map[string]any) {
 	})
 }
 
-// isFinished 处理当前模块的相关逻辑。
+// isFinished reports whether the task is already in a terminal status.
 func (r TaskRecord) isFinished() bool {
 	switch r.Status {
 	case "completed", "cancelled", "ended_unfinished", "failed":
@@ -1891,7 +1890,7 @@ func (r TaskRecord) isFinished() bool {
 	}
 }
 
-// runStatus 处理当前模块的相关逻辑。
+// runStatus maps the task status to the reduced compatibility-layer run state.
 func (r TaskRecord) runStatus() string {
 	if r.Status == "completed" {
 		return "completed"
@@ -1899,7 +1898,7 @@ func (r TaskRecord) runStatus() string {
 	return "processing"
 }
 
-// cloneTimeline 处理当前模块的相关逻辑。
+// cloneTimeline returns a shallow copy of the task timeline slice.
 func cloneTimeline(timeline []TaskStepRecord) []TaskStepRecord {
 	if len(timeline) == 0 {
 		return nil
@@ -1910,7 +1909,7 @@ func cloneTimeline(timeline []TaskStepRecord) []TaskStepRecord {
 	return result
 }
 
-// cloneMap 处理当前模块的相关逻辑。
+// cloneMap recursively copies a map[string]any payload.
 func cloneMap(values map[string]any) map[string]any {
 	if len(values) == 0 {
 		return nil
@@ -1987,10 +1986,8 @@ func isSessionBusyTask(record *TaskRecord) bool {
 	}
 }
 
-// advanceTimeline 处理当前模块的相关逻辑。
-
-// advanceTimeline 推进 task timeline。
-// 如果步骤名发生变化，会先完成上一个步骤，再追加一个新的步骤记录。
+// advanceTimeline moves the task timeline forward, completing the previous step
+// before appending a new one when the step name changes.
 func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary string) []TaskStepRecord {
 	if len(timeline) == 0 {
 		return []TaskStepRecord{{
@@ -2024,9 +2021,8 @@ func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary 
 	return updated
 }
 
-// buildSecuritySummary 处理当前模块的相关逻辑。
-
-// buildSecuritySummary 生成任务详情里展示的最小安全摘要。
+// buildSecuritySummary creates the minimal security summary shown in task
+// detail views.
 func buildSecuritySummary(riskLevel string, latestRestorePoint map[string]any) map[string]any {
 	return map[string]any{
 		"security_status":        "normal",
@@ -2047,9 +2043,8 @@ func latestRestorePointFromSummary(summary map[string]any) map[string]any {
 	return cloneMap(latestRestorePoint)
 }
 
-// buildRecoveryPoint 处理当前模块的相关逻辑。
-
-// buildRecoveryPoint 生成任务完成时附带的恢复点元数据。
+// buildRecoveryPoint creates the recovery-point metadata attached when a task
+// completes.
 func buildRecoveryPoint(taskID string, createdAt time.Time) map[string]any {
 	return map[string]any{
 		"recovery_point_id": fmt.Sprintf("rp_%d", createdAt.UnixNano()),
@@ -2100,7 +2095,7 @@ func removeStringValue(values []string, target string) []string {
 	return append([]string(nil), filtered...)
 }
 
-// timelineCurrentStepID 处理当前模块的相关逻辑。
+// timelineCurrentStepID returns the step_id of the latest timeline entry.
 func timelineCurrentStepID(timeline []TaskStepRecord) any {
 	if len(timeline) == 0 {
 		return nil
@@ -2109,7 +2104,7 @@ func timelineCurrentStepID(timeline []TaskStepRecord) any {
 	return timeline[len(timeline)-1].StepID
 }
 
-// firstNonEmpty 处理当前模块的相关逻辑。
+// firstNonEmpty returns primary when present, otherwise fallback.
 func firstNonEmpty(primary, fallback string) string {
 	if primary != "" {
 		return primary
@@ -2130,7 +2125,8 @@ func runtimeStopReasonFromPayload(payload map[string]any) string {
 	return ""
 }
 
-// sortTaskRecords 按协议约定的排序字段和方向整理任务列表。
+// sortTaskRecords orders task lists according to the protocol-level sort fields
+// and direction.
 func sortTaskRecords(records []TaskRecord, sortBy, sortOrder string) {
 	if len(records) <= 1 {
 		return

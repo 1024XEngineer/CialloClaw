@@ -1340,7 +1340,7 @@ func (s *Service) SecurityPendingList(params map[string]any) (map[string]any, er
 	}, nil
 }
 
-// SecurityAuditList 处理 agent.security.audit.list。
+// SecurityAuditList handles agent.security.audit.list.
 func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, error) {
 	limit := clampListLimit(intValue(params, "limit", 20))
 	offset := clampListOffset(intValue(params, "offset", 0))
@@ -1365,7 +1365,7 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	}, nil
 }
 
-// SecurityRestorePointsList 处理 agent.security.restore_points.list。
+// SecurityRestorePointsList handles agent.security.restore_points.list.
 func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]any, error) {
 	limit := clampListLimit(intValue(params, "limit", 20))
 	offset := clampListOffset(intValue(params, "offset", 0))
@@ -1393,7 +1393,7 @@ func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]a
 	}, nil
 }
 
-// SecurityRestoreApply 处理 agent.security.restore.apply。
+// SecurityRestoreApply handles agent.security.restore.apply.
 func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, error) {
 	recoveryPointID := stringValue(params, "recovery_point_id", "")
 	if strings.TrimSpace(recoveryPointID) == "" {
@@ -2330,7 +2330,8 @@ func workspacePathFromSettings(settings map[string]any) string {
 	return stringValue(download, "workspace_path", "workspace")
 }
 
-// defaultIntentMap 处理当前模块的相关逻辑。
+// defaultIntentMap creates a minimal default intent payload for notepad
+// conversions.
 func defaultIntentMap(name string) map[string]any {
 	arguments := map[string]any{}
 	if name == "summarize" {
@@ -3951,7 +3952,8 @@ func impactScopeTarget(impactScope map[string]any, fallback string) string {
 	return firstNonEmptyString(strings.TrimSpace(fallback), "main_flow")
 }
 
-// applyResolvedDeliveryToPlan 把任务级交付偏好解析结果回填到恢复执行计划中。
+// applyResolvedDeliveryToPlan folds the resolved task-level delivery preference
+// back into a pending execution plan.
 func (s *Service) applyResolvedDeliveryToPlan(task runengine.TaskRecord, plan map[string]any, taskIntent map[string]any) map[string]any {
 	if len(plan) == 0 {
 		return nil
@@ -3964,12 +3966,13 @@ func (s *Service) applyResolvedDeliveryToPlan(task runengine.TaskRecord, plan ma
 	return updatedPlan
 }
 
-// resolveTaskDeliveryType 统一计算某个任务当前应采用的交付类型。
+// resolveTaskDeliveryType computes the effective delivery type for a task.
 func resolveTaskDeliveryType(task runengine.TaskRecord, taskIntent map[string]any) string {
 	return resolveDeliveryType(task.PreferredDelivery, task.FallbackDelivery, deliveryTypeFromIntent(taskIntent))
 }
 
-// resolveDeliveryType 按“任务偏好 -> fallback -> 默认值”的顺序解析最终交付类型。
+// resolveDeliveryType resolves the final delivery type in priority order:
+// task preference, fallback, then default.
 func resolveDeliveryType(preferred, fallback, defaultType string) string {
 	if normalized := normalizeDeliveryType(preferred); normalized != "" {
 		return normalized
@@ -3997,7 +4000,7 @@ func normalizeDeliveryType(deliveryType string) string {
 	}
 }
 
-// previewTextForDeliveryType 返回不同交付类型对应的预览文案。
+// previewTextForDeliveryType returns the preview copy for each delivery type.
 func previewTextForDeliveryType(deliveryType string) string {
 	if deliveryType == "bubble" {
 		return "\u7ed3\u679c\u5df2\u901a\u8fc7\u6c14\u6ce1\u8fd4\u56de"
