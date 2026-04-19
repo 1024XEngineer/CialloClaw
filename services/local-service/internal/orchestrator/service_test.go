@@ -5472,6 +5472,15 @@ func TestServiceBudgetAutoDowngradeSwitchesWorkspaceDeliveryToBubble(t *testing.
 	if len(record.AuditRecords) == 0 || stringValue(record.AuditRecords[len(record.AuditRecords)-1], "action", "") != "budget_auto_downgrade.applied" {
 		t.Fatalf("expected budget downgrade audit record, got %+v", record.AuditRecords)
 	}
+	if record.SecuritySummary["budget_auto_downgrade_applied"] != true {
+		t.Fatalf("expected completed task security summary to retain downgrade marker, got %+v", record.SecuritySummary)
+	}
+	if record.SecuritySummary["budget_auto_downgrade_reason"] != "budget_pressure" {
+		t.Fatalf("expected completed task security summary to retain downgrade reason, got %+v", record.SecuritySummary)
+	}
+	if stringValue(mapValue(record.SecuritySummary, "budget_auto_downgrade_trace"), "trigger_reason", "") != "budget_pressure" {
+		t.Fatalf("expected completed task security summary to retain downgrade trace, got %+v", record.SecuritySummary)
+	}
 }
 
 func TestServiceBudgetAutoDowngradeProviderUnavailableDisablesExpensiveTools(t *testing.T) {

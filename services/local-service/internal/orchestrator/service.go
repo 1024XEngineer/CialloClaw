@@ -5036,6 +5036,9 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 	budgetDecision := s.evaluateBudgetAutoDowngrade(processingTask, taskIntent)
 	processingTask, snapshot, taskIntent = s.applyBudgetAutoDowngrade(processingTask, snapshot, taskIntent, budgetDecision)
+	if budgetDecision.Applied {
+		_, _ = s.runEngine.UpdateSecuritySummary(processingTask.TaskID, processingTask.SecuritySummary)
+	}
 
 	resultTitle, _, resultBubbleText := resultSpecFromIntent(taskIntent)
 	deliveryType := resolveTaskDeliveryType(processingTask, taskIntent)
