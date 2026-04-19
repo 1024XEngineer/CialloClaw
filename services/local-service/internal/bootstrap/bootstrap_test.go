@@ -115,8 +115,8 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.playwright == nil {
 		t.Fatal("expected playwright runtime to be wired")
 	}
-	if app.playwright.Available() && !app.playwright.Ready() {
-		t.Fatal("expected available playwright sidecar runtime to be ready")
+	if app.playwright.Client() == nil {
+		t.Fatal("expected playwright runtime client to remain available")
 	}
 	if app.ocr == nil {
 		t.Fatal("expected ocr runtime to be wired")
@@ -189,3 +189,30 @@ func TestNewFailsFastWhenModelConfigIsInvalid(t *testing.T) {
 		t.Fatalf("expected ErrModelProviderUnsupported, got %v", err)
 	}
 }
+
+func TestChooseRuntimeOnStartKeepsFailedRuntimeState(t *testing.T) {
+	failedRuntime := &stubRuntimeStarter{err: errors.New("start failed")}
+	unavailableRuntime := &stubRuntimeStarter{}
+	selected := chooseRuntimeOnStart[*stubRuntimeStarter](failedRuntime, nil, func() *stubRuntimeStarter {
+		return unavailableRuntime
+	})
+	if selected != failedRuntime {
+		t.Fatalf("expected start failure to keep original runtime, got %+v", selected)
+	}
+	selected = chooseRuntimeOnStart[*stubRuntimeStarter](failedRuntime, errors.New("build failed"), func() *stubRuntimeStarter {
+		return unavailableRuntime
+	})
+	if selected != failedRuntime {
+		t.Fatalf("expected build failure with runtime shell to keep original runtime, got %+v", selected)
+	}
+	selected = chooseRuntimeOnStart[*stubRuntimeStarter](nil, errors.New("build failed"), func() *stubRuntimeStarter {
+		return unavailableRuntime
+	})
+	if selected != unavailableRuntime {
+		t.Fatalf("expected nil build failure runtime to choose unavailable runtime, got %+v", selected)
+	}
+}
+
+type stubRuntimeStarter struct{ err error }
+
+func (s *stubRuntimeStarter) Start() error { return s.err }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -35,22 +36,36 @@ func TestOCRWorkerRuntimeClientExtractText(t *testing.T) {
 
 func TestOCRWorkerRuntimeLifecycle(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := NewOCRWorkerRuntime(osCapability)
-	if err != nil {
-		return
+	pluginService := plugin.NewService()
+	runtime := &OCRWorkerRuntime{
+		plugins:   pluginService,
+		os:        osCapability,
+		ready:     false,
+		available: true,
+		invoker:   &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}},
+		name:      "ocr_worker",
 	}
 	runtime.invoker = &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
+	runtime.client = runtimeOCRWorkerClient{runtime: runtime}
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 	if !runtime.Ready() || !osCapability.HasNamedPipe(runtime.PipeName()) {
 		t.Fatalf("expected runtime ready after start")
 	}
+	state, ok := pluginService.RuntimeState(plugin.RuntimeKindWorker, runtime.Name())
+	if !ok || state.Health != plugin.RuntimeHealthHealthy || state.Status != plugin.RuntimeStatusRunning {
+		t.Fatalf("expected healthy OCR runtime state after start, got %+v ok=%v", state, ok)
+	}
 	if err := runtime.Stop(); err != nil {
 		t.Fatalf("Stop returned error: %v", err)
 	}
 	if runtime.Ready() {
 		t.Fatal("expected runtime not ready after stop")
+	}
+	state, ok = pluginService.RuntimeState(plugin.RuntimeKindWorker, runtime.Name())
+	if !ok || state.Health != plugin.RuntimeHealthStopped || state.Status != plugin.RuntimeStatusStopped {
+		t.Fatalf("expected stopped OCR runtime state after stop, got %+v ok=%v", state, ok)
 	}
 }
 
@@ -193,7 +208,7 @@ func TestOCRNoopAndUnavailableRuntime(t *testing.T) {
 	if _, err := client.ExtractText(context.Background(), "workspace/demo.txt"); !errors.Is(err, tools.ErrOCRWorkerFailed) {
 		t.Fatalf("expected noop OCR failure, got %v", err)
 	}
-	runtime := NewUnavailableOCRWorkerRuntime(platform.NewLocalOSCapabilityAdapter())
+	runtime := NewUnavailableOCRWorkerRuntime(plugin.NewService(), platform.NewLocalOSCapabilityAdapter())
 	if runtime.Available() {
 		t.Fatal("expected unavailable OCR runtime")
 	}

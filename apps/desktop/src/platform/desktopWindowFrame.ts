@@ -1,15 +1,15 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-function isDesktopWindowEnvironment() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
 function getDesktopFrameWindow() {
-  if (!isDesktopWindowEnvironment()) {
+  if (typeof window === "undefined") {
     return null;
   }
 
-  return getCurrentWindow();
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
 }
 
 // startCurrentDesktopWindowDragging delegates to the Tauri window drag API

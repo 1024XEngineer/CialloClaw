@@ -189,6 +189,16 @@ export interface TimeInterval {
   value: number;
 }
 
+// StrongholdStatus captures the formal secret-backend lifecycle metadata that
+// can be surfaced in settings responses without exposing secret values.
+export interface StrongholdStatus {
+  backend: string;
+  available: boolean;
+  fallback: boolean;
+  initialized: boolean;
+  formal_store: boolean;
+}
+
 // Task 定义当前模块的接口约束。
 export interface Task {
   task_id: string;
@@ -438,6 +448,7 @@ export interface SettingsSnapshot {
       provider: string;
       budget_auto_downgrade: boolean;
       provider_api_key_configured: boolean;
+      stronghold: StrongholdStatus;
     };
   };
 }
@@ -570,20 +581,26 @@ export interface PluginManifest {
 
 // PluginRuntimeState 定义当前模块的接口约束。
 export interface PluginRuntimeState {
-  plugin_id: string;
-  healthy: boolean;
-  last_heartbeat_at: string | null;
-  current_task_id: string | null;
+  name: string;
+  kind: "worker" | "sidecar";
+  status: "declared" | "starting" | "running" | "stopped" | "unavailable" | "failed";
+  transport: string;
+  health: "unknown" | "healthy" | "degraded" | "failed" | "stopped" | "unavailable";
+  last_seen_at: string;
   last_error: string | null;
+  capabilities: string[];
 }
 
 // PluginMetricSnapshot 定义当前模块的接口约束。
 export interface PluginMetricSnapshot {
-  plugin_id: string;
-  call_count: number;
-  error_count: number;
-  average_duration_ms: number;
-  artifact_count: number;
+  name: string;
+  kind: "worker" | "sidecar";
+  start_count: number;
+  success_count: number;
+  failure_count: number;
+  last_started_at: string;
+  last_failed_at: string;
+  last_seen_at: string;
 }
 
 // RpcResponseMeta 定义当前模块的接口约束。

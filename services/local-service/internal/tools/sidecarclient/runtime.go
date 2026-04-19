@@ -240,6 +240,7 @@ func (c runtimePlaywrightClient) StructuredDOM(ctx context.Context, url string) 
 // - 当前 sidecar 是否已进入 ready 状态
 type PlaywrightSidecarRuntime struct {
 	mu        sync.Mutex
+	plugins   *plugin.Service
 	spec      plugin.SidecarSpec
 	os        platform.OSCapabilityAdapter
 	ready     bool
@@ -254,25 +255,31 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 	if !ok {
 		return nil, errors.New("playwright sidecar not declared")
 	}
-	entryPath, err := resolveWorkerEntryPath()
-	if err != nil {
-		return nil, err
-	}
+	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindSidecar, spec.Name)
 	runtime := &PlaywrightSidecarRuntime{
+		plugins:   pluginService,
 		spec:      spec,
 		os:        osCapability,
 		ready:     false,
-		available: true,
-		invoker:   newCommandWorkerInvoker(entryPath),
+		available: false,
 	}
 	runtime.client = runtimePlaywrightClient{runtime: runtime}
+	entryPath, err := resolveWorkerEntryPath()
+	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindSidecar, spec.Name, err)
+		return runtime, err
+	}
+	runtime.available = true
+	runtime.invoker = newCommandWorkerInvoker(entryPath)
 	return runtime, nil
 }
 
 // NewUnavailablePlaywrightSidecarRuntime returns a disabled runtime placeholder.
 func NewUnavailablePlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) *PlaywrightSidecarRuntime {
 	spec, _ := pluginService.SidecarSpec("playwright_sidecar")
+	markPluginRuntimeUnavailable(pluginService, plugin.RuntimeKindSidecar, spec.Name, "playwright sidecar unavailable")
 	runtime := &PlaywrightSidecarRuntime{
+		plugins:   pluginService,
 		spec:      spec,
 		os:        osCapability,
 		ready:     false,
@@ -309,23 +316,28 @@ func (r *PlaywrightSidecarRuntime) Available() bool {
 // Start 进入当前阶段的最小 ready 状态。
 func (r *PlaywrightSidecarRuntime) Start() error {
 	if !r.Available() {
+		markPluginRuntimeUnavailable(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, "playwright sidecar unavailable")
 		return nil
 	}
 	if r.os == nil {
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, errors.New("os capability adapter is required"))
 		return errors.New("os capability adapter is required")
 	}
 	if err := r.os.EnsureNamedPipe(sidecarPipeName(r.spec.Name)); err != nil {
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, err)
 		return err
 	}
 	healthCtx, cancel := context.WithTimeout(context.Background(), sidecarHealthTimeout)
 	defer cancel()
 	if _, err := r.invoke(healthCtx, sidecarRequest{Action: "health"}); err != nil {
 		_ = r.os.CloseNamedPipe(sidecarPipeName(r.spec.Name))
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, err)
 		return fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ready = true
+	markPluginRuntimeHealthy(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name)
 	return nil
 }
 
@@ -343,6 +355,7 @@ func (r *PlaywrightSidecarRuntime) Stop() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ready = false
+	markPluginRuntimeStopped(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name)
 	return nil
 }
 
@@ -370,6 +383,7 @@ func (r *PlaywrightSidecarRuntime) markFailure() error {
 	r.mu.Lock()
 	r.ready = false
 	r.mu.Unlock()
+	markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, errors.New("playwright sidecar marked failed"))
 	if r.os == nil {
 		return nil
 	}
@@ -467,6 +481,41 @@ func searchUpwardsForRelativePath(start, relativePath string, seen map[string]st
 		}
 		current = parent
 	}
+}
+
+func markPluginRuntimeHealthy(service *plugin.Service, kind plugin.RuntimeKind, name string) {
+	if service == nil {
+		return
+	}
+	service.MarkRuntimeHealthy(kind, name)
+}
+
+func markPluginRuntimeStarting(service *plugin.Service, kind plugin.RuntimeKind, name string) {
+	if service == nil {
+		return
+	}
+	service.MarkRuntimeStarting(kind, name)
+}
+
+func markPluginRuntimeFailed(service *plugin.Service, kind plugin.RuntimeKind, name string, err error) {
+	if service == nil {
+		return
+	}
+	service.MarkRuntimeFailed(kind, name, err)
+}
+
+func markPluginRuntimeUnavailable(service *plugin.Service, kind plugin.RuntimeKind, name, reason string) {
+	if service == nil {
+		return
+	}
+	service.MarkRuntimeUnavailable(kind, name, reason)
+}
+
+func markPluginRuntimeStopped(service *plugin.Service, kind plugin.RuntimeKind, name string) {
+	if service == nil {
+		return
+	}
+	service.MarkRuntimeStopped(kind, name)
 }
 
 func decodeSidecarResponse(payload []byte) (sidecarResponse, error) {

@@ -1,4 +1,5 @@
-import { AlertTriangle, ArrowUpRight, Clock3, FolderOutput, RefreshCcw, ShieldAlert, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, ArrowUpRight, Clock3, FolderOutput, RefreshCcw, SendHorizonal, ShieldAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,8 @@ import type { TaskDetailData } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
 import { TaskContextBlock } from "./TaskContextBlock";
 import { TaskProgressTimeline } from "./TaskProgressTimeline";
+import type { TaskEventFilters, TaskEventTimeRange } from "../taskPage.types";
+import { DEFAULT_TASK_EVENT_FILTERS } from "../taskPage.service";
 
 type TaskDetailPanelProps = {
   artifactActionPendingId: string | null;
@@ -19,6 +22,10 @@ type TaskDetailPanelProps = {
   detailWarningMessage: string | null;
   detailData: TaskDetailData;
   detailErrorMessage: string | null;
+  eventErrorMessage: string | null;
+  eventFilters: TaskEventFilters;
+  eventItems: import("../taskPage.types").TaskEventItem[];
+  eventLoading: boolean;
   detailState: "loading" | "error" | "ready";
   deliveryActionPending: boolean;
   feedback: string | null;
@@ -26,7 +33,11 @@ type TaskDetailPanelProps = {
   onClose: () => void;
   onOpenArtifact: (artifactId: string) => void;
   onOpenLatestDelivery: () => void;
+  onApplyEventFilters: (filters: TaskEventFilters) => void;
+  onResetEventFilters: () => void;
   onRetryDetail: (() => void) | null;
+  onSteerTask: (message: string) => void;
+  steeringPending: boolean;
 };
 
 export function TaskDetailPanel({
@@ -37,6 +48,10 @@ export function TaskDetailPanel({
   detailWarningMessage,
   detailData,
   detailErrorMessage,
+  eventErrorMessage,
+  eventFilters,
+  eventItems,
+  eventLoading,
   detailState,
   deliveryActionPending,
   feedback,
@@ -44,9 +59,15 @@ export function TaskDetailPanel({
   onClose,
   onOpenArtifact,
   onOpenLatestDelivery,
+  onApplyEventFilters,
+  onResetEventFilters,
   onRetryDetail,
+  onSteerTask,
+  steeringPending,
 }: TaskDetailPanelProps) {
   const { detail, experience, task } = detailData;
+  const [steeringMessage, setSteeringMessage] = useState("");
+  const [eventFilterDraft, setEventFilterDraft] = useState(eventFilters);
   const progress = getTaskProgress(detail.timeline);
   const stateVoice = getTaskStateVoice(task, experience, detail.timeline);
   const ended = isTaskEnded(task);
@@ -59,6 +80,178 @@ export function TaskDetailPanel({
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
   const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
+  const canSteerTask = !ended && task.status !== "cancelled";
+  const runtimeSummary = detail.runtime_summary;
+
+  useEffect(() => {
+    if (steeringPending) {
+      return;
+    }
+
+    if (!feedback || !/已记录新的补充要求/.test(feedback)) {
+      return;
+    }
+
+    setSteeringMessage("");
+  }, [feedback, steeringPending]);
+
+  useEffect(() => {
+    // Keep runtime event filters as local draft state so typing does not trigger
+    // one RPC refetch per keystroke before the user explicitly applies changes.
+    setEventFilterDraft(eventFilters);
+  }, [eventFilters]);
+
+  function handleSubmitSteering() {
+    if (!steeringMessage.trim()) {
+      return;
+    }
+    onSteerTask(steeringMessage);
+  }
+
+  function handleApplyEventFilters() {
+    onApplyEventFilters({
+      eventType: eventFilterDraft.eventType.trim(),
+      runId: eventFilterDraft.runId.trim(),
+      timeRange: eventFilterDraft.timeRange,
+    });
+  }
+
+  function handleResetEventFilters() {
+    setEventFilterDraft(DEFAULT_TASK_EVENT_FILTERS);
+    onResetEventFilters();
+  }
+
+  function updateEventTimeRange(timeRange: TaskEventTimeRange) {
+    setEventFilterDraft((current) => ({
+      ...current,
+      timeRange,
+    }));
+  }
+
+  function renderRuntimeEventFilters() {
+    return (
+      <div className="task-detail-runtime-filters">
+        <label className="task-detail-runtime-filters__field">
+          <span>事件类型</span>
+          <input
+            className="task-detail-runtime-filters__input"
+            onChange={(event) =>
+              setEventFilterDraft((current) => ({
+                ...current,
+                eventType: event.target.value,
+              }))
+            }
+            placeholder="例如 loop.failed"
+            value={eventFilterDraft.eventType}
+          />
+        </label>
+        <label className="task-detail-runtime-filters__field">
+          <span>Run ID</span>
+          <input
+            className="task-detail-runtime-filters__input"
+            onChange={(event) =>
+              setEventFilterDraft((current) => ({
+                ...current,
+                runId: event.target.value,
+              }))
+            }
+            placeholder="例如 run_001"
+            value={eventFilterDraft.runId}
+          />
+        </label>
+        <label className="task-detail-runtime-filters__field">
+          <span>时间范围</span>
+          <select className="task-detail-runtime-filters__input" onChange={(event) => updateEventTimeRange(event.target.value as TaskEventTimeRange)} value={eventFilterDraft.timeRange}>
+            <option value="all">全部时间</option>
+            <option value="1h">最近 1 小时</option>
+            <option value="24h">最近 24 小时</option>
+            <option value="7d">最近 7 天</option>
+          </select>
+        </label>
+        <div className="task-detail-runtime-filters__actions">
+          <button className="task-detail-card__action" disabled={eventLoading} onClick={handleApplyEventFilters} type="button">
+            <RefreshCcw className="h-4 w-4" />
+            应用筛选
+          </button>
+          <button className="task-detail-card__action" disabled={eventLoading} onClick={handleResetEventFilters} type="button">
+            重置
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderRuntimeSummarySection() {
+    return (
+      <section className="task-detail-card">
+        <div className="task-detail-card__header">
+          <p className="task-detail-card__eyebrow">Runtime Summary</p>
+          <h3 className="task-detail-card__title">循环停止原因与调试概览</h3>
+        </div>
+        <div className="task-detail-current-grid">
+          <article className="task-detail-current-card">
+            <Clock3 className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Loop stop reason</p>
+              <p className="task-detail-current-card__text">{runtimeSummary.loop_stop_reason ?? "当前还没有停止原因"}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <AlertTriangle className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Latest event</p>
+              <p className="task-detail-current-card__text">{runtimeSummary.latest_event_type ?? "当前还没有 runtime event"}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <ShieldAlert className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Event count</p>
+              <p className="task-detail-current-card__text">{runtimeSummary.events_count}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <SendHorizonal className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Pending steering</p>
+              <p className="task-detail-current-card__text">{runtimeSummary.active_steering_count}</p>
+            </div>
+          </article>
+        </div>
+      </section>
+    );
+  }
+
+  function renderRuntimeEventsSection() {
+    return (
+      <section className="task-detail-card">
+        <div className="task-detail-card__header">
+          <p className="task-detail-card__eyebrow">Runtime Events</p>
+          <h3 className="task-detail-card__title">执行事件与循环回流</h3>
+        </div>
+        <p className="task-detail-card__hint">通过正式 `agent.task.events.list` 查询当前任务的运行时事件，可按事件类型、Run ID 与时间范围筛选。</p>
+        {renderRuntimeEventFilters()}
+        {eventErrorMessage ? <p className="task-detail-card__hint">{eventErrorMessage}</p> : null}
+        {eventLoading && eventItems.length === 0 ? <p className="task-detail-card__empty">正在同步运行时事件...</p> : null}
+        {eventItems.length > 0 ? (
+          <div className="task-detail-runtime-list">
+            {eventItems.map((event) => (
+              <article key={event.event_id} className="task-detail-runtime-item">
+                <div className="task-detail-runtime-item__meta">
+                  <span className="task-detail-runtime-item__type">{event.type}</span>
+                  <span>{formatTimestamp(event.created_at)}</span>
+                </div>
+                <p className="task-detail-runtime-item__summary">{event.payload?.stop_reason ? `stop_reason: ${String(event.payload.stop_reason)}` : `level: ${event.level}`}</p>
+                <p className="task-detail-runtime-item__payload">{event.payload_json}</p>
+              </article>
+            ))}
+          </div>
+        ) : !eventLoading ? (
+          <p className="task-detail-card__empty">当前没有可展示的运行时事件。</p>
+        ) : null}
+      </section>
+    );
+  }
 
   return (
     <motion.section animate={{ opacity: 1, x: 0 }} className="task-detail-shell" initial={{ opacity: 0, x: 18 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
@@ -178,7 +371,35 @@ export function TaskDetailPanel({
                 </div>
               </section>
 
+              {renderRuntimeSummarySection()}
+
               <TaskContextBlock detailData={detailData} />
+
+              <section className="task-detail-card">
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">任务引导</p>
+                    <h3 className="task-detail-card__title">补充新的执行要求</h3>
+                  </div>
+                </div>
+                <p className="task-detail-card__hint">这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。</p>
+                <div className="task-detail-steer-box">
+                  <textarea
+                    className="task-detail-steer-box__input"
+                    disabled={!canSteerTask || steeringPending}
+                    onChange={(event) => setSteeringMessage(event.target.value)}
+                    placeholder={canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"}
+                    rows={3}
+                    value={steeringMessage}
+                  />
+                  <button className="task-detail-card__action" disabled={!canSteerTask || steeringPending || !steeringMessage.trim()} onClick={handleSubmitSteering} type="button">
+                    <SendHorizonal className="h-4 w-4" />
+                    {steeringPending ? "提交中..." : "追加要求"}
+                  </button>
+                </div>
+              </section>
+
+              {renderRuntimeEventsSection()}
 
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
@@ -286,6 +507,10 @@ export function TaskDetailPanel({
                 <p className="task-detail-ended-copy">{experience.endedSummary ?? stateVoice.body}</p>
                 <p className="task-detail-ended-time">结束时间：{formatTimestamp(task.finished_at)}</p>
               </section>
+
+              {renderRuntimeSummarySection()}
+
+              {renderRuntimeEventsSection()}
 
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">

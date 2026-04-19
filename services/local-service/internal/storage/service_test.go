@@ -169,8 +169,35 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if capabilities.MemoryRetrievalBackend != memoryRetrievalBackendSQLite {
 		t.Fatalf("unexpected retrieval backend: %+v", capabilities)
 	}
-	if capabilities.SecretStoreBackend != memoryStoreBackendSQLite {
+	if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
 		t.Fatalf("unexpected secret backend: %+v", capabilities)
+	}
+	if service.SkillManifestStore() == nil || service.BlueprintDefinitionStore() == nil || service.PromptTemplateVersionStore() == nil {
+		t.Fatalf("expected config asset stores to be wired: %+v", capabilities)
+	}
+}
+
+func TestServiceConfigAssetStoresPersistRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config-assets-service.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	if err := service.SkillManifestStore().WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_001", Name: "skill", Version: "v1", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write skill manifest failed: %v", err)
+	}
+	if err := service.BlueprintDefinitionStore().WriteBlueprintDefinition(context.Background(), BlueprintDefinitionRecord{BlueprintDefinitionID: "blueprint_001", Name: "blueprint", Version: "v1", Source: "builtin", Summary: "summary", DefinitionJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write blueprint definition failed: %v", err)
+	}
+	if err := service.PromptTemplateVersionStore().WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_001", TemplateName: "default", Version: "v1", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write prompt template version failed: %v", err)
+	}
+	if _, err := service.SkillManifestStore().GetSkillManifest(context.Background(), "skill_001"); err != nil {
+		t.Fatalf("get skill manifest failed: %v", err)
+	}
+	if _, err := service.BlueprintDefinitionStore().GetBlueprintDefinition(context.Background(), "blueprint_001"); err != nil {
+		t.Fatalf("get blueprint definition failed: %v", err)
+	}
+	if _, err := service.PromptTemplateVersionStore().GetPromptTemplateVersion(context.Background(), "prompt_001"); err != nil {
+		t.Fatalf("get prompt template version failed: %v", err)
 	}
 }
 
@@ -224,6 +251,220 @@ func TestMemoryStoreReturnsWorkingImplementation(t *testing.T) {
 	}})
 	if err != nil {
 		t.Fatalf("SaveRetrievalHits returned error: %v", err)
+	}
+}
+
+func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval-auth.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	err := service.ApprovalRequestStore().WriteApprovalRequest(context.Background(), ApprovalRequestRecord{
+		ApprovalID:      "appr_001",
+		TaskID:          "task_approval_001",
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "inputs/screen.png",
+		Reason:          "screen_capture_requires_authorization",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["inputs/screen.png"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_001",
+		TaskID:                "task_approval_001",
+		ApprovalID:            "appr_001",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          true,
+		CreatedAt:             "2026-04-18T10:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write authorization record failed: %v", err)
+	}
+	approvalItems, approvalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("unexpected approval records total=%d len=%d err=%v", approvalTotal, len(approvalItems), err)
+	}
+	if approvalItems[0].OperationName != "screen_capture" || approvalItems[0].Status != "pending" {
+		t.Fatalf("unexpected approval record: %+v", approvalItems[0])
+	}
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("unexpected authorization records total=%d len=%d err=%v", authorizationTotal, len(authorizationItems), err)
+	}
+	if authorizationItems[0].Decision != "allow_once" || !authorizationItems[0].RememberRule {
+		t.Fatalf("unexpected authorization record: %+v", authorizationItems[0])
+	}
+	if err := service.ApprovalRequestStore().UpdateApprovalRequestStatus(context.Background(), "appr_001", "approved", "2026-04-18T10:02:00Z"); err != nil {
+		t.Fatalf("update approval request status failed: %v", err)
+	}
+	updatedApprovalItems, updatedApprovalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || updatedApprovalTotal != 1 || len(updatedApprovalItems) != 1 {
+		t.Fatalf("unexpected updated approval records total=%d len=%d err=%v", updatedApprovalTotal, len(updatedApprovalItems), err)
+	}
+	if updatedApprovalItems[0].Status != "approved" || updatedApprovalItems[0].UpdatedAt != "2026-04-18T10:02:00Z" {
+		t.Fatalf("expected updated approval record status, got %+v", updatedApprovalItems[0])
+	}
+	pendingApprovalItems, pendingApprovalTotal, err := service.ApprovalRequestStore().ListPendingApprovalRequests(context.Background(), 10, 0)
+	if err != nil || pendingApprovalTotal != 0 || len(pendingApprovalItems) != 0 {
+		t.Fatalf("expected no pending approvals after approval update, got total=%d len=%d err=%v items=%+v", pendingApprovalTotal, len(pendingApprovalItems), err, pendingApprovalItems)
+	}
+	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_002",
+		TaskID:                "task_approval_001",
+		ApprovalID:            "appr_001",
+		Decision:              "deny_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-18T10:03:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write second authorization record failed: %v", err)
+	}
+	updatedAuthorizationItems, updatedAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || updatedAuthorizationTotal != 2 || len(updatedAuthorizationItems) != 2 {
+		t.Fatalf("expected full authorization history total=%d len=%d err=%v items=%+v", updatedAuthorizationTotal, len(updatedAuthorizationItems), err, updatedAuthorizationItems)
+	}
+	if updatedAuthorizationItems[0].AuthorizationRecordID != "auth_002" || updatedAuthorizationItems[1].AuthorizationRecordID != "auth_001" {
+		t.Fatalf("expected authorization history ordering to preserve both records, got %+v", updatedAuthorizationItems)
+	}
+}
+
+func TestTaskStoresCloseAndErrorHelpers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-store-close.db")
+	taskStore, err := NewSQLiteTaskStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskStore returned error: %v", err)
+	}
+	if err := taskStore.WriteTask(context.Background(), TaskRecord{
+		TaskID:              "task_close_001",
+		SessionID:           "sess_close_001",
+		RunID:               "run_close_001",
+		Title:               "close helper task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "return_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           "2026-04-18T10:00:00Z",
+		UpdatedAt:           "2026-04-18T10:01:00Z",
+		SnapshotJSON:        `{}`,
+	}); err != nil {
+		t.Fatalf("WriteTask returned error: %v", err)
+	}
+	if err := taskStore.DeleteTask(context.Background(), "task_close_001"); err != nil {
+		t.Fatalf("DeleteTask returned error: %v", err)
+	}
+	if _, err := taskStore.GetTask(context.Background(), "task_close_001"); !IsTaskRecordNotFound(err) {
+		t.Fatalf("expected IsTaskRecordNotFound to detect deleted row, got %v", err)
+	}
+	if err := taskStore.Close(); err != nil {
+		t.Fatalf("expected SQLiteTaskStore close to succeed, got %v", err)
+	}
+	var nilTaskStore SQLiteTaskStore
+	if err := nilTaskStore.Close(); err != nil {
+		t.Fatalf("expected nil SQLiteTaskStore close to succeed, got %v", err)
+	}
+
+	stepStore, err := NewSQLiteTaskStepStore(filepath.Join(t.TempDir(), "task-step-close.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskStepStore returned error: %v", err)
+	}
+	if err := stepStore.ReplaceTaskSteps(context.Background(), "task_close_001", []TaskStepRecord{{
+		StepID:        "step_close_001",
+		TaskID:        "task_close_001",
+		Name:          "return_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "input",
+		OutputSummary: "output",
+		CreatedAt:     "2026-04-18T10:00:00Z",
+		UpdatedAt:     "2026-04-18T10:01:00Z",
+	}}); err != nil {
+		t.Fatalf("ReplaceTaskSteps returned error: %v", err)
+	}
+	if err := stepStore.Close(); err != nil {
+		t.Fatalf("expected SQLiteTaskStepStore close to succeed, got %v", err)
+	}
+	var nilStepStore SQLiteTaskStepStore
+	if err := nilStepStore.Close(); err != nil {
+		t.Fatalf("expected nil SQLiteTaskStepStore close to succeed, got %v", err)
+	}
+
+	if nullableText("") != nil || nullableText("value") != "value" {
+		t.Fatalf("expected nullableText helper to preserve empty/non-empty semantics")
+	}
+	if IsTaskRecordNotFound(nil) || IsTaskRecordNotFound(sql.ErrConnDone) {
+		t.Fatalf("expected IsTaskRecordNotFound to reject nil and unrelated errors")
+	}
+}
+
+func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval-auth-atomic.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	if err := service.ApprovalRequestStore().WriteApprovalRequest(context.Background(), ApprovalRequestRecord{
+		ApprovalID:      "appr_atomic_001",
+		TaskID:          "task_atomic_001",
+		OperationName:   "write_file",
+		RiskLevel:       "yellow",
+		TargetObject:    "workspace/result.md",
+		Reason:          "atomic authorization persistence",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/result.md"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+	if err := service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_atomic_001",
+		TaskID:                "task_atomic_001",
+		ApprovalID:            "appr_atomic_001",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          true,
+		CreatedAt:             "2026-04-18T10:01:00Z",
+	}, "approved", "2026-04-18T10:01:00Z"); err != nil {
+		t.Fatalf("write atomic authorization decision failed: %v", err)
+	}
+
+	approvalItems, approvalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_atomic_001", 10, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("unexpected approval records after atomic authorization write total=%d len=%d err=%v", approvalTotal, len(approvalItems), err)
+	}
+	if approvalItems[0].Status != "approved" {
+		t.Fatalf("expected atomic authorization write to update approval status, got %+v", approvalItems[0])
+	}
+
+	err = service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_atomic_missing",
+		TaskID:                "task_atomic_missing",
+		ApprovalID:            "appr_missing",
+		Decision:              "deny_once",
+		Operator:              "user",
+		CreatedAt:             "2026-04-18T10:02:00Z",
+	}, "denied", "2026-04-18T10:02:00Z")
+	if !errors.Is(err, ErrApprovalRequestNotFound) {
+		t.Fatalf("expected missing approval to fail atomic authorization write, got %v", err)
+	}
+
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("expected failed atomic authorization write to leave history unchanged total=%d len=%d err=%v items=%+v", authorizationTotal, len(authorizationItems), err, authorizationItems)
+	}
+	if authorizationItems[0].AuthorizationRecordID != "auth_atomic_001" {
+		t.Fatalf("expected only committed authorization decision to remain, got %+v", authorizationItems)
 	}
 }
 
@@ -293,6 +534,8 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 		RunID:         "run_loop_001",
 		TaskID:        "task_loop_001",
 		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "initial",
 		LoopRound:     1,
 		Name:          "agent_loop_round",
 		Status:        "completed",
@@ -339,15 +582,75 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	assertTableCount(t, sqliteStore.db, "runs", 1)
 	assertTableCount(t, sqliteStore.db, "steps", 1)
+	var attemptIndex int
+	var segmentKind string
+	if err := sqliteStore.db.QueryRow(`SELECT attempt_index, segment_kind FROM steps WHERE step_id = ?`, "step_loop_001").Scan(&attemptIndex, &segmentKind); err != nil {
+		t.Fatalf("query step attempt/segment failed: %v", err)
+	}
+	if attemptIndex != 1 || segmentKind != "initial" {
+		t.Fatalf("expected step attempt/segment to persist, got attempt=%d segment=%s", attemptIndex, segmentKind)
+	}
+	if err := service.loopRuntimeStore.SaveSteps(context.Background(), []StepRecord{{
+		StepID:        "task_loop_001_attempt_01_resume_step_loop_001",
+		RunID:         "run_loop_001",
+		TaskID:        "task_loop_001",
+		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "resume",
+		LoopRound:     1,
+		Name:          "agent_loop_round",
+		Status:        "completed",
+		InputSummary:  "resume planner input",
+		OutputSummary: "resume planner output",
+		StopReason:    "completed",
+		StartedAt:     "2026-04-17T10:00:02Z",
+		CompletedAt:   "2026-04-17T10:00:03Z",
+	}}); err != nil {
+		t.Fatalf("SaveSteps for resume segment returned error: %v", err)
+	}
+	assertTableCount(t, sqliteStore.db, "steps", 2)
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
 
-	events, total, err := store.ListEvents(context.Background(), "task_loop_001", 20, 0)
+	events, total, err := store.ListEvents(context.Background(), "task_loop_001", "", "", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListEvents returned error: %v", err)
 	}
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
+	}
+}
+
+func TestServiceTaskStoresTrackStructuredTaskRecordsFromTaskRunSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-structured.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	record := sampleTaskRunRecord()
+	if err := service.TaskRunStore().SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("SaveTaskRun returned error: %v", err)
+	}
+
+	taskItems, taskTotal, err := service.TaskStore().ListTasks(context.Background(), 10, 0)
+	if err != nil || taskTotal != 1 || len(taskItems) != 1 {
+		t.Fatalf("expected one first-class task record, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
+	}
+	if taskItems[0].TaskID != record.TaskID || taskItems[0].IntentName != "summarize" {
+		t.Fatalf("unexpected first-class task record: %+v", taskItems[0])
+	}
+	stepItems, stepTotal, err := service.TaskStepStore().ListTaskSteps(context.Background(), record.TaskID, 10, 0)
+	if err != nil || stepTotal != 1 || len(stepItems) != 1 {
+		t.Fatalf("expected one first-class task_step record, got total=%d items=%+v err=%v", stepTotal, stepItems, err)
+	}
+	if stepItems[0].StepID != record.Timeline[0].StepID || stepItems[0].Name != "return_result" {
+		t.Fatalf("unexpected first-class task_step record: %+v", stepItems[0])
+	}
+	if err := service.TaskRunStore().DeleteTaskRun(context.Background(), record.TaskID); err != nil {
+		t.Fatalf("DeleteTaskRun returned error: %v", err)
+	}
+	taskItems, taskTotal, err = service.TaskStore().ListTasks(context.Background(), 10, 0)
+	if err != nil || taskTotal != 0 || len(taskItems) != 0 {
+		t.Fatalf("expected first-class task record to be deleted, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
 	}
 }
 
@@ -380,12 +683,36 @@ func TestLoopRuntimeStoreKeepsAppendOnlyEventsAcrossRuns(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("save second event failed: %v", err)
 	}
-	events, total, err := store.ListEvents(context.Background(), "task_001", 20, 0)
+	events, total, err := store.ListEvents(context.Background(), "task_001", "", "", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("list append-only events failed: %v", err)
 	}
 	if total != 2 || len(events) != 2 {
 		t.Fatalf("expected append-only events from multiple runs, got total=%d items=%+v", total, events)
+	}
+
+	filteredByRun, totalByRun, err := store.ListEvents(context.Background(), "task_001", "run_002", "", "", "", 20, 0)
+	if err != nil {
+		t.Fatalf("list events by run failed: %v", err)
+	}
+	if totalByRun != 1 || len(filteredByRun) != 1 || filteredByRun[0].RunID != "run_002" {
+		t.Fatalf("expected one run-scoped event, got total=%d items=%+v", totalByRun, filteredByRun)
+	}
+
+	filteredByType, totalByType, err := store.ListEvents(context.Background(), "task_001", "", "loop.round.completed", "", "", 20, 0)
+	if err != nil {
+		t.Fatalf("list events by type failed: %v", err)
+	}
+	if totalByType != 2 || len(filteredByType) != 2 {
+		t.Fatalf("expected two type-scoped events, got total=%d items=%+v", totalByType, filteredByType)
+	}
+
+	filteredByTime, totalByTime, err := store.ListEvents(context.Background(), "task_001", "", "", "2026-04-17T10:00:30Z", "2026-04-17T10:01:30Z", 20, 0)
+	if err != nil {
+		t.Fatalf("list events by time failed: %v", err)
+	}
+	if totalByTime != 1 || len(filteredByTime) != 1 || filteredByTime[0].RunID != "run_002" {
+		t.Fatalf("expected one time-scoped event, got total=%d items=%+v", totalByTime, filteredByTime)
 	}
 }
 
@@ -603,6 +930,22 @@ func TestResolveModelAPIKeyReturnsAccessFailureWhenStoreClosed(t *testing.T) {
 	_, err := service.ResolveModelAPIKey("openai_responses")
 	if !errors.Is(err, ErrSecretStoreAccessFailed) {
 		t.Fatalf("expected ErrSecretStoreAccessFailed, got %v", err)
+	}
+}
+
+func TestServiceUsesUnavailableSecretStoreWhenStrongholdCannotOpen(t *testing.T) {
+	service := NewService(stubAdapter{databasePath: ""})
+	defer func() { _ = service.Close() }()
+	if service.Stronghold() != nil {
+		t.Fatalf("expected no Stronghold provider when secret path missing, got %+v", service.Stronghold().Descriptor())
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); err != nil {
+		t.Fatalf("expected in-memory fallback store when Stronghold path missing, got %v", err)
+	}
+
+	store := SecretStore(UnavailableSecretStore{})
+	if err := store.PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected unavailable formal store to reject writes, got %v", err)
 	}
 }
 

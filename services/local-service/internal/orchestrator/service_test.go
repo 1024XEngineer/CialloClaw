@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -40,7 +41,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
 type stubModelClient struct {
 	output string
 }
@@ -64,6 +64,8 @@ type stubPlaywrightClient struct {
 	structuredResult tools.BrowserStructuredDOMResult
 	err              error
 }
+
+type localHTTPPlaywrightClient struct{}
 
 type stubOCRWorkerClient struct {
 	result tools.OCRTextResult
@@ -92,6 +94,46 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
+	response, err := http.Get(url)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	text := string(body)
+	title := ""
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, "<title>")
+	end := strings.Index(lower, "</title>")
+	if start >= 0 && end > start+len("<title>") {
+		title = text[start+len("<title>") : end]
+	}
+	return tools.BrowserPageReadResult{
+		URL:         url,
+		Title:       title,
+		TextContent: text,
+		MIMEType:    response.Header.Get("Content-Type"),
+		TextType:    "html",
+		Source:      "local_http_playwright_client",
+	}, nil
+}
+
+func (localHTTPPlaywrightClient) SearchPage(_ context.Context, url, query string, _ int) (tools.BrowserPageSearchResult, error) {
+	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
+	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
@@ -193,6 +235,16 @@ type failingEvalSnapshotStore struct {
 	err error
 }
 
+type failingApprovalRequestStore struct {
+	base storage.ApprovalRequestStore
+	err  error
+}
+
+type failingAuthorizationRecordStore struct {
+	base storage.AuthorizationRecordStore
+	err  error
+}
+
 func (s failingEvalSnapshotStore) WriteEvalSnapshot(context.Context, storage.EvalSnapshotRecord) error {
 	return s.err
 }
@@ -201,9 +253,75 @@ func (s failingEvalSnapshotStore) ListEvalSnapshots(context.Context, string, int
 	return nil, 0, s.err
 }
 
+func (s failingApprovalRequestStore) WriteApprovalRequest(ctx context.Context, record storage.ApprovalRequestRecord) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.WriteApprovalRequest(ctx, record)
+}
+
+func (s failingApprovalRequestStore) UpdateApprovalRequestStatus(ctx context.Context, approvalID string, status string, updatedAt string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.UpdateApprovalRequestStatus(ctx, approvalID, status, updatedAt)
+}
+
+func (s failingApprovalRequestStore) ListApprovalRequests(ctx context.Context, taskID string, limit, offset int) ([]storage.ApprovalRequestRecord, int, error) {
+	if s.base == nil {
+		return nil, 0, nil
+	}
+	return s.base.ListApprovalRequests(ctx, taskID, limit, offset)
+}
+
+func (s failingApprovalRequestStore) ListPendingApprovalRequests(ctx context.Context, limit, offset int) ([]storage.ApprovalRequestRecord, int, error) {
+	if s.base == nil {
+		return nil, 0, nil
+	}
+	return s.base.ListPendingApprovalRequests(ctx, limit, offset)
+}
+
+func (s failingAuthorizationRecordStore) WriteAuthorizationRecord(ctx context.Context, record storage.AuthorizationRecordRecord) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.WriteAuthorizationRecord(ctx, record)
+}
+
+func (s failingAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.Context, record storage.AuthorizationRecordRecord, approvalStatus string, updatedAt string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.WriteAuthorizationDecision(ctx, record, approvalStatus, updatedAt)
+}
+
+func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]storage.AuthorizationRecordRecord, int, error) {
+	if s.base == nil {
+		return nil, 0, nil
+	}
+	return s.base.ListAuthorizationRecords(ctx, taskID, limit, offset)
+}
+
 type countingTaskRunStore struct {
 	base      storage.TaskRunStore
 	loadCalls int
+}
+
+type countingTaskStore struct {
+	base      storage.TaskStore
+	listCalls int
 }
 
 func (s failingTodoStore) ReplaceTodoState(ctx context.Context, items []storage.TodoItemRecord, rules []storage.RecurringRuleRecord) error {
@@ -238,6 +356,23 @@ func (s *countingTaskRunStore) SaveTaskRun(ctx context.Context, record storage.T
 func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.TaskRunRecord, error) {
 	s.loadCalls++
 	return s.base.LoadTaskRuns(ctx)
+}
+
+func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
+	return s.base.WriteTask(ctx, record)
+}
+
+func (s *countingTaskStore) DeleteTask(ctx context.Context, taskID string) error {
+	return s.base.DeleteTask(ctx, taskID)
+}
+
+func (s *countingTaskStore) GetTask(ctx context.Context, taskID string) (storage.TaskRecord, error) {
+	return s.base.GetTask(ctx, taskID)
+}
+
+func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]storage.TaskRecord, int, error) {
+	s.listCalls++
+	return s.base.ListTasks(ctx, limit, offset)
 }
 
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -349,6 +484,21 @@ func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengin
 	return engine
 }
 
+type storageTestAdapter struct {
+	databasePath string
+}
+
+func (s storageTestAdapter) DatabasePath() string {
+	return s.databasePath
+}
+
+func (s storageTestAdapter) SecretStorePath() string {
+	if s.databasePath == "" {
+		return ""
+	}
+	return s.databasePath + ".stronghold"
+}
+
 func newTestService() *Service {
 	return NewService(
 		contextsvc.NewService(),
@@ -382,6 +532,14 @@ func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mu
 	mutate(record)
 }
 
+func replaceRuntimeClock(t *testing.T, engine *runengine.Engine, clock func() time.Time) {
+	t.Helper()
+
+	engineValue := reflect.ValueOf(engine).Elem()
+	field := engineValue.FieldByName("now")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(clock))
+}
+
 func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.TaskRunStore) {
 	t.Helper()
 
@@ -390,6 +548,40 @@ func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.T
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
 }
 
+func replaceTaskStore(t *testing.T, service *storage.Service, store storage.TaskStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("taskStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceApprovalRequestStore(t *testing.T, service *storage.Service, store storage.ApprovalRequestStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("approvalRequestStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceAuthorizationRecordStore(t *testing.T, service *storage.Service, store storage.AuthorizationRecordStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("authorizationRecordStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceSecretStore(t *testing.T, service *storage.Service, store storage.SecretStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("secretStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+// TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
+// continues execution and completes delivery.
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -1813,6 +2005,46 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	}
 }
 
+func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
+	initialTask := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	initialProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(initialTask, initialProcessing); segment != executionSegmentInitial {
+		t.Fatalf("expected initial segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(initialTask, initialProcessing); attempt != 1 {
+		t.Fatalf("expected initial attempt index 1, got %d", attempt)
+	}
+
+	resumedTask := runengine.TaskRecord{RunID: "run_same", Status: "paused", ExecutionAttempt: 1}
+	resumedProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(resumedTask, resumedProcessing); segment != executionSegmentResume {
+		t.Fatalf("expected resume segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(resumedTask, resumedProcessing); attempt != 1 {
+		t.Fatalf("expected resume to stay in first attempt, got %d", attempt)
+	}
+
+	restartedTask := runengine.TaskRecord{RunID: "run_before_restart", Status: "completed", ExecutionAttempt: 1}
+	restartedProcessing := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	if segment := executionSegmentKind(restartedTask, restartedProcessing); segment != executionSegmentRestart {
+		t.Fatalf("expected restart segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(restartedTask, restartedProcessing); attempt != 2 {
+		t.Fatalf("expected restart to increment attempt index, got %d", attempt)
+	}
+
+	restartedAgainTask := runengine.TaskRecord{RunID: "run_after_restart", Status: "completed", ExecutionAttempt: 2}
+	restartedAgainProcessing := runengine.TaskRecord{RunID: "run_after_restart_2", Status: "processing", ExecutionAttempt: 3}
+	if attempt := executionAttemptIndex(restartedAgainTask, restartedAgainProcessing); attempt != 3 {
+		t.Fatalf("expected second restart to reach attempt index 3, got %d", attempt)
+	}
+
+	legacyRestartProcessing := runengine.TaskRecord{RunID: "run_after_restart_3", Status: "processing"}
+	if attempt := executionAttemptIndex(restartedAgainTask, legacyRestartProcessing); attempt != 3 {
+		t.Fatalf("expected fallback attempt inference to reach 3, got %d", attempt)
+	}
+}
+
 func TestServiceTaskControlResumeConsumesHumanLoopPendingPayload(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -2352,7 +2584,8 @@ func TestServiceSubmitInputWithFilesDoesNotWaitForInput(t *testing.T) {
 	}
 }
 
-// TestServiceSubmitInputEmptyTextReturnsWaitingInput 验证空文本提交会进入 waiting_input。
+// TestServiceSubmitInputEmptyTextReturnsWaitingInput verifies that empty text
+// submissions enter waiting_input.
 func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2413,7 +2646,8 @@ func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 	}
 }
 
-// TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs 验证ServiceDirectStartBuildsMemoryAndDeliveryHandoffs。
+// TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs verifies direct starts
+// attach memory and delivery handoffs.
 func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2477,7 +2711,8 @@ func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	}
 }
 
-// TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt 验证等待授权前不会提前写入 finished_at。
+// TestServiceStartTaskRespectsPreferredDelivery verifies direct starts preserve
+// preferred and fallback delivery settings.
 func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	service := newTestService()
 
@@ -2673,7 +2908,8 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 	}
 }
 
-// TestServiceConfirmCanEnterWaitingAuth 验证ServiceConfirmCanEnterWaitingAuth。
+// TestServiceConfirmCanEnterWaitingAuth verifies confirm flows can enter
+// waiting_auth.
 func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2748,7 +2984,97 @@ func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	}
 }
 
-// TestServiceSecurityRespondAllowOnceResumesAndCompletes 验证授权通过后任务会继续执行并完成交付。
+func TestServiceConfirmWaitingAuthPersistsApprovalRequestRecord(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "approval persistence output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_approval_store",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "persist approval request before execution",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	items, total, err := service.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list approval requests failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected one persisted approval request, got total=%d items=%+v", total, items)
+	}
+	if items[0].TaskID != taskID || items[0].Status != "pending" {
+		t.Fatalf("expected pending approval request for task %s, got %+v", taskID, items[0])
+	}
+	if items[0].OperationName != "write_file" {
+		t.Fatalf("expected write_file approval request, got %+v", items[0])
+	}
+}
+
+func TestServiceConfirmTaskReturnsStorageErrorWhenApprovalPersistenceFails(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "approval persistence failure output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.ApprovalRequestStore()
+	defer replaceApprovalRequestStore(t, service.storage, originalStore)
+	replaceApprovalRequestStore(t, service.storage, failingApprovalRequestStore{base: originalStore, err: errors.New("approval store unavailable")})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_approval_store_failure",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "persist approval request before execution",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err == nil || !errors.Is(err, ErrStorageQueryFailed) {
+		t.Fatalf("expected ErrStorageQueryFailed from approval persistence, got %v", err)
+	}
+}
+
+// TestServiceSecurityRespondAllowOnceResumesAndCompletes verifies allow-once
+// resumes execution and completes delivery.
 func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -2850,7 +3176,8 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	}
 }
 
-// TestServiceSecurityRespondDenyOnceCancelsTask 验证拒绝授权后任务会结束。
+// TestServiceSecurityRespondRespectsFallbackDelivery verifies authorization
+// resume honors fallback delivery resolution.
 func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 	service := newTestService()
 
@@ -2978,6 +3305,240 @@ func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 	}
 	if record.PendingExecution != nil {
 		t.Fatal("expected pending execution plan to be cleared after denial")
+	}
+}
+
+func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "authorization persistence output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_authorization_store",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "persist authorization decision after approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	_, err = service.SecurityRespond(map[string]any{
+		"task_id":       taskID,
+		"approval_id":   "appr_auth_store",
+		"decision":      "allow_once",
+		"remember_rule": true,
+	})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list authorization records failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected one persisted authorization record, got total=%d items=%+v", total, items)
+	}
+	if items[0].TaskID != taskID || items[0].Decision != "allow_once" || !items[0].RememberRule {
+		t.Fatalf("unexpected authorization record: %+v", items[0])
+	}
+	approvalItems, approvalTotal, err := service.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), taskID, 20, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("expected one approval request after authorization, got total=%d items=%+v err=%v", approvalTotal, approvalItems, err)
+	}
+	if approvalItems[0].Status != "approved" {
+		t.Fatalf("expected resolved approval request to be marked approved, got %+v", approvalItems[0])
+	}
+}
+
+func TestServiceSecurityRespondReturnsStorageErrorWhenAuthorizationPersistenceFails(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "authorization persistence failure output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.AuthorizationRecordStore()
+	defer replaceAuthorizationRecordStore(t, service.storage, originalStore)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_authorization_store_failure",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "persist authorization decision after approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	replaceAuthorizationRecordStore(t, service.storage, failingAuthorizationRecordStore{base: originalStore, err: errors.New("authorization store unavailable")})
+	_, err = service.SecurityRespond(map[string]any{
+		"task_id":       taskID,
+		"decision":      "allow_once",
+		"remember_rule": true,
+	})
+	if err == nil || !errors.Is(err, ErrStorageQueryFailed) {
+		t.Fatalf("expected ErrStorageQueryFailed from authorization persistence, got %v", err)
+	}
+}
+
+func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "authorization out of phase output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "output.md"), []byte("old content"), 0o644); err != nil {
+		t.Fatalf("seed output file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_authorization_out_of_phase",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); err != nil {
+		t.Fatalf("first security respond failed: %v", err)
+	}
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected repeated out-of-phase respond to return ErrTaskStatusInvalid, got %v", err)
+	}
+
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list authorization records failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected repeated out-of-phase respond to keep one persisted authorization record, got total=%d items=%+v", total, items)
+	}
+}
+
+func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "history persistence output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "output.md"), []byte("old content"), 0o644); err != nil {
+		t.Fatalf("seed output file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_authorization_history",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": taskID, "decision": "allow_once"}); err != nil {
+		t.Fatalf("security respond for initial write failed: %v", err)
+	}
+	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+	points := pointsResult["items"].([]map[string]any)
+	if len(points) == 0 {
+		t.Fatal("expected restore point to exist for second approval cycle")
+	}
+	if _, err := service.SecurityRestoreApply(map[string]any{"task_id": taskID, "recovery_point_id": points[0]["recovery_point_id"]}); err != nil {
+		t.Fatalf("security restore apply failed: %v", err)
+	}
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": "appr_restore_apply_history", "decision": "allow_once"}); err != nil {
+		t.Fatalf("security respond for restore apply failed: %v", err)
+	}
+
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list authorization history failed: %v", err)
+	}
+	if total < 2 || len(items) < 2 {
+		t.Fatalf("expected at least two authorization records, got total=%d items=%+v", total, items)
+	}
+	if items[0].AuthorizationRecordID == items[1].AuthorizationRecordID {
+		t.Fatalf("expected unique authorization record ids across approval cycles, got %+v", items)
+	}
+	if items[0].ApprovalID == "" || items[1].ApprovalID == "" {
+		t.Fatalf("expected authorization history to keep approval ids, got %+v", items)
+	}
+	approvalItems, approvalTotal, err := service.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), taskID, 20, 0)
+	if err != nil || approvalTotal < 2 || len(approvalItems) < 2 {
+		t.Fatalf("expected approval history for both cycles, got total=%d items=%+v err=%v", approvalTotal, approvalItems, err)
+	}
+	for _, item := range approvalItems {
+		if item.Status == "pending" {
+			t.Fatalf("expected all resolved approvals to be non-pending, got %+v", approvalItems)
+		}
 	}
 }
 
@@ -3304,9 +3865,20 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 	}
 }
 
-// modelConfig 处理当前模块的相关逻辑。
+// TestServiceTaskListSupportsSortParams verifies task list sorting parameters.
 func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	service := newTestService()
+	baseTime := time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC)
+	times := []time.Time{baseTime, baseTime.Add(10 * time.Millisecond)}
+	index := 0
+	replaceRuntimeClock(t, service.runEngine, func() time.Time {
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		current := times[index]
+		index++
+		return current
+	})
 
 	firstResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -3326,7 +3898,6 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start first task failed: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
 
 	secondResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -3407,6 +3978,99 @@ func TestServiceTaskListFallsBackToStoredTaskRuns(t *testing.T) {
 	items := listResult["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["task_id"] != "task_stored_001" {
 		t.Fatalf("expected storage-backed task list item, got %+v", items)
+	}
+}
+
+func TestServiceTaskListPrefersStructuredTaskStoreFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored task list from structured store")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_001",
+		SessionID:           "sess_structured",
+		RunID:               "run_structured_001",
+		Title:               "structured finished task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 9, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), "task_structured_001", []storage.TaskStepRecord{{
+		StepID:        "step_structured_001",
+		TaskID:        "task_structured_001",
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != "task_structured_001" {
+		t.Fatalf("expected structured task store fallback item, got %+v", items)
+	}
+	intent := items[0]["intent"].(map[string]any)
+	arguments := intent["arguments"].(map[string]any)
+	if arguments["style"] != "key_points" {
+		t.Fatalf("expected structured task list to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestServiceTaskListUsesStructuredStoreUnlimitedPaginationInMemoryFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list unlimited in-memory")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	for index := 0; index < 25; index++ {
+		if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+			TaskID:              fmt.Sprintf("task_structured_%03d", index),
+			SessionID:           "sess_structured",
+			RunID:               fmt.Sprintf("run_structured_%03d", index),
+			Title:               fmt.Sprintf("structured task %03d", index),
+			SourceType:          "hover_input",
+			Status:              "completed",
+			IntentName:          "summarize",
+			IntentArgumentsJSON: `{"style":"key_points"}`,
+			PreferredDelivery:   "workspace_document",
+			FallbackDelivery:    "bubble",
+			CurrentStep:         "deliver_result",
+			CurrentStepStatus:   "completed",
+			RiskLevel:           "green",
+			StartedAt:           time.Date(2026, 4, 15, 9, 0, index, 0, time.UTC).Format(time.RFC3339Nano),
+			UpdatedAt:           time.Date(2026, 4, 15, 9, 5, index, 0, time.UTC).Format(time.RFC3339Nano),
+			FinishedAt:          time.Date(2026, 4, 15, 9, 6, index, 0, time.UTC).Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("write structured task %d failed: %v", index, err)
+		}
+	}
+	items, total, ok := service.listTasksFromStructuredStorage("finished", "updated_at", "desc", 0, 0)
+	if !ok || total != 25 || len(items) != 25 {
+		t.Fatalf("expected unlimited structured storage pagination to return all tasks, got ok=%v total=%d len=%d", ok, total, len(items))
 	}
 }
 
@@ -3925,6 +4589,122 @@ func TestServiceTaskDetailGetDropsApprovalAnchorWhenStatusIsNotPending(t *testin
 	}
 }
 
+func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail runtime summary")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_runtime_summary",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task detail should expose runtime summary",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain available in runtime")
+	}
+	if _, ok := service.runEngine.RecordLoopLifecycle(taskID, "loop.failed", "tool_retry_exhausted", map[string]any{"stop_reason": "tool_retry_exhausted"}); !ok {
+		t.Fatal("expected loop lifecycle update to succeed")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     "evt_detail_runtime_001",
+		RunID:       task.RunID,
+		TaskID:      taskID,
+		StepID:      fmt.Sprintf("%s_step_loop_01", task.RunID),
+		Type:        "loop.failed",
+		Level:       "error",
+		PayloadJSON: `{"stop_reason":"tool_retry_exhausted"}`,
+		CreatedAt:   "2026-04-18T11:00:00Z",
+	}, {
+		EventID:     "evt_detail_runtime_002",
+		RunID:       "run_previous_attempt",
+		TaskID:      taskID,
+		StepID:      "run_previous_attempt_step_loop_01",
+		Type:        "loop.round.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-18T10:59:00Z",
+	}}); err != nil {
+		t.Fatalf("save runtime events failed: %v", err)
+	}
+	if _, ok := service.runEngine.AppendSteeringMessage(taskID, "Also include a short summary section.", nil); !ok {
+		t.Fatal("expected steering append to succeed")
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary, ok := detailResult["runtime_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected runtime_summary payload, got %+v", detailResult["runtime_summary"])
+	}
+	if runtimeSummary["loop_stop_reason"] != "tool_retry_exhausted" {
+		t.Fatalf("expected loop_stop_reason in runtime_summary, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["events_count"] != 2 {
+		t.Fatalf("expected task-level events_count 2, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_event_type"] != "loop.failed" {
+		t.Fatalf("expected latest_event_type loop.failed, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail runtime event scope")
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_runtime_scope",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task detail runtime summary should ignore non-runtime latest events",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := service.runEngine.AppendSteeringMessage(taskID, "Please prioritize the action items.", nil); !ok {
+		t.Fatal("expected steering append to succeed")
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary, ok := detailResult["runtime_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected runtime_summary payload, got %+v", detailResult["runtime_summary"])
+	}
+	if runtimeSummary["events_count"] != 0 {
+		t.Fatalf("expected task-level events_count 0, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_event_type"] != nil {
+		t.Fatalf("expected latest_event_type to stay nil without runtime events, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
+	}
+}
+
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 	service := newTestService()
 
@@ -4184,16 +4964,16 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	originalStore := service.storage.TaskRunStore()
+	originalStore := service.storage.TaskStore()
 	defer func() {
-		replaceTaskRunStore(t, service.storage, originalStore)
+		replaceTaskStore(t, service.storage, originalStore)
 		if service.storage != nil {
 			_ = service.storage.Close()
 		}
 	}()
 
-	countingStore := &countingTaskRunStore{base: service.storage.TaskRunStore()}
-	replaceTaskRunStore(t, service.storage, countingStore)
+	countingStore := &countingTaskStore{base: service.storage.TaskStore()}
+	replaceTaskStore(t, service.storage, countingStore)
 
 	if _, err := service.StartTask(map[string]any{
 		"session_id": "sess_overview_count",
@@ -4213,28 +4993,33 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 		t.Fatalf("start runtime task failed: %v", err)
 	}
 
-	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
-		TaskID:      "task_dashboard_count",
-		SessionID:   "sess_overview_count",
-		RunID:       "run_dashboard_count",
-		Title:       "stored task for overview count",
-		SourceType:  "hover_input",
-		Status:      "completed",
-		CurrentStep: "deliver_result",
-		RiskLevel:   "green",
-		StartedAt:   time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, 4, 14, 12, 5, 0, 0, time.UTC),
-		FinishedAt:  timePointer(time.Date(2026, 4, 14, 12, 6, 0, 0, time.UTC)),
+	if err := countingStore.WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_dashboard_count",
+		SessionID:           "sess_overview_count",
+		RunID:               "run_dashboard_count",
+		Title:               "stored task for overview count",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 14, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 14, 12, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
 	}); err != nil {
-		t.Fatalf("save task run failed: %v", err)
+		t.Fatalf("write structured task failed: %v", err)
 	}
 
 	if _, err := service.DashboardOverviewGet(map[string]any{}); err != nil {
 		t.Fatalf("dashboard overview failed: %v", err)
 	}
 
-	if countingStore.loadCalls != 1 {
-		t.Fatalf("expected dashboard overview to load stored tasks once per request, got %d", countingStore.loadCalls)
+	if countingStore.listCalls != 1 {
+		t.Fatalf("expected dashboard overview to load structured tasks once per request, got %d", countingStore.listCalls)
 	}
 }
 
@@ -4708,6 +5493,349 @@ func TestServiceSecuritySummaryIncludesRuntimeTokenUsage(t *testing.T) {
 	}
 }
 
+func TestServiceBudgetAutoDowngradeSwitchesWorkspaceDeliveryToBubble(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed downgrade output")
+	runtimeEvents := make([]map[string]any, 0)
+	unsubscribe := service.SubscribeRuntimeNotifications(func(taskID, method string, params map[string]any) {
+		runtimeEvents = append(runtimeEvents, map[string]any{
+			"task_id": taskID,
+			"method":  method,
+			"params":  cloneMap(params),
+		})
+	})
+	defer unsubscribe()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_budget_downgrade",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": strings.Repeat("long task content ", 20),
+		},
+		"options": map[string]any{
+			"confirm_required":   false,
+			"preferred_delivery": "workspace_document",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected downgraded task to remain in runtime")
+	}
+	_, ok = service.runEngine.AppendAuditData(taskID, nil, map[string]any{"total_tokens": 96, "estimated_cost": 0.12})
+	if !ok {
+		t.Fatal("expected token usage update to succeed")
+	}
+	record, ok = service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected downgraded task to remain in runtime after token usage update")
+	}
+	updatedTask, bubble, deliveryResult, _, err := service.executeTask(record, snapshotFromTask(record), record.Intent)
+	if err != nil {
+		t.Fatalf("executeTask failed after token usage pressure: %v", err)
+	}
+	if bubble == nil || bubble["type"] != "result" {
+		t.Fatalf("expected downgraded execution to keep a result bubble, got %+v", bubble)
+	}
+
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected budget downgrade to switch delivery to bubble, got %+v", deliveryResult)
+	}
+	record, ok = service.runEngine.GetTask(updatedTask.TaskID)
+	if !ok {
+		t.Fatal("expected downgraded task to remain in runtime")
+	}
+	if record.DeliveryResult["type"] != "bubble" {
+		t.Fatalf("expected runtime delivery result to use downgraded bubble delivery, got %+v", record.DeliveryResult)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatalf("expected budget downgrade notifications to remain buffered")
+	}
+	foundDowngradeEvent := false
+	for _, notification := range notifications {
+		if notification.Method != "budget.downgrade.applied" {
+			continue
+		}
+		eventPayload := mapValue(mapValue(notification.Params, "event"), "payload")
+		if eventPayload["trigger_reason"] != "budget_pressure" {
+			t.Fatalf("expected budget downgrade payload to explain budget pressure, got %+v", notification.Params)
+		}
+		foundDowngradeEvent = true
+		break
+	}
+	if !foundDowngradeEvent {
+		t.Fatalf("expected one budget.downgrade.applied notification, got %+v", notifications)
+	}
+	foundLiveRuntimeEvent := false
+	for _, event := range runtimeEvents {
+		if event["method"] != "budget.downgrade.applied" {
+			continue
+		}
+		foundLiveRuntimeEvent = true
+		break
+	}
+	if !foundLiveRuntimeEvent {
+		t.Fatalf("expected live runtime subscribers to receive budget.downgrade.applied, got %+v", runtimeEvents)
+	}
+	if len(record.AuditRecords) == 0 || stringValue(record.AuditRecords[len(record.AuditRecords)-1], "action", "") != "budget_auto_downgrade.applied" {
+		t.Fatalf("expected budget downgrade audit record, got %+v", record.AuditRecords)
+	}
+	if record.SecuritySummary["budget_auto_downgrade_applied"] != true {
+		t.Fatalf("expected completed task security summary to retain downgrade marker, got %+v", record.SecuritySummary)
+	}
+	if record.SecuritySummary["budget_auto_downgrade_reason"] != "budget_pressure" {
+		t.Fatalf("expected completed task security summary to retain downgrade reason, got %+v", record.SecuritySummary)
+	}
+	if stringValue(mapValue(record.SecuritySummary, "budget_auto_downgrade_trace"), "trigger_reason", "") != "budget_pressure" {
+		t.Fatalf("expected completed task security summary to retain downgrade trace, got %+v", record.SecuritySummary)
+	}
+}
+
+func TestServiceBudgetAutoDowngradeProviderUnavailableDisablesExpensiveTools(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed provider unavailable")
+	if _, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider":              "unsupported_provider",
+			"budget_auto_downgrade": true,
+		},
+	}); err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+
+	task := runengine.TaskRecord{
+		TaskID:            "task_budget_provider_unavailable",
+		SessionID:         "sess_budget_provider_unavailable",
+		RunID:             "run_budget_provider_unavailable",
+		Title:             "provider unavailable task",
+		SourceType:        "hover_input",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		StartedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+	}
+	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if !decision.Applied || decision.TriggerReason != "provider_unavailable" {
+		t.Fatalf("expected provider unavailable downgrade decision, got %+v", decision)
+	}
+	updatedTask, updatedSnapshot, updatedIntent := service.applyBudgetAutoDowngrade(task, contextsvc.TaskContextSnapshot{Text: strings.Repeat("provider unavailable ", 20)}, task.Intent, decision)
+	if updatedTask.PreferredDelivery != "bubble" || updatedTask.FallbackDelivery != "bubble" {
+		t.Fatalf("expected provider unavailable downgrade to force bubble delivery, got task=%+v", updatedTask)
+	}
+	if mapValue(updatedIntent, "arguments")["disable_tool_calls"] != true {
+		t.Fatalf("expected provider unavailable downgrade to disable expensive tool calls, got %+v", updatedIntent)
+	}
+	if len(updatedSnapshot.Text) == 0 {
+		t.Fatalf("expected snapshot text to survive downgrade mutation, got %+v", updatedSnapshot)
+	}
+}
+
+func TestServiceBudgetAutoDowngradeDisabledKeepsWorkspaceDelivery(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed no downgrade")
+	if _, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"budget_auto_downgrade": false,
+		},
+	}); err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_budget_disabled",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": strings.Repeat("long task content ", 20),
+		},
+		"options": map[string]any{
+			"confirm_required":   false,
+			"preferred_delivery": "workspace_document",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected disabled budget downgrade to preserve workspace_document delivery, got %+v", deliveryResult)
+	}
+}
+
+func TestServiceBudgetAutoDowngradeUsesFailurePressureSignal(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed failure pressure")
+	task := runengine.TaskRecord{
+		TaskID:            "task_budget_failure_pressure",
+		SessionID:         "sess_budget_failure_pressure",
+		RunID:             "run_budget_failure_pressure",
+		Title:             "failure pressure task",
+		SourceType:        "hover_input",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		StartedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		AuditRecords: []map[string]any{{
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrClientNotConfigured.Error(),
+		}, {
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrModelProviderUnsupported.Error(),
+		}},
+	}
+	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if !decision.Applied || decision.TriggerReason != "failure_pressure" {
+		t.Fatalf("expected failure pressure downgrade decision, got %+v", decision)
+	}
+	if !containsString(decision.DegradeActions, "skip_expensive_tools") {
+		t.Fatalf("expected failure pressure decision to disable expensive tools, got %+v", decision)
+	}
+	if decision.Trace == nil || decision.Trace["failure_signal_window"] != 2 {
+		t.Fatalf("expected failure pressure trace to expose configured policy window, got %+v", decision.Trace)
+	}
+}
+
+func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed failure signal")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_budget_failure_audit",
+		Title:       "failure signal task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:      "provider failure should leave budget signal",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	updatedTask, bubble := service.failExecutionTask(task, task.Intent, execution.Result{}, model.ErrClientNotConfigured)
+	if bubble == nil {
+		t.Fatal("expected failure bubble")
+	}
+	foundBudgetFailure := false
+	for _, record := range updatedTask.AuditRecords {
+		if stringValue(record, "category", "") != "budget_auto_downgrade" {
+			continue
+		}
+		if stringValue(record, "result", "") != "failed" {
+			continue
+		}
+		foundBudgetFailure = true
+		break
+	}
+	if !foundBudgetFailure {
+		t.Fatalf("expected failExecutionTask to append budget failure signal, got %+v", updatedTask.AuditRecords)
+	}
+}
+
+func TestServiceBudgetFallbackSuccessStillAppendsFailureSignal(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed fallback success signal")
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_budget_fallback_signal",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": strings.Repeat("fallback signal content ", 12),
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	mutateRuntimeTask(t, service.runEngine, taskID, func(record *runengine.TaskRecord) {
+		record.AuditRecords = append(record.AuditRecords, map[string]any{
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrClientNotConfigured.Error(),
+		})
+	})
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime after fallback success")
+	}
+	foundBudgetFailure := false
+	for _, auditRecord := range record.AuditRecords {
+		if stringValue(auditRecord, "action", "") != "budget_auto_downgrade.failure_signal" {
+			continue
+		}
+		foundBudgetFailure = true
+		break
+	}
+	if !foundBudgetFailure {
+		t.Fatalf("expected fallback success path to retain budget failure signal, got %+v", record.AuditRecords)
+	}
+}
+
+func TestServiceBudgetAutoDowngradeUsesConfiguredPolicyThresholds(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed configured thresholds")
+	_, _, _, needRestart := service.runEngine.UpdateSettings(map[string]any{
+		"data_log": map[string]any{
+			"budget_auto_downgrade": true,
+			"budget_policy": map[string]any{
+				"failure_signal_window":     3,
+				"token_pressure_threshold":  120,
+				"cost_pressure_threshold":   0.20,
+				"planner_retry_budget":      2,
+				"expensive_tool_categories": []any{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if needRestart {
+		t.Fatal("expected nested budget policy update to remain immediate")
+	}
+	task := runengine.TaskRecord{
+		TaskID:            "task_budget_policy_thresholds",
+		SessionID:         "sess_budget_policy_thresholds",
+		RunID:             "run_budget_policy_thresholds",
+		Title:             "configured thresholds task",
+		SourceType:        "hover_input",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		StartedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		TokenUsage: map[string]any{
+			"total_tokens":   96,
+			"estimated_cost": 0.08,
+		},
+	}
+	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if decision.Applied {
+		t.Fatalf("expected configured thresholds to suppress downgrade below custom limits, got %+v", decision)
+	}
+	task.TokenUsage["total_tokens"] = 140
+	decision = service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if !decision.Applied || decision.Trace == nil || decision.Trace["planner_retry_budget"] != 2 || decision.Trace["failure_signal_window"] != 3 {
+		t.Fatalf("expected configured thresholds and trace metadata to be respected, got %+v", decision)
+	}
+}
+
 func TestServiceSecuritySummaryFallsBackToStoredRecoveryPoint(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
 	if service.storage == nil {
@@ -5130,6 +6258,140 @@ func TestServiceSecurityPendingListPaginatesMergedPendingAuthorizations(t *testi
 	}
 }
 
+func TestServiceSecurityPendingListFallsBackToApprovalRequestStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending approval store fallback")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_store_only_001",
+		TaskID:          "task_store_only_001",
+		OperationName:   "restore_apply",
+		RiskLevel:       "red",
+		TargetObject:    "workspace/result.md",
+		Reason:          "stored approval request should backfill pending list",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/result.md"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{"limit": float64(20), "offset": float64(0)})
+	if err != nil {
+		t.Fatalf("security pending list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one storage-backed pending authorization, got %+v", items)
+	}
+	if items[0]["task_id"] != "task_store_only_001" || items[0]["operation_name"] != "restore_apply" {
+		t.Fatalf("unexpected storage-backed pending authorization item: %+v", items[0])
+	}
+	impactScope, ok := items[0]["impact_scope"].(map[string]any)
+	if !ok || len(impactScope) == 0 {
+		t.Fatalf("expected impact_scope to be restored from approval store, got %+v", items[0])
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 || page["has_more"] != false {
+		t.Fatalf("expected storage-backed page metadata, got %+v", page)
+	}
+}
+
+func TestServiceSecurityPendingListIgnoresResolvedApprovalStoreRecords(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending approval resolved fallback")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_store_resolved_001",
+		TaskID:          "task_store_resolved_001",
+		OperationName:   "restore_apply",
+		RiskLevel:       "red",
+		TargetObject:    "workspace/result.md",
+		Reason:          "resolved approval request should not backfill pending list",
+		Status:          "approved",
+		ImpactScopeJSON: `{"files":["workspace/result.md"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write resolved approval request failed: %v", err)
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{"limit": float64(20), "offset": float64(0)})
+	if err != nil {
+		t.Fatalf("security pending list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 0 {
+		t.Fatalf("expected resolved approval record to stay out of pending list, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 0 || page["has_more"] != false {
+		t.Fatalf("expected empty page metadata after filtering resolved approvals, got %+v", page)
+	}
+}
+
+func TestServiceSecurityRestoreApplyReturnsStorageErrorWhenApprovalPersistenceFails(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "restore approval persistence failure output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.ApprovalRequestStore()
+	defer replaceApprovalRequestStore(t, service.storage, originalStore)
+	originalPath := filepath.Join("notes", "output.md")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, originalPath), []byte("old content"), 0o644); err != nil {
+		t.Fatalf("seed output file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_restore_store_failure",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": originalPath,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+	points := pointsResult["items"].([]map[string]any)
+	if len(points) == 0 {
+		t.Fatal("expected restore point to exist")
+	}
+
+	replaceApprovalRequestStore(t, service.storage, failingApprovalRequestStore{base: originalStore, err: errors.New("approval store unavailable")})
+	_, err = service.SecurityRestoreApply(map[string]any{"task_id": taskID, "recovery_point_id": points[0]["recovery_point_id"]})
+	if err == nil || !errors.Is(err, ErrStorageQueryFailed) {
+		t.Fatalf("expected ErrStorageQueryFailed from restore apply persistence, got %v", err)
+	}
+}
+
 func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "dashboard audit trail")
 
@@ -5510,6 +6772,23 @@ func TestServiceSecurityRestoreApplyRestoresWorkspaceAndReturnsFormalResult(t *t
 	}
 	if applyResult["task"].(map[string]any)["status"] != "waiting_auth" || applyResult["applied"] != false {
 		t.Fatalf("expected restore apply to require authorization first, got %+v", applyResult)
+	}
+	approvalItems, approvalTotal, err := service.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list persisted approval requests failed: %v", err)
+	}
+	if approvalTotal < 1 || len(approvalItems) == 0 {
+		t.Fatalf("expected persisted approval request for restore apply, got total=%d items=%+v", approvalTotal, approvalItems)
+	}
+	foundRestoreApply := false
+	for _, item := range approvalItems {
+		if item.OperationName == "restore_apply" && item.Status == "pending" {
+			foundRestoreApply = true
+			break
+		}
+	}
+	if !foundRestoreApply {
+		t.Fatalf("expected restore_apply approval request to be persisted, got %+v", approvalItems)
 	}
 	contentBeforeApproval, err := os.ReadFile(originalPath)
 	if err != nil {
@@ -5900,6 +7179,186 @@ func TestServiceTaskDetailGetFallsBackToStoredTaskRun(t *testing.T) {
 	artifacts := detailResult["artifacts"].([]map[string]any)
 	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_task_stored_detail" {
 		t.Fatalf("expected storage-backed artifacts, got %+v", artifacts)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_detail",
+		SessionID:           "sess_structured",
+		RunID:               "run_structured_detail",
+		Title:               "structured detail task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 10, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), "task_structured_detail", []storage.TaskStepRecord{{
+		StepID:        "step_structured_detail",
+		TaskID:        "task_structured_detail",
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_detail"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	task := detailResult["task"].(map[string]any)
+	if task["task_id"] != "task_structured_detail" || task["title"] != "structured detail task" {
+		t.Fatalf("expected structured task detail fallback, got %+v", task)
+	}
+	timeline := detailResult["timeline"].([]map[string]any)
+	if len(timeline) != 1 || timeline[0]["step_id"] != "step_structured_detail" {
+		t.Fatalf("expected structured timeline fallback, got %+v", timeline)
+	}
+	intent := task["intent"].(map[string]any)
+	arguments := intent["arguments"].(map[string]any)
+	if arguments["style"] != "key_points" {
+		t.Fatalf("expected structured task detail to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail approval")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_waiting_auth"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured",
+		RunID:               "run_structured_waiting_auth",
+		Title:               "structured waiting auth task",
+		SourceType:          "hover_input",
+		Status:              "waiting_auth",
+		IntentName:          "write_file",
+		IntentArgumentsJSON: `{"require_authorization":true}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "waiting_authorization",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_waiting_auth",
+		TaskID:        taskID,
+		Name:          "waiting_authorization",
+		Status:        "pending",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "waiting for approval",
+		CreatedAt:     time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_structured_waiting_auth",
+		TaskID:          taskID,
+		OperationName:   "write_file",
+		RiskLevel:       "yellow",
+		TargetObject:    "workspace/document.md",
+		Reason:          "structured fallback should restore approval state",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/document.md"]}`,
+		CreatedAt:       "2026-04-15T11:05:00Z",
+		UpdatedAt:       "2026-04-15T11:05:00Z",
+	}); err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest, ok := detailResult["approval_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback approval request, got %+v", detailResult["approval_request"])
+	}
+	if approvalRequest["approval_id"] != "appr_structured_waiting_auth" {
+		t.Fatalf("unexpected structured fallback approval request: %+v", approvalRequest)
+	}
+	securitySummary := detailResult["security_summary"].(map[string]any)
+	if securitySummary["pending_authorizations"] != 1 || securitySummary["security_status"] != "pending_confirmation" {
+		t.Fatalf("expected structured fallback security summary to reflect pending approval, got %+v", securitySummary)
+	}
+}
+
+func TestServiceSecuritySummaryCountsStructuredFallbackPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured security summary pending auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_security_waiting_auth"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_security",
+		RunID:               "run_structured_security_waiting_auth",
+		Title:               "structured waiting auth security task",
+		SourceType:          "hover_input",
+		Status:              "waiting_auth",
+		IntentName:          "write_file",
+		IntentArgumentsJSON: `{"require_authorization":true}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "waiting_authorization",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_structured_security_waiting_auth",
+		TaskID:          taskID,
+		OperationName:   "write_file",
+		RiskLevel:       "yellow",
+		TargetObject:    "workspace/security.md",
+		Reason:          "structured fallback should count pending authorization",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/security.md"]}`,
+		CreatedAt:       "2026-04-15T12:05:00Z",
+		UpdatedAt:       "2026-04-15T12:05:00Z",
+	}); err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+	summary := result["summary"].(map[string]any)
+	if summary["pending_authorizations"] != 1 || summary["security_status"] != "pending_confirmation" {
+		t.Fatalf("expected structured fallback pending authorization to appear in security summary, got %+v", summary)
 	}
 }
 
@@ -6334,6 +7793,10 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	if dataLog["provider_api_key_configured"] != false {
 		t.Fatalf("expected unset provider key flag, got %+v", dataLog)
 	}
+	stronghold := dataLog["stronghold"].(map[string]any)
+	if stronghold["backend"] == "" || stronghold["available"] != true {
+		t.Fatalf("expected stronghold status metadata, got %+v", stronghold)
+	}
 	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
 		Namespace: "model",
 		Key:       service.model.Provider() + "_api_key",
@@ -6352,6 +7815,20 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	}
 }
 
+func TestSettingsGetWithoutStorageStillReturnsStrongholdStatus(t *testing.T) {
+	service := newTestService()
+	service.storage = nil
+	result, err := service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
+	stronghold := dataLog["stronghold"].(map[string]any)
+	if stronghold["backend"] != "none" || stronghold["available"] != false || stronghold["formal_store"] != false {
+		t.Fatalf("expected degraded settings get to still expose stronghold defaults, got %+v", stronghold)
+	}
+}
+
 func TestSettingsGetReturnsStrongholdErrorWhenSecretStoreUnreadable(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "settings secret error")
 	if service.storage == nil {
@@ -6363,6 +7840,24 @@ func TestSettingsGetReturnsStrongholdErrorWhenSecretStoreUnreadable(t *testing.T
 	_, err := service.SettingsGet(map[string]any{"scope": "all"})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsGetUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings general scope")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.Close(); err != nil {
+		t.Fatalf("close storage failed: %v", err)
+	}
+	result, err := service.SettingsGet(map[string]any{"scope": "general"})
+	if err != nil {
+		t.Fatalf("expected unrelated settings scope to ignore secret outage, got %v", err)
+	}
+	settings := result["settings"].(map[string]any)
+	if _, ok := settings["general"].(map[string]any); !ok {
+		t.Fatalf("expected general scope payload, got %+v", settings)
 	}
 }
 
@@ -6395,6 +7890,9 @@ func TestSettingsUpdatePersistsSecretOutsideRegularSettings(t *testing.T) {
 	}
 	if dataLog["provider_api_key_configured"] != true {
 		t.Fatalf("expected configured flag in settings response, got %+v", dataLog)
+	}
+	if _, exists := dataLog["stronghold"]; !exists {
+		t.Fatalf("expected stronghold status in settings response, got %+v", dataLog)
 	}
 }
 
@@ -6434,6 +7932,68 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	}
 }
 
+func TestSettingsUpdateDeletesProviderSecretWithoutLeakingValue(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings delete secret")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       service.model.Provider() + "_api_key",
+		Value:     "secret-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store failed: %v", err)
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider":       "openai",
+			"delete_api_key": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update delete failed: %v", err)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", service.model.Provider()+"_api_key")
+	if !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("expected secret to be deleted, got %v", err)
+	}
+	dataLog := result["effective_settings"].(map[string]any)["data_log"].(map[string]any)
+	if _, exists := dataLog["api_key"]; exists {
+		t.Fatalf("expected settings delete response to stay redacted, got %+v", dataLog)
+	}
+	if dataLog["provider_api_key_configured"] != false {
+		t.Fatalf("expected delete to clear configured flag, got %+v", dataLog)
+	}
+}
+
+func TestSettingsUpdateReturnsStrongholdErrorWhenStoreUnavailable(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings stronghold unavailable")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStorage := service.storage
+	defer func() {
+		if service.storage != nil {
+			_ = service.storage.Close()
+		}
+	}()
+	if err := originalStorage.Close(); err != nil {
+		t.Fatalf("close original storage failed: %v", err)
+	}
+	service.storage = storage.NewService(nil)
+	replaceSecretStore(t, service.storage, storage.UnavailableSecretStore{})
+	_, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider": "openai",
+			"api_key":  "secret-key",
+		},
+	})
+	if !errors.Is(err, ErrStrongholdAccessFailed) {
+		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
 func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
 	service := newTestService()
 	_, err := service.SettingsUpdate(map[string]any{
@@ -6444,6 +8004,142 @@ func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
 	})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings unrelated update")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.Close(); err != nil {
+		t.Fatalf("close storage failed: %v", err)
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"language": "zh-CN",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected unrelated settings update to ignore secret outage, got %v", err)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	if _, ok := effectiveSettings["general"].(map[string]any); !ok {
+		t.Fatalf("expected general effective settings payload, got %+v", effectiveSettings)
+	}
+	if _, exists := effectiveSettings["data_log"]; exists {
+		t.Fatalf("expected unrelated settings update to avoid attaching data_log metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestServicePluginRuntimeListReturnsStructuredState(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeStarting(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("sidecar failed"))
+	result, err := service.PluginRuntimeList(map[string]any{})
+	if err != nil {
+		t.Fatalf("plugin runtime list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	metrics := result["metrics"].([]map[string]any)
+	events := result["events"].([]map[string]any)
+	if len(items) == 0 || len(metrics) == 0 || len(events) == 0 {
+		t.Fatalf("expected runtime query to return items/metrics/events, got %+v", result)
+	}
+	foundFailedSidecar := false
+	for _, item := range items {
+		if item["name"] == "playwright_sidecar" && fmt.Sprint(item["health"]) == string(plugin.RuntimeHealthFailed) {
+			foundFailedSidecar = true
+			break
+		}
+	}
+	if !foundFailedSidecar {
+		t.Fatalf("expected runtime query to expose failed sidecar state, got %+v", items)
+	}
+}
+
+func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
+	service := newTestService()
+	snapshot := service.Snapshot()
+	if snapshot["primary_worker"] != "playwright_worker" {
+		t.Fatalf("expected snapshot primary_worker to use stable declaration order, got %+v", snapshot)
+	}
+}
+
+func TestDashboardModuleGetIncludesPluginRuntimeSummary(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeUnavailable(plugin.RuntimeKindWorker, "media_worker", "missing")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("boom"))
+	result, err := service.DashboardModuleGet(map[string]any{"module": "mirror", "tab": "daily_summary"})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+	summary := result["summary"].(map[string]any)["plugin_runtime"].(map[string]any)
+	if summary["healthy"] != 1 || summary["failed"] != 1 || summary["unavailable"] != 1 {
+		t.Fatalf("expected dashboard module summary to expose plugin runtime counts, got %+v", summary)
+	}
+}
+
+func TestDashboardModuleGetTasksIncludesFocusRuntimeSummary(t *testing.T) {
+	service := newTestService()
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_dashboard_tasks_runtime",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "dashboard task runtime summary",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := service.runEngine.AppendSteeringMessage(taskID, "Also include a one-line recap.", nil); !ok {
+		t.Fatal("expected steering message to persist for dashboard focus task")
+	}
+	if _, ok := service.runEngine.RecordLoopLifecycle(taskID, "loop.retrying", "planner_timeout", map[string]any{"stop_reason": "planner_timeout"}); !ok {
+		t.Fatal("expected loop lifecycle to update focus task")
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "tasks",
+		"tab":    "focus",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	summary := moduleResult["summary"].(map[string]any)
+	if summary["waiting_auth_tasks"] != 1 {
+		t.Fatalf("expected one waiting_auth task in summary, got %+v", summary)
+	}
+	focusRuntimeSummary, ok := summary["focus_runtime_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected focus_runtime_summary map, got %+v", summary["focus_runtime_summary"])
+	}
+	if focusRuntimeSummary["latest_event_type"] != "loop.retrying" {
+		t.Fatalf("expected latest_event_type loop.retrying, got %+v", focusRuntimeSummary)
+	}
+	if focusRuntimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected active steering count 1, got %+v", focusRuntimeSummary)
+	}
+
+	highlights := moduleResult["highlights"].([]string)
+	joined := strings.Join(highlights, " ")
+	if !strings.Contains(joined, "最近运行事件：loop.retrying") {
+		t.Fatalf("expected runtime event highlight, got %+v", highlights)
+	}
+	if !strings.Contains(joined, "当前仍有 1 条追加要求待消费") {
+		t.Fatalf("expected steering highlight, got %+v", highlights)
 	}
 }
 
@@ -6606,6 +8302,56 @@ func TestServiceTaskEventsListReturnsNormalizedLoopEvents(t *testing.T) {
 	page := result["page"].(map[string]any)
 	if page["total"] != 1 {
 		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
+func TestServiceTaskEventsListSupportsRunAndTypeFilters(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event filters")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{
+		{EventID: "evt_loop_filter_001", RunID: "run_loop_filter_a", TaskID: "task_loop_filter_001", StepID: "step_a", Type: "loop.round.started", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:00Z"},
+		{EventID: "evt_loop_filter_002", RunID: "run_loop_filter_b", TaskID: "task_loop_filter_001", StepID: "step_b", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:01:00Z"},
+	}); err != nil {
+		t.Fatalf("save loop filter events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": "task_loop_filter_001", "run_id": "run_loop_filter_b", "type": "loop.failed", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list with filters failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_loop_filter_b" || items[0]["type"] != "loop.failed" {
+		t.Fatalf("expected filtered loop event, got %+v", items)
+	}
+}
+
+func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event time filters")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{
+		{EventID: "evt_loop_time_001", RunID: "run_loop_time_a", TaskID: "task_loop_time_001", StepID: "step_a", Type: "loop.round.started", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:00Z"},
+		{EventID: "evt_loop_time_002", RunID: "run_loop_time_b", TaskID: "task_loop_time_001", StepID: "step_b", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:05:00Z"},
+	}); err != nil {
+		t.Fatalf("save loop time filter events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{
+		"task_id":         "task_loop_time_001",
+		"created_at_from": "2026-04-17T10:04:00Z",
+		"created_at_to":   "2026-04-17T10:06:00Z",
+		"limit":           20,
+		"offset":          0,
+	})
+	if err != nil {
+		t.Fatalf("task events list with time filters failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_loop_time_b" {
+		t.Fatalf("expected time-filtered loop event, got %+v", items)
 	}
 }
 
@@ -7084,17 +8830,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 		_ = server.Serve(listener)
 	}()
 
-	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
-	if err != nil {
-		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
-	}
-	if err := runtime.Start(); err != nil {
-		t.Skipf("playwright runtime unavailable in test environment: %v", err)
-	}
-	defer runtime.Stop()
-
-	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, runtime.Client())
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, localHTTPPlaywrightClient{})
 	result, err := service.StartTask(map[string]any{
 		"session_id": "sess_real_page_read",
 		"source":     "floating_ball",
@@ -7142,6 +8878,36 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	}
 	if record.LatestEvent["type"] != "delivery.ready" {
 		t.Fatalf("expected delivery.ready latest event, got %+v", record.LatestEvent)
+	}
+}
+
+func TestLocalHTTPPlaywrightClientReadPageFetchesLocalHTML(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Local Acceptance Page</title></head><body><p>Local acceptance page verifies direct local http page reads.</p></body></html>`))
+	})}
+	defer server.Close()
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	client := localHTTPPlaywrightClient{}
+	result, err := client.ReadPage(context.Background(), "http://"+listener.Addr().String())
+	if err != nil {
+		t.Fatalf("ReadPage returned error: %v", err)
+	}
+	if result.Title != "Local Acceptance Page" {
+		t.Fatalf("expected local title to be parsed, got %+v", result)
+	}
+	if !strings.Contains(result.TextContent, "direct local http page reads") {
+		t.Fatalf("expected local page content to be captured, got %+v", result)
+	}
+	if result.Source != "local_http_playwright_client" {
+		t.Fatalf("expected local http source marker, got %+v", result)
 	}
 }
 

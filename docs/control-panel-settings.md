@@ -72,6 +72,7 @@
 - 右侧顶部：当前分组标题、功能说明、是否存在未保存更改。
 - 右侧内容区：按卡片分块展示设置项。
 - 页面底部：全局操作区，例如“恢复默认设置”“保存并应用”“取消更改”。
+- 控制面板通过托盘按需打开；关闭窗口会结束当前面板会话，因此未保存的本地草稿不会跨关闭保留。
 
 ---
 
@@ -391,9 +392,23 @@
 
 - 当前使用模型
 - 模型提供商
+- Provider Base URL（当桌面端处于本地兼容模式时）
 - Token 消耗统计
 - 单任务成本
 - 达到预算时自动降级
+
+#### 7.2.1.1 桌面端模型与路由兼容层
+
+当前桌面端控制面板中的“模型与路由”需要同时承接两类数据：
+
+- 正式共享字段：`settings.models.provider`
+- 正式凭证字段：`settings.models.credentials.budget_auto_downgrade`、`settings.models.credentials.provider_api_key_configured`、`settings.models.credentials.base_url`、`settings.models.credentials.model`
+
+约束如下：
+
+- `provider`、`budget_auto_downgrade`、`provider_api_key_configured`、`base_url` 与 `model` 都以正式 `models / models.credentials` 为准，不允许再以旧的 `data_log` 兼容字段反向覆盖。
+- `API Key` 仍只返回是否已配置的布尔状态，不回传明文。
+- 控制面板读取 RPC 设置后，应直接以正式 `models` 结构渲染，不再把共享字段镜像到旧的 `data_log` 兼容视图。
 
 #### 7.2.2 页面表达建议
 
@@ -417,6 +432,10 @@
 
 - 当开启“达到预算时自动降级”后，应明确说明会降到哪类模型或策略。
 - 当预算已接近阈值时，设置页应出现预警提示，而不是仅在执行时提示。
+- 当显示 `Base URL` / `Model` 时，应明确这是桌面端路由兼容视图；如果当前后端协议未提供对应字段，不要把它们表达成已写入正式后端设置的共享配置。
+- `API Key` 的保存提示必须区分数据来源：
+  - `source === "rpc"`：通过 JSON-RPC `agent.settings.update` 提交，只写入后端 Stronghold，不回显明文。
+  - `source === "mock"` 或 RPC 不可用：只更新桌面本地快照，不写入后端 Stronghold，也不在桌面端保存明文 key。
 
 ### 7.3 隐私与数据
 

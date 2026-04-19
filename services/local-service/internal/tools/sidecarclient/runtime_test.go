@@ -195,7 +195,8 @@ func TestPlaywrightSidecarRuntimeClientInteractsAndReadsStructuredDOM(t *testing
 
 func TestPlaywrightSidecarRuntimeStartFailsHealthCheck(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	pluginService := plugin.NewService()
+	runtime, err := NewPlaywrightSidecarRuntime(pluginService, osCapability)
 	if err != nil {
 		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
 	}
@@ -205,6 +206,25 @@ func TestPlaywrightSidecarRuntimeStartFailsHealthCheck(t *testing.T) {
 	}
 	if runtime.Ready() {
 		t.Fatal("expected runtime not ready after failed health check")
+	}
+	state, ok := pluginService.RuntimeState(plugin.RuntimeKindSidecar, "playwright_sidecar")
+	if !ok || state.Health != plugin.RuntimeHealthFailed {
+		t.Fatalf("expected plugin runtime cache to reflect health-check failure, got %+v ok=%v", state, ok)
+	}
+}
+
+func TestPlaywrightSidecarRuntimeStartFailsWithoutOSCapability(t *testing.T) {
+	pluginService := plugin.NewService()
+	runtime, err := NewPlaywrightSidecarRuntime(pluginService, nil)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	if err := runtime.Start(); err == nil || err.Error() != "os capability adapter is required" {
+		t.Fatalf("expected start without os capability to fail, got %v", err)
+	}
+	state, ok := pluginService.RuntimeState(plugin.RuntimeKindSidecar, "playwright_sidecar")
+	if !ok || state.Health != plugin.RuntimeHealthFailed || state.Status != plugin.RuntimeStatusFailed {
+		t.Fatalf("expected plugin runtime cache to reflect os capability failure, got %+v ok=%v", state, ok)
 	}
 }
 

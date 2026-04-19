@@ -1327,6 +1327,79 @@ func TestDispatchMapsStrongholdErrors(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsSettingsGet(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-get.db")})
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-settings-get"`),
+		Method:  "agent.settings.get",
+		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	dataLog := success.Result.Data.(map[string]any)["settings"].(map[string]any)["data_log"].(map[string]any)
+	if _, ok := dataLog["stronghold"].(map[string]any); !ok {
+		t.Fatalf("expected settings get to include stronghold status, got %+v", dataLog)
+	}
+}
+
+func TestDispatchReturnsSettingsUpdate(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-update.db")})
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-settings-update"`),
+		Method:  "agent.settings.update",
+		Params: mustMarshal(t, map[string]any{
+			"data_log": map[string]any{
+				"provider": "openai",
+				"api_key":  "rpc-secret-key",
+			},
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	dataLog := success.Result.Data.(map[string]any)["effective_settings"].(map[string]any)["data_log"].(map[string]any)
+	if dataLog["provider_api_key_configured"] != true {
+		t.Fatalf("expected settings update to mark provider key configured, got %+v", dataLog)
+	}
+	if _, exists := dataLog["api_key"]; exists {
+		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", dataLog)
+	}
+}
+
+func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-plugin-runtime-list"`),
+		Method:  "agent.plugin.runtime.list",
+		Params:  mustMarshal(t, map[string]any{}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatalf("expected plugin runtime query to return declared runtimes, got %+v", data)
+	}
+	metrics := data["metrics"].([]map[string]any)
+	if len(metrics) == 0 {
+		t.Fatalf("expected plugin runtime query to return metric snapshots, got %+v", data)
+	}
+}
+
 func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 	server := newTestServer()
 
@@ -1510,6 +1583,8 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 		Method:  "agent.task.events.list",
 		Params: mustMarshal(t, map[string]any{
 			"task_id": "task_rpc_loop_001",
+			"run_id":  "run_rpc_loop_001",
+			"type":    "loop.completed",
 			"limit":   20,
 			"offset":  0,
 		}),

@@ -51,10 +51,14 @@ import type {
   AgentTaskControlResult,
   AgentTaskDetailGetParams,
   AgentTaskDetailGetResult,
+  AgentTaskEventsListParams,
+  AgentTaskEventsListResult,
   AgentTaskListParams,
   AgentTaskListResult,
   AgentTaskStartParams,
   AgentTaskStartResult,
+  AgentTaskSteerParams,
+  AgentTaskSteerResult,
 } from "@cialloclaw/protocol";
 import { rpcClient, type JsonRpcResponsePayload } from "./client";
 import { RPC_METHODS } from "./protocolConstants";
@@ -89,6 +93,16 @@ export function listTasks(params: AgentTaskListParams) {
 // getTaskDetail loads the task detail view without exposing run-centric internals.
 export function getTaskDetail(params: AgentTaskDetailGetParams) {
   return rpcClient.request<AgentTaskDetailGetResult>(RPC_METHODS.AGENT_TASK_DETAIL_GET, params);
+}
+
+// listTaskEvents loads persisted runtime events for the current task detail view.
+export function listTaskEvents(params: AgentTaskEventsListParams) {
+  return rpcClient.request<AgentTaskEventsListResult>(RPC_METHODS.AGENT_TASK_EVENTS_LIST, params);
+}
+
+// steerTask appends one follow-up instruction to an active task.
+export function steerTask(params: AgentTaskSteerParams) {
+  return rpcClient.request<AgentTaskSteerResult>(RPC_METHODS.AGENT_TASK_STEER, params);
 }
 
 export function listTaskArtifacts(params: AgentTaskArtifactListParams) {

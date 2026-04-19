@@ -1,7 +1,11 @@
 import type {
+  AgentDashboardModuleGetResult,
+  AgentDashboardOverviewGetResult,
   AgentDeliveryOpenResult,
   AgentInputSubmitResult,
   AgentMirrorOverviewGetResult,
+  AgentRecommendationFeedbackSubmitResult,
+  AgentRecommendationGetResult,
   AgentSettingsUpdateResult,
   AgentSecurityAuditListResult,
   AgentSecurityPendingListResult,
@@ -354,42 +358,88 @@ export async function startTask(_params?: unknown): Promise<AgentTaskStartResult
   };
 }
 
+export async function getDashboardOverview(_params?: unknown): Promise<AgentDashboardOverviewGetResult> {
+  return {
+    overview: {
+      focus_summary: {
+        task_id: "task_stub",
+        title: "stub task",
+        status: "processing",
+        current_step: "overview",
+        next_action: "Open the active task.",
+        updated_at: new Date().toISOString(),
+      },
+      trust_summary: {
+        risk_level: "yellow",
+        pending_authorizations: 0,
+        has_restore_point: true,
+        workspace_path: "workspace",
+      },
+      quick_actions: ["Open dashboard"],
+      global_state: {},
+      high_value_signal: ["Continue the current task."],
+    },
+  };
+}
+
+export async function getDashboardModule(_params?: unknown): Promise<AgentDashboardModuleGetResult> {
+  return {
+    module: "home",
+    tab: "summary",
+    summary: {},
+    highlights: ["Stub dashboard module"],
+  };
+}
+
+export async function getRecommendations(_params?: unknown): Promise<AgentRecommendationGetResult> {
+  return {
+    cooldown_hit: false,
+    items: [],
+  };
+}
+
+export async function submitRecommendationFeedback(_params?: unknown): Promise<AgentRecommendationFeedbackSubmitResult> {
+  return {
+    applied: true,
+  };
+}
+
 export async function listTaskEvents(_params?: unknown): Promise<AgentTaskEventsListResult> {
-	return {
-		items: [
-			{
-				event_id: "evt_stub_001",
-				run_id: "run_stub",
-				task_id: "task_stub",
-				step_id: "step_stub",
-				type: "loop.completed",
-				level: "info",
-				payload_json: JSON.stringify({ stop_reason: "completed" }),
-				created_at: new Date().toISOString(),
-			},
-		],
-		page: {
-			has_more: false,
-			limit: 20,
-			offset: 0,
-			total: 1,
-		},
-	};
+  return {
+    items: [
+      {
+        event_id: "evt_stub_001",
+        run_id: "run_stub",
+        task_id: "task_stub",
+        step_id: "step_stub",
+        type: "loop.completed",
+        level: "info",
+        payload_json: JSON.stringify({ stop_reason: "completed" }),
+        created_at: new Date().toISOString(),
+      },
+    ],
+    page: {
+      has_more: false,
+      limit: 20,
+      offset: 0,
+      total: 1,
+    },
+  };
 }
 
 export async function steerTask(_params?: unknown): Promise<AgentTaskSteerResult> {
-	return {
-		task: createTask("waiting_auth", "agent_loop"),
-		bubble_message: {
-			bubble_id: "bubble_steer_stub",
-			task_id: "task_stub",
-			type: "status",
-			text: "The follow-up instruction was recorded for the active task.",
-			pinned: false,
-			hidden: false,
-			created_at: new Date().toISOString(),
-		},
-	};
+  return {
+    task: createTask("waiting_auth", "agent_loop"),
+    bubble_message: {
+      bubble_id: "bubble_steer_stub",
+      task_id: "task_stub",
+      type: "status",
+      text: "The follow-up instruction was recorded for the active task.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+  };
 }
 
 export async function listTaskArtifacts(_params?: unknown): Promise<AgentTaskArtifactListResult> {

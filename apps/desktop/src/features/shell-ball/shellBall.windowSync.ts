@@ -2,6 +2,7 @@ import { cloneShellBallBubbleItems } from "./shellBall.bubble";
 import type { ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import { getShellBallInputBarMode } from "./shellBall.interaction";
+import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 
 import type { IntentPayload } from "@cialloclaw/protocol";
@@ -11,6 +12,8 @@ export const shellBallWindowSyncEvents = Object.freeze({
   geometry: "desktop-shell-ball:geometry",
   helperReady: "desktop-shell-ball:helper-ready",
   textSelectionState: "desktop-shell-ball:text-selection-state",
+  selectionSnapshot: "desktop-shell-ball:selection-snapshot",
+  clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot",
   pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
   pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
   bubbleHover: "desktop-shell-ball:bubble-hover",
@@ -119,6 +122,14 @@ export type ShellBallInputRequestFocusPayload = {
 
 export type ShellBallTextSelectionStatePayload = {
   available: boolean;
+};
+
+export type ShellBallSelectionSnapshotPayload = {
+  snapshot: ShellBallSelectionSnapshot | null;
+};
+
+export type ShellBallClipboardSnapshotPayload = {
+  text: string;
 };
 
 export type ShellBallPrimaryActionPayload = {

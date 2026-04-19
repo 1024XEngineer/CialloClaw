@@ -1,4 +1,4 @@
-import type { AgentTaskDetailGetResult, ApprovalRequest, RecoveryPoint, Task, TaskStep } from "@cialloclaw/protocol";
+import type { AgentTaskDetailGetResult, ApprovalRequest, RecoveryPoint, Task, TaskRuntimeSummary, TaskStep } from "@cialloclaw/protocol";
 import type { TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
 
 const HOUR = 1000 * 60 * 60;
@@ -522,11 +522,23 @@ function createDetail(
   securitySummary: AgentTaskDetailGetResult["security_summary"],
   mirrorReferences: AgentTaskDetailGetResult["mirror_references"],
   approvalRequest: AgentTaskDetailGetResult["approval_request"] = null,
+  runtimeSummary: TaskRuntimeSummary = {
+    active_steering_count: 0,
+    events_count: timeline.length,
+    latest_event_type: timeline[timeline.length - 1]?.status === "completed" ? "step.completed" : "step.updated",
+    loop_stop_reason: task.status === "completed" || task.status === "cancelled" || task.status === "ended_unfinished" ? "task_settled" : null,
+  },
 ) {
   return {
     approval_request: approvalRequest,
     artifacts,
     mirror_references: mirrorReferences,
+    runtime_summary: {
+      active_steering_count: 0,
+      events_count: 0,
+      latest_event_type: null,
+      loop_stop_reason: null,
+    },
     security_summary: securitySummary,
     task,
     timeline,

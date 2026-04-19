@@ -1,6 +1,7 @@
 //go:build !windows
 
-// 该文件负责非 Windows 环境下的 Named Pipe 占位实现。
+// Package rpc provides the non-Windows named-pipe placeholder for the local
+// RPC server.
 package rpc
 
 import (
@@ -9,10 +10,11 @@ import (
 	"net"
 )
 
-// errNamedPipeUnsupported 定义当前模块的基础变量。
+// errNamedPipeUnsupported documents that named-pipe transport is unavailable on
+// non-Windows platforms.
 var errNamedPipeUnsupported = errors.New("named pipe transport unsupported")
 
-// serveNamedPipe 处理当前模块的相关逻辑。
+// serveNamedPipe reports that named-pipe transport is not supported here.
 func serveNamedPipe(ctx context.Context, pipeName string, handler func(net.Conn)) error {
 	_ = ctx
 	_ = pipeName

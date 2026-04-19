@@ -4,6 +4,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -39,6 +40,10 @@ type App struct {
 	media        *sidecarclient.MediaWorkerRuntime
 }
 
+type runtimeStarter interface {
+	Start() error
+}
+
 // New 创建并返回当前能力。
 func New(cfg config.Config) (*App, error) {
 	pathPolicy, err := platform.NewLocalPathPolicy(cfg.WorkspaceRoot)
@@ -52,32 +57,21 @@ func New(cfg config.Config) (*App, error) {
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executionBackend := platform.NewControlledExecutionBackend(cfg.WorkspaceRoot)
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
-	if err != nil {
-		playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
-	} else {
-		if err := playwrightRuntime.Start(); err != nil {
-			playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
-		}
-	}
+	pluginService := plugin.NewService()
+	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
+	playwrightRuntime = chooseRuntimeOnStart(playwrightRuntime, err, func() *sidecarclient.PlaywrightSidecarRuntime {
+		return sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
+	})
 	playwrightClient := playwrightRuntime.Client()
-	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(osCapability)
-	if err != nil {
-		ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(osCapability)
-	} else {
-		if err := ocrRuntime.Start(); err != nil {
-			ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(osCapability)
-		}
-	}
+	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(pluginService, osCapability)
+	ocrRuntime = chooseRuntimeOnStart(ocrRuntime, err, func() *sidecarclient.OCRWorkerRuntime {
+		return sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
+	})
 	ocrClient := ocrRuntime.Client()
-	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(osCapability)
-	if err != nil {
-		mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(osCapability)
-	} else {
-		if err := mediaRuntime.Start(); err != nil {
-			mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(osCapability)
-		}
-	}
+	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(pluginService, osCapability)
+	mediaRuntime = chooseRuntimeOnStart(mediaRuntime, err, func() *sidecarclient.MediaWorkerRuntime {
+		return sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
+	})
 	mediaClient := mediaRuntime.Client()
 	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	toolRegistry := tools.NewRegistry()
@@ -112,7 +106,6 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	deliveryService := delivery.NewService()
-	pluginService := plugin.NewService()
 	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
 	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
 		WithArtifactStore(storageService.ArtifactStore()).
@@ -171,4 +164,22 @@ func (a *App) Close() error {
 	}
 
 	return a.storage.Close()
+}
+
+// chooseRuntimeOnStart keeps a runtime instance after Start fails so the shared
+// plugin runtime cache preserves the concrete failure state instead of being
+// overwritten by a generic unavailable placeholder. Constructor failures may
+// still return a non-nil runtime shell that carries the concrete failure state.
+func chooseRuntimeOnStart[T runtimeStarter](runtime T, buildErr error, unavailable func() T) T {
+	if buildErr != nil {
+		value := reflect.ValueOf(runtime)
+		if value.IsValid() && !(value.Kind() == reflect.Ptr && value.IsNil()) {
+			return runtime
+		}
+		return unavailable()
+	}
+	if err := runtime.Start(); err != nil {
+		return runtime
+	}
+	return runtime
 }

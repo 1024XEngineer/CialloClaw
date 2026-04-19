@@ -91,6 +91,14 @@ export interface TimeInterval {
   value: number;
 }
 
+export interface StrongholdStatus {
+  backend: string;
+  available: boolean;
+  fallback: boolean;
+  initialized: boolean;
+  formal_store: boolean;
+}
+
 export interface Task {
   task_id: string;
   title: string;
@@ -99,6 +107,7 @@ export interface Task {
   intent: IntentPayload | null;
   current_step: string;
   risk_level: RiskLevel;
+  loop_stop_reason?: string | null;
   started_at: string | null;
   updated_at: string;
   finished_at: string | null;
@@ -247,6 +256,7 @@ export interface SettingsSnapshot {
       provider: string;
       budget_auto_downgrade: boolean;
       provider_api_key_configured: boolean;
+      stronghold: StrongholdStatus;
     };
   };
 }
@@ -297,6 +307,14 @@ export const NOTIFICATION_METHODS = {
   TASK_UPDATED: "task.updated",
   DELIVERY_READY: "delivery.ready",
   APPROVAL_PENDING: "approval.pending",
+  TASK_STEERED: "task.steered",
+  LOOP_STARTED: "loop.started",
+  LOOP_ROUND_STARTED: "loop.round.started",
+  LOOP_RETRYING: "loop.retrying",
+  LOOP_COMPACTED: "loop.compacted",
+  LOOP_ROUND_COMPLETED: "loop.round.completed",
+  LOOP_COMPLETED: "loop.completed",
+  LOOP_FAILED: "loop.failed",
   MIRROR_OVERVIEW_UPDATED: "mirror.overview.updated",
   PLUGIN_UPDATED: "plugin.updated",
   PLUGIN_METRIC_UPDATED: "plugin.metric.updated",
@@ -481,6 +499,10 @@ export interface TaskEvent {
 export interface AgentTaskEventsListParams {
 	 request_meta: RequestMeta;
 	 task_id: string;
+	 run_id?: string;
+	 type?: string;
+	 created_at_from?: string;
+	 created_at_to?: string;
 	 limit?: number;
 	 offset?: number;
 }
@@ -564,7 +586,7 @@ export interface InspectorConfig {
   remind_when_stale: boolean;
 }
 
-export interface AgentTaskInspectorConfigGetResult extends InspectorConfig {}
+export type AgentTaskInspectorConfigGetResult = InspectorConfig;
 
 export interface AgentTaskInspectorConfigUpdateParams extends InspectorConfig {
   request_meta: RequestMeta;
@@ -804,6 +826,7 @@ export interface AgentSettingsUpdateParams {
   task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
   data_log?: Partial<SettingsSnapshot["settings"]["data_log"]> & {
     api_key?: string;
+    delete_api_key?: boolean;
   };
 }
 
@@ -832,4 +855,15 @@ export interface ApprovalPendingNotification {
 export interface MirrorOverviewUpdatedNotification {
   revision: number;
   source?: string;
+}
+
+export interface TaskSteeredNotification {
+  task_id: string;
+  message: string;
+}
+
+export interface TaskRuntimeNotification {
+  task_id: string;
+  event: TaskEvent;
+  stop_reason?: string;
 }

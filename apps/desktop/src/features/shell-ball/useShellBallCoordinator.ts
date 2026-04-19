@@ -1,7 +1,10 @@
 import type { BubbleMessage, DeliveryResult } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { captureDesktopScreenshot } from "@/platform/desktopScreen";
+import { getActiveWindowContext } from "@/platform/desktopWindowContext";
 import { subscribeDeliveryReady } from "@/rpc/subscriptions";
+import { submitTextInput } from "@/services/agentInputService";
 import {
   SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME,
   closeShellBallPinnedBubbleWindow,
@@ -18,6 +21,7 @@ import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromFiles } from "@/services/taskService";
 import {
   createDefaultShellBallWindowSnapshot,
@@ -44,7 +48,6 @@ import {
 } from "./shellBall.windowSync";
 import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
 import { getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
-import { createMockShellBallConfirmResult } from "./shellBall.mock";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
 type ShellBallCoordinatorInput = {
@@ -78,6 +81,9 @@ type ShellBallHelperSnapshotInput = {
 const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
+const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";
+const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";
+const SHELL_BALL_WINDOW_COMMAND = "窗口";
 
 type ShellBallBubbleTurnOrder = {
   turnIndex?: number;
@@ -332,6 +338,41 @@ export function createShellBallAgentBubbleItem(
   });
 }
 
+function getShellBallTaskErrorText(error: unknown) {
+  if (isRpcChannelUnavailable(error)) {
+    return "任务入口未连通，请先确认本地服务可用后再重试。";
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message !== "") {
+      return `任务提交失败：${message}`;
+    }
+  }
+
+  return "任务提交失败，请稍后重试。";
+}
+
+// Submission failures stay as local shell-ball status bubbles until the backend
+// accepts a formal task.
+function createShellBallTaskErrorBubbleItem(input: {
+  createdAt: string;
+  error: unknown;
+  taskId?: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: getShellBallTaskErrorText(input.error),
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
 export function applyShellBallBubbleAction(
   items: ShellBallBubbleItem[],
   payload: Pick<ShellBallBubbleActionPayload, "action" | "bubbleId">,
@@ -511,6 +552,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }, SHELL_BALL_BUBBLE_HIDE_DELAY_MS);
   }, [applyBubbleVisibilityPhase, clearBubbleVisibilityTimers]);
 
+  /**
+   * Desktop file drops should reuse the same pending attachment queue as the
+   * picker so the user can review files and send them explicitly.
+   */
   const handleDroppedFiles = useCallback(async (paths: string[]) => {
     const normalizedPaths = paths.map((path) => path.trim()).filter(Boolean);
 
@@ -518,15 +563,52 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
+    handlersRef.current.onAppendPendingFiles(normalizedPaths);
+
+    try {
+      await emitShellBallInputRequestFocus(Date.now());
+    } catch (error) {
+      console.warn("shell-ball file drop focus request failed", error);
+    }
+  }, []);
+
+  const handleSelectedTextPrompt = useCallback((text: string) => {
+    const turnIndex = allocateBubbleTurnIndex();
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallTextBubbleItem({
+          role: "agent",
+          text: createShellBallSelectedTextPreview(text),
+          bubbleType: "status",
+          createdAt: new Date().toISOString(),
+          turnIndex,
+          turnPhase: 0,
+        }),
+      ]),
+    );
+    revealBubbleRegion();
+  }, [revealBubbleRegion]);
+
+  /**
+   * Submits clipboard text through the formal shell-ball text input path while
+   * preserving the local bubble turn ordering used by hover-input submissions.
+   *
+   * @param text Clipboard text captured by the desktop clipboard prompt.
+   * @returns A promise that resolves after the bubble timeline has been updated.
+   */
+  const handleClipboardPrompt = useCallback(async (text: string) => {
+    const normalizedText = text.trim();
+    if (normalizedText === "") {
+      return;
+    }
+
     const createdAt = new Date().toISOString();
     const turnIndex = allocateBubbleTurnIndex();
-    const leadFile = normalizedPaths[0].split(/[\\/]/).pop() ?? normalizedPaths[0];
-    const userText = normalizedPaths.length === 1 ? `拖入文件：${leadFile}` : `拖入 ${normalizedPaths.length} 个文件`;
-
     const userBubbleItem = createShellBallTextBubbleItem({
       role: "user",
-      text: userText,
-      bubbleType: "status",
+      text: normalizedText,
+      bubbleType: "result",
       createdAt,
       turnIndex,
       turnPhase: 0,
@@ -541,18 +623,23 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     revealBubbleRegion();
 
     try {
-      const result = await startTaskFromFiles(normalizedPaths, {
-        delivery: {
-          preferred: "bubble",
-          fallback: "task_detail",
-        },
+      const result = await submitTextInput({
+        text: normalizedText,
         source: "floating_ball",
+        trigger: "hover_text_input",
+        inputMode: "text",
+        options: {
+          confirm_required: false,
+          preferred_delivery: "bubble",
+        },
       });
+
+      if (!isShellBallInputSubmitResult(result)) {
+        return;
+      }
+
       shellBallTaskIdsRef.current.add(result.task.task_id);
       bindTaskToBubbleTurn(result.task.task_id, turnIndex);
-
-      syncShellBallVisualStateFromTaskStatus(result.task.status);
-
       setBubbleItems((currentItems) => {
         const nextItems = currentItems.map((item) =>
           item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
@@ -576,13 +663,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       });
       revealBubbleRegion();
     } catch (error) {
-      console.warn("shell-ball file drop start failed", error);
+      console.warn("shell-ball clipboard prompt submit failed", error);
       setBubbleItems((currentItems) =>
         sortShellBallBubbleItemsByTimestamp([
           ...currentItems,
           createShellBallTextBubbleItem({
             role: "agent",
-            text: error instanceof Error ? error.message : "文件承接失败，请稍后再试。",
+            text: "Clipboard request failed.",
             bubbleType: "status",
             createdAt: new Date().toISOString(),
             turnIndex,
@@ -594,21 +681,116 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
   }, [revealBubbleRegion]);
 
-  const handleSelectedTextPrompt = useCallback(() => {
-    const turnIndex = allocateBubbleTurnIndex();
+  /**
+   * Captures a desktop screenshot into `apps/.temp` and appends a local shell-ball
+   * reply describing the saved screenshot.
+   *
+   * @returns A promise that resolves after the local bubble timeline updates.
+   */
+  const handleScreenshotPrompt = useCallback(async () => {
+    const createdAt = new Date().toISOString();
+
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
         createShellBallTextBubbleItem({
-          role: "agent",
-          text: "识别到选中了文字",
-          bubbleType: "status",
-          createdAt: new Date().toISOString(),
-          turnIndex,
-          turnPhase: 0,
+          role: "user",
+          text: SHELL_BALL_SCREENSHOT_COMMAND,
+          bubbleType: "result",
+          createdAt,
         }),
       ]),
     );
+    revealBubbleRegion();
+
+    try {
+      const screenshot = await captureDesktopScreenshot();
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: `Screenshot saved to ${screenshot.relative_path}`,
+            bubbleType: "result",
+            createdAt: new Date().toISOString(),
+          }),
+        ]),
+      );
+    } catch (error) {
+      console.warn("shell-ball screenshot capture failed", error);
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: "Screenshot capture failed.",
+            bubbleType: "status",
+            createdAt: new Date().toISOString(),
+          }),
+        ]),
+      );
+    }
+
+    handlersRef.current.setInputValue("");
+    handlersRef.current.onInputFocusChange(false);
+    revealBubbleRegion();
+  }, [revealBubbleRegion]);
+
+  /**
+   * Reads the current active window context and appends a local shell-ball
+   * reply with the active application name and, when available, the browser
+   * URL.
+   *
+   * @returns A promise that resolves after the local bubble timeline updates.
+   */
+  const handleWindowPrompt = useCallback(async () => {
+    const createdAt = new Date().toISOString();
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallTextBubbleItem({
+          role: "user",
+          text: SHELL_BALL_WINDOW_COMMAND,
+          bubbleType: "result",
+          createdAt,
+        }),
+      ]),
+    );
+    revealBubbleRegion();
+
+    try {
+      const context = await getActiveWindowContext();
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: context
+              ? createShellBallWindowContextReply(context.app_name, context.title, context.url)
+              : "Window context is unavailable.",
+            bubbleType: "result",
+            createdAt: new Date().toISOString(),
+          }),
+        ]),
+      );
+    } catch (error) {
+      console.warn("shell-ball window context lookup failed", error);
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: "Window context lookup failed.",
+            bubbleType: "status",
+            createdAt: new Date().toISOString(),
+          }),
+        ]),
+      );
+    }
+
+    handlersRef.current.setInputValue("");
+    handlersRef.current.onInputFocusChange(false);
     revealBubbleRegion();
   }, [revealBubbleRegion]);
 
@@ -901,14 +1083,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     async function handlePrimaryAction(action: ShellBallPrimaryAction) {
       switch (action) {
         case "attach_file": {
-          handlersRef.current.onAttachFile();
           const turnIndex = allocateBubbleTurnIndex();
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
               ...currentItems,
               createShellBallTextBubbleItem({
                 role: "agent",
-                text: "把文件拖到悬浮球上，就会按 issue #187 的 file_drop 入口创建任务。",
+                text: "文件选择失败，请重试；也可以把文件拖到悬浮球上先加入附件，再手动发送。",
                 bubbleType: "status",
                 createdAt: new Date().toISOString(),
                 turnIndex,
@@ -922,6 +1103,75 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         case "submit": {
           const submittedText = snapshotRef.current.inputValue.trim();
           const submittedFiles = snapshotRef.current.pendingFiles;
+
+          if (shouldHandleShellBallWindowCommand({
+            text: submittedText,
+            files: submittedFiles,
+          })) {
+            void handleWindowPrompt();
+            break;
+          }
+
+          if (shouldHandleShellBallScreenshotCommand({
+            text: submittedText,
+            files: submittedFiles,
+          })) {
+            void handleScreenshotPrompt();
+            break;
+          }
+
+          if (shouldHandleShellBallClipboardCommand({
+            text: submittedText,
+            files: submittedFiles,
+          })) {
+            const createdAt = new Date().toISOString();
+            setBubbleItems((currentItems) =>
+              sortShellBallBubbleItemsByTimestamp([
+                ...currentItems,
+                createShellBallTextBubbleItem({
+                  role: "user",
+                  text: SHELL_BALL_CLIPBOARD_COMMAND,
+                  bubbleType: "result",
+                  createdAt,
+                }),
+              ]),
+            );
+            revealBubbleRegion();
+
+            try {
+              const clipboardText = await readClipboardText();
+              setBubbleItems((currentItems) =>
+                sortShellBallBubbleItemsByTimestamp([
+                  ...currentItems,
+                  createShellBallTextBubbleItem({
+                    role: "agent",
+                    text: createShellBallClipboardReply(clipboardText),
+                    bubbleType: "result",
+                    createdAt: new Date().toISOString(),
+                  }),
+                ]),
+              );
+            } catch (error) {
+              console.warn("shell-ball clipboard read failed", error);
+              setBubbleItems((currentItems) =>
+                sortShellBallBubbleItemsByTimestamp([
+                  ...currentItems,
+                  createShellBallTextBubbleItem({
+                    role: "agent",
+                    text: "Clipboard is unavailable right now.",
+                    bubbleType: "status",
+                    createdAt: new Date().toISOString(),
+                  }),
+                ]),
+              );
+            }
+
+            handlersRef.current.setInputValue("");
+            handlersRef.current.onInputFocusChange(false);
+            revealBubbleRegion();
+            break;
+          }
+
           const submittedPreview = createShellBallSubmittedContentPreview({
             text: submittedText,
             files: submittedFiles,
@@ -956,7 +1206,28 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           );
           revealBubbleRegion();
 
-          const result = await handlersRef.current.onSubmitText();
+          let result: ShellBallInputSubmitResult | null | void;
+
+          try {
+            result = await handlersRef.current.onSubmitText();
+          } catch (error) {
+            console.warn("shell-ball text submit failed", error);
+            setBubbleItems((currentItems) =>
+              replaceShellBallPendingBubble(
+                currentItems,
+                pendingAgentBubbleItem.bubble.bubble_id,
+                createShellBallTaskErrorBubbleItem({
+                  createdAt: new Date().toISOString(),
+                  error,
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ),
+            );
+            revealBubbleRegion();
+            break;
+          }
+
           if (isShellBallInputSubmitResult(result)) {
             shellBallTaskIdsRef.current.add(result.task.task_id);
             bindTaskToBubbleTurn(result.task.task_id, turnIndex);
@@ -1004,51 +1275,35 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           task_id: string;
         }) => Promise<ShellBallInputSubmitResult>;
       }>;
+      const createdAt = new Date().toISOString();
+      const turnIndex = allocateBubbleTurnIndex();
+      const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
+
+      bindTaskToBubbleTurn(payload.taskId, turnIndex);
+
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            createdAt,
+            role: "user",
+            text: decisionText,
+            bubbleType: "status",
+            taskId: payload.taskId,
+            turnIndex,
+            turnPhase: 0,
+          }),
+        ]),
+      );
 
       try {
         const rpcMethods = await importRpcMethods();
-        const createdAt = new Date().toISOString();
-        const turnIndex = allocateBubbleTurnIndex();
-        const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
-
-        bindTaskToBubbleTurn(payload.taskId, turnIndex);
-
-        setBubbleItems((currentItems) =>
-          sortShellBallBubbleItemsByTimestamp([
-            ...currentItems,
-            createShellBallTextBubbleItem({
-              createdAt,
-              role: "user",
-              text: decisionText,
-              bubbleType: "status",
-              taskId: payload.taskId,
-              turnIndex,
-              turnPhase: 0,
-            }),
-          ]),
-        );
-
-        let result: ShellBallInputSubmitResult;
-
-        try {
-          result = await rpcMethods.confirmTask({
-            confirmed: payload.decision === "confirm",
-            corrected_intent: payload.correctedIntent,
-            request_meta: createShellBallRequestMeta(),
-            task_id: payload.taskId,
-          });
-        } catch (error) {
-          if (!isRpcChannelUnavailable(error)) {
-            throw error;
-          }
-
-          logRpcMockFallback("shell-ball confirm", error);
-          result = createMockShellBallConfirmResult({
-            confirmed: payload.decision === "confirm",
-            correctedIntent: payload.correctedIntent,
-            taskId: payload.taskId,
-          });
-        }
+        const result = await rpcMethods.confirmTask({
+          confirmed: payload.decision === "confirm",
+          corrected_intent: payload.correctedIntent,
+          request_meta: createShellBallRequestMeta(),
+          task_id: payload.taskId,
+        });
 
         syncShellBallVisualStateFromTaskStatus(result.task.status);
         shellBallTaskIdsRef.current.add(result.task.task_id);
@@ -1066,6 +1321,19 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         revealBubbleRegion();
       } catch (error) {
         console.warn("shell-ball intent decision failed", error);
+        setBubbleItems((currentItems) =>
+          sortShellBallBubbleItemsByTimestamp([
+            ...currentItems,
+            createShellBallTaskErrorBubbleItem({
+              createdAt: new Date().toISOString(),
+              error,
+              taskId: payload.taskId,
+              turnIndex,
+              turnPhase: 1,
+            }),
+          ]),
+        );
+        revealBubbleRegion();
       }
     }
 
@@ -1165,6 +1433,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     snapshot,
     handleDroppedFiles,
     handleSelectedTextPrompt,
+    handleClipboardPrompt,
     handleRegionEnter: handleCoordinatorRegionEnter,
     handleRegionLeave: handleCoordinatorRegionLeave,
   };
@@ -1289,4 +1558,106 @@ export async function emitShellBallPinnedWindowDetached(bubbleId: string) {
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pinnedWindowDetached, {
     bubbleId,
   });
+}
+/**
+ * Builds a compact selection preview so shell-ball can acknowledge the exact
+ * text that was detected without overwhelming the bubble region.
+ *
+ * @param text Selected text captured from the current DOM scene.
+ * @returns A short preview string for the acknowledgement bubble.
+ */
+function createShellBallSelectedTextPreview(text: string) {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+
+  if (normalizedText === "") {
+    return "识别到选中了文字";
+  }
+
+  if (normalizedText.length <= 28) {
+    return `识别到选中了文字：${normalizedText}`;
+  }
+
+  return `识别到选中了文字：${normalizedText.slice(0, 28)}…`;
+}
+
+/**
+ * Determines whether the current shell-ball draft should be handled by the
+ * frontend-only clipboard shortcut instead of the normal submit path.
+ *
+ * @param input Current text draft and pending file attachments.
+ * @returns Whether the clipboard shortcut should run locally.
+ */
+function shouldHandleShellBallClipboardCommand(input: {
+  text: string;
+  files: string[];
+}) {
+  return input.files.length === 0 && input.text.trim() === SHELL_BALL_CLIPBOARD_COMMAND;
+}
+
+/**
+ * Resolves the fixed assistant reply used by the clipboard shortcut.
+ *
+ * @param text Clipboard text returned by the desktop clipboard service.
+ * @returns The user-facing reply bubble content.
+ */
+function createShellBallClipboardReply(text: string) {
+  if (text.trim() === "") {
+    return "Clipboard is empty.";
+  }
+
+  return text;
+}
+
+/**
+ * Determines whether the current shell-ball draft should trigger a local
+ * screenshot capture instead of the normal submit path.
+ *
+ * @param input Current text draft and pending file attachments.
+ * @returns Whether the screenshot shortcut should run locally.
+ */
+function shouldHandleShellBallScreenshotCommand(input: {
+  text: string;
+  files: string[];
+}) {
+  return input.files.length === 0 && input.text.trim() === SHELL_BALL_SCREENSHOT_COMMAND;
+}
+
+/**
+ * Determines whether the current shell-ball draft should resolve the active
+ * window context locally.
+ *
+ * @param input Current text draft and pending file attachments.
+ * @returns Whether the active-window shortcut should run locally.
+ */
+function shouldHandleShellBallWindowCommand(input: {
+  text: string;
+  files: string[];
+}) {
+  return input.files.length === 0 && input.text.trim() === SHELL_BALL_WINDOW_COMMAND;
+}
+
+/**
+ * Formats the local shell-ball reply for active-window context lookups.
+ *
+ * @param appName Active application name.
+ * @param title Active window title, when available.
+ * @param url Optional browser URL resolved by the host.
+ * @returns The local shell-ball reply bubble text.
+ */
+function createShellBallWindowContextReply(appName: string, title: string | null, url: string | null) {
+  const lines = [`App: ${appName}`];
+  const normalizedAppName = appName.toLowerCase();
+  const isBrowser = ["chrome", "msedge", "firefox", "opera", "brave", "vivaldi"].includes(normalizedAppName);
+
+  if (title && title.trim() !== "") {
+    lines.push(`Title: ${title}`);
+  }
+
+  if (url && url.trim() !== "") {
+    lines.push(`URL: ${url}`);
+  } else if (isBrowser) {
+    lines.push("URL: get failed");
+  }
+
+  return lines.join("\n");
 }

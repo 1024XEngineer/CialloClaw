@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -35,19 +36,32 @@ func TestMediaWorkerRuntimeClientExtractFrames(t *testing.T) {
 
 func TestMediaWorkerRuntimeLifecycle(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := NewMediaWorkerRuntime(osCapability)
-	if err != nil {
-		return
+	pluginService := plugin.NewService()
+	runtime := &MediaWorkerRuntime{
+		plugins:   pluginService,
+		os:        osCapability,
+		ready:     false,
+		available: true,
+		invoker:   &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}},
+		name:      "media_worker",
 	}
-	runtime.invoker = &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
+	runtime.client = runtimeMediaWorkerClient{runtime: runtime}
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 	if !runtime.Ready() || !osCapability.HasNamedPipe(runtime.PipeName()) {
 		t.Fatalf("expected media runtime ready after start")
 	}
+	state, ok := pluginService.RuntimeState(plugin.RuntimeKindWorker, runtime.Name())
+	if !ok || state.Health != plugin.RuntimeHealthHealthy || state.Status != plugin.RuntimeStatusRunning {
+		t.Fatalf("expected healthy media runtime state after start, got %+v ok=%v", state, ok)
+	}
 	if err := runtime.Stop(); err != nil {
 		t.Fatalf("Stop returned error: %v", err)
+	}
+	state, ok = pluginService.RuntimeState(plugin.RuntimeKindWorker, runtime.Name())
+	if !ok || state.Health != plugin.RuntimeHealthStopped || state.Status != plugin.RuntimeStatusStopped {
+		t.Fatalf("expected stopped media runtime state after stop, got %+v ok=%v", state, ok)
 	}
 }
 
@@ -171,7 +185,7 @@ func TestMediaNoopUnavailableAndValidationBranches(t *testing.T) {
 	if _, err := client.NormalizeRecording(context.Background(), "workspace/demo.mov", "workspace/demo.mp4"); !errors.Is(err, tools.ErrMediaWorkerFailed) {
 		t.Fatalf("expected noop media failure, got %v", err)
 	}
-	runtime := NewUnavailableMediaWorkerRuntime(platform.NewLocalOSCapabilityAdapter())
+	runtime := NewUnavailableMediaWorkerRuntime(plugin.NewService(), platform.NewLocalOSCapabilityAdapter())
 	if runtime.Available() {
 		t.Fatal("expected unavailable media runtime")
 	}

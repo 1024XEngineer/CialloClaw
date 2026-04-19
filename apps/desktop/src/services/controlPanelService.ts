@@ -15,12 +15,18 @@ import {
   updateTaskInspectorConfig,
 } from "@/rpc/methods";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
-import { loadSettings, saveSettings, type DesktopSettings } from "@/services/settingsService";
+import {
+  hydrateDesktopSettings,
+  loadSettings,
+  saveSettings,
+  type DesktopSettings,
+  type DesktopSettingsData,
+} from "@/services/settingsService";
 
 export type ControlPanelSource = "rpc" | "mock";
 
 export type ControlPanelData = {
-  settings: SettingsSnapshot["settings"];
+  settings: DesktopSettingsData;
   inspector: AgentTaskInspectorConfigGetResult;
   securitySummary: AgentSecuritySummaryGetResult["summary"];
   providerApiKeyInput: string;
@@ -31,15 +37,15 @@ export type ControlPanelSaveResult = {
   applyMode: ApplyMode;
   needRestart: boolean;
   updatedKeys: string[];
-  effectiveSettings: Partial<SettingsSnapshot["settings"]>;
+  effectiveSettings: Partial<DesktopSettingsData>;
   effectiveInspector: AgentTaskInspectorConfigGetResult;
   source: ControlPanelSource;
 };
 
 function projectInspectorToTaskAutomation(
-  settings: SettingsSnapshot["settings"],
+  settings: DesktopSettingsData,
   inspector: AgentTaskInspectorConfigGetResult,
-): SettingsSnapshot["settings"] {
+): DesktopSettingsData {
   return {
     ...settings,
     task_automation: {
@@ -54,35 +60,88 @@ function projectInspectorToTaskAutomation(
   };
 }
 
-function normalizeSettingsSnapshot(settings: SettingsSnapshot["settings"]): SettingsSnapshot["settings"] {
+function mergeProtocolSettings(
+  base: DesktopSettingsData,
+  patch: Partial<SettingsSnapshot["settings"]>,
+): DesktopSettingsData {
   return {
-    ...settings,
-    data_log: {
-      ...settings.data_log,
-      provider_api_key_configured: settings.data_log.provider_api_key_configured ?? false,
-    },
+    ...hydrateDesktopSettings({
+      ...base,
+      general: patch.general
+        ? {
+            ...base.general,
+            ...patch.general,
+            download: {
+              ...base.general.download,
+              ...(patch.general.download ?? {}),
+            },
+          }
+        : base.general,
+      floating_ball: patch.floating_ball
+        ? {
+            ...base.floating_ball,
+            ...patch.floating_ball,
+          }
+        : base.floating_ball,
+      memory: patch.memory
+        ? {
+            ...base.memory,
+            ...patch.memory,
+            work_summary_interval: {
+              ...base.memory.work_summary_interval,
+              ...(patch.memory.work_summary_interval ?? {}),
+            },
+            profile_refresh_interval: {
+              ...base.memory.profile_refresh_interval,
+              ...(patch.memory.profile_refresh_interval ?? {}),
+            },
+          }
+        : base.memory,
+      task_automation: patch.task_automation
+        ? {
+            ...base.task_automation,
+            ...patch.task_automation,
+            inspection_interval: {
+              ...base.task_automation.inspection_interval,
+              ...(patch.task_automation.inspection_interval ?? {}),
+            },
+          }
+        : base.task_automation,
+      data_log: patch.data_log
+        ? {
+            ...base.data_log,
+            ...patch.data_log,
+          }
+        : base.data_log,
+    }),
   };
 }
 
 function buildSettingsWithProviderApiKeyConfigured(
-  settings: SettingsSnapshot["settings"],
+  settings: DesktopSettingsData,
   providerApiKeyConfigured: boolean,
-): SettingsSnapshot["settings"] {
-  return {
+): DesktopSettingsData {
+  return hydrateDesktopSettings({
     ...settings,
     data_log: {
       ...settings.data_log,
+      provider: settings.models.provider,
+      budget_auto_downgrade: settings.models.budget_auto_downgrade,
       provider_api_key_configured: providerApiKeyConfigured,
     },
-  };
+    models: {
+      ...settings.models,
+      provider_api_key_configured: providerApiKeyConfigured,
+    },
+  });
 }
 
 function buildDataLogUpdatePayload(input: ControlPanelData) {
   const apiKey = input.providerApiKeyInput.trim();
 
   return {
-    provider: input.settings.data_log.provider,
-    budget_auto_downgrade: input.settings.data_log.budget_auto_downgrade,
+    provider: input.settings.models.provider,
+    budget_auto_downgrade: input.settings.models.budget_auto_downgrade,
     ...(apiKey === "" ? {} : { api_key: apiKey }),
   };
 }
@@ -131,7 +190,7 @@ function buildMockInspector(settings: DesktopSettings): AgentTaskInspectorConfig
 function getInitialControlPanelData(): ControlPanelData {
   const settings = loadSettings();
   const inspector = buildMockInspector(settings);
-  const normalizedSettings = normalizeSettingsSnapshot(projectInspectorToTaskAutomation(settings.settings, inspector));
+  const normalizedSettings = projectInspectorToTaskAutomation(settings.settings, inspector);
   return {
     settings: normalizedSettings,
     inspector,
@@ -144,14 +203,21 @@ function getInitialControlPanelData(): ControlPanelData {
 export async function loadControlPanelData(): Promise<ControlPanelData> {
   try {
     const requestMeta = createRequestMeta();
+    const localSettings = loadSettings().settings;
     const [settingsResult, inspectorResult, securityResult] = await Promise.all([
       getSettings({ request_meta: requestMeta, scope: "all" }),
       getTaskInspectorConfig({ request_meta: createRequestMeta() }),
       getSecuritySummary({ request_meta: createRequestMeta() }),
     ]);
 
+    const effectiveSettings = projectInspectorToTaskAutomation(
+      mergeProtocolSettings(localSettings, settingsResult.settings),
+      inspectorResult,
+    );
+    saveSettings({ settings: effectiveSettings });
+
     return {
-      settings: normalizeSettingsSnapshot(projectInspectorToTaskAutomation(settingsResult.settings, inspectorResult)),
+      settings: effectiveSettings,
       inspector: inspectorResult,
       providerApiKeyInput: "",
       securitySummary: securityResult.summary,
@@ -167,7 +233,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
   if (data.source === "mock") {
     const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
       projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.data_log.provider_api_key_configured,
+      data.settings.models.provider_api_key_configured,
     );
     const nextDesktopSettings: DesktopSettings = {
       settings: nextSettingsSnapshot,
@@ -176,7 +242,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
     return {
       applyMode: "immediate",
       needRestart: false,
-      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "data_log"],
+      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "models"],
       effectiveSettings: nextDesktopSettings.settings,
       effectiveInspector: data.inspector,
       source: "mock",
@@ -203,12 +269,11 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       }),
     ]);
 
-    const effectiveSettings = normalizeSettingsSnapshot(
-      projectInspectorToTaskAutomation(
-        settingsResult.effective_settings as SettingsSnapshot["settings"],
-        inspectorResult.effective_config,
-      ),
+    const effectiveSettings = projectInspectorToTaskAutomation(
+      mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>),
+      inspectorResult.effective_config,
     );
+    saveSettings({ settings: effectiveSettings });
 
     return {
       applyMode: settingsResult.apply_mode,
@@ -226,7 +291,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
     logRpcMockFallback("control panel save", error);
     const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
       projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.data_log.provider_api_key_configured,
+      data.settings.models.provider_api_key_configured,
     );
     const nextDesktopSettings: DesktopSettings = {
       settings: nextSettingsSnapshot,
@@ -235,7 +300,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
     return {
       applyMode: "immediate",
       needRestart: false,
-      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "data_log"],
+      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "models"],
       effectiveSettings: nextDesktopSettings.settings,
       effectiveInspector: data.inspector,
       source: "mock",

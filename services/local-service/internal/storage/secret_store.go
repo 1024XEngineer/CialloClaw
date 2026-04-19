@@ -3,10 +3,14 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// ErrStrongholdAccessFailed reports formal Stronghold lifecycle access failure.
+var ErrStrongholdAccessFailed = ErrSecretStoreAccessFailed
 
 type inMemorySecretStore struct {
 	mu      sync.Mutex
@@ -44,7 +48,9 @@ func (s *inMemorySecretStore) DeleteSecret(_ context.Context, namespace, key str
 	return nil
 }
 
-// SQLiteSecretStore persists secrets in a dedicated Stronghold-compatible SQLite database.
+// SQLiteSecretStore persists secrets in a dedicated SQLite fallback database.
+// It remains the development fallback once the formal Stronghold lifecycle is
+// introduced through StrongholdProvider.
 type SQLiteSecretStore struct {
 	db *sql.DB
 }
@@ -100,6 +106,39 @@ func (s *SQLiteSecretStore) DeleteSecret(ctx context.Context, namespace, key str
 		return fmt.Errorf("%w: %v", ErrSecretStoreAccessFailed, err)
 	}
 	return nil
+}
+
+// UnavailableSecretStore is used when Stronghold lifecycle exists but cannot be
+// opened. This keeps secret APIs explicit about unavailability instead of
+// silently pretending the fallback is the formal source of truth.
+type UnavailableSecretStore struct{}
+
+func (UnavailableSecretStore) PutSecret(context.Context, SecretRecord) error {
+	return ErrStrongholdUnavailable
+}
+
+func (UnavailableSecretStore) GetSecret(context.Context, string, string) (SecretRecord, error) {
+	return SecretRecord{}, ErrStrongholdUnavailable
+}
+
+func (UnavailableSecretStore) DeleteSecret(context.Context, string, string) error {
+	return ErrStrongholdUnavailable
+}
+
+func NormalizeSecretStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrSecretNotFound) {
+		return ErrSecretNotFound
+	}
+	if errors.Is(err, ErrStrongholdUnavailable) {
+		return ErrStrongholdAccessFailed
+	}
+	if errors.Is(err, ErrSecretStoreAccessFailed) {
+		return ErrStrongholdAccessFailed
+	}
+	return err
 }
 
 // Close closes the secret store handle.

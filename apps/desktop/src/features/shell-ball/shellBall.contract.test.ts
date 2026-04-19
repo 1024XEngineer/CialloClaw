@@ -30,7 +30,13 @@ import {
 } from "./shellBall.interaction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
-import { ShellBallApp, shouldArmShellBallTextDropTarget, shouldShowShellBallFileDropOverlay, shouldShowShellBallSelectionIndicator } from "./ShellBallApp";
+import {
+  isShellBallClipboardPromptActive,
+  ShellBallApp,
+  shouldArmShellBallTextDropTarget,
+  shouldShowShellBallFileDropOverlay,
+  shouldShowShellBallSelectionIndicator,
+} from "./ShellBallApp";
 import { ShellBallBubbleWindow } from "./ShellBallBubbleWindow";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallInputWindow } from "./ShellBallInputWindow";
@@ -93,6 +99,7 @@ import { respondSecurity } from "./test-stubs/rpcMethods";
 import {
   appendShellBallDroppedText,
   createShellBallInputSubmitParams,
+  createShellBallTaskStartParams,
   getShellBallPostSubmitInputReset,
   getShellBallDashboardOpenGesturePolicy,
   getShellBallVoiceRecognitionUnexpectedEndFallbackState,
@@ -108,6 +115,9 @@ import {
   useShellBallInteraction,
 } from "./useShellBallInteraction";
 import { useShellBallStore } from "../../stores/shellBallStore";
+import {
+  areShellBallSelectionSnapshotsEqual,
+} from "./selection/selection.provider";
 
 const desktopRoot = process.cwd();
 
@@ -286,6 +296,7 @@ function withWindowControllerRuntime<T>(runtime: {
 function withHideOnCloseRequestRuntime<T>(
   currentWindow: {
     __calls__?: string[];
+    destroy?: () => Promise<void> | void;
     label?: string;
     hide: () => Promise<void> | void;
     onCloseRequested: (handler: (event: { preventDefault: () => void }) => Promise<void> | void) => unknown;
@@ -454,6 +465,59 @@ function withShellBallModuleRuntime<T>(
     return callback(transpiledModule.exports);
   } finally {
     NodeModule._load = originalLoad;
+  }
+}
+
+function withSourceModuleRuntime<T>(
+  modulePath: string,
+  mocks: Record<string, unknown>,
+  callback: (moduleExports: Record<string, unknown>) => T,
+) {
+  const NodeModule = require("node:module") as any;
+  const originalLoad = NodeModule._load;
+  const source = readFileSync(modulePath, "utf8");
+  const transpiledModule = { exports: {} as Record<string, unknown> };
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: modulePath,
+  });
+  const moduleFactory = new Function("require", "module", "exports", transpiled.outputText) as (
+    require: NodeRequire,
+    module: { exports: Record<string, unknown> },
+    exports: Record<string, unknown>,
+  ) => void;
+
+  NodeModule._load = function loadSourceModule(request: string, parent: unknown, isMain: boolean) {
+    if (request in mocks) {
+      return mocks[request];
+    }
+
+    return originalLoad(request, parent, isMain);
+  };
+
+  const restoreRuntime = () => {
+    NodeModule._load = originalLoad;
+  };
+
+  try {
+    moduleFactory(require, transpiledModule, transpiledModule.exports);
+    const result = callback(transpiledModule.exports);
+    const maybePromise = result as unknown as PromiseLike<T>;
+
+    if (result && typeof maybePromise.then === "function") {
+      return (result as unknown as Promise<T>).finally(restoreRuntime) as T;
+    }
+
+    restoreRuntime();
+    return result;
+  } catch (error) {
+    restoreRuntime();
+    throw error;
   }
 }
 
@@ -772,6 +836,10 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
       windows: string[];
       permissions: string[];
     };
+    "control-panel-destroy": {
+      windows: string[];
+      permissions: string[];
+    };
   };
 
   assert.deepEqual(generatedCapabilitySchema.default.windows, parsedCapabilityConfig.windows);
@@ -793,7 +861,10 @@ test("shell-ball pinned window labels and capabilities stay deterministic", () =
   };
   const generatedCapabilitySchema = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/gen/schemas/capabilities.json"), "utf8"),
-  ) as {
+  ) as Record<string, {
+    windows: string[];
+    permissions: string[];
+  }> & {
     default: {
       windows: string[];
       permissions: string[];
@@ -806,9 +877,42 @@ test("shell-ball pinned window labels and capabilities stay deterministic", () =
   assert.equal(capabilityConfig.windows.includes("shell-ball-bubble-pinned-*"), true);
   assert.deepEqual(generatedCapabilitySchema.default.windows, capabilityConfig.windows);
   assert.equal(generatedCapabilitySchema.default.windows.includes("shell-ball-bubble-pinned-*"), true);
+  assert.deepEqual(generatedCapabilitySchema["control-panel-destroy"].windows, ["control-panel"]);
+  assert.deepEqual(generatedCapabilitySchema["control-panel-destroy"].permissions, ["core:window:allow-destroy"]);
 });
 
-test("dashboard and control-panel stay hidden on cold launch until explicitly opened", () => {
+test("shell-ball window controller caches helper handles for drag-time updates", () => {
+  const controllerSource = readFileSync(
+    resolve(desktopRoot, "src/platform/shellBallWindowController.ts"),
+    "utf8",
+  );
+
+  assert.match(controllerSource, /const shellBallWindowHandleCache = new Map<string, Window>\(\);/);
+  assert.match(controllerSource, /shellBallWindowHandleCache\.set\(currentWindow\.label, currentWindow\);/);
+  assert.match(controllerSource, /const cachedWindowHandle = shellBallWindowHandleCache\.get\(label\);/);
+  assert.match(controllerSource, /if \(cachedWindowHandle !== undefined\) \{\s*return cachedWindowHandle;\s*\}/);
+  assert.match(controllerSource, /shellBallWindowHandleCache\.set\(label, windowHandle\);/);
+});
+
+test("shell-ball drag sync keeps geometry publishes coalesced and visibility-aware", () => {
+  const metricsSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
+    "utf8",
+  );
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+
+  assert.match(metricsSource, /const scheduleBallGeometryEmit = useCallback\(\(geometry: ShellBallWindowGeometry\) => \{/);
+  assert.match(metricsSource, /const scheduleBallGeometryPublish = useCallback\(\(input\?: \{ snapToBounds\?: boolean \}\) => \{/);
+  assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
+  assert.match(metricsSource, /pendingBallDragFrameRef\.current = nextFrame;/);
+  assert.match(metricsSource, /if \(ballDragPositionQueueRef\.current !== null\) \{\s*return ballDragPositionQueueRef\.current;\s*\}/);
+  assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
+  assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
+  assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
+  assert.match(appSource, /helperVisibility: snapshot\.visibility/);
+});
+
+test("dashboard stays hidden on cold launch while control-panel is created on demand", () => {
   const tauriConfig = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8"),
   ) as {
@@ -820,16 +924,12 @@ test("dashboard and control-panel stay hidden on cold launch until explicitly op
       }>;
     };
   };
-
   const dashboardWindow = tauriConfig.app.windows.find((window) => window.label === "dashboard");
   const controlPanelWindow = tauriConfig.app.windows.find((window) => window.label === "control-panel");
-
   assert.ok(dashboardWindow);
-  assert.ok(controlPanelWindow);
+  assert.equal(controlPanelWindow, undefined);
   assert.equal(dashboardWindow.visible, false);
-  assert.equal(controlPanelWindow.visible, false);
   assert.equal(dashboardWindow.decorations, false);
-  assert.equal(controlPanelWindow.decorations, false);
 });
 
 test("shell-ball entries opt into transparent window mode", () => {
@@ -1013,9 +1113,15 @@ test("window controller focuses an existing labeled desktop window", async () =>
   const capabilityConfig = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/capabilities/default.json"), "utf8"),
   ) as { permissions: string[] };
+  const controlPanelCapabilityConfig = JSON.parse(
+    readFileSync(resolve(desktopRoot, "src-tauri/capabilities/control-panel-destroy.json"), "utf8"),
+  ) as { permissions: string[]; windows: string[] };
 
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-unminimize"), true);
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-set-fullscreen"), true);
+  assert.equal(capabilityConfig.permissions.includes("core:window:allow-destroy"), false);
+  assert.deepEqual(controlPanelCapabilityConfig.windows, ["control-panel"]);
+  assert.equal(controlPanelCapabilityConfig.permissions.includes("core:window:allow-destroy"), true);
 
   await withWindowControllerRuntime({
     getByLabel(label) {
@@ -1133,7 +1239,7 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
     },
     {
       label: "control-panel",
-      expectedCalls: ["onCloseRequested", "preventDefault", "hide"],
+      expectedCalls: ["onCloseRequested", "preventDefault", "destroy"],
     },
   ] as const) {
     const calls: string[] = [];
@@ -1146,6 +1252,9 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
         calls.push("onCloseRequested");
         closeHandler = handler;
         return "unlisten";
+      },
+      async destroy() {
+        calls.push("destroy");
       },
       async hide() {
         calls.push("hide");
@@ -1161,6 +1270,71 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
 
     assert.deepEqual(calls, scenario.expectedCalls);
   }
+});
+
+test("hide-on-close helper lets a destroy-triggered second close continue without prevention", async () => {
+  const calls: string[] = [];
+  let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+  await withHideOnCloseRequestRuntime({
+    __calls__: calls,
+    label: "control-panel",
+    onCloseRequested(handler) {
+      closeHandler = handler;
+      return "unlisten";
+    },
+    async destroy() {
+      calls.push("destroy");
+      await closeHandler?.({
+        preventDefault() {
+          calls.push("preventDefault:second-close");
+        },
+      });
+    },
+    async hide() {
+      calls.push("hide");
+    },
+  }, async ({ installHideOnCloseRequest }) => {
+    installHideOnCloseRequest();
+    await closeHandler?.({
+      preventDefault() {
+        calls.push("preventDefault:first-close");
+      },
+    });
+  });
+
+  assert.deepEqual(calls, ["preventDefault:first-close", "destroy"]);
+});
+
+test("hide-on-close helper still prevents repeated close requests for hide-on-close windows", async () => {
+  const calls: string[] = [];
+  let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+  await withHideOnCloseRequestRuntime({
+    __calls__: calls,
+    label: "dashboard",
+    onCloseRequested(handler) {
+      closeHandler = handler;
+      return "unlisten";
+    },
+    async hide() {
+      calls.push("hide");
+      await closeHandler?.({
+        preventDefault() {
+          calls.push("preventDefault:second-close");
+        },
+      });
+    },
+  }, async ({ installHideOnCloseRequest }) => {
+    installHideOnCloseRequest();
+    await closeHandler?.({
+      preventDefault() {
+        calls.push("preventDefault:first-close");
+      },
+    });
+  });
+
+  assert.deepEqual(calls, ["preventDefault:first-close", "requestShellBallDashboardCloseTransition", "hide", "preventDefault:second-close"]);
 });
 
 test("dashboard and control-panel entrypoints install hide-on-close handling", () => {
@@ -1233,6 +1407,7 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
     geometry: "desktop-shell-ball:geometry",
     helperReady: "desktop-shell-ball:helper-ready",
     textSelectionState: "desktop-shell-ball:text-selection-state",
+    selectionSnapshot: "desktop-shell-ball:selection-snapshot",
     pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
     pinnedWindowDetached: "desktop-shell-ball:pinned-window-detached",
     bubbleHover: "desktop-shell-ball:bubble-hover",
@@ -1693,8 +1868,14 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /const updateBallWindowPointerDrag = useCallback\(\(pointer: ShellBallPointerPosition\) => \{/);
   assert.match(metricsSource, /const endBallWindowPointerDrag = useCallback\(async \(pointer\?: ShellBallPointerPosition\) => \{/);
   assert.match(metricsSource, /ballDragMoveAnimationFrameRef = useRef<number \| null>\(null\)/);
+  assert.match(metricsSource, /const scheduleBallGeometryEmit = useCallback\(\(geometry: ShellBallWindowGeometry\) => \{/);
+  assert.match(metricsSource, /const scheduleBallGeometryPublish = useCallback\(\(input\?: \{ snapToBounds\?: boolean \}\) => \{/);
+  assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
   assert.match(metricsSource, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(metricsSource, /await queueBallWindowDragPosition\(finalFrame\);/);
+  assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
+  assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
+  assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
   assert.match(metricsSource, /await publishBallGeometry\(\{ snapToBounds: true \}\);/);
   assert.doesNotMatch(metricsSource, /SHELL_BALL_DRAG_RELEASE_POLL_MS/);
   assert.doesNotMatch(metricsSource, /armBallWindowBoundsSnapOnRelease/);
@@ -1980,6 +2161,201 @@ test("shell-ball submit params route text and voice through the formal input con
   assert.equal(voiceParams.trigger, "voice_commit");
   assert.equal(voiceParams.input.input_mode, "voice");
   assert.equal(createShellBallInputSubmitParams({ text: "   ", trigger: "hover_text_input", inputMode: "text" }), null);
+});
+
+test("shell-ball file task params preserve attachment descriptions for agent.task.start", () => {
+  const fileParams = createShellBallTaskStartParams({
+    text: "  explain these files  ",
+    files: ["  C:\\workspace\\notes.md  ", "C:\\workspace\\spec.md"],
+  });
+
+  assert.ok(fileParams);
+  assert.equal(fileParams.trigger, "file_drop");
+  assert.deepEqual(fileParams.input, {
+    type: "file",
+    text: "explain these files",
+    files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
+  });
+  assert.equal(createShellBallTaskStartParams({ text: "   ", files: [] }), null);
+});
+
+test("task-entry services keep rpc transport failures visible and forward file descriptions", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+  const mirrorCalls: string[] = [];
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/agentInputService.ts"),
+    {
+      "@/rpc/methods": {
+        submitInput() {
+          return Promise.reject(transportError);
+        },
+      },
+      "./mirrorMemoryService": {
+        recordMirrorConversationFailure() {
+          mirrorCalls.push("failure");
+        },
+        recordMirrorConversationStart() {
+          mirrorCalls.push("start");
+        },
+        recordMirrorConversationSuccess() {
+          mirrorCalls.push("success");
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        submitTextInput: (input: {
+          text: string;
+          source: "floating_ball" | "dashboard" | "tray_panel";
+          trigger: "voice_commit" | "hover_text_input";
+          inputMode: "voice" | "text";
+        }) => Promise<unknown>;
+      };
+
+      await assert.rejects(
+        () =>
+          service.submitTextInput({
+            text: "submit through rpc",
+            source: "floating_ball",
+            trigger: "hover_text_input",
+            inputMode: "text",
+          }),
+        /transport is not wired/i,
+      );
+    },
+  );
+
+  assert.deepEqual(mirrorCalls, ["start", "failure"]);
+
+  const startTaskCalls: Array<Record<string, unknown>> = [];
+  const bootstrapSubmitCalls: Array<Record<string, unknown>> = [];
+  const taskResult: {
+    bubble_message: null;
+    delivery_result: null;
+    task: {
+      task_id: string;
+      title: string;
+      source_type: "dragged_file";
+      status: "processing";
+      intent: null;
+      current_step: string;
+      risk_level: "yellow";
+      started_at: string;
+      updated_at: string;
+      finished_at: null;
+    };
+  } = {
+    bubble_message: null,
+    delivery_result: null,
+    task: {
+      task_id: "task_shell_ball_001",
+      title: "Process files",
+      source_type: "dragged_file",
+      status: "processing",
+      intent: null,
+      current_step: "processing",
+      risk_level: "yellow",
+      started_at: "2026-04-18T10:00:00.000Z",
+      updated_at: "2026-04-18T10:00:00.000Z",
+      finished_at: null,
+    },
+  };
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask(params: Record<string, unknown>) {
+          startTaskCalls.push(params);
+          return Promise.resolve(taskResult);
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./agentInputService": {
+        submitTextInput(params: Record<string, unknown>) {
+          bootstrapSubmitCalls.push(params);
+          return Promise.resolve(taskResult);
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        bootstrapTask: (title: string) => Promise<unknown>;
+        startTaskFromErrorSignal: (errorMessage: string, context?: Record<string, unknown>) => Promise<unknown>;
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+        startTaskFromSelectedText: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
+      };
+
+      await service.startTaskFromFiles(
+        ["  C:\\workspace\\notes.md  ", "C:\\workspace\\spec.md"],
+        {
+          source: "floating_ball",
+        },
+        "  explain these files  ",
+      );
+
+      assert.equal(startTaskCalls[0]?.trigger, "file_drop");
+      assert.deepEqual(startTaskCalls[0]?.input, {
+        type: "file",
+        text: "explain these files",
+        files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
+        page_context: {
+          app_name: "desktop",
+          title: "Quick Intake",
+          url: "local://shell-ball",
+        },
+      });
+
+      await service.bootstrapTask("  summarize this  ");
+    },
+  );
+
+  assert.equal(startTaskCalls.length, 1);
+  assert.equal(bootstrapSubmitCalls.length, 1);
+  assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask() {
+          return Promise.reject(transportError);
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./agentInputService": {
+        submitTextInput() {
+          return Promise.reject(transportError);
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        bootstrapTask: (title: string) => Promise<unknown>;
+        startTaskFromErrorSignal: (errorMessage: string, context?: Record<string, unknown>) => Promise<unknown>;
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+        startTaskFromSelectedText: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.startTaskFromSelectedText("selected text"), /transport is not wired/i);
+      await assert.rejects(() => service.startTaskFromFiles(["C:\\workspace\\notes.md"], {}, "details"), /transport is not wired/i);
+      await assert.rejects(() => service.startTaskFromErrorSignal("stack trace"), /transport is not wired/i);
+      await assert.rejects(() => service.bootstrapTask("hover text"), /transport is not wired/i);
+    },
+  );
 });
 
 test("shell-ball text drop helpers only accept non-file drags and extract plain text", () => {
@@ -3620,7 +3996,7 @@ test("shell-ball selected-text prompt stays below an existing intent bubble even
       onPrimaryClick: () => {},
     });
 
-    handleSelectedTextPrompt();
+    handleSelectedTextPrompt("");
 
     assert.deepEqual(
       bubbleItemsState.map((item) => ({
@@ -4399,32 +4775,176 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   assert.match(surfaceSource, /className="shell-ball-surface__text-drop-target"/);
 });
 
+test("shell-ball clipboard command stays frontend-only and reads the desktop clipboard service", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const clipboardServiceSource = readFileSync(resolve(desktopRoot, "src/services/clipboardService.ts"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallClipboardCommand\(/);
+  assert.match(coordinatorSource, /const clipboardText = await readClipboardText\(\);/);
+  assert.match(coordinatorSource, /Clipboard is unavailable right now\./);
+  assert.match(clipboardServiceSource, /import \{ readText \} from "@tauri-apps\/plugin-clipboard-manager";/);
+  assert.match(clipboardServiceSource, /export async function readClipboardText\(\)/);
+  assert.doesNotMatch(interactionSource, /SHELL_BALL_CLIPBOARD_COMMAND/);
+});
+
+test("shell-ball clipboard prompts stay active for 10 seconds after clipboard refresh", () => {
+  assert.equal(
+    isShellBallClipboardPromptActive({
+      text: "clipboard text",
+      expiresAt: 2_000,
+    }, 1_500),
+    true,
+  );
+  assert.equal(
+    isShellBallClipboardPromptActive({
+      text: "clipboard text",
+      expiresAt: 2_000,
+    }, 2_000),
+    false,
+  );
+});
+
+test("shell-ball app routes fresh clipboard prompts through the formal text submit path", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const syncSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.windowSync.ts"), "utf8");
+
+  assert.match(appSource, /const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;/);
+  assert.match(appSource, /const \[clipboardPrompt, setClipboardPrompt\] = useState<ShellBallClipboardPrompt \| null>\(null\);/);
+  assert.match(appSource, /listen<ShellBallClipboardSnapshotPayload>\(shellBallWindowSyncEvents\.clipboardSnapshot/);
+  assert.match(appSource, /if \(clipboardPrompt !== null\) \{/);
+  assert.match(appSource, /void handleCoordinatorClipboardPrompt\(clipboardPrompt\.text\);/);
+  assert.match(coordinatorSource, /const handleClipboardPrompt = useCallback\(async \(text: string\) => \{/);
+  assert.match(coordinatorSource, /submitTextInput\(\{/);
+  assert.match(coordinatorSource, /trigger: "hover_text_input"/);
+  assert.match(coordinatorSource, /inputMode: "text"/);
+  assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
+});
+
+test("shell-ball screenshot command stays local and stores captures in apps temp", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const screenPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopScreen.ts"), "utf8");
+  const rootGitIgnoreSource = readFileSync(resolve(desktopRoot, "../../.gitignore"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallScreenshotCommand\(/);
+  assert.match(coordinatorSource, /const screenshot = await captureDesktopScreenshot\(\);/);
+  assert.match(coordinatorSource, /Screenshot saved to \$\{screenshot\.relative_path\}/);
+  assert.match(screenPlatformSource, /invoke<DesktopScreenCapturePayload>\("desktop_capture_screenshot"\)/);
+  assert.match(rootGitIgnoreSource, /apps\/\.temp\/\*/);
+});
+
+test("shell-ball window command stays local and replies with active window context", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const windowContextPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopWindowContext.ts"), "utf8");
+  const windowContextHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_WINDOW_COMMAND = "窗口";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallWindowCommand\(/);
+  assert.match(coordinatorSource, /const context = await getActiveWindowContext\(\);/);
+  assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.title, context\.url\)/);
+  assert.match(coordinatorSource, /URL: get failed/);
+  assert.match(windowContextPlatformSource, /invoke<DesktopWindowContextPayload \| null>\("desktop_get_active_window_context"\)/);
+  assert.match(windowContextHostSource, /BROWSER_KIND_CHROME \| BROWSER_KIND_EDGE \| BROWSER_KIND_OTHER_BROWSER => \{/);
+  assert.doesNotMatch(windowContextHostSource, /read_chrome_url_via_mcp/);
+  assert.match(windowContextHostSource, /looks_like_address_bar_name/);
+});
+
+test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const handleDroppedFiles = useCallback\(async \(paths: string\[\]\) => \{/);
+  assert.match(coordinatorSource, /handlersRef\.current\.onAppendPendingFiles\(normalizedPaths\);/);
+  assert.match(coordinatorSource, /await emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
+  assert.match(coordinatorSource, /console\.warn\("shell-ball file drop focus request failed", error\);/);
+  assert.doesNotMatch(coordinatorSource, /issue #187/);
+  assert.match(interactionSource, /function handleDroppedFiles\(paths: string\[\]\) \{/);
+  assert.match(interactionSource, /setPendingFiles\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
+  assert.match(interactionSource, /controllerRef\.current\?\.forceState\("hover_input", \{/);
+});
+
+test("shell-ball task entry sources keep rpc failures visible and forward attachment descriptions", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+  const agentInputServiceSource = readFileSync(resolve(desktopRoot, "src/services/agentInputService.ts"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/services/taskService.ts"), "utf8");
+
+  assert.match(interactionSource, /return startTaskFromFiles\(normalizedFiles, \{[\s\S]*source: "floating_ball",[\s\S]*\}, input\.text\);/);
+  assert.match(taskServiceSource, /\.\.\.\(normalizedText === undefined \? \{\} : \{ text: normalizedText \}\)/);
+  assert.match(taskServiceSource, /const taskResult = await submitTextInput\(/);
+  assert.doesNotMatch(taskServiceSource, /createMockTaskStartResult/);
+  assert.doesNotMatch(taskServiceSource, /logRpcMockFallback/);
+  assert.doesNotMatch(taskServiceSource, /isRpcChannelUnavailable/);
+  assert.doesNotMatch(agentInputServiceSource, /createMockAgentInputSubmitResult/);
+  assert.doesNotMatch(agentInputServiceSource, /logRpcMockFallback/);
+  assert.doesNotMatch(agentInputServiceSource, /isRpcChannelUnavailable/);
+  assert.match(coordinatorSource, /createShellBallTaskErrorBubbleItem/);
+  assert.doesNotMatch(coordinatorSource, /createMockShellBallConfirmResult/);
+  assert.doesNotMatch(coordinatorSource, /logRpcMockFallback/);
+});
+
 test("shell-ball selected-text prompt only surfaces in resting states", () => {
   assert.equal(
     shouldShowShellBallSelectionIndicator({
-      available: true,
+      selection: {
+        text: "selected text",
+        page_context: { title: "Dashboard", url: "local://dashboard", app_name: "dashboard" },
+        source: "windows_uia",
+        updated_at: "2026-04-16T10:00:00.000Z",
+      },
       visualState: "idle",
     }),
     true,
   );
   assert.equal(
     shouldShowShellBallSelectionIndicator({
-      available: true,
+      selection: {
+        text: "selected text",
+        page_context: { title: "Dashboard", url: "local://dashboard", app_name: "dashboard" },
+        source: "windows_uia",
+        updated_at: "2026-04-16T10:00:00.000Z",
+      },
       visualState: "processing",
     }),
     false,
   );
 });
 
-test("shell-ball app routes selected-text prompts into input focus and a mock agent reply", () => {
+test("shell-ball app routes real selection snapshots into input focus and an acknowledgement bubble", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const providersSource = readFileSync(resolve(desktopRoot, "src/features/shared/AppProviders.tsx"), "utf8");
+  const selectionProviderSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/selection/selection.provider.tsx"), "utf8");
 
-  assert.match(appSource, /listen<ShellBallTextSelectionStatePayload>\(shellBallWindowSyncEvents\.textSelectionState/);
+  assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
-  assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
-  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(\) => \{/);
-  assert.match(coordinatorSource, /text: "识别到选中了文字"/);
+  assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(selectionPrompt\.text\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
+  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(text: string\) => \{/);
+  assert.match(coordinatorSource, /createShellBallSelectedTextPreview\(text\)/);
+  assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
+  assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
+  assert.doesNotMatch(selectionProviderSource, /readShellBallSelectionSnapshot/);
+  assert.doesNotMatch(selectionProviderSource, /useInterval\(/);
+  assert.equal(
+    areShellBallSelectionSnapshotsEqual(
+      {
+        text: "selected text",
+        page_context: { title: "A", url: "native://windows-uia-selection", app_name: "notepad" },
+        source: "windows_uia",
+        updated_at: "1",
+      },
+      {
+        text: "selected text",
+        page_context: { title: "A", url: "native://windows-uia-selection", app_name: "notepad" },
+        source: "windows_uia",
+        updated_at: "2",
+      },
+    ),
+    true,
+  );
 });
 
 test("shell-ball input window skips window-focus pointer handling for the resize grip", () => {

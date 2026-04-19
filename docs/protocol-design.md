@@ -100,6 +100,7 @@
 - `agent.mirror.*`：镜子和长期记忆视图。
 - `agent.security.*`：安全卫士、授权、审计、恢复。
 - `agent.settings.*`：设置中心。
+- `agent.screen.*`：屏幕感知与场景推荐分析。
 - `agent.plugin.* / agent.model.* / agent.skill.*`：扩展能力方法组，当前多数为 planned。
 
 ---
@@ -218,6 +219,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `processing`：任务正在执行。
 - `waiting_auth`：命中高风险动作，等待授权。
 - `waiting_input`：等待用户补充必要输入。
+- `confirming_intent`：系统已识别出候选意图，等待用户确认或纠偏。
 - `paused`：任务被用户或系统主动暂停。
 - `blocked`：任务因依赖、环境或外部条件未满足而阻塞。
 - `failed`：任务执行失败。
@@ -317,7 +319,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 5.15 设置相关
 
-- `settings_scope`：`all / general / floating_ball / memory / task_automation / data_log`
+- `settings_scope`：`all / general / floating_ball / memory / task_automation / models`
 - `apply_mode`：`immediate / restart_required / next_task_effective`
 - `theme_mode`：`follow_system / light / dark`
 - `position_mode`：`fixed / draggable`
@@ -475,12 +477,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.confirm`
 - `agent.recommendation.get`
 - `agent.recommendation.feedback.submit`
+- `agent.screen.analyze`
 
 #### B. 任务状态 / 结果交付 / 巡检
 
 - `agent.task.list`
 - `agent.task.detail.get`
 - `agent.task.control`
+- `agent.task.events.list`
+- `agent.task.steer`
 - `agent.task.artifact.list`
 - `agent.task.artifact.open`
 - `agent.delivery.open`
@@ -529,9 +534,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **意图确认与纠偏** 统一使用 `agent.task.confirm`，用于采纳系统猜测或覆盖为用户修正后的意图。
 - 气泡置顶 / 删除 / 恢复：优先作为前端局部能力，必要时再引出设置或历史管理接口
 - **主动推荐与反馈** 统一使用 `agent.recommendation.get` 和 `agent.recommendation.feedback.submit`。
+- **屏幕截图、剪贴板、鼠标停留等场景感知信号** 统一使用 `agent.screen.analyze`，用于判断是否刷新推荐，不直接替代 `agent.task.start` 创建正式任务。
 - **任务成果列表、产物打开与最终交付打开** 统一使用 `agent.task.artifact.*` 与 `agent.delivery.open`。
 - 长结果自动分流：由交付内核决定，不新增方法
 - 一键中断：复用 `agent.task.control`
+- **运行中补充 follow-up 指令** 统一使用 `agent.task.steer`，用于向当前任务追加 steering 信息。
+- **运行时事件查看与调试观察** 统一使用 `agent.task.events.list`，用于补充查看正式事件流，不替代 `task` 主对象查询。
 - **插件、多模型、技能安装** 当前阶段先通过 `agent.settings.get / update` 与仪表盘模块承接，待对象、权限与来源字段完全冻结后再升级为独立正式接口。
 - **任务巡检、事项转任务** 统一使用 `agent.task_inspector.*` 与 `agent.notepad.*`。
 - **仪表盘首页、镜子、安全卫士** 统一使用 `agent.dashboard.*`、`agent.mirror.*`、`agent.security.*`。
@@ -664,7 +672,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **接口调用时机**：
   - 用户选中文本后点击悬浮球
   - 用户拖拽文件到悬浮球
-  - 系统识别到错误信息并进入承接流程
 - **系统处理**：
   - 识别输入对象与对象上下文
   - 创建正式 `task` 并决定处理路径
@@ -674,24 +681,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.task.start 入参说明
 
-| 字段                          | 中文说明                           |
-| ----------------------------- | ---------------------------------- |
-| `request_meta.trace_id`       | 请求链路追踪 ID                    |
-| `request_meta.client_time`    | 前端发起时间                       |
-| `session_id`                  | 当前会话 ID                        |
-| `source`                      | 来源位置                           |
-| `trigger`                     | 触发动作，如文本选中点击、文件拖拽 |
-| `input.type`                  | 输入对象类型                       |
-| `input.text`                  | 文本内容                           |
-| `input.files`                 | 文件列表                           |
-| `input.error_message`         | 错误信息内容                       |
-| `input.page_context`          | 页面上下文                         |
-| `context.selection.text`      | 当前选区补充文本                   |
-| `context.files`               | 补充文件上下文                     |
-| `delivery.preferred`          | 优先交付方式                       |
-| `delivery.fallback`           | 兜底交付方式                       |
+| 字段                       | 中文说明 |
+| -------------------------- | -------- |
+| `request_meta.trace_id`    | 请求链路追踪 ID |
+| `request_meta.client_time` | 前端发起时间 |
+| `session_id`               | 当前会话 ID |
+| `source`                   | 来源位置，取值来自 `request_source` |
+| `trigger`                  | 触发动作，取值来自 `request_trigger` |
+| `input.type`               | 输入对象类型，取值来自 `input_type` |
+| `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
+| `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
+| `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
+| `context.selection.text`   | 当前选区补充文本，按需传入 |
+| `context.files`            | 补充文件上下文，按需传入 |
+| `delivery.preferred`       | 优先交付方式 |
+| `delivery.fallback`        | 兜底交付方式 |
 
 ### agent.task.start 入参示例
+
+以下示例展示“文本选中后点击悬浮球”的 `text_selection` 场景。
 
 ```json
 {
@@ -710,9 +718,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "type": "text_selection",
       "text": "这里放用户选中的文本内容",
       "page_context": {
-        "title": "当前页面标题",
-        "url": "local://current-page",
-        "app_name": "browser"
+        "app_name": "Chrome",
+        "url": "https://example.com/release",
+        "image_url": "xxx.png"
       }
     },
     "context": {
@@ -731,13 +739,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.task.start 出参说明
 
-| 字段                   | 中文说明     |
-| ---------------------- | ------------ |
-| `data.task`            | 任务主对象   |
-| `data.task.status`     | 当前任务状态 |
-| `data.bubble_message`  | 当前气泡内容 |
-| `data.delivery_result` | 正式交付结果 |
-| `warnings`             | 弱提示信息   |
+| 字段                     | 中文说明                         |
+| ------------------------ | -------------------------------- |
+| `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.title`        | 任务标题                         |
+| `data.task.source_type`  | 任务来源类型                     |
+| `data.task.status`       | 当前任务状态                     |
+| `data.task.current_step` | 当前步骤                         |
+| `data.bubble_message`    | 气泡承接内容                     |
+| `data.delivery_result`   | 若后端已直接完成，可返回正式交付 |
+| `meta.server_time`       | 服务端响应时间                   |
 
 ### agent.task.start 出参示例
 
@@ -787,9 +798,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 补充约束：
 
-- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时 `corrected_intent` 可省略；若传入也应被忽略，不得覆盖当前意图。
-- `confirmed = false` 时，若调用方传入完整的 `corrected_intent`，后端以该对象覆盖任务当前意图后再推进执行。
-- `confirmed = false` 且未传入 `corrected_intent` 时，后端不得直接取消任务；应保留任务在 `confirming_intent`，并返回要求用户重新说明目标或补充修正意图的状态气泡。
+- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时 `corrected_content` 可省略；若传入也应被忽略，不得覆盖当前意图。
+- `confirmed = false` 时，若调用方传入完整的 `corrected_content`，后端以该对象覆盖任务当前意图后再推进执行。
+- `confirmed = false` 且未传入 `corrected_content` 时，后端不得直接取消任务；应保留任务在 `corrected_content`，并返回要求用户重新说明目标或补充修正意图的状态气泡。
 - 本接口只处理“意图确认 / 纠偏”这一承接阶段，不替代 `agent.task.control` 的暂停、继续、取消、重启控制语义。
 
 ### agent.task.confirm 入参说明
@@ -800,8 +811,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `request_meta.client_time`   | 前端发起时间         |
 | `task_id`                    | 目标任务 ID          |
 | `confirmed`                  | 是否确认系统猜测正确 |
-| `corrected_intent.name`      | 修正后的意图名称     |
-| `corrected_intent.arguments` | 修正后的意图参数     |
+| `corrected_content`      | 修正后的用户想法     |
 
 ### agent.task.confirm 入参示例
 
@@ -817,12 +827,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     },
     "task_id": "task_101",
     "confirmed": false,
-    "corrected_intent": {
-      "name": "rewrite",
-      "arguments": {
-        "tone": "professional",
-        "length": "short"
-      }
+    "corrected_content": "修正后的用户想法"
     }
   }
 }
@@ -834,7 +839,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------- | ---------------- |
 | `data.task.task_id`   | 任务 ID          |
 | `data.task.status`    | 更新后的任务状态 |
-| `data.task.intent`    | 生效后的任务意图 |
+| `data.task.corrected_content`    | 生效后的任务意图 |
 | `data.task.current_step` | 当前步骤      |
 | `data.bubble_message` | 状态提示气泡     |
 
@@ -849,13 +854,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "task": {
         "task_id": "task_101",
         "status": "processing",
-        "intent": {
-          "name": "rewrite",
-          "arguments": {
-            "tone": "professional",
-            "length": "short"
-          }
-        },
+        "corrected_content": "修正后的用户想法",
         "current_step": "generate_output"
       },
       "bubble_message": {
@@ -1254,6 +1253,107 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     },
     "meta": {
       "server_time": "2026-04-07T11:11:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+
+---
+
+### 8.1.9 `agent.screen.analyze`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户在某个页面持续停留，需要系统判断是否应主动给出帮助时
+  - 前端已采集到截图、剪贴板、鼠标停留等场景信号，需要统一做一次场景分析时
+- **系统处理**：
+  - 结合页面信息、屏幕截图、剪贴板内容、鼠标位置和最近行为做轻量场景判断
+  - 返回当前是否需要刷新推荐，以及推荐文案和触发原因
+- **入参**：页面信息、屏幕截图、剪贴板内容、鼠标信息、行为信号
+- **出参**：推荐结果
+
+### agent.screen.analyze 入参说明
+
+| 字段                        | 中文说明 |
+| --------------------------- | -------- |
+| `request_meta.trace_id`     | 请求链路追踪 ID |
+| `request_meta.client_time`  | 前端发起时间 |
+| `page.app_name`             | 当前宿主应用名称 |
+| `page.url`                  | 当前页面 URL |
+| `screen.image_url`          | 当前截图文件路径或可解析地址 |
+| `clipboard.context`         | 当前剪贴板上下文内容 |
+| `clipboard.mime_type`       | 剪贴板内容 MIME 类型 |
+| `mouse.isactive`            | 鼠标当前是否处于活跃状态；字段名保持与协议示例一致 |
+| `mouse.position.x`          | 鼠标横坐标 |
+| `mouse.position.y`          | 鼠标纵坐标 |
+| `behavior.dwell_millis`     | 当前场景停留时长，单位毫秒 |
+| `behavior.last_action`      | 最近一次关键动作，例如 `copy` |
+
+### agent.screen.analyze 入参示例
+
+```json
+{
+   "jsonrpc": "2.0",
+   "id": "req_input_001",
+   "method": "agent.screen.analyze",
+   "params": {
+      "request_meta": {
+        "trace_id": "trace_001",
+        "client_time": "2026-04-07T10:20:00+08:00"
+      },
+      "page": {
+        "app_name": "Chrome",
+        "url": "https://example.com/release"
+      },
+      "screen": {
+        "image_url": "C://.tem/example/screenshot.png"
+      },
+      "clipboard": {
+        "context": "translate this paragraph",
+        "mime_type": "text/plain"
+      },
+      "mouse": {
+        "isactive": true,
+        "position": {
+          "x": 100,
+          "y": 200
+        }
+      },
+      "behavior": {
+        "dwell_millis": 18000,
+        "last_action": "copy"
+      }
+   }
+}
+```
+
+### agent.screen.analyze 出参说明
+
+| 字段                                 | 中文说明 |
+| ------------------------------------ | -------- |
+| `data.recommendation.should_refresh` | 当前是否应刷新推荐内容 |
+| `data.recommendation.content`        | 给前端展示的推荐文案；当 `should_refresh = true` 时应可直接展示 |
+| `data.recommendation.reason`         | 触发本次推荐的原因标识 |
+| `meta.server_time`                   | 服务端响应时间 |
+
+### agent.screen.analyze 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_xxx",
+  "result": {
+    "data": {
+      "recommendation": {
+        "should_refresh": true,
+        "content": "需要帮忙翻译这段话吗？",
+        "reason": "copy_behavior"
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-09T10:00:01+08:00"
     },
     "warnings": []
   }
@@ -1872,7 +1972,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.6 `agent.task_inspector.run`
+### 8.2.9 `agent.task_inspector.run`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户手动点击“立即巡检”时
@@ -1944,7 +2044,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.7 `agent.notepad.list`
+### 8.2.10 `agent.notepad.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户查看近期要做、后续安排、重复事项、已结束时
@@ -2062,7 +2162,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.8 `agent.notepad.update`
+### 8.2.11 `agent.notepad.update`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在 notes 详情页对事项执行状态变更动作时
@@ -2140,7 +2240,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.9 `agent.notepad.convert_to_task`
+### 8.2.12 `agent.notepad.convert_to_task`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
@@ -2417,6 +2517,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.summary`    | 统计摘要     |
 | `data.highlights` | 亮点信息列表 |
 
+当 `module = "tasks"` 时，`data.summary` 在通用统计摘要之外还会补充以下任务模块字段：
+
+| 字段                                  | 中文说明 |
+| ------------------------------------- | -------- |
+| `data.summary.processing_tasks`       | 当前未完成任务中处于 `processing` 的数量 |
+| `data.summary.waiting_auth_tasks`     | 当前未完成任务中处于 `waiting_auth` 的数量 |
+| `data.summary.blocked_tasks`          | 当前未完成任务中处于 `blocked`、`failed`、`ended_unfinished` 或 `paused` 的数量 |
+| `data.summary.focus_task_id`          | 当前焦点任务的 `task_id`，用于把任务模块运行态与 `agent.dashboard.overview.get` 的 `focus_summary.task_id` 对齐 |
+| `data.summary.focus_runtime_summary`  | 当前焦点任务的运行态摘要，仅当 `focus_task_id` 与前端持有的焦点任务一致时才应被展示 |
+| `data.summary.focus_runtime_summary.events_count` | 焦点任务累计运行事件数 |
+| `data.summary.focus_runtime_summary.latest_event_type` | 焦点任务最近一个关键运行事件类型 |
+| `data.summary.focus_runtime_summary.active_steering_count` | 焦点任务当前待消费的 steering 条数 |
+| `data.summary.focus_runtime_summary.loop_stop_reason` | 焦点任务最近一次 loop 停止原因 |
+
 ### agent.dashboard.module.get 出参示例
 
 ```json
@@ -2425,18 +2539,28 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   "id": "req_dashboard_module_001",
   "result": {
     "data": {
-      "module": "mirror",
-      "tab": "daily_summary",
+      "module": "tasks",
+      "tab": "focus",
       "summary": {
         "completed_tasks": 3,
         "generated_outputs": 5,
         "authorizations_used": 1,
-        "exceptions": 0
+        "exceptions": 0,
+        "processing_tasks": 2,
+        "waiting_auth_tasks": 1,
+        "blocked_tasks": 1,
+        "focus_task_id": "task_focus_001",
+        "focus_runtime_summary": {
+          "events_count": 6,
+          "latest_event_type": "loop.retrying",
+          "active_steering_count": 2,
+          "loop_stop_reason": "waiting_for_user_confirmation"
+        }
       },
       "highlights": [
-        "完成了 3 项内容整理任务",
-        "生成了 1 份方案稿和 2 份摘要",
-        "命中 2 条历史偏好记忆"
+        "焦点任务仍在执行中，当前步骤为 gather_context。",
+        "最近停止原因：waiting_for_user_confirmation。",
+        "当前仍有 2 条追加要求待消费。"
       ]
     },
     "meta": {
@@ -3086,15 +3210,22 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户打开设置面板时
-- **系统处理**：返回当前设置快照；若 Stronghold 读取敏感配置状态失败，返回统一错误 `STRONGHOLD_ACCESS_FAILED`
+- **系统处理**：返回当前设置快照；若 Stronghold 读取模型凭证配置状态失败，返回统一错误 `STRONGHOLD_ACCESS_FAILED`
 - **入参**：查询范围
 - **出参**：设置快照
 
+补充约束：
+
+- `agent.settings.get` 返回的是设置读取快照，其中模型配置使用 `models.credentials.*` 组织敏感配置状态与连接信息。
+- `provider_api_key_configured` 只表示当前提供方凭证是否已配置成功，不回传任何明文密钥。
+
 ### agent.settings.get 入参说明
 
-| 字段    | 中文说明                   |
-| ------- | -------------------------- |
-| `scope` | 获取范围，如全部或单个分组 |
+| 字段                        | 中文说明 |
+| --------------------------- | -------- |
+| `request_meta.trace_id`     | 请求链路追踪 ID |
+| `request_meta.client_time`  | 前端发起时间 |
+| `scope`                     | 获取范围；与当前设置分组一致，支持 `all / general / floating_ball / memory / task_automation / models` |
 
 ### agent.settings.get 入参示例
 
@@ -3115,13 +3246,38 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.settings.get 出参说明
 
-| 字段                            | 中文说明         |
-| ------------------------------- | ---------------- |
-| `data.settings.general`         | 通用设置         |
-| `data.settings.floating_ball`   | 悬浮球设置       |
-| `data.settings.memory`          | 记忆设置         |
-| `data.settings.task_automation` | 任务与自动化设置 |
-| `data.settings.data_log`        | 数据与日志设置（包含脱敏机密状态） |
+| 字段                                                 | 中文说明 |
+| ---------------------------------------------------- | -------- |
+| `data.settings.general.language`                     | 界面语言 |
+| `data.settings.general.auto_launch`                  | 是否开机自启动 |
+| `data.settings.general.theme_mode`                   | 主题模式，取值来自 `theme_mode` |
+| `data.settings.general.voice_notification_enabled`   | 是否开启语音通知 |
+| `data.settings.general.voice_type`                   | 语音播报音色 |
+| `data.settings.general.download.workspace_path`      | 默认工作区路径 |
+| `data.settings.general.download.ask_before_save_each_file` | 每次保存文件前是否再次确认 |
+| `data.settings.floating_ball.auto_snap`              | 悬浮球是否自动吸边 |
+| `data.settings.floating_ball.idle_translucent`       | 空闲时是否半透明 |
+| `data.settings.floating_ball.position_mode`          | 悬浮球位置模式，取值来自 `position_mode` |
+| `data.settings.floating_ball.size`                   | 悬浮球尺寸档位 |
+| `data.settings.memory.enabled`                       | 是否启用记忆 |
+| `data.settings.memory.lifecycle`                     | 记忆保留周期 |
+| `data.settings.memory.work_summary_interval.unit`    | 工作总结刷新周期单位，取值来自 `time_unit` |
+| `data.settings.memory.work_summary_interval.value`   | 工作总结刷新周期数值 |
+| `data.settings.memory.profile_refresh_interval.unit` | 画像刷新周期单位，取值来自 `time_unit` |
+| `data.settings.memory.profile_refresh_interval.value` | 画像刷新周期数值 |
+| `data.settings.task_automation.inspect_on_startup`   | 启动时是否自动巡检 |
+| `data.settings.task_automation.inspect_on_file_change` | 文件变化时是否自动巡检 |
+| `data.settings.task_automation.inspection_interval.unit` | 巡检周期单位，取值来自 `time_unit` |
+| `data.settings.task_automation.inspection_interval.value` | 巡检周期数值 |
+| `data.settings.task_automation.task_sources`         | 巡检任务来源目录列表 |
+| `data.settings.task_automation.remind_before_deadline` | 是否在截止前提醒 |
+| `data.settings.task_automation.remind_when_stale`    | 是否对长期未处理事项提醒 |
+| `data.settings.models.provider`                      | 当前模型提供方 |
+| `data.settings.models.credentials.budget_auto_downgrade` | 预算不足时是否自动降级 |
+| `data.settings.models.credentials.provider_api_key_configured` | 当前提供方 API Key 是否已配置；只返回布尔状态，不返回明文 |
+| `data.settings.models.credentials.base_url`          | 模型服务基地址 |
+| `data.settings.models.credentials.model`             | 当前生效模型名 |
+| `meta.server_time`                                   | 服务端响应时间 |
 
 ### agent.settings.get 出参示例
 
@@ -3174,11 +3330,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "remind_before_deadline": true,
           "remind_when_stale": false
         },
-        "data_log": {
-          "provider": "openai",
-          "budget_auto_downgrade": true,
-          "provider_api_key_configured": true
-        }
+          "models": {
+    		"provider": "openai",
+    		"credentials": {
+      		"budget_auto_downgrade": true,
+      		"provider_api_key_configured": true,
+      		"base_url": "https://api.openai.com/v1",
+      		"model": "gpt-3.5-turbo"
+    	  }
+  		}
       }
     },
     "meta": {
@@ -3195,19 +3355,32 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改设置并点击保存时
-- **系统处理**：写入设置并返回生效结果；`data_log.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照
+- **系统处理**：写入设置并返回生效结果；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文
 - **入参**：要更新的设置项
 - **出参**：已更新字段、生效设置、生效方式、是否需重启
 
+补充约束：
+
+- `agent.settings.update` 的 `models` 采用写入导向结构，使用扁平字段提交提供方、凭证和模型选择。
+- 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
+- `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
+
 ### agent.settings.update 入参说明
 
-| 字段              | 中文说明           |
-| ----------------- | ------------------ |
-| `memory`          | 记忆设置变更       |
-| `task_automation` | 任务自动化设置变更 |
-| `general`         | 通用设置变更       |
-| `floating_ball`   | 悬浮球设置变更     |
-| `data_log`        | 数据与日志设置变更；允许携带临时写入 Stronghold 的 `api_key` |
+| 字段                                      | 中文说明 |
+| ----------------------------------------- | -------- |
+| `request_meta.trace_id`                   | 请求链路追踪 ID |
+| `request_meta.client_time`                | 前端发起时间 |
+| `memory.enabled`                          | 是否启用记忆 |
+| `memory.lifecycle`                        | 记忆保留周期 |
+| `task_automation.inspection_interval.unit` | 巡检周期单位，取值来自 `time_unit` |
+| `task_automation.inspection_interval.value` | 巡检周期数值 |
+| `task_automation.inspect_on_file_change`  | 文件变化时是否自动巡检 |
+| `models.provider`                         | 要切换到的模型提供方 |
+| `models.budget_auto_downgrade`            | 预算不足时是否自动降级 |
+| `models.api_key`                          | 当前请求临时写入 Stronghold 的 API Key；保存后不回显 |
+| `models.base_url`                         | 模型服务基地址 |
+| `models.model`                            | 目标模型名 |
 
 ### agent.settings.update 入参示例
 
@@ -3232,10 +3405,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       },
       "inspect_on_file_change": true
     },
-    "data_log": {
+    "models": {
       "provider": "openai",
       "budget_auto_downgrade": true,
-      "api_key": "sk-example"
+      "api_key": "sk-example",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-3.5-turbo"
     }
   }
 }
@@ -3243,12 +3418,22 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.settings.update 出参说明
 
-| 字段                      | 中文说明       |
-| ------------------------- | -------------- |
-| `data.updated_keys`       | 已更新字段列表 |
-| `data.effective_settings` | 生效后的设置   |
-| `data.apply_mode`         | 生效方式       |
-| `data.need_restart`       | 是否需要重启   |
+| 字段                                                   | 中文说明 |
+| ------------------------------------------------------ | -------- |
+| `data.updated_keys`                                    | 已更新字段列表，字段路径与请求对象路径一致 |
+| `data.effective_settings.memory.enabled`               | 生效后的记忆开关 |
+| `data.effective_settings.memory.lifecycle`             | 生效后的记忆保留周期 |
+| `data.effective_settings.task_automation.inspection_interval.unit` | 生效后的巡检周期单位 |
+| `data.effective_settings.task_automation.inspection_interval.value` | 生效后的巡检周期数值 |
+| `data.effective_settings.task_automation.inspect_on_file_change` | 生效后的文件变化自动巡检开关 |
+| `data.effective_settings.models.provider`              | 生效后的模型提供方 |
+| `data.effective_settings.models.budget_auto_downgrade` | 生效后的自动降级开关 |
+| `data.effective_settings.models.provider_api_key_configured` | API Key 是否已配置成功；只返回布尔状态 |
+| `data.effective_settings.models.base_url`              | 生效后的模型服务基地址 |
+| `data.effective_settings.models.model`                 | 生效后的模型名 |
+| `data.apply_mode`                                      | 配置生效方式，取值来自 `apply_mode` |
+| `data.need_restart`                                    | 当前更新是否需要重启客户端 |
+| `meta.server_time`                                     | 服务端响应时间 |
 
 ### agent.settings.update 出参示例
 
@@ -3276,11 +3461,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           },
           "inspect_on_file_change": true
         },
-        "data_log": {
+        "models": {
           "provider": "openai",
           "budget_auto_downgrade": true,
-          "provider_api_key_configured": true
-        }
+          "provider_api_key_configured": true,
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-3.5-turbo"
+      	}
       },
       "apply_mode": "immediate",
       "need_restart": false
@@ -3292,6 +3479,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   }
 }
 ```
+
+
 
 ---
 

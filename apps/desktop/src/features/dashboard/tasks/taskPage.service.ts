@@ -1,10 +1,20 @@
-import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup } from "@cialloclaw/protocol";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
-import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
-import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
+import type {
+  AgentTaskDetailGetResult,
+  AgentTaskControlParams,
+  AgentTaskEventsListParams,
+  AgentTaskSteerParams,
+  RequestMeta,
+  Task,
+  TaskControlAction,
+  TaskEvent,
+  TaskListGroup,
+  TaskRuntimeSummary,
+} from "@cialloclaw/protocol";
+import { controlTask, getTaskDetail, listTaskEvents, listTasks, steerTask } from "@/rpc/methods";
+import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
-import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
+import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskEventFilters, TaskEventPageData, TaskEventTimeRange, TaskExperience, TaskListItem } from "./taskPage.types";
 
 export type TaskPageDataMode = "rpc" | "mock";
 
@@ -13,6 +23,12 @@ const INITIAL_TASK_PAGE_LIMIT: Record<TaskListGroup, number> = {
   unfinished: 12,
 };
 const TASK_RPC_TIMEOUT_MS = 2_500;
+
+export const DEFAULT_TASK_EVENT_FILTERS: TaskEventFilters = {
+  eventType: "",
+  runId: "",
+  timeRange: "all",
+};
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -80,6 +96,12 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
     approval_request: null,
     artifacts: [],
     mirror_references: [],
+    runtime_summary: {
+      active_steering_count: 0,
+      events_count: 0,
+      latest_event_type: null,
+      loop_stop_reason: null,
+    },
     security_summary: {
       latest_restore_point: null,
       pending_authorizations: 0,
@@ -91,9 +113,108 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
   };
 }
 
+function parseTaskEventPayload(event: TaskEvent): Record<string, unknown> | null {
+  const source = event.payload_json.trim();
+  if (!source) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function createFallbackRuntimeSummary(): AgentTaskDetailGetResult["runtime_summary"] {
+  return {
+    active_steering_count: 0,
+    events_count: 0,
+    latest_event_type: null,
+    loop_stop_reason: null,
+  };
+}
+
+function normalizeRuntimeSummary(detail: AgentTaskDetailGetResult): AgentTaskDetailGetResult["runtime_summary"] {
+  const candidate = detail.runtime_summary as Partial<AgentTaskDetailGetResult["runtime_summary"]> | null | undefined;
+  if (!candidate || typeof candidate !== "object") {
+    return createFallbackRuntimeSummary();
+  }
+
+  return {
+    active_steering_count: typeof candidate.active_steering_count === "number" ? candidate.active_steering_count : 0,
+    events_count: typeof candidate.events_count === "number" ? candidate.events_count : 0,
+    latest_event_type: typeof candidate.latest_event_type === "string" ? candidate.latest_event_type : null,
+    loop_stop_reason: typeof candidate.loop_stop_reason === "string" ? candidate.loop_stop_reason : null,
+  };
+}
+
+function normalizeTaskEventPage(result: { items: TaskEvent[]; page: TaskEventPageData["page"] }): TaskEventPageData {
+  return {
+    items: normalizeArray(result.items, isTaskEvent, "task events payload items").map((event) => ({
+      ...event,
+      payload: parseTaskEventPayload(event),
+    })),
+    page: result.page,
+  };
+}
+
+function sanitizeTaskEventFilters(filters?: Partial<TaskEventFilters>): TaskEventFilters {
+  const timeRange = filters?.timeRange ?? DEFAULT_TASK_EVENT_FILTERS.timeRange;
+  return {
+    eventType: filters?.eventType?.trim() ?? DEFAULT_TASK_EVENT_FILTERS.eventType,
+    runId: filters?.runId?.trim() ?? DEFAULT_TASK_EVENT_FILTERS.runId,
+    timeRange: isTaskEventTimeRange(timeRange) ? timeRange : DEFAULT_TASK_EVENT_FILTERS.timeRange,
+  };
+}
+
+function isTaskEventTimeRange(value: string): value is TaskEventTimeRange {
+  return value === "all" || value === "1h" || value === "24h" || value === "7d";
+}
+
+function resolveTaskEventTimeBounds(timeRange: TaskEventTimeRange, nowProvider: () => Date) {
+  if (timeRange === "all") {
+    return {};
+  }
+
+  const now = nowProvider();
+  const start = new Date(now.getTime());
+  switch (timeRange) {
+    case "1h":
+      start.setHours(start.getHours() - 1);
+      break;
+    case "24h":
+      start.setDate(start.getDate() - 1);
+      break;
+    case "7d":
+      start.setDate(start.getDate() - 7);
+      break;
+    default:
+      return {};
+  }
+
+  return {
+    created_at_from: start.toISOString(),
+    created_at_to: now.toISOString(),
+  };
+}
+
 const riskLevels = new Set<string>(RISK_LEVELS);
 const securityStatuses = new Set<string>(SECURITY_STATUSES);
 const taskStepStatuses = new Set<string>(TASK_STEP_STATUSES);
+
+function isValidRuntimeSummary(summary: Partial<TaskRuntimeSummary> | null | undefined): summary is TaskRuntimeSummary {
+  return Boolean(
+    summary &&
+      typeof summary.events_count === "number" &&
+      Number.isFinite(summary.events_count) &&
+      typeof summary.active_steering_count === "number" &&
+      Number.isFinite(summary.active_steering_count) &&
+      (typeof summary.latest_event_type === "string" || summary.latest_event_type === null || typeof summary.latest_event_type === "undefined") &&
+      (typeof summary.loop_stop_reason === "string" || summary.loop_stop_reason === null || typeof summary.loop_stop_reason === "undefined"),
+  );
+}
 
 function hasValidSecuritySummary(detail: AgentTaskDetailGetResult): boolean {
   const summary = detail.security_summary as Partial<AgentTaskDetailGetResult["security_summary"]> | null | undefined;
@@ -118,6 +239,11 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
   if (!hasValidSecuritySummary(detail)) {
     throw new Error("task detail payload is missing security summary");
   }
+
+  if (detail.runtime_summary !== undefined && !isValidRuntimeSummary(detail.runtime_summary)) {
+    throw new Error("task detail payload is missing runtime summary");
+  }
+  const runtimeSummary = detail.runtime_summary === undefined ? createFallbackRuntimeSummary() : normalizeRuntimeSummary(detail);
 
   const approvalRequest = normalizeNullable(detail.approval_request, isApprovalRequest, "task detail payload approval_request");
   const latestRestorePoint = normalizeNullable(detail.security_summary.latest_restore_point, isRecoveryPoint, "task detail payload restore point");
@@ -153,6 +279,7 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
     approval_request: approvalRequest,
     artifacts,
     mirror_references: mirrorReferences,
+    runtime_summary: runtimeSummary,
     security_summary: {
       ...detail.security_summary,
       latest_restore_point: latestRestorePoint,
@@ -259,33 +386,74 @@ export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit
     return getMockTaskBucketPage(group, options);
   }
 
-  try {
-    const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
-    const offset = options?.offset ?? 0;
-    const result = await withTimeout(
-      listTasks({
-        group,
-        limit,
-        offset,
-        request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
-        sort_by: getTaskListSortBy(group),
-        sort_order: "desc",
-      }),
-      `task bucket ${group}`,
-    );
+  const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
+  const offset = options?.offset ?? 0;
+  const result = await withTimeout(
+    listTasks({
+      group,
+      limit,
+      offset,
+      request_meta: createRequestMeta(`task_list_${group}_${offset}_${limit}`),
+      sort_by: getTaskListSortBy(group),
+      sort_order: "desc",
+    }),
+    `task bucket ${group}`,
+  );
 
+  return {
+    items: mapTasks(result.items),
+    page: result.page,
+  };
+}
+
+export async function loadTaskEventPage(taskId: string, source: TaskPageDataMode = "rpc", filters: Partial<TaskEventFilters> = DEFAULT_TASK_EVENT_FILTERS, nowProvider: () => Date = () => new Date()): Promise<TaskEventPageData> {
+  if (source === "mock") {
     return {
-      items: mapTasks(result.items),
-      page: result.page,
+      items: [],
+      page: { has_more: false, limit: 20, offset: 0, total: 0 },
     };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback(`task bucket ${group}`, error);
-      return getMockTaskBucketPage(group, options);
-    }
-
-    throw error;
   }
+
+  const normalizedFilters = sanitizeTaskEventFilters(filters);
+  const params: AgentTaskEventsListParams = {
+    limit: 20,
+    offset: 0,
+    request_meta: createRequestMeta(`task_events_${taskId}`),
+    task_id: taskId,
+    ...(normalizedFilters.runId ? { run_id: normalizedFilters.runId } : {}),
+    ...(normalizedFilters.eventType ? { type: normalizedFilters.eventType } : {}),
+    ...resolveTaskEventTimeBounds(normalizedFilters.timeRange, nowProvider),
+  };
+
+  return normalizeTaskEventPage(await withTimeout(listTaskEvents(params), `task events ${taskId}`));
+}
+
+export async function steerTaskByMessage(taskId: string, message: string, source: TaskPageDataMode = "rpc") {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    throw new Error("补充要求不能为空");
+  }
+
+  if (source === "mock") {
+    return {
+      bubble_message: {
+        created_at: new Date().toISOString(),
+        level: "info",
+        task_id: taskId,
+        text: "已记录新的补充要求，后续执行会纳入该指令。",
+        type: "status",
+      },
+      task: getMockTaskDetail(taskId).detail.task,
+    };
+  }
+
+  const params: AgentTaskSteerParams = {
+    message: trimmed,
+    request_meta: createRequestMeta(`task_steer_${taskId}`),
+    task_id: taskId,
+  };
+
+  return withTimeout(steerTask(params), `task steer ${taskId}`);
 }
 
 export async function loadTaskBuckets(options?: { unfinishedLimit?: number; finishedLimit?: number; source?: TaskPageDataMode }): Promise<TaskBucketsData> {
@@ -307,32 +475,23 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     return getMockTaskDetail(taskId);
   }
 
-  try {
-    const normalized = normalizeTaskDetailData(
-      await withTimeout(
-        getTaskDetail({
-          request_meta: createRequestMeta(`task_detail_${taskId}`),
-          task_id: taskId,
-        }),
-        `task detail ${taskId}`,
-      ),
-    );
+  const normalized = normalizeTaskDetailData(
+    await withTimeout(
+      getTaskDetail({
+        request_meta: createRequestMeta(`task_detail_${taskId}`),
+        task_id: taskId,
+      }),
+      `task detail ${taskId}`,
+    ),
+  );
 
-    return {
-      detailWarningMessage: normalized.detailWarningMessage,
-      detail: normalized.detail,
-      experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
-      source: "rpc",
-      task: normalized.detail.task,
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback(`task detail ${taskId}`, error);
-      return getMockTaskDetail(taskId);
-    }
-
-    throw error;
-  }
+  return {
+    detailWarningMessage: normalized.detailWarningMessage,
+    detail: normalized.detail,
+    experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
+    source: "rpc",
+    task: normalized.detail.task,
+  };
 }
 
 export async function controlTaskByAction(taskId: string, action: TaskControlAction, source: TaskPageDataMode = "rpc"): Promise<TaskControlOutcome> {
@@ -346,17 +505,8 @@ export async function controlTaskByAction(taskId: string, action: TaskControlAct
     return runMockTaskControl(taskId, action);
   }
 
-  try {
-    return {
-      result: await withTimeout(controlTask(params), `task control ${action}`),
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback(`task control ${action}`, error);
-      return runMockTaskControl(taskId, action);
-    }
-
-    throw error;
-  }
+  return {
+    result: await withTimeout(controlTask(params), `task control ${action}`),
+    source: "rpc",
+  };
 }

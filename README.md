@@ -49,6 +49,17 @@ scripts/
 - `workers/*`：Playwright、OCR、media 三类 sidecar worker
 - `docs/*` 与 `scripts/*`：当前文档真源与开发 / 构建 / CI 脚本目录
 
+## 当前 Agent Loop 状态
+
+- 后端已具备独立 `Agent Loop / ReAct` runtime，不再只是一次性 intent 分类后生成总结
+- 已支持结构化 `runs / steps / events / delivery_results` 归一化持久化
+- 已支持 `agent.task.events.list` 查询任务运行时事件视图
+- 已支持 `agent.task.steer` 追加 follow-up 指令，并在后续 loop round 中消费 active-run steering
+- 已支持正式 `loop.*` 与 `task.steered` 通知方法，便于调试流与任务详情观察运行时进展
+- 已支持 loop stop reason 暴露、planner/tool retry 与最小 active-run steering
+
+当前仍在持续补强：更细的 retry classification、更多 runtime 直接单测、以及更完整的前端承接。
+
 ## 文档入口
 
 ### 核心技术文档
@@ -77,7 +88,7 @@ scripts/
 
 - 对外主对象统一为 `task`，后端执行兼容层保留 `run / step / event / tool_call`
 - JSON-RPC 方法统一使用 `agent.domain.action`，例如 `agent.task.start`、`agent.task.confirm`、`agent.task.list`
-- Notification 统一使用 `dot.case`，例如 `task.updated`
+- Notification 统一使用 `dot.case`，例如 `task.updated`、`task.steered`、`loop.started`
 - 正式结果统一通过 `delivery_result / artifact / citation` 交付
 - Windows 正式传输链路优先使用 Named Pipe，本地 HTTP / SSE 仅保留调试兼容态
 

@@ -244,6 +244,7 @@
 - 主要表：`tasks / task_steps / events / delivery_results / artifacts / approval_requests / trace_records`
 - 关键字段：`events.type / payload_json`
 - 作用：为任务列表、详情、安全摘要和结果区提供统一真源和事件驱动刷新。
+- 当前 owner-5 P0-2 迁移策略采用 `task_runs` 兼容快照与 `tasks / task_steps` 一等记录双写；任务列表、详情和部分 overview 回退读侧应优先读取 `tasks / task_steps`，仅在正式表缺失时再回退 `task_runs`。
 
 ### 6.7 结果审查、Trace 与熔断
 - 主要表：`trace_records / eval_snapshots / events / tool_calls / audit_records`
@@ -335,8 +336,9 @@
 ### 7A.9 skill_manifests / blueprint_definitions / prompt_template_versions
 
 - `version`：前馈配置版本号，是回放、问题定位和评估的关键字段。
-- `manifest_json / blueprint_json / template_text`：运行时装配真源，必须保持可审计和可回溯。
-- `scope`：Prompt 模板的适用范围，不得省略成纯文本描述。
+- `manifest_json / definition_json / template_body`：运行时装配真源，必须保持可审计和可回溯。
+- `source / summary`：前馈配置资产的来源与摘要，用于后续审计、加载器诊断和边界预留。
+- `variables_json`：Prompt 模板变量声明，预留后续参数化装配边界，但当前阶段不提前扩展生态 UI。
 
 ### 7A.10 trace_records / eval_snapshots
 
@@ -706,12 +708,14 @@ CREATE INDEX idx_retrieval_hits_task_score ON retrieval_hits(task_id, score DESC
 
 ```sql
 CREATE TABLE skill_manifests (
-    skill_id TEXT PRIMARY KEY,                   -- Skill ID
+    skill_manifest_id TEXT PRIMARY KEY,          -- Skill Manifest ID
+    name TEXT NOT NULL,                          -- Skill 名称
     version TEXT NOT NULL,                       -- 版本
     source TEXT NOT NULL,                        -- 来源
-    title TEXT NOT NULL,                         -- 标题
+    summary TEXT NOT NULL,                       -- 摘要
     manifest_json TEXT NOT NULL,                 -- 配置(JSON)
-    installed_at TEXT NOT NULL                   -- 安装时间
+    created_at TEXT NOT NULL,                    -- 创建时间
+    updated_at TEXT NOT NULL                     -- 更新时间
 );
 ```
 
@@ -719,11 +723,14 @@ CREATE TABLE skill_manifests (
 
 ```sql
 CREATE TABLE blueprint_definitions (
-    blueprint_id TEXT PRIMARY KEY,               -- 蓝图ID
+    blueprint_definition_id TEXT PRIMARY KEY,    -- 蓝图定义ID
+    name TEXT NOT NULL,                          -- 蓝图名称
     version TEXT NOT NULL,                       -- 版本
-    title TEXT NOT NULL,                         -- 标题
-    blueprint_json TEXT NOT NULL,                -- 蓝图内容(JSON)
-    created_at TEXT NOT NULL                     -- 创建时间
+    source TEXT NOT NULL,                        -- 来源
+    summary TEXT NOT NULL,                       -- 摘要
+    definition_json TEXT NOT NULL,               -- 蓝图内容(JSON)
+    created_at TEXT NOT NULL,                    -- 创建时间
+    updated_at TEXT NOT NULL                     -- 更新时间
 );
 ```
 
@@ -731,11 +738,15 @@ CREATE TABLE blueprint_definitions (
 
 ```sql
 CREATE TABLE prompt_template_versions (
-    prompt_template_id TEXT PRIMARY KEY,         -- 模板ID
+    prompt_template_version_id TEXT PRIMARY KEY, -- 模板版本ID
+    template_name TEXT NOT NULL,                 -- 模板名称
     version TEXT NOT NULL,                       -- 版本
-    scope TEXT NOT NULL,                         -- 作用域
-    template_text TEXT NOT NULL,                 -- 模板内容
-    created_at TEXT NOT NULL                     -- 创建时间
+    source TEXT NOT NULL,                        -- 来源
+    summary TEXT NOT NULL,                       -- 摘要
+    template_body TEXT NOT NULL,                 -- 模板内容
+    variables_json TEXT NOT NULL,                -- 模板变量(JSON)
+    created_at TEXT NOT NULL,                    -- 创建时间
+    updated_at TEXT NOT NULL                     -- 更新时间
 );
 ```
 

@@ -1,6 +1,11 @@
 // This entry point boots the desktop Tauri host process.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
+mod screen_capture;
+mod selection;
+mod window_context;
+
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -10,7 +15,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(windows)]
 use once_cell::sync::Lazy;
@@ -20,8 +25,17 @@ use std::collections::HashSet;
 
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{PtInRect, ScreenToClient},
+    System::{
+        DataExchange::{
+            CloseClipboard, GetClipboardData, GetClipboardSequenceNumber,
+            IsClipboardFormatAvailable, OpenClipboard,
+        },
+        Memory::{GlobalLock, GlobalUnlock},
+        Ole::CF_UNICODETEXT,
+    },
+    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_DELETE, VK_SHIFT},
     UI::WindowsAndMessaging::*,
 };
 
@@ -37,7 +51,7 @@ const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
-const SHELL_BALL_TEXT_SELECTION_STATE_EVENT: &str = "desktop-shell-ball:text-selection-state";
+const SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT: &str = "desktop-shell-ball:clipboard-snapshot";
 const TRAY_ICON_ID: &str = "main-tray";
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
@@ -251,6 +265,26 @@ async fn named_pipe_unsubscribe(
         .map_err(|error| format!("named pipe unsubscribe task failed: {error}"))?
 }
 
+#[tauri::command]
+fn desktop_get_mouse_activity_snapshot() -> Option<activity::MouseActivitySnapshotPayload> {
+    activity::read_mouse_activity_snapshot()
+}
+
+#[tauri::command]
+async fn desktop_capture_screenshot() -> Result<screen_capture::ScreenCapturePayload, String> {
+    tauri::async_runtime::spawn_blocking(screen_capture::capture_screenshot)
+        .await
+        .map_err(|error| format!("desktop screenshot task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn desktop_get_active_window_context(
+) -> Result<Option<window_context::ActiveWindowContextPayload>, String> {
+    tauri::async_runtime::spawn_blocking(window_context::read_active_window_context)
+        .await
+        .map_err(|error| format!("desktop window-context task failed: {error}"))?
+}
+
 fn writer_loop(
     writer: std::fs::File,
     receiver: mpsc::Receiver<BridgeCommand>,
@@ -329,6 +363,34 @@ fn focus_webview_window(app: &tauri::AppHandle, label: &str) -> Result<(), Strin
     Ok(())
 }
 
+fn open_or_focus_control_panel_window(app: &tauri::AppHandle) {
+    if app.get_webview_window(CONTROL_PANEL_WINDOW_LABEL).is_some() {
+        if let Err(error) = focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL) {
+            eprintln!("failed to focus control panel from tray: {error}");
+        }
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let create_result = WebviewWindowBuilder::new(
+            &handle,
+            CONTROL_PANEL_WINDOW_LABEL,
+            WebviewUrl::App("control-panel.html".into()),
+        )
+        .title("CialloClaw Control Panel")
+        .inner_size(1080.0, 760.0)
+        .decorations(false)
+        .visible(true)
+        .focused(true)
+        .build();
+
+        if let Err(error) = create_result {
+            eprintln!("failed to create control panel from tray: {error}");
+        }
+    });
+}
+
 fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Result<(), String> {
     app.emit_to(
         SHELL_BALL_WINDOW_LABEL,
@@ -338,175 +400,6 @@ fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Resul
         }),
     )
     .map_err(|error| format!("failed to emit shell-ball dashboard transition request: {error}"))
-}
-
-#[cfg(windows)]
-fn emit_shell_ball_text_selection_state(app: &tauri::AppHandle, available: bool) {
-    let _ = app.emit_to(
-        SHELL_BALL_WINDOW_LABEL,
-        SHELL_BALL_TEXT_SELECTION_STATE_EVENT,
-        serde_json::json!({
-            "available": available,
-        }),
-    );
-}
-
-#[cfg(windows)]
-fn get_shell_ball_root_window_at_point(point: POINT) -> HWND {
-    unsafe {
-        let hit_window = WindowFromPoint(point);
-        if hit_window.0.is_null() {
-            return hit_window;
-        }
-
-        GetAncestor(hit_window, GA_ROOT)
-    }
-}
-
-#[cfg(windows)]
-fn is_shell_ball_cluster_window_at_point(app: &tauri::AppHandle, point: POINT) -> bool {
-    let hit_window = get_shell_ball_root_window_at_point(point);
-
-    if hit_window.0.is_null() {
-        return false;
-    }
-
-    let shell_ball_labels = [
-        SHELL_BALL_WINDOW_LABEL,
-        SHELL_BALL_BUBBLE_WINDOW_LABEL,
-        SHELL_BALL_INPUT_WINDOW_LABEL,
-        SHELL_BALL_VOICE_WINDOW_LABEL,
-    ];
-
-    for label in shell_ball_labels {
-        let Some(window) = app.get_webview_window(label) else {
-            continue;
-        };
-
-        let Ok(hwnd) = window.hwnd() else {
-            continue;
-        };
-
-        if hwnd == hit_window {
-            return true;
-        }
-    }
-
-    for window in app.webview_windows().values() {
-        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
-            continue;
-        }
-
-        let Ok(hwnd) = window.hwnd() else {
-            continue;
-        };
-
-        if hwnd == hit_window {
-            return true;
-        }
-    }
-
-    false
-}
-
-#[cfg(windows)]
-unsafe extern "system" fn shell_ball_selection_observer(
-    n_code: i32,
-    w_param: WPARAM,
-    l_param: LPARAM,
-) -> LRESULT {
-    if n_code < 0 {
-        return CallNextHookEx(None, n_code, w_param, l_param);
-    }
-
-    let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
-    let app_handle = SHELL_BALL_APP_HANDLE
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().cloned());
-
-    match w_param.0 as u32 {
-        WM_LBUTTONDOWN => {
-            if let Some(app) = app_handle.as_ref() {
-                if is_shell_ball_cluster_window_at_point(app, point) {
-                    if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
-                        *tracker = SelectionGestureTracker::default();
-                    }
-                    return CallNextHookEx(None, n_code, w_param, l_param);
-                }
-            }
-
-            if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
-                tracker.pointer_active = true;
-                tracker.drag_candidate = false;
-                tracker.start_point = point;
-            }
-        }
-        WM_MOUSEMOVE => {
-            if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
-                let delta_x = (point.x - tracker.start_point.x).abs();
-                let delta_y = (point.y - tracker.start_point.y).abs();
-
-                if tracker.pointer_active
-                    && !tracker.drag_candidate
-                    && (delta_x >= SHELL_BALL_SELECTION_DRAG_THRESHOLD_PX
-                        || delta_y >= SHELL_BALL_SELECTION_DRAG_THRESHOLD_PX)
-                {
-                    tracker.drag_candidate = true;
-                }
-            }
-        }
-        WM_LBUTTONUP => {
-            let mut should_emit = None;
-
-            if let Ok(mut tracker) = SHELL_BALL_SELECTION_TRACKER.lock() {
-                if tracker.pointer_active {
-                    should_emit = Some(tracker.drag_candidate);
-                }
-
-                *tracker = SelectionGestureTracker::default();
-            }
-
-            if let (Some(app), Some(available)) = (app_handle.as_ref(), should_emit) {
-                if !is_shell_ball_cluster_window_at_point(app, point) {
-                    emit_shell_ball_text_selection_state(app, available);
-                }
-            }
-        }
-        _ => {}
-    }
-
-    CallNextHookEx(None, n_code, w_param, l_param)
-}
-
-#[cfg(windows)]
-fn install_shell_ball_selection_hook(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Ok(mut app_handle) = SHELL_BALL_APP_HANDLE.lock() {
-        *app_handle = Some(app.clone());
-    }
-
-    let mut hook = SHELL_BALL_SELECTION_HOOK
-        .lock()
-        .map_err(|_| "shell-ball selection hook lock poisoned".to_string())?;
-
-    if hook.is_some() {
-        return Ok(());
-    }
-
-    unsafe {
-        *hook = Some(
-            SetWindowsHookExW(WH_MOUSE_LL, Some(shell_ball_selection_observer), None, 0)
-                .map_err(|error| format!("failed to install shell-ball selection hook: {error}"))?
-                .0 as isize,
-        );
-    }
-
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn install_shell_ball_selection_hook(_app: &tauri::AppHandle) -> Result<(), String> {
-    Ok(())
 }
 
 fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
@@ -557,6 +450,191 @@ fn show_shell_ball(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn emit_shell_ball_clipboard_snapshot(app: &tauri::AppHandle, text: String) {
+    let _ = app.emit_to(
+        SHELL_BALL_WINDOW_LABEL,
+        SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT,
+        serde_json::json!({
+            "text": text,
+        }),
+    );
+}
+
+#[cfg(windows)]
+fn schedule_shell_ball_clipboard_probe(delay_ms: u64) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+        let Some(app) = SHELL_BALL_APP_HANDLE
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
+        else {
+            return;
+        };
+
+        let Ok(sequence_number) = read_clipboard_sequence_number() else {
+            return;
+        };
+
+        let should_emit = {
+            let mut state = match SHELL_BALL_CLIPBOARD_STATE.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+
+            if sequence_number == 0 || sequence_number == state.last_sequence_number {
+                false
+            } else {
+                state.last_sequence_number = sequence_number;
+                true
+            }
+        };
+
+        if !should_emit {
+            return;
+        }
+
+        if let Ok(Some(text)) = read_windows_clipboard_text() {
+            emit_shell_ball_clipboard_snapshot(&app, text);
+        }
+    });
+}
+
+#[cfg(windows)]
+fn read_clipboard_sequence_number() -> Result<u32, String> {
+    let sequence_number = unsafe { GetClipboardSequenceNumber() };
+    Ok(sequence_number)
+}
+
+#[cfg(windows)]
+fn read_windows_clipboard_text() -> Result<Option<String>, String> {
+    unsafe {
+        OpenClipboard(None).map_err(|error| format!("failed to open clipboard: {error}"))?;
+
+        let result = (|| {
+            if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_err() {
+                return Ok(None);
+            }
+
+            let clipboard_handle = GetClipboardData(CF_UNICODETEXT.0 as u32)
+                .map_err(|error| format!("failed to get clipboard handle: {error}"))?;
+            let clipboard_ptr = GlobalLock(HGLOBAL(clipboard_handle.0));
+            if clipboard_ptr.is_null() {
+                return Err("failed to lock clipboard handle".to_string());
+            }
+
+            let text = read_utf16_null_terminated(clipboard_ptr as *const u16);
+            let _ = GlobalUnlock(HGLOBAL(clipboard_handle.0));
+
+            if text.trim().is_empty() {
+                return Ok(None);
+            }
+
+            Ok(Some(text))
+        })();
+
+        let _ = CloseClipboard();
+        result
+    }
+}
+
+#[cfg(windows)]
+fn read_utf16_null_terminated(mut ptr: *const u16) -> String {
+    let mut buffer = Vec::new();
+
+    unsafe {
+        while !ptr.is_null() && *ptr != 0 {
+            buffer.push(*ptr);
+            ptr = ptr.add(1);
+        }
+    }
+
+    String::from_utf16_lossy(&buffer)
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn shell_ball_clipboard_mouse_hook(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 && w_param.0 as u32 == WM_RBUTTONUP {
+        schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_RIGHT_CLICK_DELAY_MS);
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn shell_ball_clipboard_keyboard_hook(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 && (w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN) {
+        let keyboard_info = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let ctrl_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+        let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+
+        if ctrl_down && (keyboard_info.vkCode == b'C' as u32 || keyboard_info.vkCode == b'X' as u32) {
+            schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_COPY_DELAY_MS);
+        }
+
+        if shift_down && keyboard_info.vkCode == VK_DELETE.0 as u32 {
+            schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_COPY_DELAY_MS);
+        }
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+fn install_shell_ball_clipboard_hooks(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Ok(mut app_handle) = SHELL_BALL_APP_HANDLE.lock() {
+        *app_handle = Some(app.clone());
+    }
+
+    if let Ok(mut state) = SHELL_BALL_CLIPBOARD_STATE.lock() {
+        state.last_sequence_number = read_clipboard_sequence_number().unwrap_or(0);
+    }
+
+    let mut mouse_hook = SHELL_BALL_CLIPBOARD_MOUSE_HOOK
+        .lock()
+        .map_err(|_| "clipboard mouse hook lock poisoned".to_string())?;
+    let mut keyboard_hook = SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK
+        .lock()
+        .map_err(|_| "clipboard keyboard hook lock poisoned".to_string())?;
+
+    if mouse_hook.is_none() {
+        unsafe {
+            *mouse_hook = Some(
+                SetWindowsHookExW(WH_MOUSE_LL, Some(shell_ball_clipboard_mouse_hook), None, 0)
+                    .map_err(|error| format!("failed to install clipboard mouse hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    if keyboard_hook.is_none() {
+        unsafe {
+            *keyboard_hook = Some(
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(shell_ball_clipboard_keyboard_hook), None, 0)
+                    .map_err(|error| format!("failed to install clipboard keyboard hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_shell_ball_clipboard_hooks(_app: &tauri::AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show_shell_ball_menu_item =
         MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球").build(app)?;
@@ -593,9 +671,7 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 }
             }
             TRAY_MENU_OPEN_CONTROL_PANEL_ID => {
-                if let Err(error) = focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL) {
-                    eprintln!("failed to open control panel from tray: {error}");
-                }
+                open_or_focus_control_panel_window(app);
             }
             TRAY_MENU_QUIT_ID => {
                 app.exit(0);
@@ -646,34 +722,28 @@ static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::n
 static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(windows)]
-static SHELL_BALL_SELECTION_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_CLIPBOARD_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
 static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> = Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
-static SHELL_BALL_SELECTION_TRACKER: Lazy<Mutex<SelectionGestureTracker>> =
-    Lazy::new(|| Mutex::new(SelectionGestureTracker::default()));
+static SHELL_BALL_CLIPBOARD_STATE: Lazy<Mutex<ClipboardMonitorState>> =
+    Lazy::new(|| Mutex::new(ClipboardMonitorState::default()));
 
 #[cfg(windows)]
-const SHELL_BALL_SELECTION_DRAG_THRESHOLD_PX: i32 = 16;
+const SHELL_BALL_CLIPBOARD_COPY_DELAY_MS: u64 = 140;
 
 #[cfg(windows)]
-struct SelectionGestureTracker {
-    pointer_active: bool,
-    drag_candidate: bool,
-    start_point: POINT,
-}
+const SHELL_BALL_CLIPBOARD_RIGHT_CLICK_DELAY_MS: u64 = 3_000;
 
 #[cfg(windows)]
-impl Default for SelectionGestureTracker {
-    fn default() -> Self {
-        Self {
-            pointer_active: false,
-            drag_candidate: false,
-            start_point: POINT { x: 0, y: 0 },
-        }
-    }
+#[derive(Default)]
+struct ClipboardMonitorState {
+    last_sequence_number: u32,
 }
 
 #[cfg(windows)]
@@ -842,12 +912,28 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
         .collect())
 }
 
+#[tauri::command]
+async fn shell_ball_read_selection_snapshot(
+    app: tauri::AppHandle,
+) -> Result<Option<selection::SelectionSnapshotPayload>, String> {
+    tauri::async_runtime::spawn_blocking(move || selection::read_selection_snapshot(&app))
+        .await
+        .map_err(|error| format!("selection snapshot task failed: {error}"))?
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            install_shell_ball_selection_hook(app.handle())
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+            // activity::install_mouse_activity_listener()
+            //     .map_err(|error| std::io::Error::other(error))?;
+            install_shell_ball_clipboard_hooks(app.handle())
+                .map_err(|error| std::io::Error::other(error))?;
+            selection::install_selection_listener(app.handle())
+                .map_err(|error| std::io::Error::other(error))?;
+            window_context::install_window_context_listener(app.handle())
+                .map_err(|error| std::io::Error::other(error))?;
 
             Ok(install_system_tray(app)?)
         })
@@ -857,7 +943,11 @@ fn main() {
             named_pipe_unsubscribe,
             shell_ball_set_ignore_cursor_events,
             shell_ball_get_mouse_position,
-            pick_shell_ball_files
+            desktop_get_mouse_activity_snapshot,
+            desktop_capture_screenshot,
+            desktop_get_active_window_context,
+            pick_shell_ball_files,
+            shell_ball_read_selection_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

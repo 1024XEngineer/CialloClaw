@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -50,6 +51,7 @@ func (c runtimeOCRWorkerClient) OCRPDF(ctx context.Context, path, language strin
 // OCRWorkerRuntime manages the OCR worker lifecycle.
 type OCRWorkerRuntime struct {
 	mu        sync.Mutex
+	plugins   *plugin.Service
 	os        platform.OSCapabilityAdapter
 	ready     bool
 	available bool
@@ -58,24 +60,30 @@ type OCRWorkerRuntime struct {
 	name      string
 }
 
-func NewOCRWorkerRuntime(osCapability platform.OSCapabilityAdapter) (*OCRWorkerRuntime, error) {
-	entryPath, err := resolveRelativePathFromRoots(ocrWorkerRelativePath, workerSearchRoots())
-	if err != nil {
-		return nil, err
-	}
+func NewOCRWorkerRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) (*OCRWorkerRuntime, error) {
 	runtime := &OCRWorkerRuntime{
+		plugins:   pluginService,
 		os:        osCapability,
 		ready:     false,
-		available: true,
-		invoker:   newCommandWorkerInvoker(entryPath),
+		available: false,
 		name:      "ocr_worker",
 	}
 	runtime.client = runtimeOCRWorkerClient{runtime: runtime}
+	entryPath, err := resolveRelativePathFromRoots(ocrWorkerRelativePath, workerSearchRoots())
+	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindWorker, "ocr_worker", err)
+		return runtime, err
+	}
+	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindWorker, "ocr_worker")
+	runtime.available = true
+	runtime.invoker = newCommandWorkerInvoker(entryPath)
 	return runtime, nil
 }
 
-func NewUnavailableOCRWorkerRuntime(osCapability platform.OSCapabilityAdapter) *OCRWorkerRuntime {
+func NewUnavailableOCRWorkerRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) *OCRWorkerRuntime {
+	markPluginRuntimeUnavailable(pluginService, plugin.RuntimeKindWorker, "ocr_worker", "ocr worker unavailable")
 	runtime := &OCRWorkerRuntime{
+		plugins:   pluginService,
 		os:        osCapability,
 		ready:     false,
 		available: false,
@@ -113,17 +121,20 @@ func (r *OCRWorkerRuntime) Start() error {
 		return errors.New("os capability adapter is required")
 	}
 	if err := r.os.EnsureNamedPipe(r.PipeName()); err != nil {
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindWorker, r.name, err)
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sidecarHealthTimeout)
 	defer cancel()
 	if _, err := r.invoke(ctx, sidecarRequest{Action: "health"}); err != nil {
 		_ = r.os.CloseNamedPipe(r.PipeName())
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindWorker, r.name, err)
 		return fmt.Errorf("%w: %v", tools.ErrOCRWorkerFailed, err)
 	}
 	r.mu.Lock()
 	r.ready = true
 	r.mu.Unlock()
+	markPluginRuntimeHealthy(r.plugins, plugin.RuntimeKindWorker, r.name)
 	return nil
 }
 
@@ -140,6 +151,7 @@ func (r *OCRWorkerRuntime) Stop() error {
 	r.mu.Lock()
 	r.ready = false
 	r.mu.Unlock()
+	markPluginRuntimeStopped(r.plugins, plugin.RuntimeKindWorker, r.name)
 	return nil
 }
 
@@ -166,6 +178,7 @@ func (r *OCRWorkerRuntime) markFailure() error {
 	r.mu.Lock()
 	r.ready = false
 	r.mu.Unlock()
+	markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindWorker, r.name, errors.New("ocr worker marked failed"))
 	if r.os == nil {
 		return nil
 	}

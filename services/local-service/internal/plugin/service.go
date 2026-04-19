@@ -1,66 +1,344 @@
-// 该文件负责插件管理层的最小骨架。
 package plugin
 
-import "strings"
+import (
+	"strings"
+	"sync"
+	"time"
+)
 
 type SidecarSpec struct {
 	Name      string
 	Transport string
 }
 
-// Service 提供当前模块的服务能力。
+// RuntimeHealth represents the smallest stable health surface that later
+// dashboard and query layers can consume without depending on concrete worker
+// or sidecar implementations.
+type RuntimeHealth string
+
+const (
+	RuntimeHealthUnknown     RuntimeHealth = "unknown"
+	RuntimeHealthHealthy     RuntimeHealth = "healthy"
+	RuntimeHealthDegraded    RuntimeHealth = "degraded"
+	RuntimeHealthFailed      RuntimeHealth = "failed"
+	RuntimeHealthStopped     RuntimeHealth = "stopped"
+	RuntimeHealthUnavailable RuntimeHealth = "unavailable"
+)
+
+// RuntimeStatus separates lifecycle intent from health so callers can tell
+// whether a plugin was never started, is active, or has been stopped.
+type RuntimeStatus string
+
+const (
+	RuntimeStatusDeclared    RuntimeStatus = "declared"
+	RuntimeStatusStarting    RuntimeStatus = "starting"
+	RuntimeStatusRunning     RuntimeStatus = "running"
+	RuntimeStatusStopped     RuntimeStatus = "stopped"
+	RuntimeStatusUnavailable RuntimeStatus = "unavailable"
+	RuntimeStatusFailed      RuntimeStatus = "failed"
+)
+
+// RuntimeKind distinguishes worker runtimes from sidecar runtimes.
+type RuntimeKind string
+
+const (
+	RuntimeKindWorker  RuntimeKind = "worker"
+	RuntimeKindSidecar RuntimeKind = "sidecar"
+)
+
+// RuntimeState is the smallest formal PluginRuntimeState read model exposed by
+// the backend. It keeps runtime visibility separate from static declarations.
+type RuntimeState struct {
+	Name         string
+	Kind         RuntimeKind
+	Status       RuntimeStatus
+	Transport    string
+	Health       RuntimeHealth
+	LastSeenAt   string
+	LastError    string
+	Capabilities []string
+}
+
+// MetricSnapshot is the smallest formal PluginMetricSnapshot read model used to
+// report liveness and failure counts without introducing full telemetry yet.
+type MetricSnapshot struct {
+	Name          string
+	Kind          RuntimeKind
+	StartCount    int
+	SuccessCount  int
+	FailureCount  int
+	LastStartedAt string
+	LastFailedAt  string
+	LastSeenAt    string
+}
+
+// RuntimeEvent represents one backend event payload that higher layers can fan
+// out to dashboards or later persistence sinks.
+type RuntimeEvent struct {
+	Name      string
+	Kind      RuntimeKind
+	EventType string
+	Payload   map[string]any
+	CreatedAt string
+}
+
+const maxRuntimeEvents = 50
+
+// Service keeps static declarations plus the current runtime state cache.
 type Service struct {
-	workers  []string
-	sidecars []string
+	mu       sync.Mutex
+	order    []string
+	runtimes map[string]RuntimeState
+	metrics  map[string]MetricSnapshot
+	events   []RuntimeEvent
 }
 
-// NewService 创建并返回Service。
+// NewService creates the plugin runtime registry with declared workers and sidecars.
 func NewService() *Service {
-	return &Service{
-		workers:  []string{"playwright_worker", "ocr_worker", "media_worker"},
-		sidecars: []string{"playwright_sidecar"},
+	service := &Service{
+		order:    make([]string, 0),
+		runtimes: map[string]RuntimeState{},
+		metrics:  map[string]MetricSnapshot{},
+		events:   make([]RuntimeEvent, 0),
 	}
+	service.declareRuntime(RuntimeState{Name: "playwright_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "worker_process", Health: RuntimeHealthUnknown, Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}})
+	service.declareRuntime(RuntimeState{Name: "ocr_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Capabilities: []string{"extract_text", "ocr_image", "ocr_pdf"}})
+	service.declareRuntime(RuntimeState{Name: "media_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Capabilities: []string{"transcode_media", "normalize_recording", "extract_frames"}})
+	service.declareRuntime(RuntimeState{Name: "playwright_sidecar", Kind: RuntimeKindSidecar, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}})
+	return service
 }
 
-// Workers 处理当前模块的相关逻辑。
+func (s *Service) declareRuntime(state RuntimeState) {
+	key := runtimeKey(state.Kind, state.Name)
+	s.order = append(s.order, key)
+	s.runtimes[key] = state
+	s.metrics[key] = MetricSnapshot{Name: state.Name, Kind: state.Kind}
+}
+
 func (s *Service) Workers() []string {
-	return append([]string(nil), s.workers...)
+	return s.runtimeNamesByKind(RuntimeKindWorker)
 }
 
-// Sidecars 返回当前已知 sidecar 名称列表。
 func (s *Service) Sidecars() []string {
-	return append([]string(nil), s.sidecars...)
+	return s.runtimeNamesByKind(RuntimeKindSidecar)
 }
 
-// HasSidecar 判断当前声明中是否包含指定 sidecar。
+func (s *Service) runtimeNamesByKind(kind RuntimeKind) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]string, 0)
+	for _, key := range s.order {
+		runtime, ok := s.runtimes[key]
+		if !ok {
+			continue
+		}
+		if runtime.Kind == kind {
+			result = append(result, runtime.Name)
+		}
+	}
+	return result
+}
+
 func (s *Service) HasSidecar(name string) bool {
 	needle := strings.TrimSpace(name)
 	if needle == "" {
 		return false
 	}
-	for _, sidecar := range s.sidecars {
-		if sidecar == needle {
-			return true
-		}
-	}
-	return false
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.runtimes[runtimeKey(RuntimeKindSidecar, needle)]
+	return ok
 }
 
-// PrimarySidecar 返回当前最重要的 sidecar 名称。
 func (s *Service) PrimarySidecar() string {
-	if len(s.sidecars) == 0 {
-		return ""
+	if sidecars := s.Sidecars(); len(sidecars) > 0 {
+		return sidecars[0]
 	}
-	return s.sidecars[0]
+	return ""
 }
 
-// SidecarSpec 返回指定 sidecar 的最小运行时规格。
 func (s *Service) SidecarSpec(name string) (SidecarSpec, bool) {
 	if !s.HasSidecar(name) {
 		return SidecarSpec{}, false
 	}
-	return SidecarSpec{
+	state, ok := s.RuntimeState(RuntimeKindSidecar, name)
+	if !ok {
+		return SidecarSpec{}, false
+	}
+	return SidecarSpec{Name: state.Name, Transport: state.Transport}, true
+}
+
+// RuntimeState returns one runtime entry by kind/name.
+func (s *Service) RuntimeState(kind RuntimeKind, name string) (RuntimeState, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.runtimes[runtimeKey(kind, name)]
+	return cloneRuntimeState(state), ok
+}
+
+// RuntimeStates returns all currently known runtime entries.
+func (s *Service) RuntimeStates() []RuntimeState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]RuntimeState, 0, len(s.runtimes))
+	for _, key := range s.order {
+		runtime, ok := s.runtimes[key]
+		if !ok {
+			continue
+		}
+		result = append(result, cloneRuntimeState(runtime))
+	}
+	return result
+}
+
+// MetricSnapshots returns all current metric snapshots.
+func (s *Service) MetricSnapshots() []MetricSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]MetricSnapshot, 0, len(s.metrics))
+	for _, key := range s.order {
+		metric, ok := s.metrics[key]
+		if !ok {
+			continue
+		}
+		result = append(result, metric)
+	}
+	return result
+}
+
+// RuntimeEvents returns the buffered runtime event snapshots.
+func (s *Service) RuntimeEvents() []RuntimeEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]RuntimeEvent, 0, len(s.events))
+	for _, event := range s.events {
+		result = append(result, RuntimeEvent{Name: event.Name, Kind: event.Kind, EventType: event.EventType, Payload: cloneMap(event.Payload), CreatedAt: event.CreatedAt})
+	}
+	return result
+}
+
+// MarkRuntimeStarting records that one runtime is attempting to start.
+func (s *Service) MarkRuntimeStarting(kind RuntimeKind, name string) {
+	s.updateRuntime(kind, name, RuntimeStatusStarting, RuntimeHealthUnknown, "")
+	s.bumpMetric(kind, name, func(metric *MetricSnapshot) {
+		metric.StartCount++
+		metric.LastStartedAt = time.Now().UTC().Format(time.RFC3339)
+	})
+	s.appendEvent(kind, name, "plugin.runtime.starting", map[string]any{"status": RuntimeStatusStarting})
+}
+
+// MarkRuntimeHealthy records a healthy runtime heartbeat.
+func (s *Service) MarkRuntimeHealthy(kind RuntimeKind, name string) {
+	s.updateRuntime(kind, name, RuntimeStatusRunning, RuntimeHealthHealthy, "")
+	s.bumpMetric(kind, name, func(metric *MetricSnapshot) {
+		metric.SuccessCount++
+		metric.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
+	})
+	s.appendEvent(kind, name, "plugin.runtime.healthy", map[string]any{"health": RuntimeHealthHealthy})
+}
+
+// MarkRuntimeFailed records a runtime failure.
+func (s *Service) MarkRuntimeFailed(kind RuntimeKind, name string, err error) {
+	errorText := "runtime failed"
+	if err != nil {
+		errorText = strings.TrimSpace(err.Error())
+	}
+	s.updateRuntime(kind, name, RuntimeStatusFailed, RuntimeHealthFailed, errorText)
+	s.bumpMetric(kind, name, func(metric *MetricSnapshot) {
+		metric.FailureCount++
+		metric.LastFailedAt = time.Now().UTC().Format(time.RFC3339)
+		metric.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
+	})
+	s.appendEvent(kind, name, "plugin.runtime.failed", map[string]any{"error": errorText})
+}
+
+// MarkRuntimeUnavailable records that a declared runtime cannot be started.
+func (s *Service) MarkRuntimeUnavailable(kind RuntimeKind, name string, reason string) {
+	s.updateRuntime(kind, name, RuntimeStatusUnavailable, RuntimeHealthUnavailable, strings.TrimSpace(reason))
+	s.appendEvent(kind, name, "plugin.runtime.unavailable", map[string]any{"error": strings.TrimSpace(reason)})
+}
+
+// MarkRuntimeStopped records a graceful stop signal.
+func (s *Service) MarkRuntimeStopped(kind RuntimeKind, name string) {
+	s.updateRuntime(kind, name, RuntimeStatusStopped, RuntimeHealthStopped, "")
+	s.appendEvent(kind, name, "plugin.runtime.stopped", map[string]any{"status": RuntimeStatusStopped})
+}
+
+func (s *Service) updateRuntime(kind RuntimeKind, name string, status RuntimeStatus, health RuntimeHealth, lastError string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := runtimeKey(kind, name)
+	state := s.runtimes[key]
+	state.Status = status
+	state.Health = health
+	state.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
+	state.LastError = strings.TrimSpace(lastError)
+	s.runtimes[key] = state
+	metric := s.metrics[key]
+	metric.Name = state.Name
+	metric.Kind = state.Kind
+	metric.LastSeenAt = state.LastSeenAt
+	s.metrics[key] = metric
+}
+
+func (s *Service) bumpMetric(kind RuntimeKind, name string, fn func(metric *MetricSnapshot)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := runtimeKey(kind, name)
+	metric := s.metrics[key]
+	metric.Name = name
+	metric.Kind = kind
+	fn(&metric)
+	s.metrics[key] = metric
+}
+
+func (s *Service) appendEvent(kind RuntimeKind, name string, eventType string, payload map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, RuntimeEvent{
 		Name:      name,
-		Transport: "named_pipe",
-	}, true
+		Kind:      kind,
+		EventType: eventType,
+		Payload:   cloneMap(payload),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	if len(s.events) > maxRuntimeEvents {
+		s.events = append([]RuntimeEvent(nil), s.events[len(s.events)-maxRuntimeEvents:]...)
+	}
+}
+
+func runtimeKey(kind RuntimeKind, name string) string {
+	return string(kind) + "::" + strings.TrimSpace(name)
+}
+
+func cloneRuntimeState(state RuntimeState) RuntimeState {
+	return RuntimeState{
+		Name:         state.Name,
+		Kind:         state.Kind,
+		Status:       state.Status,
+		Transport:    state.Transport,
+		Health:       state.Health,
+		LastSeenAt:   state.LastSeenAt,
+		LastError:    state.LastError,
+		Capabilities: append([]string(nil), state.Capabilities...),
+	}
+}
+
+func cloneMap(payload map[string]any) map[string]any {
+	if len(payload) == 0 {
+		return nil
+	}
+	result := make(map[string]any, len(payload))
+	for key, value := range payload {
+		result[key] = value
+	}
+	return result
+}
+
+func stringValue(payload map[string]any, key string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
 }

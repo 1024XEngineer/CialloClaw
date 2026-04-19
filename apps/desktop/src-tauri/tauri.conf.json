@@ -74,15 +74,6 @@
         "decorations": false,
         "visible": false,
         "url": "dashboard.html"
-      },
-      {
-        "label": "control-panel",
-        "title": "CialloClaw Control Panel",
-        "width": 1080,
-        "height": 760,
-        "decorations": false,
-        "visible": false,
-        "url": "control-panel.html"
       }
     ]
   }

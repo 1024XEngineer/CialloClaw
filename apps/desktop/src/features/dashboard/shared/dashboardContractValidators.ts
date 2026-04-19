@@ -1,5 +1,5 @@
 import { APPROVAL_STATUSES, RISK_LEVELS, TASK_SOURCE_TYPES, TASK_STATUSES } from "@cialloclaw/protocol";
-import type { ApprovalRequest, Artifact, MirrorReference, RecoveryPoint, Task, TaskStep } from "@cialloclaw/protocol";
+import type { ApprovalRequest, Artifact, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
 
 type Guard<T> = (value: unknown) => value is T;
 const approvalStatuses = new Set<string>(APPROVAL_STATUSES);
@@ -114,6 +114,24 @@ export function isTaskStep(value: unknown, taskStepStatuses: ReadonlySet<string>
     typeof candidate.output_summary === "string" &&
     typeof candidate.status === "string" &&
     taskStepStatuses.has(candidate.status)
+  );
+}
+
+export function isTaskEvent(value: unknown): value is TaskEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<TaskEvent>;
+  return (
+    typeof candidate.event_id === "string" &&
+    typeof candidate.run_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    (candidate.step_id === undefined || typeof candidate.step_id === "string") &&
+    typeof candidate.type === "string" &&
+    typeof candidate.level === "string" &&
+    typeof candidate.payload_json === "string" &&
+    typeof candidate.created_at === "string"
   );
 }
 

@@ -24,6 +24,8 @@ import type {
   SecurityStatus,
   Session,
   SettingsSnapshot,
+  PluginMetricSnapshot,
+  PluginRuntimeState,
   Task,
   TaskControlAction,
   TaskListGroup,
@@ -68,6 +70,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
+  AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
 } as const;
 
 // RPC_METHODS_PLANNED reserves method names that are still documented as
@@ -283,6 +286,13 @@ export interface AgentTaskDetailGetParams {
 }
 
 // AgentTaskDetailGetResult 定义当前模块的接口约束。
+export interface TaskRuntimeSummary {
+  loop_stop_reason?: string | null;
+  events_count: number;
+  latest_event_type?: string | null;
+  active_steering_count: number;
+}
+
 export interface AgentTaskDetailGetResult {
   task: Task;
   timeline: TaskStep[];
@@ -290,6 +300,7 @@ export interface AgentTaskDetailGetResult {
   mirror_references: MirrorReference[];
   approval_request: ApprovalRequest | null;
   security_summary: SecuritySummary;
+  runtime_summary: TaskRuntimeSummary;
 }
 
 // TaskEvent defines one persisted compatibility event exposed through task-centric queries.
@@ -308,6 +319,10 @@ export interface TaskEvent {
 export interface AgentTaskEventsListParams {
   request_meta: RequestMeta;
   task_id: string;
+  run_id?: string;
+  type?: string;
+  created_at_from?: string;
+  created_at_to?: string;
   limit?: number;
   offset?: number;
 }
@@ -676,6 +691,7 @@ export interface AgentSettingsUpdateParams {
   task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
   data_log?: Partial<SettingsSnapshot["settings"]["data_log"]> & {
     api_key?: string;
+    delete_api_key?: boolean;
   };
 }
 
@@ -685,6 +701,27 @@ export interface AgentSettingsUpdateResult {
   effective_settings: Partial<SettingsSnapshot["settings"]>;
   apply_mode: ApplyMode;
   need_restart: boolean;
+}
+
+// AgentPluginRuntimeListParams defines the stable plugin runtime query params.
+export interface AgentPluginRuntimeListParams {
+  request_meta?: RequestMeta;
+}
+
+// PluginRuntimeEvent mirrors the backend runtime event query payload.
+export interface PluginRuntimeEvent {
+  name: string;
+  kind: PluginRuntimeState["kind"];
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+// AgentPluginRuntimeListResult defines the plugin runtime query result.
+export interface AgentPluginRuntimeListResult {
+  items: PluginRuntimeState[];
+  metrics: PluginMetricSnapshot[];
+  events: PluginRuntimeEvent[];
 }
 
 // TaskUpdatedNotification 定义当前模块的接口约束。
@@ -717,4 +754,15 @@ export interface TaskSessionResumedNotification {
 export interface MirrorOverviewUpdatedNotification {
   revision: number;
   source?: string;
+}
+
+export interface TaskSteeredNotification {
+  task_id: string;
+  message: string;
+}
+
+export interface TaskRuntimeNotification {
+  task_id: string;
+  event: TaskEvent;
+  stop_reason?: string;
 }

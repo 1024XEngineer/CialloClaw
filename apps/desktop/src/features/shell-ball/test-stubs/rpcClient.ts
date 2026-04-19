@@ -1,15 +1,13 @@
 export class JsonRpcClientError extends Error {
-  readonly code: number | null = null;
+  code: number;
+  traceId: string | null;
+  data?: Record<string, unknown>;
 
-  readonly traceId: string | null = null;
-
-  readonly detail: string | null = null;
-
-  readonly rpcMessage: string;
-
-  constructor(message = "stubbed json-rpc error") {
-    super(message);
+  constructor(input: { code: number; data?: Record<string, unknown>; message: string; traceId?: string | null }) {
+    super(input.message);
     this.name = "JsonRpcClientError";
-    this.rpcMessage = message;
+    this.code = input.code;
+    this.traceId = input.traceId ?? null;
+    this.data = input.data;
   }
 }

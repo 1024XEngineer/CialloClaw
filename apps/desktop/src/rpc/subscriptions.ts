@@ -2,6 +2,8 @@ import type {
   ApprovalPendingNotification,
   DeliveryReadyNotification,
   MirrorOverviewUpdatedNotification,
+  TaskRuntimeNotification,
+  TaskSteeredNotification,
   TaskUpdatedNotification,
 } from "@cialloclaw/protocol";
 import { NOTIFICATION_METHODS } from "./protocolConstants";
@@ -182,6 +184,60 @@ export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotific
   return () => {
     disposed = true;
     if (unsubscribe) {
+      void unsubscribe();
+    }
+  };
+}
+
+// subscribeTaskRuntime keeps task detail views aligned with task.steered and
+// loop.* notifications without promoting these runtime payloads into formal
+// frontend state. Callers still re-read the task-centric queries after each hit.
+export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSteeredNotification | TaskRuntimeNotification) => void) {
+  const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
+
+  if (!bridge?.subscribe) {
+    return () => {};
+  }
+
+  let disposed = false;
+  const unsubscribes: Array<() => Promise<void>> = [];
+
+  const methods = [
+    NOTIFICATION_METHODS.TASK_STEERED,
+    NOTIFICATION_METHODS.LOOP_STARTED,
+    NOTIFICATION_METHODS.LOOP_ROUND_STARTED,
+    NOTIFICATION_METHODS.LOOP_RETRYING,
+    NOTIFICATION_METHODS.LOOP_COMPACTED,
+    NOTIFICATION_METHODS.LOOP_ROUND_COMPLETED,
+    NOTIFICATION_METHODS.LOOP_COMPLETED,
+    NOTIFICATION_METHODS.LOOP_FAILED,
+  ] as const;
+
+  for (const method of methods) {
+    void bridge
+      .subscribe(method, (payload) => {
+        if (disposed) {
+          return;
+        }
+
+        const message = payload as { params?: TaskSteeredNotification | TaskRuntimeNotification };
+        if (message.params?.task_id === taskId) {
+          onMessage(message.params);
+        }
+      })
+      .then((subscription) => {
+        if (disposed) {
+          void subscription.unsubscribe();
+          return;
+        }
+
+        unsubscribes.push(subscription.unsubscribe);
+      });
+  }
+
+  return () => {
+    disposed = true;
+    for (const unsubscribe of unsubscribes) {
       void unsubscribe();
     }
   };

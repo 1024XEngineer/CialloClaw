@@ -100,6 +100,8 @@ type Request struct {
 	RunID                string
 	Title                string
 	Intent               map[string]any
+	AttemptIndex         int
+	SegmentKind          string
 	Snapshot             contextsvc.TaskContextSnapshot
 	SteeringMessages     []string
 	DeliveryType         string
@@ -107,6 +109,7 @@ type Request struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	BudgetDowngrade      map[string]any
 }
 
 // Result 描述执行完成后需要回填给 orchestrator 的交付与痕迹。
@@ -119,6 +122,7 @@ type Result struct {
 	ModelInvocation map[string]any
 	AuditRecord     map[string]any
 	ToolCalls       []tools.ToolCallRecord
+	BudgetFailure   map[string]any
 	ToolName        string
 	ToolInput       map[string]any
 	ToolOutput      map[string]any
@@ -146,6 +150,7 @@ type generationTrace struct {
 	ModelInvocation  map[string]any
 	AuditRecord      map[string]any
 	GenerationOutput map[string]any
+	BudgetFailure    map[string]any
 }
 
 // NewService 创建执行服务。
@@ -305,6 +310,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		ModelInvocation: cloneMap(trace.ModelInvocation),
 		AuditRecord:     cloneMap(trace.AuditRecord),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+		BudgetFailure:   cloneMap(trace.BudgetFailure),
 		ToolInput: map[string]any{
 			"intent_name":     effectiveIntentName(request.Intent),
 			"delivery_type":   deliveryType,
@@ -634,6 +640,9 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 	if intentName == "" || intentName == "write_file" {
 		return Result{}, false, nil
 	}
+	if budgetDowngradeDisallowsDirectTool(request, intentName) {
+		return Result{}, false, nil
+	}
 	if s.executor == nil || s.tools == nil {
 		return Result{}, false, nil
 	}
@@ -755,6 +764,9 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	}
 
 	if s.tools == nil || intentName == "" {
+		return "", nil, false
+	}
+	if budgetDowngradeDisallowsDirectTool(request, intentName) {
 		return "", nil, false
 	}
 	if _, err := s.tools.Get(intentName); err != nil {
@@ -1333,23 +1345,57 @@ func (s *Service) fileSection(filePath string) string {
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	if trace, ok, err := s.generateOutputWithAgentLoop(ctx, request, inputText); err != nil {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
+			return fallbackTrace, nil
+		}
 		return generationTrace{}, err
 	} else if ok {
 		return trace, nil
 	}
 
-	return s.generateOutputWithPrompt(ctx, request, inputText)
+	trace, err := s.generateOutputWithPrompt(ctx, request, inputText)
+	if err != nil {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
+			return fallbackTrace, nil
+		}
+		return generationTrace{}, err
+	}
+	return trace, nil
 }
 
 func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	prompt := buildPrompt(request, inputText)
+	fallbackText := fallbackOutput(request, inputText)
+	if boolValue(request.BudgetDowngrade, "applied") {
+		fallbackText = budgetDowngradeFallbackText(request, inputText)
+	}
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, "generate_text", map[string]any{
 		"prompt":        prompt,
-		"fallback_text": fallbackOutput(request, inputText),
+		"fallback_text": fallbackText,
 		"intent_name":   effectiveIntentName(request.Intent),
 	})
 	if err != nil {
 		return generationTrace{}, fmt.Errorf("generate text: %w", err)
+	}
+	if boolValue(toolResult.RawOutput, "fallback") && boolValue(request.BudgetDowngrade, "applied") {
+		auditRecord := mapValue(toolResult.RawOutput, "audit_record")
+		failureReason := stringValue(toolResult.RawOutput, "fallback_reason", model.ErrClientNotConfigured.Error())
+		return generationTrace{
+			OutputText: budgetDowngradeFallbackText(request, inputText),
+			ToolCalls:  []tools.ToolCallRecord{toolResult.ToolCall},
+			ModelInvocation: map[string]any{
+				"provider":   "budget_downgrade_fallback",
+				"model_id":   "lightweight_delivery",
+				"request_id": fmt.Sprintf("budget_fallback_%s", request.TaskID),
+				"fallback":   true,
+				"reason":     stringValue(request.BudgetDowngrade, "trigger_reason", "execution_fallback"),
+			},
+			AuditRecord:      cloneMap(auditRecord),
+			GenerationOutput: cloneMap(toolResult.RawOutput),
+			BudgetFailure:    budgetFailureSignal(request, errors.New(failureReason)),
+		}, nil
 	}
 
 	outputText, ok := toolResult.RawOutput["content"].(string)
@@ -1391,11 +1437,15 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		TaskID:          request.TaskID,
 		RunID:           request.RunID,
 		Intent:          request.Intent,
+		AttemptIndex:    request.AttemptIndex,
+		SegmentKind:     request.SegmentKind,
 		InputText:       runtimeInput,
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
 		ToolDefinitions: s.agentLoopToolDefinitions(),
-		AllowedTool:     s.isAllowedAgentLoopTool,
+		AllowedTool: func(name string) bool {
+			return s.isAllowedAgentLoopTool(name) && !budgetDowngradeDisallowsDirectTool(request, name)
+		},
 		PollSteering: func(_ context.Context, taskID string) []string {
 			if s.steeringPoller == nil {
 				return nil
@@ -1414,7 +1464,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		CompressChars:      s.agentLoopCompressionChars(),
 		KeepRecent:         s.agentLoopKeepRecent(),
 		RepeatedToolBudget: 2,
-		PlannerRetryBudget: s.agentLoopPlannerRetryBudget(),
+		PlannerRetryBudget: budgetPlannerRetryBudget(request, s.agentLoopPlannerRetryBudget()),
 		ToolRetryBudget:    s.agentLoopToolRetryBudget(),
 		Hook:               noopAgentLoopHook{},
 		EmitEvent: func(event agentloop.LifecycleEvent) {
@@ -1502,6 +1552,142 @@ func invocationRecordMap(record *model.InvocationRecord) map[string]any {
 		return nil
 	}
 	return record.Map()
+}
+
+func budgetDowngradeDisablesToolCalls(request Request) bool {
+	return boolValue(request.BudgetDowngrade, "applied") && containsExecutionString(stringSliceValue(request.BudgetDowngrade, "degrade_actions"), "skip_expensive_tools") && budgetDowngradeBlocksAgentLoopTools(request)
+}
+
+func budgetDowngradeBlocksAgentLoopTools(request Request) bool {
+	for _, category := range budgetExpensiveToolCategories(request) {
+		switch category {
+		case "filesystem_mutation", "browser_mutation", "command", "media_heavy":
+			return true
+		}
+	}
+	return false
+}
+
+func budgetDowngradeDisallowsDirectTool(request Request, toolName string) bool {
+	if !budgetDowngradeDisablesToolCalls(request) {
+		return false
+	}
+	category := budgetToolCategory(toolName)
+	if category == "" {
+		return false
+	}
+	return containsExecutionString(budgetExpensiveToolCategories(request), category)
+}
+
+func budgetPlannerRetryBudget(request Request, fallback int) int {
+	if fallback <= 0 {
+		fallback = 1
+	}
+	trace := mapValue(request.BudgetDowngrade, "trace")
+	override := intValue(trace, "planner_retry_budget")
+	if override <= 0 {
+		return fallback
+	}
+	if override < fallback {
+		return override
+	}
+	return fallback
+}
+
+func budgetExpensiveToolCategories(request Request) []string {
+	trace := mapValue(request.BudgetDowngrade, "trace")
+	if categories := stringSliceValue(trace, "expensive_tool_categories"); len(categories) > 0 {
+		return categories
+	}
+	return []string{"command", "browser_mutation", "media_heavy"}
+}
+
+func budgetToolCategory(toolName string) string {
+	switch strings.TrimSpace(toolName) {
+	case "exec_command":
+		return "command"
+	case "write_file":
+		return "filesystem_mutation"
+	case "page_interact":
+		return "browser_mutation"
+	case "transcode_media", "normalize_recording", "extract_frames":
+		return "media_heavy"
+	default:
+		return ""
+	}
+}
+
+func budgetDowngradeGenerationFallback(request Request, inputText string, generationErr error) (generationTrace, bool) {
+	if !boolValue(request.BudgetDowngrade, "applied") {
+		return generationTrace{}, false
+	}
+	summary := firstNonEmpty(stringValue(request.BudgetDowngrade, "summary", ""), "Budget downgrade fallback applied.")
+	triggerReason := stringValue(request.BudgetDowngrade, "trigger_reason", "execution_fallback")
+	fallbackText := fallbackOutput(request, inputText)
+	output := strings.TrimSpace(summary + "\n\n" + fallbackText)
+	return generationTrace{
+		OutputText: output,
+		ModelInvocation: map[string]any{
+			"provider":   "budget_downgrade_fallback",
+			"model_id":   "lightweight_delivery",
+			"request_id": fmt.Sprintf("budget_fallback_%s", request.TaskID),
+			"fallback":   true,
+			"reason":     triggerReason,
+		},
+		GenerationOutput: map[string]any{
+			"content":  output,
+			"fallback": true,
+			"reason":   triggerReason,
+		},
+	}, true
+}
+
+func budgetFailureSignal(request Request, generationErr error) map[string]any {
+	if !boolValue(request.BudgetDowngrade, "applied") || generationErr == nil {
+		return nil
+	}
+	reason := strings.TrimSpace(generationErr.Error())
+	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !isBudgetFailureReason(reason) {
+		return nil
+	}
+	return map[string]any{
+		"category": "budget_auto_downgrade",
+		"action":   "budget_auto_downgrade.failure_signal",
+		"result":   "failed",
+		"reason":   normalizeBudgetFailureReason(reason),
+	}
+}
+
+func isBudgetFailureReason(reason string) bool {
+	trimmed := strings.TrimSpace(reason)
+	switch trimmed {
+	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error():
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeBudgetFailureReason(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return "execution fallback"
+	}
+	return trimmed
+}
+
+func budgetDowngradeFallbackText(request Request, inputText string) string {
+	summary := firstNonEmpty(stringValue(request.BudgetDowngrade, "summary", ""), "Budget downgrade fallback applied.")
+	return strings.TrimSpace(summary + "\n\n" + fallbackOutput(request, inputText))
+}
+
+func containsExecutionString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func buildPrompt(request Request, inputText string) string {
@@ -2098,6 +2284,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		return
 	}
 	updatedAt := time.Now().UTC().Format(time.RFC3339)
+	segmentToken := loopSegmentToken(result)
 	runRecord := storage.RunRecord{
 		RunID:      request.RunID,
 		TaskID:     request.TaskID,
@@ -2111,7 +2298,9 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice || result.StopReason == agentloop.StopReasonToolRetryExhausted || result.StopReason == agentloop.StopReasonPlannerError {
 		runRecord.FinishedAt = updatedAt
 	}
-	_ = s.loopStore.SaveRun(context.Background(), runRecord)
+	if s.loopStore != nil {
+		_ = s.loopStore.SaveRun(context.Background(), runRecord)
+	}
 	if s.notificationEmitter != nil && result.StopReason != "" {
 		s.notificationEmitter(request.TaskID, "task.updated", map[string]any{
 			"task_id":          request.TaskID,
@@ -2119,13 +2308,18 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		})
 	}
 
+	roundStepIDs := make(map[string]string, len(result.Rounds))
 	stepRecords := make([]storage.StepRecord, 0, len(result.Rounds))
 	for _, round := range result.Rounds {
+		stepID := loopStepRecordID(request.TaskID, segmentToken, round)
+		roundStepIDs[round.StepID] = stepID
 		stepRecords = append(stepRecords, storage.StepRecord{
-			StepID:        fmt.Sprintf("%s_%s", request.RunID, round.StepID),
+			StepID:        stepID,
 			RunID:         round.RunID,
 			TaskID:        round.TaskID,
 			OrderIndex:    round.LoopRound,
+			AttemptIndex:  round.AttemptIndex,
+			SegmentKind:   round.SegmentKind,
 			LoopRound:     round.LoopRound,
 			Name:          round.Name,
 			Status:        round.Status,
@@ -2141,28 +2335,28 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 			ToolCallID:    round.ToolCallRecord.ToolCallID,
 		})
 	}
-	if len(stepRecords) > 0 {
+	if s.loopStore != nil && len(stepRecords) > 0 {
 		_ = s.loopStore.SaveSteps(context.Background(), stepRecords)
 	}
 
 	eventRecords := make([]storage.EventRecord, 0, len(result.Events))
 	for index, event := range result.Events {
 		eventRecords = append(eventRecords, storage.EventRecord{
-			EventID:     fmt.Sprintf("evt_loop_%s_%03d", request.RunID, index+1),
+			EventID:     loopEventRecordID(request.TaskID, request.AttemptIndex, request.SegmentKind, segmentToken, index, event.Type),
 			RunID:       request.RunID,
 			TaskID:      request.TaskID,
-			StepID:      stepEventID(request.RunID, event.StepID),
+			StepID:      loopEventStepID(event.StepID, roundStepIDs),
 			Type:        event.Type,
 			Level:       firstNonEmpty(event.Level, "info"),
 			PayloadJSON: marshalEventPayload(event.Payload),
 			CreatedAt:   event.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	if len(eventRecords) > 0 {
+	if s.loopStore != nil && len(eventRecords) > 0 {
 		_ = s.loopStore.SaveEvents(context.Background(), eventRecords)
 	}
 
-	if result.DeliveryRecord != nil {
+	if s.loopStore != nil && result.DeliveryRecord != nil {
 		_ = s.loopStore.SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
 			DeliveryResultID: result.DeliveryRecord.DeliveryResultID,
 			TaskID:           result.DeliveryRecord.TaskID,
@@ -2190,11 +2384,81 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 	}
 }
 
-func stepEventID(runID, stepID string) string {
-	if strings.TrimSpace(stepID) == "" {
+// loopSegmentToken derives one deterministic token for a persisted execution
+// segment so repeated resumes keep distinct rows without inventing new state.
+func loopSegmentToken(result agentloop.Result) string {
+	switch {
+	case len(result.Rounds) > 0:
+		return loopRuntimeTimeToken(firstNonZeroLoopTime(result.Rounds[0].StartedAt, result.Rounds[0].CompletedAt))
+	case len(result.Events) > 0:
+		return loopRuntimeTimeToken(result.Events[0].CreatedAt)
+	case result.DeliveryRecord != nil:
+		return loopRuntimeTimeToken(result.DeliveryRecord.CreatedAt)
+	default:
+		return "0"
+	}
+}
+
+func loopStepRecordID(taskID, segmentToken string, round agentloop.PersistedRound) string {
+	return fmt.Sprintf(
+		"%s_attempt_%02d_%s_%s_%s",
+		taskID,
+		normalizedLoopAttemptIndex(round.AttemptIndex),
+		normalizedLoopSegmentKind(round.SegmentKind),
+		firstNonEmpty(segmentToken, "0"),
+		round.StepID,
+	)
+}
+
+func loopEventRecordID(taskID string, attemptIndex int, segmentKind, segmentToken string, index int, eventType string) string {
+	return fmt.Sprintf(
+		"evt_loop_%s_attempt_%02d_%s_%s_%03d_%s",
+		taskID,
+		normalizedLoopAttemptIndex(attemptIndex),
+		normalizedLoopSegmentKind(segmentKind),
+		firstNonEmpty(segmentToken, "0"),
+		index+1,
+		strings.ReplaceAll(strings.TrimSpace(eventType), ".", "_"),
+	)
+}
+
+func loopEventStepID(stepID string, roundStepIDs map[string]string) string {
+	trimmedStepID := strings.TrimSpace(stepID)
+	if trimmedStepID == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s_%s", runID, stepID)
+	if stableStepID, ok := roundStepIDs[trimmedStepID]; ok {
+		return stableStepID
+	}
+	return trimmedStepID
+}
+
+func normalizedLoopAttemptIndex(value int) int {
+	if value > 0 {
+		return value
+	}
+	return 1
+}
+
+func normalizedLoopSegmentKind(value string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return "initial"
+}
+
+func loopRuntimeTimeToken(value time.Time) string {
+	if value.IsZero() {
+		return "0"
+	}
+	return fmt.Sprintf("%d", value.UTC().UnixNano())
+}
+
+func firstNonZeroLoopTime(primary, fallback time.Time) time.Time {
+	if !primary.IsZero() {
+		return primary
+	}
+	return fallback
 }
 
 func formatOptionalTime(value time.Time) string {
@@ -2273,6 +2537,9 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 	)
 	if s.tools != nil && intentName != "" && intentName != "write_file" {
 		if _, err := s.tools.Get(intentName); err == nil {
+			if budgetDowngradeDisallowsDirectTool(request, intentName) {
+				return "", nil, nil, false, nil
+			}
 			switch intentName {
 			case "read_file":
 				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
