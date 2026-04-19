@@ -92,6 +92,14 @@
   padding: 0.9rem 1rem;
 }
 
+.security-page__topbar--canvas {
+  left: var(--security-space-5);
+  position: absolute;
+  right: var(--security-space-5);
+  top: var(--security-space-5);
+  z-index: 7;
+}
+
 .security-page__home-link,
 .security-page__module-link,
 .security-queue-card__detail-button,
@@ -164,6 +172,10 @@
 .security-page__hero,
 .security-zone {
   gap: var(--security-space-4);
+}
+
+.security-page__hero {
+  top: clamp(7.4rem, 12vw, 8.6rem);
 }
 
 .security-zone__header {
@@ -667,6 +679,12 @@
 
   .security-page__module-nav {
     justify-content: flex-start;
+  }
+
+  .security-page__topbar--canvas {
+    left: 0.85rem;
+    right: 0.85rem;
+    top: 0.85rem;
   }
 }
 

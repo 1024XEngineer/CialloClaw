@@ -39,7 +39,7 @@ function createApprovalRequest(taskId: string, approvalId: string, riskLevel: Ap
 const baseTasks: Task[] = [
   {
     task_id: "task_focus_001",
-    title: "把任务页整理成可爱又克制的未来感任务舱",
+    title: "把任务页整理成可爱又克制的云岛剧场",
     source_type: "dragged_file",
     status: "processing",
     intent: { name: "design_task_page", arguments: { mood: "soft_future" } },
@@ -63,7 +63,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_focus_003",
-    title: "把最近便签整理成任务舱所需的上下文提示",
+    title: "把最近便签整理成任务页所需的上下文提示",
     source_type: "todo",
     status: "paused",
     intent: { name: "organize_notes", arguments: { output: "context" } },
@@ -139,7 +139,7 @@ const taskExperiences: Record<string, TaskExperience> = {
   task_focus_001: {
     priority: "critical",
     dueAt: iso(DAY),
-    goal: "把当前任务页整理成一个聚焦推进单任务的未来感任务舱，让人第一眼就知道正在做什么、下一步该怎么推进。",
+    goal: "把当前任务页整理成一个聚焦推进单任务的云岛剧场，让人第一眼就知道正在做什么、下一步该怎么推进。",
     phase: "正在把详情、子任务、产出和笔记四个内容层整理成一组连贯舱室。",
     nextAction: "先把主任务区的呼吸感和 tabs 内容面板定型，再回头收细底部操作键与成果区。",
     progressHint: "当前正在打磨主任务区，离可交付版本还差产出区与动作区收口。",
@@ -185,7 +185,7 @@ const taskExperiences: Record<string, TaskExperience> = {
       },
     ],
     quickContext: [
-      { id: "ctx_001", label: "最近对话", content: "任务页必须像未来感任务舱，而不是企业后台。" },
+      { id: "ctx_001", label: "最近对话", content: "任务页必须像有呼吸感的云岛剧场，而不是企业后台。" },
       { id: "ctx_002", label: "用户约束", content: "可爱但不幼稚，炫酷但不赛博朋克。" },
       { id: "ctx_003", label: "关键提醒", content: "底部动作区要像软胶按键，不能做成普通工具栏。" },
     ],
@@ -500,7 +500,7 @@ const taskExperiences: Record<string, TaskExperience> = {
     ],
     recentConversation: ["任务页要和悬浮球属于同一世界观。", "可爱但要克制。"],
     suggestedNext: "把悬浮球的软质按钮感迁到任务页底部动作条。",
-    assistantState: { label: "待命", hint: "视觉参考已经准备好，接下来重点是落地任务舱页面。" },
+    assistantState: { label: "待命", hint: "视觉参考已经准备好，接下来重点是落地云岛剧场页面。" },
     outputs: [
       { id: "output_022", label: "当前草稿", content: "无。", tone: "draft" },
       { id: "output_023", label: "已生成结果", content: "悬浮球的世界观资料已经可直接参考。", tone: "result" },
@@ -563,7 +563,7 @@ const baseDetails: Record<string, AgentTaskDetailGetResult> = {
     { security_status: "normal", risk_level: "green", pending_authorizations: 0, latest_restore_point: null },
     [
       { memory_id: "mem_task_page_soft_future", reason: "任务页需要继承悬浮球的暖白与蓝灰冷调。", summary: "保持软胶质感、磨砂玻璃和低打扰留白。" },
-      { memory_id: "mem_task_page_single_focus", reason: "任务页应聚焦推进当前一个任务，而不是管理一堆任务。", summary: "用主任务舱 + 辅助区组织信息，而不是后台式双栏表格。" },
+      { memory_id: "mem_task_page_single_focus", reason: "任务页应聚焦推进当前一个任务，而不是管理一堆任务。", summary: "用中心舞台 + 漂浮任务岛组织信息，而不是后台式双栏表格。" },
       { memory_id: "mem_task_page_quiet_motion", reason: "动效必须克制，高级，不可出现夸张霓虹与过重 bounce。", summary: "主任务区轻呼吸、tabs 淡入位移、Sheet 像舱门滑开即可。" },
     ],
   ),

@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Lock, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Lock, X } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallVoiceHintMode } from "../shellBall.types";
@@ -41,6 +41,19 @@ export function ShellBallVoiceHints({
         >
           <ArrowDown className="shell-ball-mascot__voice-arrow" />
           <X className="shell-ball-mascot__voice-icon" />
+        </div>
+      ) : null}
+
+      {hintMode === "finish" ? (
+        <div
+          className={cn(
+            "shell-ball-mascot__voice-hint",
+            "shell-ball-mascot__voice-hint--finish",
+            voicePreview === "cancel" && "is-active",
+          )}
+        >
+          <ArrowDown className="shell-ball-mascot__voice-arrow" />
+          <Check className="shell-ball-mascot__voice-icon" />
         </div>
       ) : null}
     </>

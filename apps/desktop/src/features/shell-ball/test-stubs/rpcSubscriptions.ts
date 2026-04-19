@@ -2,10 +2,11 @@ import type {
   ApprovalPendingNotification,
   DeliveryReadyNotification,
   MirrorOverviewUpdatedNotification,
-  TaskRuntimeNotification,
-  TaskSteeredNotification,
   TaskUpdatedNotification,
 } from "@cialloclaw/protocol";
+
+type TaskRuntimeNotification = TaskUpdatedNotification;
+type TaskSteeredNotification = TaskUpdatedNotification;
 
 function noopUnsubscribe() {
   return () => {};

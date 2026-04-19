@@ -6,7 +6,10 @@ mod screen_capture;
 mod selection;
 mod window_context;
 
+use serde::Deserialize;
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Write};
@@ -24,6 +27,12 @@ use once_cell::sync::Lazy;
 use std::collections::HashSet;
 
 #[cfg(windows)]
+use std::ffi::OsStr;
+
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
+#[cfg(windows)]
 use windows::Win32::{
     Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{PtInRect, ScreenToClient},
@@ -35,9 +44,13 @@ use windows::Win32::{
         Memory::{GlobalLock, GlobalUnlock},
         Ole::CF_UNICODETEXT,
     },
+    UI::Shell::ShellExecuteW,
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_DELETE, VK_SHIFT},
     UI::WindowsAndMessaging::*,
 };
+
+#[cfg(windows)]
+use windows::core::PCWSTR;
 
 type JsonChannel = Channel<Value>;
 
@@ -921,6 +934,188 @@ async fn shell_ball_read_selection_snapshot(
         .map_err(|error| format!("selection snapshot task failed: {error}"))?
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DesktopOpenResourceAction {
+    OpenFile,
+    RevealInFolder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DesktopOpenOperation {
+    OpenPath(PathBuf),
+    RevealFile(PathBuf),
+}
+
+#[tauri::command]
+fn desktop_open_resource(
+    action: DesktopOpenResourceAction,
+    path: String,
+) -> Result<(), String> {
+    let resolved_path = resolve_desktop_resource_path(&path)?;
+    let operation = build_desktop_open_operation(action, resolved_path);
+    execute_desktop_open_operation(&operation)
+}
+
+fn resolve_desktop_resource_path(raw_path: &str) -> Result<PathBuf, String> {
+    let roots = build_desktop_resource_resolution_roots();
+    resolve_desktop_resource_path_with_roots(raw_path, &roots)
+}
+
+fn resolve_desktop_resource_path_with_roots(
+    raw_path: &str,
+    roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let trimmed_path = raw_path.trim();
+    if trimmed_path.is_empty() {
+        return Err("resource path is empty".to_string());
+    }
+
+    let candidate_path = PathBuf::from(trimmed_path);
+    if candidate_path.is_absolute() {
+        return ensure_existing_path(candidate_path, trimmed_path);
+    }
+
+    for root in roots {
+        let joined_path = root.join(&candidate_path);
+        if joined_path.exists() {
+            return Ok(joined_path);
+        }
+    }
+
+    Err(format!("resource path does not exist: {trimmed_path}"))
+}
+
+fn ensure_existing_path(path: PathBuf, original_path: &str) -> Result<PathBuf, String> {
+    if path.exists() {
+        return Ok(path);
+    }
+
+    Err(format!("resource path does not exist: {original_path}"))
+}
+
+fn build_desktop_resource_resolution_roots() -> Vec<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut roots = Vec::new();
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        push_unique_path(&mut roots, current_dir);
+    }
+
+    push_unique_path(&mut roots, manifest_dir.clone());
+
+    if let Some(desktop_root) = manifest_dir.parent() {
+        push_unique_path(&mut roots, desktop_root.to_path_buf());
+    }
+
+    if let Some(apps_root) = manifest_dir.parent().and_then(Path::parent) {
+        push_unique_path(&mut roots, apps_root.to_path_buf());
+    }
+
+    if let Some(repo_root) = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    {
+        push_unique_path(&mut roots, repo_root.to_path_buf());
+    }
+
+    roots
+}
+
+fn push_unique_path(roots: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if roots.iter().any(|existing| existing == &candidate) {
+        return;
+    }
+
+    roots.push(candidate);
+}
+
+fn build_desktop_open_operation(
+    action: DesktopOpenResourceAction,
+    target_path: PathBuf,
+) -> DesktopOpenOperation {
+    match action {
+        DesktopOpenResourceAction::OpenFile => DesktopOpenOperation::OpenPath(target_path),
+        DesktopOpenResourceAction::RevealInFolder => {
+            if target_path.is_dir() {
+                DesktopOpenOperation::OpenPath(target_path)
+            } else {
+                DesktopOpenOperation::RevealFile(target_path)
+            }
+        }
+    }
+}
+
+fn execute_desktop_open_operation(operation: &DesktopOpenOperation) -> Result<(), String> {
+    match operation {
+        DesktopOpenOperation::OpenPath(target_path) => open_path_with_default_app(target_path),
+        DesktopOpenOperation::RevealFile(target_path) => reveal_file_in_folder(target_path),
+    }
+}
+
+#[cfg(windows)]
+fn open_path_with_default_app(target_path: &Path) -> Result<(), String> {
+    let operation = encode_wide_string(OsStr::new("open"));
+    let target = encode_wide_string(target_path.as_os_str());
+
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    let result_code = result.0 as isize;
+    if result_code <= 32 {
+        return Err(format!("shell open failed with code {result_code}"));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn open_path_with_default_app(target_path: &Path) -> Result<(), String> {
+    let command_name = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+
+    Command::new(command_name)
+        .arg(target_path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to launch {command_name}: {error}"))
+}
+
+#[cfg(windows)]
+fn reveal_file_in_folder(target_path: &Path) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg(format!("/select,{}", target_path.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to reveal file in Explorer: {error}"))
+}
+
+#[cfg(not(windows))]
+fn reveal_file_in_folder(target_path: &Path) -> Result<(), String> {
+    let parent_directory = target_path
+        .parent()
+        .ok_or_else(|| format!("resource path has no parent directory: {}", target_path.display()))?;
+
+    open_path_with_default_app(parent_directory)
+}
+
+#[cfg(windows)]
+fn encode_wide_string(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
@@ -947,8 +1142,99 @@ fn main() {
             desktop_capture_screenshot,
             desktop_get_active_window_context,
             pick_shell_ball_files,
-            shell_ball_read_selection_snapshot
+            shell_ball_read_selection_snapshot,
+            desktop_open_resource
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_desktop_open_operation, resolve_desktop_resource_path_with_roots,
+        DesktopOpenOperation, DesktopOpenResourceAction,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn create_temp_root(name: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cialloclaw_desktop_{name}_{unique_suffix}"));
+        fs::create_dir_all(&root).expect("temp root should be created");
+        root
+    }
+
+    #[test]
+    fn resolve_desktop_resource_path_with_roots_keeps_absolute_paths() {
+        let root = create_temp_root("absolute");
+        let target = root.join("artifact.txt");
+        fs::write(&target, "artifact").expect("temp file should be created");
+
+        let resolved = resolve_desktop_resource_path_with_roots(
+            target.to_str().expect("temp path should be utf-8"),
+            &[],
+        )
+        .expect("absolute path should resolve");
+
+        assert_eq!(resolved, target);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_desktop_resource_path_with_roots_uses_repo_relative_candidates() {
+        let missing_root = create_temp_root("missing_root");
+        let repo_root = create_temp_root("repo_root");
+        let relative_path = PathBuf::from("docs").join("dashboard-design.md");
+        let target = repo_root.join(&relative_path);
+        fs::create_dir_all(
+            target
+                .parent()
+                .expect("target should have a parent directory"),
+        )
+        .expect("target parent should be created");
+        fs::write(&target, "dashboard").expect("relative target should be created");
+
+        let resolved = resolve_desktop_resource_path_with_roots(
+            relative_path.to_str().expect("relative path should be utf-8"),
+            &[missing_root.clone(), repo_root.clone()],
+        )
+        .expect("repo-relative path should resolve");
+
+        assert_eq!(resolved, target);
+        let _ = fs::remove_dir_all(missing_root);
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn build_desktop_open_operation_opens_directories_and_reveals_files() {
+        let root = create_temp_root("reveal");
+        let file_target = root.join("artifact.txt");
+        fs::write(&file_target, "artifact").expect("temp file should be created");
+
+        assert_eq!(
+            build_desktop_open_operation(
+                DesktopOpenResourceAction::RevealInFolder,
+                root.clone(),
+            ),
+            DesktopOpenOperation::OpenPath(root.clone())
+        );
+        assert_eq!(
+            build_desktop_open_operation(
+                DesktopOpenResourceAction::RevealInFolder,
+                file_target.clone(),
+            ),
+            DesktopOpenOperation::RevealFile(file_target.clone())
+        );
+        assert_eq!(
+            build_desktop_open_operation(DesktopOpenResourceAction::OpenFile, file_target.clone()),
+            DesktopOpenOperation::OpenPath(file_target.clone())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

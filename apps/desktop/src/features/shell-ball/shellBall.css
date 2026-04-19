@@ -1533,6 +1533,12 @@
   bottom: 0.35rem;
 }
 
+.shell-ball-mascot__voice-hint--finish {
+  background: rgba(70, 153, 108, 0.22);
+  border: 1px solid rgba(70, 153, 108, 0.38);
+  bottom: 0.35rem;
+}
+
 .shell-ball-mascot__voice-hint.is-active,
 .shell-ball-mascot__voice-hint.is-locked {
   box-shadow:
@@ -1551,6 +1557,11 @@
 .shell-ball-mascot__voice-hint--cancel.is-active {
   background: rgba(86, 132, 196, 0.58);
   border-color: rgba(234, 242, 255, 0.76);
+}
+
+.shell-ball-mascot__voice-hint--finish.is-active {
+  background: rgba(70, 153, 108, 0.62);
+  border-color: rgba(233, 255, 242, 0.82);
 }
 
 .shell-ball-mascot__selection-marker {

@@ -10,8 +10,9 @@ import {
 } from "react";
 import { Badge, Button, Flex, Heading, Text } from "@radix-ui/themes";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
+  ArrowLeft,
   ArrowUpRight,
   History,
   ShieldCheck,
@@ -34,10 +35,10 @@ import { JsonRpcClientError } from "@/rpc/client";
 import { subscribeApprovalPending, subscribeTask } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import {
   isDashboardSafetyApprovalSnapshotOnly,
   resolveDashboardSafetyNavigationRoute,
-  resolveDashboardSafetyFocusTarget,
   resolveDashboardSafetySnapshotLifecycle,
   shouldRetainDashboardSafetyActiveDetail,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";
@@ -58,7 +59,7 @@ import {
   type SecurityRestorePointListData,
   type SecurityRespondOutcome,
 } from "./securityService";
-import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
 import "./securityPage.css";
 import "./securityBoard.css";
@@ -99,7 +100,7 @@ const DRAG_THRESHOLD = 8;
 const CARD_CLEARANCE = 14;
 const CARD_STEP = 18;
 const BOARD_INSET_X = 22;
-const BOARD_INSET_TOP = 140;
+const BOARD_INSET_TOP = 220;
 const BOARD_INSET_BOTTOM = 24;
 const DEFAULT_CARD_SIZE: CardSize = { width: 248, height: 176 };
 const FALLBACK_POSITION: CardPosition = { x: BOARD_INSET_X, y: BOARD_INSET_TOP };
@@ -1110,12 +1111,42 @@ export function SecurityApp() {
     [bringCardToFront, cardKeys],
   );
 
+  const renderDashboardTopbar = () => {
+    return (
+      <header className="security-surface security-page__topbar security-page__topbar--canvas">
+        <Link className="security-page__home-link" to={resolveDashboardRoutePath("home")}>
+          <ArrowLeft className="h-4 w-4" />
+          返回首页
+        </Link>
+
+        <nav aria-label="Dashboard modules" className="security-page__module-nav">
+          {dashboardModules.map((item) => (
+            <NavLink
+              key={item.route}
+              className={({ isActive }) => `security-page__module-link${isActive ? " is-active" : ""}`}
+              to={item.path}
+            >
+              {item.title}
+            </NavLink>
+          ))}
+        </nav>
+      </header>
+    );
+  };
+
   if (!moduleData) {
     return (
       <main className="app-shell security-page">
-        <div className="security-page__frame">
-          <div className="security-surface security-page__topbar">
-            <Text>{loadError ? `安全页同步失败：${loadError}` : "正在同步安全数据..."}</Text>
+        <div className="security-page__canvas" aria-label="Security 卡片画布">
+          {renderDashboardTopbar()}
+          <div className="security-page__hero">
+            <Text as="p" size="1" className="security-page__eyebrow">
+              security
+            </Text>
+            <Heading size="9" className="security-page__title">
+              安全卫士
+            </Heading>
+            <div className="security-page__detail-callout">{loadError ? `安全页同步失败：${loadError}` : "正在同步安全数据..."}</div>
           </div>
         </div>
         <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
@@ -2061,6 +2092,7 @@ export function SecurityApp() {
   return (
     <main className="app-shell security-page">
       <div className="security-page__canvas" ref={canvasRef} aria-label="Security 卡片画布">
+        {renderDashboardTopbar()}
         <div className="security-page__hero">
           <Text as="p" size="1" className="security-page__eyebrow">
             security

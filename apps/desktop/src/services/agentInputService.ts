@@ -10,6 +10,8 @@ type SubmitTextInputParams = {
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  sessionId?: AgentInputSubmitParams["session_id"];
+  voiceMeta?: AgentInputSubmitParams["voice_meta"];
   options?: {
     confirm_required?: boolean;
     preferred_delivery?: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
@@ -37,6 +39,7 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
 
   return {
     request_meta: createRequestMeta(),
+    ...(input.sessionId ? { session_id: input.sessionId } : {}),
     source: input.source,
     trigger: input.trigger,
     input: {
@@ -47,6 +50,7 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
     context: {
       files: [],
     },
+    ...(input.voiceMeta ? { voice_meta: input.voiceMeta } : {}),
     ...(input.options ? { options: input.options } : {}),
   };
 }

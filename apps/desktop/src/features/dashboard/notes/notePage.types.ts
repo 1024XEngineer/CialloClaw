@@ -1,4 +1,4 @@
-import type { AgentNotepadConvertToTaskResult, AgentNotepadUpdateResult, TodoBucket, TodoItem, TodoStatus } from "@cialloclaw/protocol";
+import type { AgentNotepadConvertToTaskResult, AgentNotepadUpdateResult, TodoBucket, TodoItem } from "@cialloclaw/protocol";
 
 export type NoteDataSource = "rpc" | "mock";
 export type NotePreviewGroupKey = "upcoming" | "later" | "recurring_rule" | "closed";
@@ -13,16 +13,17 @@ export type NoteDetailAction =
   | "cancel-recurring"
   | "restore"
   | "delete"
-  | "convert-to-task";
+  | "convert-to-task"
+  | "view-task";
 
 export type NoteType = "reminder" | "follow-up" | "template" | "recurring" | "archive";
 
 export type NoteResource = {
   id: string;
   label: string;
-  path: string;
+  path: string | null;
   type: string;
-  openAction?: "task_detail" | "open_url" | "copy_path" | null;
+  openAction?: "task_detail" | "open_url" | "open_file" | "reveal_in_folder" | null;
   taskId?: string | null;
   url?: string | null;
 };
@@ -89,4 +90,28 @@ export type NoteActionShortcut = {
   id: string;
   label: string;
   tooltip: string;
+};
+
+export type NoteCanvasCardLayout = {
+  itemId: string;
+  sourceBucket: TodoBucket;
+  x: number;
+  y: number;
+};
+
+export type NoteCanvasLayoutSnapshot = Record<string, NoteCanvasCardLayout>;
+
+export type NoteDrawerPreferenceSnapshot = {
+  drawerOpen: boolean;
+  expandedBucket: TodoBucket;
+};
+
+export type NoteSelectionState = {
+  bucket: TodoBucket | null;
+  itemId: string | null;
+};
+
+export type NoteDetailLayerState = {
+  activeBucket: TodoBucket | null;
+  openItemIds: string[];
 };

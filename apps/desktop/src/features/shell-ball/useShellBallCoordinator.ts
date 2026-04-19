@@ -19,8 +19,12 @@ import {
 import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
-import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import type {
+  ShellBallFinalizedSpeechPayload,
+  ShellBallInputSubmitResult,
+  ShellBallVoiceStatusPayload,
+} from "./useShellBallInteraction";
+import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromFiles } from "@/services/taskService";
 import {
@@ -57,13 +61,15 @@ type ShellBallCoordinatorInput = {
   inputValue: string;
   inputFocused: boolean;
   pendingFiles?: string[];
-  finalizedSpeechPayload: string | null;
+  finalizedSpeechPayload: ShellBallFinalizedSpeechPayload | null;
+  voiceStatusPayload?: ShellBallVoiceStatusPayload | null;
   voicePreview: ShellBallVoicePreview;
   voiceHintMode: ShellBallVoiceHintMode;
   setInputValue: (value: string) => void;
   onAppendPendingFiles?: (paths: string[]) => void;
   onRemovePendingFile?: (path: string) => void;
   onFinalizedSpeechHandled: () => void;
+  onVoiceStatusHandled?: () => void;
   onRegionEnter: () => void;
   onRegionLeave: () => void;
   onInputHoverChange: (active: boolean) => void;
@@ -185,13 +191,14 @@ export function createShellBallFinalizedSpeechBubbleItem(input: {
   text: string;
   sequence: number;
   createdAt: string;
+  taskId: string | null;
   turnIndex?: number;
   turnPhase?: number;
 }): ShellBallBubbleItem {
   return {
     bubble: {
       bubble_id: `shell-ball-local-user-voice-${input.sequence}`,
-      task_id: "",
+      task_id: input.taskId ?? "",
       type: "result",
       text: input.text,
       pinned: false,
@@ -402,6 +409,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const [bubbleItems, setBubbleItems] = useState(() => sortShellBallBubbleItemsByTimestamp(cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS)));
   const appendedVoiceBubbleSequenceRef = useRef(0);
   const handledFinalizedSpeechPayloadRef = useRef<string | null>(null);
+  const handledVoiceStatusPayloadRef = useRef<string | null>(null);
   const bubbleTurnIndexRef = useRef(0);
   const [bubbleVisibilityPhase, setBubbleVisibilityPhase] = useState<ShellBallBubbleVisibilityPhase>("hidden");
   const [inputHovered, setInputHovered] = useState(false);
@@ -449,6 +457,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onAppendPendingFiles: input.onAppendPendingFiles ?? (() => {}),
     onRemovePendingFile: input.onRemovePendingFile ?? (() => {}),
     onFinalizedSpeechHandled: input.onFinalizedSpeechHandled,
+    onVoiceStatusHandled: input.onVoiceStatusHandled ?? (() => {}),
     onRegionEnter: input.onRegionEnter,
     onRegionLeave: input.onRegionLeave,
     onInputHoverChange: input.onInputHoverChange,
@@ -466,6 +475,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onAppendPendingFiles: input.onAppendPendingFiles ?? (() => {}),
     onRemovePendingFile: input.onRemovePendingFile ?? (() => {}),
     onFinalizedSpeechHandled: input.onFinalizedSpeechHandled,
+    onVoiceStatusHandled: input.onVoiceStatusHandled ?? (() => {}),
     onRegionEnter: input.onRegionEnter,
     onRegionLeave: input.onRegionLeave,
     onInputHoverChange: input.onInputHoverChange,
@@ -892,21 +902,27 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
-    if (handledFinalizedSpeechPayloadRef.current === finalizedSpeechPayload) {
+    if (handledFinalizedSpeechPayloadRef.current === finalizedSpeechPayload.id) {
       return;
     }
 
-    handledFinalizedSpeechPayloadRef.current = finalizedSpeechPayload;
+    handledFinalizedSpeechPayloadRef.current = finalizedSpeechPayload.id;
     appendedVoiceBubbleSequenceRef.current += 1;
     const turnIndex = allocateBubbleTurnIndex();
+
+    if (finalizedSpeechPayload.taskId !== null) {
+      shellBallTaskIdsRef.current.add(finalizedSpeechPayload.taskId);
+      bindTaskToBubbleTurn(finalizedSpeechPayload.taskId, turnIndex);
+    }
 
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
         createShellBallFinalizedSpeechBubbleItem({
-          text: finalizedSpeechPayload,
+          text: finalizedSpeechPayload.text,
           sequence: appendedVoiceBubbleSequenceRef.current,
           createdAt: new Date().toISOString(),
+          taskId: finalizedSpeechPayload.taskId,
           turnIndex,
           turnPhase: 0,
         }),
@@ -914,6 +930,44 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     );
     handlersRef.current.onFinalizedSpeechHandled();
   }, [input.finalizedSpeechPayload]);
+
+  useEffect(() => {
+    const voiceStatusPayload = input.voiceStatusPayload;
+
+    if (voiceStatusPayload == null) {
+      handledVoiceStatusPayloadRef.current = null;
+      return;
+    }
+
+    if (handledVoiceStatusPayloadRef.current === voiceStatusPayload.id) {
+      return;
+    }
+
+    handledVoiceStatusPayloadRef.current = voiceStatusPayload.id;
+    const turnIndex =
+      voiceStatusPayload.taskId !== null ? (getTaskBubbleTurnIndex(voiceStatusPayload.taskId) ?? allocateBubbleTurnIndex()) : allocateBubbleTurnIndex();
+
+    if (voiceStatusPayload.taskId !== null) {
+      shellBallTaskIdsRef.current.add(voiceStatusPayload.taskId);
+      bindTaskToBubbleTurn(voiceStatusPayload.taskId, turnIndex);
+    }
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallTextBubbleItem({
+          role: "agent",
+          text: voiceStatusPayload.text,
+          bubbleType: "status",
+          createdAt: new Date().toISOString(),
+          taskId: voiceStatusPayload.taskId ?? undefined,
+          turnIndex,
+          turnPhase: 1,
+        }),
+      ]),
+    );
+    handlersRef.current.onVoiceStatusHandled();
+  }, [input.voiceStatusPayload]);
 
   useEffect(() => {
     return subscribeDeliveryReady((payload) => {

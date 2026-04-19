@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
-import { getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
+import { formatTaskSourceLabel, getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
 import type { TaskDetailData } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
 import { TaskContextBlock } from "./TaskContextBlock";
@@ -75,7 +75,7 @@ export function TaskDetailPanel({
   const isDetailLoading = detailState === "loading";
   const isDetailError = detailState === "error";
   const progressLabel = progress.total > 0 ? `${progress.completedCount}/${progress.total}` : "无";
-  const detailNoticeTitle = isDetailLoading ? "正在同步更多详情" : "详情同步失败";
+  const detailNoticeTitle = isDetailLoading ? "同步中" : "同步失败";
   const detailNoticeBody = isDetailLoading
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
@@ -257,7 +257,6 @@ export function TaskDetailPanel({
     <motion.section animate={{ opacity: 1, x: 0 }} className="task-detail-shell" initial={{ opacity: 0, x: 18 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
       <div className="task-detail-shell__header">
         <div>
-          <p className="task-detail-shell__eyebrow">任务详情</p>
           <h2 className="task-detail-shell__title">{task.title}</h2>
           <p className="task-detail-shell__subtitle">{stateVoice.body}</p>
         </div>
@@ -267,7 +266,7 @@ export function TaskDetailPanel({
             <X className="h-4 w-4" />
             <span className="sr-only">关闭任务详情</span>
           </Button>
-          <Badge className={cn("border-0 px-3 py-1 text-[0.74rem] ring-1", getTaskStatusBadgeClass(task.status))}>
+          <Badge className={cn("task-detail-shell__status border-0 px-3 py-1 text-[0.74rem] ring-1", getTaskStatusBadgeClass(task.status))}>
             {getTaskPreviewStatusLabel(task.status)}
           </Badge>
           {feedback ? (
@@ -282,7 +281,7 @@ export function TaskDetailPanel({
         <div className="task-detail-shell__meta-grid">
         <div className="task-detail-shell__meta-card">
           <span>来源</span>
-          <strong>{task.source_type}</strong>
+          <strong>{formatTaskSourceLabel(task.source_type)}</strong>
         </div>
         <div className="task-detail-shell__meta-card">
           <span>开始时间</span>
@@ -304,7 +303,6 @@ export function TaskDetailPanel({
             <section className="task-detail-card task-detail-card--notice">
               <div className="task-detail-card__header task-detail-card__header--actionable">
                 <div>
-                  <p className="task-detail-card__eyebrow">详情状态</p>
                   <h3 className="task-detail-card__title">{detailNoticeTitle}</h3>
                 </div>
                 {isDetailError && onRetryDetail ? (
@@ -321,8 +319,7 @@ export function TaskDetailPanel({
           {detailWarningMessage ? (
             <section className="task-detail-card task-detail-card--notice">
               <div className="task-detail-card__header">
-                <p className="task-detail-card__eyebrow">详情提示</p>
-                <h3 className="task-detail-card__title">部分信息已降级展示</h3>
+                <h3 className="task-detail-card__title">已降级</h3>
               </div>
               <p className="task-detail-ended-copy">{detailWarningMessage}</p>
             </section>
@@ -333,8 +330,7 @@ export function TaskDetailPanel({
               {waitingCopy ? (
                 <section className="task-detail-card task-detail-card--notice">
                   <div className="task-detail-card__header">
-                    <p className="task-detail-card__eyebrow">当前提醒</p>
-                    <h3 className="task-detail-card__title">为什么现在停在这里</h3>
+                    <h3 className="task-detail-card__title">等待</h3>
                   </div>
                   <p className="task-detail-ended-copy">{waitingCopy}</p>
                 </section>
@@ -342,29 +338,27 @@ export function TaskDetailPanel({
 
               <section className="task-detail-card task-detail-card--spotlight">
                 <div className="task-detail-card__header">
-                  <p className="task-detail-card__eyebrow">当前进展</p>
-                  <h3 className="task-detail-card__title">完整任务进展</h3>
+                  <h3 className="task-detail-card__title">进度</h3>
                 </div>
                 <TaskProgressTimeline timeline={detail.timeline} />
               </section>
 
               <section className="task-detail-card">
                 <div className="task-detail-card__header">
-                  <p className="task-detail-card__eyebrow">当前阶段</p>
-                  <h3 className="task-detail-card__title">现在正在推进什么</h3>
+                  <h3 className="task-detail-card__title">下一步</h3>
                 </div>
                 <div className="task-detail-current-grid">
                   <article className="task-detail-current-card">
                     <Clock3 className="h-4 w-4" />
                     <div>
-                      <p className="task-detail-current-card__label">执行到哪一步</p>
+                      <p className="task-detail-current-card__label">当前</p>
                       <p className="task-detail-current-card__text">{progress.currentLabel}</p>
                     </div>
                   </article>
                   <article className="task-detail-current-card">
                     <ShieldAlert className="h-4 w-4" />
                     <div>
-                      <p className="task-detail-current-card__label">当前提醒</p>
+                      <p className="task-detail-current-card__label">接着做</p>
                       <p className="task-detail-current-card__text">{experience.nextAction}</p>
                     </div>
                   </article>
@@ -443,16 +437,14 @@ export function TaskDetailPanel({
               {shouldDeferSecuritySummary ? (
                 <section className="task-detail-card task-detail-card--notice">
                   <div className="task-detail-card__header">
-                    <p className="task-detail-card__eyebrow">信任摘要</p>
-                    <h3 className="task-detail-card__title">等待安全详情</h3>
+                    <h3 className="task-detail-card__title">风险</h3>
                   </div>
                   <p className="task-detail-ended-copy">等待详情同步后展示风险、授权与恢复点。</p>
                 </section>
               ) : (
                 <section className="task-detail-card">
                   <div className="task-detail-card__header">
-                    <p className="task-detail-card__eyebrow">信任摘要</p>
-                    <h3 className="task-detail-card__title">风险与授权情况</h3>
+                    <h3 className="task-detail-card__title">风险</h3>
                   </div>
                   <div className="task-detail-current-grid">
                     <article className="task-detail-current-card">
@@ -496,8 +488,7 @@ export function TaskDetailPanel({
               <section className="task-detail-card task-detail-card--spotlight">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
                   <div>
-                    <p className="task-detail-card__eyebrow">任务结果</p>
-                    <h3 className="task-detail-card__title">这条任务已经结束</h3>
+                    <h3 className="task-detail-card__title">已结束</h3>
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
@@ -515,8 +506,7 @@ export function TaskDetailPanel({
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
                   <div>
-                    <p className="task-detail-card__eyebrow">产出内容</p>
-                    <h3 className="task-detail-card__title">已生成的结果</h3>
+                    <h3 className="task-detail-card__title">产物</h3>
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />

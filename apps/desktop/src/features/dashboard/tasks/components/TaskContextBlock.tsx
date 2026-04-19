@@ -33,8 +33,7 @@ export function TaskContextBlock({ detailData }: TaskContextBlockProps) {
     <div className="task-detail-context-grid">
       <section className="task-detail-card">
         <div className="task-detail-card__header">
-          <p className="task-detail-card__eyebrow">记忆与上下文</p>
-          <h3 className="task-detail-card__title">本次任务用到的关键前提</h3>
+          <h3 className="task-detail-card__title">上下文</h3>
         </div>
         <div className="task-detail-context-list">
           {detail.mirror_references.length > 0
@@ -45,7 +44,7 @@ export function TaskContextBlock({ detailData }: TaskContextBlockProps) {
                   <p className="task-detail-context-item__meta">{reference.summary}</p>
                   <div className="task-detail-context-item__actions">
                     <button className="task-detail-card__action task-detail-context-item__action" onClick={() => openMirrorReference(reference.memory_id)} type="button">
-                      在镜子中查看
+                      镜子
                     </button>
                   </div>
                 </article>
@@ -64,12 +63,11 @@ export function TaskContextBlock({ detailData }: TaskContextBlockProps) {
       <section className="task-detail-card">
         <div className={`task-detail-card__header${experience.recentConversation.length > 0 ? " task-detail-card__header--actionable" : ""}`}>
           <div>
-            <p className="task-detail-card__eyebrow">最近对话</p>
-            <h3 className="task-detail-card__title">这次任务正在继承的上下文</h3>
+            <h3 className="task-detail-card__title">对话</h3>
           </div>
           {experience.recentConversation.length > 0 ? (
             <button className="task-detail-card__action" onClick={openMirrorHistory} type="button">
-              打开镜子记录
+              记录
             </button>
           ) : null}
         </div>

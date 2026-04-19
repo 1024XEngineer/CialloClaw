@@ -24,3 +24,10 @@ services/local-service/internal/rpc/workspace/
 
 apps/.temp/*
 !apps/.temp/.gitkeep
+
+# Local desktop build artifacts and debug snapshots.
+apps/desktop/src-tauri/target-codex/
+.tmp-edge-dom.html
+.tmp-httpserver.err.log
+.tmp-httpserver.out.log
+.tmp-notes-page.png

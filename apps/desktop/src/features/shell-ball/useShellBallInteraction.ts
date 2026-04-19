@@ -2,11 +2,13 @@
  * Shell-ball interaction state owns the floating hover input, voice capture, and
  * lightweight submission gestures that sit on top of the task-centric backend.
  */
-import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
+import type { AgentInputSubmitParams, AgentTaskStartParams, AgentTaskSteerParams, RequestMeta } from "@cialloclaw/protocol";
 import { useLatest, useUnmount } from "ahooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
+import { JsonRpcClientError } from "@/rpc/client";
+import { steerTask } from "@/rpc/methods";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
@@ -42,7 +44,7 @@ type ShellBallInteractionConsumedEvent =
   | "voice_flow_consumed"
   | "force_state_reset";
 
-type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
+type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel" | "segment";
 
 const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
   "audio-capture",
@@ -65,6 +67,38 @@ export type ShellBallInputSubmitResult = NonNullable<Awaited<ReturnType<typeof s
   } | null;
 };
 
+export type ShellBallFinalizedSpeechPayload = {
+  id: string;
+  text: string;
+  taskId: string | null;
+};
+
+export type ShellBallVoiceStatusPayload = {
+  id: string;
+  text: string;
+  taskId: string | null;
+};
+
+type ShellBallVoiceTaskUpdateResult = {
+  task: ShellBallInputSubmitResult["task"];
+  bubble_message: ShellBallInputSubmitResult["bubble_message"];
+  delivery_result?: ShellBallInputSubmitResult["delivery_result"] | null;
+};
+
+type ShellBallLockedVoiceSession = {
+  activeTaskId: string | null;
+  chain: Promise<void>;
+  segmentSequence: number;
+  sessionId: string;
+  voiceSessionId: string;
+};
+
+type ShellBallLockedVoiceSegmentPlan = {
+  id: string;
+  session: ShellBallLockedVoiceSession;
+  text: string;
+};
+
 type ShellBallPostSubmitReset = {
   nextInputValue: string;
   nextPendingFiles: string[];
@@ -81,6 +115,42 @@ function createShellBallRequestMeta(): RequestMeta {
     trace_id: traceId,
     client_time: now,
   };
+}
+
+function createShellBallLocalIdentifier(prefix: string) {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `${prefix}_${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function createShellBallLockedVoiceSession(): ShellBallLockedVoiceSession {
+  return {
+    activeTaskId: null,
+    chain: Promise.resolve(),
+    segmentSequence: 0,
+    sessionId: createShellBallLocalIdentifier("shell_ball_voice_session"),
+    voiceSessionId: createShellBallLocalIdentifier("shell_ball_locked_voice"),
+  };
+}
+
+function isShellBallLockedVoiceSteerFallbackError(error: unknown) {
+  if (!(error instanceof JsonRpcClientError)) {
+    return false;
+  }
+
+  const rpcMessage = error.message;
+  return (
+    error.code === 1001001 ||
+    error.code === 1001004 ||
+    error.code === 1001005 ||
+    rpcMessage.includes("TASK_NOT_FOUND") ||
+    rpcMessage.includes("TASK_STATUS_INVALID") ||
+    rpcMessage.includes("TASK_ALREADY_FINISHED") ||
+    rpcMessage.includes("task not found") ||
+    rpcMessage.includes("task status invalid")
+  );
 }
 
 function normalizeShellBallPendingFiles(filePaths: string[]) {
@@ -153,12 +223,16 @@ export function createShellBallInputSubmitParams(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
+  sessionId?: AgentInputSubmitParams["session_id"];
+  voiceMeta?: AgentInputSubmitParams["voice_meta"];
 }): AgentInputSubmitParams | null {
   return createTextInputSubmitParams({
     text: input.text,
+    sessionId: input.sessionId,
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    voiceMeta: input.voiceMeta,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
@@ -203,12 +277,16 @@ async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
+  sessionId?: AgentInputSubmitParams["session_id"];
+  voiceMeta?: AgentInputSubmitParams["voice_meta"];
 }): Promise<ShellBallInputSubmitResult | null> {
   return submitTextInput({
     text: input.text,
+    sessionId: input.sessionId,
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    voiceMeta: input.voiceMeta,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
@@ -359,21 +437,34 @@ export function resolveShellBallVoiceRecognitionFinalState(input: {
   transcript: string;
   baseDraft: string;
   startState: ShellBallVisualState;
+  lockedSessionActive?: boolean;
 }) {
   const normalizedTranscript = input.transcript.trim();
+  const lockedSessionActive = input.lockedSessionActive ?? false;
   const nextVisualState =
     input.startState === "hover_input" || input.baseDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const);
 
+  if (input.reason === "segment" && lockedSessionActive && normalizedTranscript !== "") {
+    return {
+      continueListening: true,
+      finalizedSpeechText: normalizedTranscript,
+      nextInputValue: input.baseDraft,
+      nextVisualState: "voice_locked" as const,
+    };
+  }
+
   if (input.reason === "finish" && normalizedTranscript !== "") {
     return {
-      finalizedSpeechPayload: normalizedTranscript,
+      continueListening: false,
+      finalizedSpeechText: normalizedTranscript,
       nextInputValue: input.baseDraft,
       nextVisualState,
     };
   }
 
   return {
-    finalizedSpeechPayload: null,
+    continueListening: false,
+    finalizedSpeechText: null,
     nextInputValue: input.baseDraft,
     nextVisualState,
   };
@@ -390,7 +481,8 @@ export function useShellBallInteraction() {
   const setVisualState = useShellBallStore((state) => state.setVisualState);
   const [inputValue, setInputValue] = useState("");
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
-  const [finalizedSpeechPayload, setFinalizedSpeechPayload] = useState<string | null>(null);
+  const [finalizedSpeechPayloads, setFinalizedSpeechPayloads] = useState<ShellBallFinalizedSpeechPayload[]>([]);
+  const [voiceStatusPayloads, setVoiceStatusPayloads] = useState<ShellBallVoiceStatusPayload[]>([]);
   const [regionActive, setRegionActive] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [voicePreview, setVoicePreview] = useState<ShellBallVoicePreview>(null);
@@ -417,6 +509,9 @@ export function useShellBallInteraction() {
   const voiceBaseDraftRef = useRef("");
   const voiceTranscriptRef = useRef("");
   const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
+  const lockedVoiceSessionRef = useRef<ShellBallLockedVoiceSession | null>(null);
+  const finalizedSpeechPayload = finalizedSpeechPayloads[0] ?? null;
+  const voiceStatusPayload = voiceStatusPayloads[0] ?? null;
 
   if (controllerRef.current === null) {
     controllerRef.current = createShellBallInteractionController({
@@ -441,6 +536,56 @@ export function useShellBallInteraction() {
       regionActive: regionActiveRef.current,
     });
     syncVisualState();
+  }
+
+  function enqueueFinalizedSpeechPayload(payload: {
+    id: string;
+    text: string;
+    taskId: string | null;
+  }) {
+    setFinalizedSpeechPayloads((currentPayloads) => [...currentPayloads, payload]);
+  }
+
+  function enqueueVoiceStatusPayload(payload: {
+    id: string;
+    text: string;
+    taskId: string | null;
+  }) {
+    setVoiceStatusPayloads((currentPayloads) => [...currentPayloads, payload]);
+  }
+
+  function ensureLockedVoiceSession() {
+    if (lockedVoiceSessionRef.current === null) {
+      lockedVoiceSessionRef.current = createShellBallLockedVoiceSession();
+    }
+
+    return lockedVoiceSessionRef.current;
+  }
+
+  function clearLockedVoiceSession() {
+    lockedVoiceSessionRef.current = null;
+  }
+
+  function createLockedVoiceSegmentPlan(text: string): ShellBallLockedVoiceSegmentPlan | null {
+    const normalizedText = text.trim();
+    if (normalizedText === "") {
+      return null;
+    }
+
+    const session = ensureLockedVoiceSession();
+    session.segmentSequence += 1;
+
+    return {
+      id: `${session.voiceSessionId}_segment_${session.segmentSequence}`,
+      session,
+      text: normalizedText,
+    };
+  }
+
+  function enqueueLockedVoiceSessionWork<T>(plan: ShellBallLockedVoiceSegmentPlan, work: () => Promise<T>): Promise<T> {
+    const run = plan.session.chain.catch((): void => undefined).then(work);
+    plan.session.chain = run.then((): void => undefined, (): void => undefined);
+    return run;
   }
 
   const clearLongPressTimer = useCallback(() => {
@@ -492,6 +637,55 @@ export function useShellBallInteraction() {
     });
   }
 
+  async function steerLockedVoiceSegment(taskId: string, text: string): Promise<ShellBallVoiceTaskUpdateResult> {
+    const params: AgentTaskSteerParams = {
+      message: text,
+      request_meta: createShellBallRequestMeta(),
+      task_id: taskId,
+    };
+    const result = await steerTask(params);
+
+    return {
+      ...result,
+      delivery_result: null,
+    };
+  }
+
+  async function submitLockedVoiceSegment(plan: ShellBallLockedVoiceSegmentPlan): Promise<ShellBallVoiceTaskUpdateResult | null> {
+    const currentTaskId = plan.session.activeTaskId;
+
+    if (currentTaskId !== null) {
+      try {
+        const result = await steerLockedVoiceSegment(currentTaskId, plan.text);
+        plan.session.activeTaskId = result.task.task_id;
+        return result;
+      } catch (error) {
+        if (!isShellBallLockedVoiceSteerFallbackError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const result = await submitShellBallInput({
+      text: plan.text,
+      trigger: "voice_commit",
+      inputMode: "voice",
+      sessionId: plan.session.sessionId,
+      voiceMeta: {
+        voice_session_id: plan.session.voiceSessionId,
+        is_locked_session: true,
+        asr_confidence: 1,
+        segment_id: plan.id,
+      },
+    });
+
+    if (result !== null) {
+      plan.session.activeTaskId = result.task.task_id;
+    }
+
+    return result;
+  }
+
   function dispatch(
     event: ShellBallInteractionEvent,
     options: { regionActive?: boolean; hoverRetained?: boolean } = {},
@@ -538,11 +732,13 @@ export function useShellBallInteraction() {
   }
 
   async function finalizeVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
+    const lockedSession = lockedVoiceSessionRef.current;
     const resolution = resolveShellBallVoiceRecognitionFinalState({
       reason,
       transcript: voiceTranscriptRef.current,
       baseDraft: voiceBaseDraftRef.current,
       startState: voiceStartStateRef.current,
+      lockedSessionActive: lockedSession !== null,
     });
     recognitionRef.current = null;
     recognitionStopReasonRef.current = "none";
@@ -557,23 +753,90 @@ export function useShellBallInteraction() {
     syncVisualState();
     voiceTranscriptRef.current = "";
 
-    if (resolution.finalizedSpeechPayload === null) {
+    if (resolution.continueListening) {
+      if (!startVoiceRecognition()) {
+        clearLockedVoiceSession();
+        controllerRef.current?.forceState("hover_input", {
+          regionActive: regionActiveRef.current,
+          hoverRetained: true,
+        });
+        syncVisualState();
+      }
+    }
+
+    if (resolution.finalizedSpeechText === null) {
+      if (reason === "finish" || reason === "cancel") {
+        clearLockedVoiceSession();
+      }
+      return;
+    }
+
+    if (lockedSession !== null) {
+      const segmentPlan = createLockedVoiceSegmentPlan(resolution.finalizedSpeechText);
+      if (segmentPlan === null) {
+        return;
+      }
+
+      const commitSegment = async () => {
+        const result = await submitLockedVoiceSegment(segmentPlan);
+        enqueueFinalizedSpeechPayload({
+          id: segmentPlan.id,
+          text: segmentPlan.text,
+          taskId: result?.task.task_id ?? segmentPlan.session.activeTaskId ?? null,
+        });
+        return result;
+      };
+
+      if (resolution.continueListening) {
+        void enqueueLockedVoiceSessionWork(segmentPlan, commitSegment).catch((error) => {
+          console.warn("shell-ball locked voice segment submit failed", error);
+          enqueueVoiceStatusPayload({
+            id: `${segmentPlan.id}_failed`,
+            text: "Voice segment failed to send. Still listening.",
+            taskId: segmentPlan.session.activeTaskId,
+          });
+        });
+        return;
+      }
+
+      // Ending a locked voice session should stop capture immediately and let
+      // the last segment flush in the background without blocking the shell UI.
+      clearLockedVoiceSession();
+      void enqueueLockedVoiceSessionWork(segmentPlan, async () => {
+        try {
+          const result = await commitSegment();
+          if (result !== null) {
+            syncVisualStateFromTaskStatus(result.task.status, resolution.nextVisualState);
+          }
+        } catch (error) {
+          console.warn("shell-ball locked voice finish submit failed", error);
+          enqueueVoiceStatusPayload({
+            id: `${segmentPlan.id}_failed`,
+            text: "Voice segment failed to send after the call ended.",
+            taskId: segmentPlan.session.activeTaskId,
+          });
+        }
+      });
       return;
     }
 
     try {
       const result = await submitShellBallInput({
-        text: resolution.finalizedSpeechPayload,
+        text: resolution.finalizedSpeechText,
         trigger: "voice_commit",
         inputMode: "voice",
       });
-      setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
+      enqueueFinalizedSpeechPayload({
+        id: createShellBallLocalIdentifier("shell_ball_voice_commit"),
+        text: resolution.finalizedSpeechText,
+        taskId: result?.task.task_id ?? null,
+      });
       if (result !== null) {
         syncVisualStateFromTaskStatus(result.task.status, resolution.nextVisualState);
       }
     } catch (error) {
       console.warn("shell-ball voice submit failed", error);
-      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, resolution.finalizedSpeechPayload);
+      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, resolution.finalizedSpeechText);
       setInputValue(restoredDraft);
       inputFocusedRef.current = true;
       setInputFocused(true);
@@ -586,7 +849,11 @@ export function useShellBallInteraction() {
   }
 
   function acknowledgeFinalizedSpeechPayload() {
-    setFinalizedSpeechPayload(null);
+    setFinalizedSpeechPayloads((currentPayloads) => currentPayloads.slice(1));
+  }
+
+  function acknowledgeVoiceStatusPayload() {
+    setVoiceStatusPayloads((currentPayloads) => currentPayloads.slice(1));
   }
 
   const disposeVoiceRecognition = useCallback(() => {
@@ -612,6 +879,19 @@ export function useShellBallInteraction() {
 
   function stopVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
     recognitionStopReasonRef.current = reason;
+    if (reason === "finish" && (controllerRef.current?.getState() ?? visualState) === "voice_locked") {
+      const nextVisualState =
+        voiceStartStateRef.current === "hover_input" || voiceBaseDraftRef.current.trim() !== "" ? ("hover_input" as const) : ("idle" as const);
+      inputFocusedRef.current = false;
+      setInputFocused(false);
+      setInputValue(voiceBaseDraftRef.current);
+      setCurrentVoiceHintMode("hidden");
+      setCurrentVoicePreview(null);
+      controllerRef.current?.forceState(nextVisualState, {
+        regionActive: nextVisualState === "hover_input",
+      });
+      syncVisualState();
+    }
     const recognition = recognitionRef.current;
 
     if (recognition === null) {
@@ -656,7 +936,19 @@ export function useShellBallInteraction() {
         return;
       }
 
-      syncVoiceDraft(collectShellBallSpeechTranscript(event.results));
+      const transcript = collectShellBallSpeechTranscript(event.results);
+      syncVoiceDraft(transcript);
+
+      const currentState = controllerRef.current?.getState() ?? visualState;
+      const latestResult = event.results[event.results.length - 1];
+      if (
+        currentState === "voice_locked" &&
+        voiceHintModeRef.current !== "finish" &&
+        latestResult?.isFinal === true &&
+        transcript.trim() !== ""
+      ) {
+        stopVoiceRecognition("segment");
+      }
     };
 
     recognition.onerror = (event) => {
@@ -683,7 +975,7 @@ export function useShellBallInteraction() {
       const recognitionError = recognitionErrorRef.current;
       recognitionErrorRef.current = null;
 
-      if (stopReason === "finish" || stopReason === "cancel") {
+      if (stopReason === "finish" || stopReason === "cancel" || stopReason === "segment") {
         void finalizeVoiceRecognition(stopReason);
         return;
       }
@@ -691,6 +983,51 @@ export function useShellBallInteraction() {
       const currentState = controllerRef.current?.getState() ?? visualState;
 
       if (shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd(currentState)) {
+        if (currentState === "voice_locked") {
+          const lockedSession = lockedVoiceSessionRef.current;
+          const recoveredTranscript = voiceTranscriptRef.current.trim();
+          voiceTranscriptRef.current = "";
+          setInputValue(voiceBaseDraftRef.current);
+
+          if (lockedSession !== null && recoveredTranscript !== "") {
+            const segmentPlan = createLockedVoiceSegmentPlan(recoveredTranscript);
+            if (segmentPlan !== null) {
+              void enqueueLockedVoiceSessionWork(segmentPlan, async () => {
+                const result = await submitLockedVoiceSegment(segmentPlan);
+                enqueueFinalizedSpeechPayload({
+                  id: segmentPlan.id,
+                  text: segmentPlan.text,
+                  taskId: result?.task.task_id ?? segmentPlan.session.activeTaskId ?? null,
+                });
+                return result;
+              }).catch((error) => {
+                console.warn("shell-ball locked voice recovery submit failed", error);
+                enqueueVoiceStatusPayload({
+                  id: `${segmentPlan.id}_failed`,
+                  text: "Voice segment failed to send. Still listening.",
+                  taskId: segmentPlan.session.activeTaskId,
+                });
+              });
+            }
+          }
+
+          if (shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd(recognitionError) && startVoiceRecognition()) {
+            return;
+          }
+
+          setCurrentVoicePreview(null);
+          controllerRef.current?.forceState(
+            getShellBallVoiceRecognitionUnexpectedEndFallbackState({
+              currentState,
+              startState: voiceStartStateRef.current,
+              committedDraft: voiceBaseDraftRef.current,
+            }),
+            { regionActive: regionActiveRef.current, hoverRetained: false },
+          );
+          syncVisualState();
+          return;
+        }
+
         const committedDraft = preserveUnexpectedVoiceTranscriptDraft();
 
         if (shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd(recognitionError) && startVoiceRecognition()) {
@@ -877,7 +1214,7 @@ export function useShellBallInteraction() {
         longPressStartAtRef.current = null;
         setVoiceHoldProgress(0);
         setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("long_press_voice_entry"));
-        setCurrentVoiceHintMode("cancel");
+        setCurrentVoiceHintMode("finish");
         setCurrentVoicePreview(null);
       }, SHELL_BALL_LOCKED_CANCEL_HOLD_MS);
       return;
@@ -944,7 +1281,7 @@ export function useShellBallInteraction() {
       return;
     }
 
-    if (currentState !== "voice_listening" && !(currentState === "voice_locked" && voiceHintModeRef.current === "cancel")) {
+    if (currentState !== "voice_listening" && !(currentState === "voice_locked" && voiceHintModeRef.current === "finish")) {
       return;
     }
 
@@ -967,6 +1304,7 @@ export function useShellBallInteraction() {
       });
 
       if (finalPreview === "lock") {
+        ensureLockedVoiceSession();
         dispatch("voice_lock");
         pressStartXRef.current = null;
         pressStartYRef.current = null;
@@ -986,7 +1324,7 @@ export function useShellBallInteraction() {
       return true;
     }
 
-    if (controllerRef.current?.getState() === "voice_locked" && voiceHintModeRef.current === "cancel") {
+    if (controllerRef.current?.getState() === "voice_locked" && voiceHintModeRef.current === "finish") {
       consumeInteraction();
       const finalPreview = getVoicePreviewForPointer({
         pointerX: event.screenX,
@@ -995,7 +1333,7 @@ export function useShellBallInteraction() {
       });
 
       if (finalPreview === "cancel") {
-        stopVoiceRecognition("cancel");
+        stopVoiceRecognition("finish");
       }
 
       setCurrentVoiceHintMode("hidden");
@@ -1073,6 +1411,7 @@ export function useShellBallInteraction() {
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
     disposeVoiceRecognition();
+    clearLockedVoiceSession();
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("force_state_reset"));
     pressStartXRef.current = null;
     pressStartYRef.current = null;
@@ -1109,6 +1448,7 @@ export function useShellBallInteraction() {
   useUnmount(() => {
     clearLongPressTimer();
     disposeVoiceRecognition();
+    clearLockedVoiceSession();
     pressStartXRef.current = null;
     pressStartYRef.current = null;
     voicePreviewRef.current = null;
@@ -1123,6 +1463,8 @@ export function useShellBallInteraction() {
     setInputValue,
     finalizedSpeechPayload,
     acknowledgeFinalizedSpeechPayload,
+    voiceStatusPayload,
+    acknowledgeVoiceStatusPayload,
     regionActive,
     voicePreview,
     voiceHintMode,

@@ -13,6 +13,10 @@ type TaskPreviewGroupProps = {
   unfinishedTasks: TaskListItem[];
 };
 
+/**
+ * Preserves the legacy two-column preview layout for callers that still
+ * consume the old grouping component outside the main dispatch page.
+ */
 export function TaskPreviewGroup({ activeTaskId, finishedGroups, onSelect, onToggleFinished, showMoreFinished, unfinishedTasks }: TaskPreviewGroupProps) {
   return (
     <div className="task-preview-layout">
@@ -28,7 +32,7 @@ export function TaskPreviewGroup({ activeTaskId, finishedGroups, onSelect, onTog
         <ScrollArea className="task-preview-section__scroll">
           <div className="task-preview-section__list">
             {unfinishedTasks.map((item) => (
-              <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onSelect={onSelect} />
+              <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onSelect={onSelect} runwayLabel="进行中" />
             ))}
           </div>
         </ScrollArea>
@@ -55,7 +59,7 @@ export function TaskPreviewGroup({ activeTaskId, finishedGroups, onSelect, onTog
 
               <div className="task-preview-group__list">
                 {group.items.map((item) => (
-                  <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onSelect={onSelect} />
+                  <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onSelect={onSelect} runwayLabel="已结束" />
                 ))}
               </div>
             </div>

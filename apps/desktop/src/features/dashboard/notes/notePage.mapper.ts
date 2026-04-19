@@ -4,9 +4,9 @@ import type { NoteDetailExperience, NoteListItem, NotePreviewGroupKey, NoteSumma
 export function getNoteBucketLabel(bucket: TodoBucket) {
   const labels: Record<TodoBucket, string> = {
     closed: "已结束",
-    later: "后续安排",
-    recurring_rule: "重复事项",
-    upcoming: "近期要做",
+    later: "后续",
+    recurring_rule: "重复",
+    upcoming: "近期",
   };
 
   return labels[bucket];
@@ -46,7 +46,7 @@ export function describeNotePreview(item: TodoItem, experience: NoteDetailExperi
   }
 
   if (item.bucket === "later") {
-    return `未到时间 · ${experience.timeHint}`;
+    return `尚未到期 · ${experience.timeHint}`;
   }
 
   if (item.bucket === "recurring_rule") {
@@ -63,18 +63,19 @@ export function buildNoteSummary(groups: Pick<Record<NotePreviewGroupKey, NoteLi
     if (!item.experience.isRecurringEnabled) {
       return false;
     }
+
     const occurrence = item.experience.nextOccurrenceAt ?? item.experience.plannedAt ?? item.item.due_at;
     if (!occurrence) {
       return false;
     }
 
     const date = new Date(occurrence);
-    const now = new Date();
+    const currentDate = new Date();
 
     return (
-      date.getFullYear() === now.getFullYear() &&
-      date.getMonth() === now.getMonth() &&
-      date.getDate() === now.getDate()
+      date.getFullYear() === currentDate.getFullYear() &&
+      date.getMonth() === currentDate.getMonth() &&
+      date.getDate() === currentDate.getDate()
     );
   }).length;
   const readyForAgent = groups.upcoming.filter((item) => item.experience.canConvertToTask).length;
@@ -88,14 +89,14 @@ export function buildNoteSummary(groups: Pick<Record<NotePreviewGroupKey, NoteLi
 }
 
 export function groupClosedNotes(items: NoteListItem[], expanded: boolean) {
-  const now = Date.now();
+  const currentTime = Date.now();
   const recent: NoteListItem[] = [];
   const weekly: NoteListItem[] = [];
   const older: NoteListItem[] = [];
 
   items.forEach((item) => {
-    const endedAt = item.experience.endedAt ? new Date(item.experience.endedAt).getTime() : now;
-    const diffDays = (now - endedAt) / (1000 * 60 * 60 * 24);
+    const endedAt = item.experience.endedAt ? new Date(item.experience.endedAt).getTime() : currentTime;
+    const diffDays = (currentTime - endedAt) / (1000 * 60 * 60 * 24);
 
     if (diffDays <= 3) {
       recent.push(item);
@@ -111,12 +112,12 @@ export function groupClosedNotes(items: NoteListItem[], expanded: boolean) {
   });
 
   const groups: Array<{ key: "recent" | "weekly" | "older"; title: string; description: string; items: NoteListItem[] }> = [
-    { key: "recent" as const, title: "近 3 天", description: "最近完成或取消的事项。", items: recent },
-    { key: "weekly" as const, title: "近 7 天", description: "一周内结束的记录。", items: weekly },
+    { key: "recent", title: "近 3 天", description: "最近完成或取消的便签。", items: recent },
+    { key: "weekly", title: "近 7 天", description: "一周内结束的记录。", items: weekly },
   ];
 
   if (expanded && older.length > 0) {
-    groups.push({ key: "older" as const, title: "更多", description: "更早结束的事项。", items: older });
+    groups.push({ key: "older", title: "更早", description: "更早结束的记录。", items: older });
   }
 
   return groups.filter((group) => group.items.length > 0);
@@ -124,7 +125,7 @@ export function groupClosedNotes(items: NoteListItem[], expanded: boolean) {
 
 export function getNoteActionLabel(action: NotePreviewGroupKey, canConvertToTask: boolean) {
   if (action === "upcoming") {
-    return canConvertToTask ? "转交给 Agent" : "继续安排";
+    return canConvertToTask ? "转任务" : "继续处理";
   }
 
   if (action === "later") {
