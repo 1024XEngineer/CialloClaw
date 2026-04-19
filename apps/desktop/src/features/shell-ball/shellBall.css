@@ -20,8 +20,8 @@
 
 .shell-ball-window--input {
   gap: 0.42rem;
-  justify-items: start;
-  width: max-content;
+  justify-items: stretch;
+  width: var(--shell-ball-helper-width);
 }
 
 .shell-ball-window--voice {
@@ -725,6 +725,7 @@
   min-height: 2rem;
   padding: 0.05rem 0.12rem 0.22rem 0.2rem;
   position: relative;
+  width: 100%;
   transition:
     transform 180ms ease,
     box-shadow 180ms ease,
@@ -744,6 +745,7 @@
   min-width: 0;
   padding: 0 0 0.08rem 0;
   position: relative;
+  width: 100%;
 }
 
 .shell-ball-input-bar__actions {
@@ -751,7 +753,8 @@
   display: flex;
   gap: 0.35rem;
   justify-content: flex-end;
-  padding-right: 0.08rem;
+  padding-right: 0;
+  width: 100%;
 }
 
 .shell-ball-input-bar__field {
@@ -775,7 +778,7 @@
   scrollbar-color: rgba(124, 140, 160, 0.94) rgba(255, 255, 255, 0.14);
   scrollbar-width: thin;
   white-space: pre-wrap;
-  width: clamp(12rem, calc(var(--shell-ball-helper-width) - 4.8rem), 23rem);
+  width: 100%;
   z-index: 2;
 }
 
