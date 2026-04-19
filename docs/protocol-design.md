@@ -306,10 +306,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `dragged_file`
 - `todo`
 - `error_signal`
+- `screen_capture`
 
 ### 5.13 气泡类型 `bubble_message_type`
 
 - `status`
+- `intent_confirm`
 - `result`
 
 ### 5.14 授权决策 / 状态
