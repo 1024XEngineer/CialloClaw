@@ -207,6 +207,14 @@ function areSnapshotsEqual(left: NoteCanvasLayoutSnapshot, right: NoteCanvasLayo
   });
 }
 
+function areItemIdListsEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((itemId, index) => itemId === right[index]);
+}
+
 function getFirstResource(item: NoteListItem) {
   return item.experience.relatedResources[0] ?? null;
 }
@@ -875,10 +883,21 @@ export function NotePage() {
   }, [detailLayerState.activeBucket, expandedBucket, itemMap]);
 
   useEffect(() => {
-    setDetailLayerState((currentState) => ({
-      activeBucket: currentState.activeBucket,
-      openItemIds: currentState.openItemIds.filter((itemId) => itemMap.get(itemId) && itemMap.get(itemId)?.item.bucket === currentState.activeBucket),
-    }));
+    setDetailLayerState((currentState) => {
+      const nextOpenItemIds = currentState.openItemIds.filter((itemId) => {
+        const item = itemMap.get(itemId);
+        return item ? item.item.bucket === currentState.activeBucket : false;
+      });
+
+      if (areItemIdListsEqual(currentState.openItemIds, nextOpenItemIds)) {
+        return currentState;
+      }
+
+      return {
+        activeBucket: currentState.activeBucket,
+        openItemIds: nextOpenItemIds,
+      };
+    });
   }, [itemMap]);
 
   useEffect(() => {

@@ -8,17 +8,20 @@ import {
   type PointerEvent,
 } from "react";
 import type { MirrorOverviewUpdatedNotification } from "@cialloclaw/protocol";
-import { X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import {
   formatDashboardSettingsMutationFeedback,
   updateDashboardSettings,
   type DashboardSettingsPatch,
 } from "@/features/dashboard/shared/dashboardSettingsMutation";
+import { cn } from "@/utils/cn";
 import { loadMirrorOverviewData, type MirrorOverviewData, type MirrorOverviewSource } from "./mirrorService";
 import { MirrorDetailContent, type MirrorHistoryDetailView } from "./MirrorDetailContent";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
@@ -609,6 +612,26 @@ export function MirrorApp() {
     setFocusedMemoryId(null);
   }, []);
 
+  function handleTopbarRouteClick(targetPath: string) {
+    if (location.pathname === targetPath) {
+      return;
+    }
+
+    navigate(targetPath);
+  }
+
+  function handleTopbarPointerDown(event: PointerEvent<HTMLElement>) {
+    event.stopPropagation();
+  }
+
+  function isTopbarRouteActive(targetPath: string) {
+    if (targetPath === "/") {
+      return location.pathname === "/";
+    }
+
+    return location.pathname === targetPath || location.pathname.startsWith(`${targetPath}/`);
+  }
+
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
@@ -863,9 +886,43 @@ export function MirrorApp() {
     [dataMode],
   );
 
+  const dashboardTopbar = (
+    <header className="dashboard-page__topbar">
+      <button
+        className="dashboard-page__home-link"
+        onClick={() => handleTopbarRouteClick(resolveDashboardRoutePath("home"))}
+        onPointerDown={handleTopbarPointerDown}
+        type="button"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        杩斿洖棣栭〉
+      </button>
+
+      <nav aria-label="Dashboard modules" className="dashboard-page__module-nav">
+        {dashboardModules.map((item) => {
+          const isActive = isTopbarRouteActive(item.path);
+
+          return (
+            <button
+              key={item.route}
+              aria-current={isActive ? "page" : undefined}
+              className={cn("dashboard-page__module-link", isActive && "is-active")}
+              onClick={() => handleTopbarRouteClick(item.path)}
+              onPointerDown={handleTopbarPointerDown}
+              type="button"
+            >
+              {item.title}
+            </button>
+          );
+        })}
+      </nav>
+    </header>
+  );
+
   if (!mirrorData) {
     return (
       <main className="app-shell mirror-page">
+        {dashboardTopbar}
         <div className="mirror-page__canvas mirror-page__canvas--full mirror-page__canvas--loading">
           <p className="mirror-page__loading-copy">{loadError ? `镜子页同步失败：${loadError}` : "正在点亮检片台…"}</p>
         </div>
@@ -1254,6 +1311,7 @@ export function MirrorApp() {
 
   return (
     <main className="app-shell mirror-page">
+      {dashboardTopbar}
       <div className="mirror-page__canvas mirror-page__canvas--full" ref={canvasRef} aria-label="Mirror 检片台" data-testid="mirror-canvas">
         <div className="mirror-page__source-status" aria-live="polite">
           <StatusBadge tone={dataSourceBadge.tone}>{dataSourceBadge.label}</StatusBadge>

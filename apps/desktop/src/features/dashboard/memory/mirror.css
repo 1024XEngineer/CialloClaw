@@ -33,7 +33,9 @@
     linear-gradient(180deg, #f5eee4 0%, #eadfce 48%, #e0d2c0 100%);
   color: var(--mirror-ink);
   color-scheme: light;
+  display: grid;
   font-family: var(--mirror-font-body);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
   max-height: 100vh;
   overflow: hidden;
@@ -69,6 +71,43 @@
   background-size: 26px 26px, 100% 100%;
   mask-image: radial-gradient(ellipse 92% 84% at 50% 50%, black 0%, transparent 100%);
   opacity: 0.28;
+}
+
+.mirror-page .dashboard-page__topbar {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  backdrop-filter: blur(18px);
+  background: linear-gradient(180deg, rgba(245, 238, 228, 0.92), rgba(245, 238, 228, 0.54) 72%, rgba(245, 238, 228, 0));
+  isolation: isolate;
+  padding: clamp(0.9rem, 2vw, 1.2rem) clamp(1rem, 2vw, 1.35rem) 0.4rem;
+  z-index: 40;
+}
+
+.mirror-page .dashboard-page__module-nav,
+.mirror-page .dashboard-page__home-link,
+.mirror-page .dashboard-page__module-link {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  pointer-events: auto;
+}
+
+.mirror-page .dashboard-page__home-link,
+.mirror-page .dashboard-page__module-link {
+  backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--mirror-paper-strong) 84%, var(--mirror-accent) 16%);
+  border: 1px solid color-mix(in srgb, var(--mirror-line-strong) 74%, var(--mirror-accent) 26%);
+  box-shadow: 0 16px 32px -24px rgba(98, 68, 42, 0.18);
+  color: var(--mirror-ink);
+}
+
+.mirror-page .dashboard-page__home-link:hover,
+.mirror-page .dashboard-page__module-link:hover,
+.mirror-page .dashboard-page__module-link.is-active {
+  background: color-mix(in srgb, var(--mirror-paper-strong) 76%, var(--mirror-accent) 24%);
+  border-color: color-mix(in srgb, var(--mirror-accent) 42%, var(--mirror-line-strong) 58%);
 }
 
 .mirror-page__canvas,
