@@ -24,6 +24,8 @@ import type {
   SecurityStatus,
   Session,
   SettingsSnapshot,
+  PluginMetricSnapshot,
+  PluginRuntimeState,
   Task,
   TaskControlAction,
   TaskListGroup,
@@ -68,6 +70,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
+  AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
 } as const;
 
 // RPC_METHODS_PLANNED reserves method names that are still documented as
@@ -696,6 +699,27 @@ export interface AgentSettingsUpdateResult {
   effective_settings: Partial<SettingsSnapshot["settings"]>;
   apply_mode: ApplyMode;
   need_restart: boolean;
+}
+
+// AgentPluginRuntimeListParams defines the stable plugin runtime query params.
+export interface AgentPluginRuntimeListParams {
+  request_meta: RequestMeta;
+}
+
+// PluginRuntimeEvent mirrors the backend runtime event query payload.
+export interface PluginRuntimeEvent {
+  name: string;
+  kind: PluginRuntimeState["kind"];
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+// AgentPluginRuntimeListResult defines the plugin runtime query result.
+export interface AgentPluginRuntimeListResult {
+  items: PluginRuntimeState[];
+  metrics: PluginMetricSnapshot[];
+  events: PluginRuntimeEvent[];
 }
 
 // TaskUpdatedNotification 定义当前模块的接口约束。
