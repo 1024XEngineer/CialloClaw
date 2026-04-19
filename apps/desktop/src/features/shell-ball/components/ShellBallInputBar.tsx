@@ -46,6 +46,15 @@ type ShellBallInputBarProps = {
   onTransientInputActivity?: () => void;
 };
 
+const SHELL_BALL_INPUT_LABEL = "Message";
+
+/**
+ * Renders the floating shell-ball input bar while preserving the attachment,
+ * resize, and submit controls that surround the draft field.
+ *
+ * @param props Shell-ball input mode, draft state, and interaction callbacks.
+ * @returns The shell-ball input bar UI.
+ */
 export function ShellBallInputBar({
   mode,
   voicePreview,
@@ -337,7 +346,10 @@ export function ShellBallInputBar({
       data-mode={mode}
       data-voice-preview={voicePreview ?? undefined}
     >
-      <div className="shell-ball-input-bar__field-shell">
+      <div
+        className="shell-ball-input-bar__field-shell"
+        data-filled={trimmedValue !== "" ? "true" : "false"}
+      >
         <textarea
           ref={inputRef}
           className="shell-ball-input-bar__field"
@@ -362,6 +374,10 @@ export function ShellBallInputBar({
           rows={1}
           style={textareaStyle}
         />
+        <span aria-hidden="true" className="shell-ball-input-bar__field-label">
+          {SHELL_BALL_INPUT_LABEL}
+        </span>
+        <i aria-hidden="true" className="shell-ball-input-bar__field-line" />
         {!isInteractive ? null : (
           <div
             aria-hidden="true"

@@ -712,11 +712,10 @@
 }
 
 .shell-ball-input-bar {
-  --shell-ball-input-accent: rgba(106, 145, 200, 0.34);
+  --shell-ball-input-accent: rgba(148, 148, 148, 0.38);
   align-items: end;
   background: transparent;
   border: 0;
-  border-bottom: 2px solid rgba(91, 103, 118, 0.34);
   border-radius: 0;
   box-shadow: none;
   display: grid;
@@ -736,25 +735,15 @@
 }
 
 .shell-ball-input-bar::before {
-  background: rgba(255, 255, 255, 0.62);
-  content: "";
-  height: 2px;
-  inset: auto 0.5rem 0.16rem;
-  opacity: 1;
-  pointer-events: none;
-  position: absolute;
-  transition:
-    opacity 180ms ease,
-    inset 180ms ease,
-    border-radius 180ms ease,
-    height 180ms ease,
-    background 180ms ease,
-  border-color 180ms ease;
+  display: none;
 }
 
 .shell-ball-input-bar__field-shell {
+  align-items: end;
+  display: flex;
+  min-height: 2.75rem;
   min-width: 0;
-  padding: 0 0.82rem 0.08rem 0;
+  padding: 0.08rem 0.82rem 0.08rem 0;
   position: relative;
 }
 
@@ -762,27 +751,61 @@
   appearance: none;
   background: transparent;
   border: 0;
-  caret-color: rgba(24, 24, 24, 0.9);
-  color: rgba(24, 24, 24, 0.88);
+  caret-color: rgba(56, 56, 56, 0.92);
+  color: rgba(56, 56, 56, 0.94);
   display: block;
   font: inherit;
   line-height: 1.42;
   max-width: min(32rem, calc(100vw - 6rem));
-  min-height: 1.28rem;
+  min-height: 2.75rem;
   min-width: 11rem;
   outline: 0;
   overflow-x: hidden;
   overflow-y: hidden;
-  padding: 0.04rem 0.46rem 0.16rem 0.18rem;
+  padding: 1.24rem 0.7rem 0.58rem 0.62rem;
   resize: none;
   scrollbar-color: rgba(124, 140, 160, 0.94) rgba(255, 255, 255, 0.14);
   scrollbar-width: thin;
   white-space: pre-wrap;
   width: clamp(12rem, calc(var(--shell-ball-helper-width) - 4.8rem), 23rem);
+  z-index: 2;
 }
 
 .shell-ball-input-bar__field::placeholder {
-  color: rgba(24, 24, 24, 0.28);
+  color: transparent;
+}
+
+.shell-ball-input-bar__field-label {
+  color: rgba(138, 138, 138, 0.74);
+  font-size: 0.95rem;
+  left: 0;
+  letter-spacing: 0.05em;
+  padding: 1.24rem 0.62rem 0.58rem;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform-origin: left center;
+  transition:
+    color 180ms ease,
+    font-size 180ms ease,
+    transform 180ms ease;
+  z-index: 1;
+}
+
+.shell-ball-input-bar__field-line {
+  background: rgba(126, 126, 126, 0.34);
+  border-radius: 0.8rem;
+  bottom: 0.08rem;
+  height: 2px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  transition:
+    background 180ms ease,
+    border-radius 180ms ease,
+    height 180ms ease;
+  width: 100%;
+  z-index: 0;
 }
 
 .shell-ball-input-bar__field::-webkit-scrollbar {
@@ -815,7 +838,7 @@
 
 .shell-ball-input-bar__resize-handle {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(109, 122, 138, 0.1));
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(132, 132, 132, 0.12));
   border-radius: 0.78rem 0.22rem 0.92rem 0.22rem;
   bottom: 0.16rem;
   box-shadow:
@@ -841,7 +864,7 @@
     repeating-linear-gradient(
       135deg,
       transparent 0 0.2rem,
-      rgba(89, 101, 117, 0.46) 0.2rem 0.28rem,
+      rgba(132, 132, 132, 0.44) 0.2rem 0.28rem,
       transparent 0.28rem 0.42rem
     );
   border-radius: 0 0.22rem 0.44rem 0;
@@ -877,7 +900,7 @@
   background: transparent;
   border: 0;
   border-radius: 999px;
-  color: rgba(81, 96, 108, 0.52);
+  color: rgba(108, 108, 108, 0.66);
   cursor: pointer;
   display: inline-flex;
   height: 1.72rem;
@@ -893,7 +916,7 @@
 }
 
 .shell-ball-input-bar__action:hover:not(:disabled) {
-  color: rgba(81, 96, 108, 0.78);
+  color: rgba(88, 88, 88, 0.84);
   transform: translateY(-1px);
 }
 
@@ -908,11 +931,11 @@
 }
 
 .shell-ball-input-bar__action--send {
-  color: rgba(81, 96, 108, 0.52);
+  color: rgba(108, 108, 108, 0.66);
 }
 
 .shell-ball-input-bar__action--send:hover:not(:disabled) {
-  color: rgba(81, 96, 108, 0.78);
+  color: rgba(88, 88, 88, 0.84);
 }
 
 .shell-ball-input-bar__action-icon {
@@ -922,49 +945,50 @@
 
 .shell-ball-input-bar--interactive {
   background: transparent;
-  border-bottom: 2px solid rgba(91, 103, 118, 0.34);
   box-shadow: none;
   min-height: 2rem;
   padding: 0.05rem 0.12rem 0.22rem 0.2rem;
 }
 
 .shell-ball-input-bar--interactive:focus-within {
-  background: rgba(105, 113, 124, 0.08);
-  border: 1px solid rgba(91, 103, 118, 0.28);
+  background: transparent;
   border-radius: 1rem;
-  box-shadow:
-    0 8px 14px -12px rgba(75, 67, 53, 0.16),
-    0 0 0 2px rgba(81, 96, 108, 0.05);
+  box-shadow: none;
   min-height: 2.68rem;
   padding: 0.28rem 0.36rem 0.28rem 0.62rem;
   transform: none;
 }
 
 .shell-ball-input-bar--interactive::before {
-  opacity: 1;
-}
-
-.shell-ball-input-bar--interactive:focus-within::before {
-  background: transparent;
-  border: 3px solid rgba(255, 255, 255, 0.62);
-  border-radius: 1rem;
-  height: auto;
-  inset: 0;
-  opacity: 1;
+  display: none;
 }
 
 .shell-ball-input-bar--interactive:focus-within .shell-ball-input-bar__field {
-  caret-color: rgba(18, 18, 18, 0.94);
-  color: rgba(18, 18, 18, 0.94);
+  caret-color: rgba(42, 42, 42, 0.96);
+  color: rgba(42, 42, 42, 0.96);
   min-height: 2.56rem;
   text-shadow: none;
 }
 
+.shell-ball-input-bar__field-shell[data-filled="true"] .shell-ball-input-bar__field-label,
+.shell-ball-input-bar--interactive:focus-within .shell-ball-input-bar__field-label,
+.shell-ball-input-bar--readonly .shell-ball-input-bar__field-label {
+  color: rgba(110, 110, 110, 0.82);
+  font-size: 0.72rem;
+  transform: translateX(-0.34rem) translateY(-1.06rem);
+}
+
+.shell-ball-input-bar__field-shell[data-filled="true"] .shell-ball-input-bar__field-line,
+.shell-ball-input-bar--interactive:focus-within .shell-ball-input-bar__field-line,
+.shell-ball-input-bar--readonly .shell-ball-input-bar__field-line {
+  background: rgba(128, 128, 128, 0.26);
+  height: calc(100% - 0.08rem);
+}
+
 .shell-ball-input-bar--readonly {
-  --shell-ball-input-accent: rgba(143, 154, 165, 0.26);
+  --shell-ball-input-accent: rgba(138, 138, 138, 0.3);
   background: transparent;
   border: 0;
-  border-bottom: 3px solid rgba(91, 103, 118, 0.22);
   box-shadow: none;
   min-height: 2rem;
   padding: 0.05rem 0.12rem 0.22rem 0.2rem;
