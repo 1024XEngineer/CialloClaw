@@ -48,6 +48,8 @@ type NamedPipeSubscription = {
   unsubscribe: () => Promise<void>;
 };
 
+const NAMED_PIPE_FALLBACK_TIMEOUT_MS = 1_200;
+
 // JsonRpcTransport is the minimal transport contract shared by both runtime modes.
 interface JsonRpcTransport {
   send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>>;
@@ -85,7 +87,7 @@ class NamedPipeJsonRpcTransport implements JsonRpcTransport {
     }
 
     try {
-      return await bridge.request<T>(payload);
+      return await this.requestWithNamedPipeTimeout(bridge, payload);
     } catch (error) {
       if (!isDesktopTransportUnavailable(error)) {
         throw error;
@@ -94,6 +96,20 @@ class NamedPipeJsonRpcTransport implements JsonRpcTransport {
       this.useHttpFallback = true;
       return this.httpFallback.send<T>(payload);
     }
+  }
+
+  private async requestWithNamedPipeTimeout<T>(
+    bridge: NonNullable<typeof window.__CIALLOCLAW_NAMED_PIPE__>,
+    payload: JsonRpcRequest,
+  ): Promise<JsonRpcEnvelope<T>> {
+    return Promise.race([
+      bridge.request<T>(payload),
+      new Promise<JsonRpcEnvelope<T>>((_, reject) => {
+        window.setTimeout(() => {
+          reject(new Error(`named pipe request timed out after ${NAMED_PIPE_FALLBACK_TIMEOUT_MS}ms`));
+        }, NAMED_PIPE_FALLBACK_TIMEOUT_MS);
+      }),
+    ]);
   }
 }
 
