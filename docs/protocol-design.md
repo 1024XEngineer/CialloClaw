@@ -577,10 +577,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.text`                 | 用户输入文本                   |
 | `input.input_mode`           | 输入模式，语音或文字           |
 | `context.page`               | 当前页面上下文                 |
+| `context.page.title`         | 当前页面标题                   |
+| `context.page.url`           | 当前页面 URL                   |
+| `context.page.app_name`      | 当前宿主应用名                 |
+| `context.page.window_title`  | 当前窗口标题                   |
+| `context.page.visible_text`  | 当前页面可见文本摘录           |
 | `context.selection.text`     | 当前选中文本                   |
 | `context.files`              | 当前附带文件列表               |
+| `context.screen.summary`     | 当前屏幕摘要，可用于视觉型任务上下文 |
+| `context.screen.visible_text` | 当前屏幕可见文本摘录          |
+| `context.behavior.last_action` | 最近行为信号，例如 `copy`    |
+| `context.behavior.dwell_millis` | 当前场景停留时长             |
 | `voice_meta`                 | 语音会话元信息                 |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
+
+补充约束：
+
+- 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
+- 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
+- 若客户端后续改为通过 `agent.task.start` 显式提交 `intent.name = screen_analyze`，后端应复用同一条主链路；`agent.input.submit` 不需要新增平行入口。
 
 ### agent.input.submit 入参示例
 
@@ -606,7 +621,17 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "page": {
         "title": "Q3 复盘草稿",
         "app_name": "browser",
-        "url": "local://current-page"
+        "url": "local://current-page",
+        "window_title": "Chrome - Q3 复盘草稿",
+        "visible_text": "发布说明缺少回滚策略和验收结论。"
+      },
+      "screen": {
+        "summary": "浏览器中打开了一页发布清单，页面中有缺失项提示。",
+        "visible_text": "Warning: release notes are incomplete."
+      },
+      "behavior": {
+        "last_action": "copy",
+        "dwell_millis": 18000
       },
       "selection": {
         "text": "这里是一段当前选中的补充上下文"

@@ -334,17 +334,59 @@ export interface JsonRpcPage {
 }
 
 export interface PageContext {
-  title: string;
-  app_name: string;
-  url: string;
+  title?: string;
+  app_name?: string;
+  url?: string;
+  window_title?: string;
+  visible_text?: string;
+  hover_target?: string;
+}
+
+export interface ScreenContext {
+  summary?: string;
+  screen_summary?: string;
+  visible_text?: string;
+  window_title?: string;
+  hover_target?: string;
+}
+
+export interface BehaviorContext {
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
+}
+
+export interface ErrorContext {
+  message?: string;
+}
+
+export interface ClipboardContext {
+  text?: string;
 }
 
 export interface InputContext {
   page?: PageContext;
+  screen?: ScreenContext;
+  behavior?: BehaviorContext;
   selection?: {
     text: string;
   };
+  error?: ErrorContext;
+  clipboard?: ClipboardContext;
+  text?: string;
+  selection_text?: string;
   files?: string[];
+  file_paths?: string[];
+  screen_summary?: string;
+  clipboard_text?: string;
+  hover_target?: string;
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
 }
 
 export interface VoiceMeta {
