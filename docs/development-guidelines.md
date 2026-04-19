@@ -574,6 +574,7 @@ Linter / CI 是最快、最便宜、最确定的反馈源。
 - 成本治理必须体现在编排层、Trace / Eval、设置项与安全 / 预算策略中。
 - 任何新功能若显著增加 token、上下文长度、工具调用次数或媒体处理成本，必须在设计评审阶段说明其成本上界和降级方案。
 - 不允许把“预算降级”只做成 UI 文案而不进入真实执行策略。
+- `budget_auto_downgrade` 的真实执行至少要覆盖：执行前策略评估、provider/model failure fallback、failure signal window、高成本工具分类治理，以及 audit/event/trace 结构化记录。
 
 ---
 

@@ -613,6 +613,66 @@ func TestExecuteBudgetDowngradeSkipsToolCallingAgentLoop(t *testing.T) {
 	}
 }
 
+func TestExecuteBudgetDowngradeBlocksExpensiveDirectToolPath(t *testing.T) {
+	service, _ := newTestExecutionService(t, "executor-backed direct tool budget fallback")
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_direct_tool",
+		RunID:        "run_budget_direct_tool",
+		Title:        "Budget direct tool fallback",
+		Intent:       map[string]any{"name": "exec_command", "arguments": map[string]any{"command": "dir"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Run an expensive command."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget direct tool result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "failure_pressure",
+			"degrade_actions": []string{"skip_expensive_tools", "lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.ToolName == "exec_command" {
+		t.Fatalf("expected direct expensive tool path to be blocked by budget downgrade, got %+v", result)
+	}
+	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
+		t.Fatalf("expected blocked direct tool path to fall back to lightweight generation before hard budget fallback, got %+v", result.ModelInvocation)
+	}
+	if strings.Contains(result.Content, "Budget downgrade fallback applied.") {
+		t.Fatalf("expected blocked direct tool path to avoid hard fallback when lightweight generation succeeds, got %q", result.Content)
+	}
+}
+
+func TestExecuteBudgetDowngradeFallbackCarriesStructuredTrace(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, nil)
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_fallback_trace",
+		RunID:        "run_budget_fallback_trace",
+		Title:        "Budget fallback trace",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget fallback trace result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "failure_pressure",
+			"degrade_actions": []string{"skip_expensive_tools", "lightweight_delivery", "shrink_context"},
+			"summary":         "Budget downgrade fallback applied.",
+			"trace": map[string]any{
+				"failure_signal_window":     2,
+				"expensive_tool_categories": []string{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.ModelInvocation["reason"] != "failure_pressure" {
+		t.Fatalf("expected fallback invocation reason to remain structured, got %+v", result.ModelInvocation)
+	}
+}
+
 func TestExecuteAgentLoopHonorsConfiguredPlannerRetryBudget(t *testing.T) {
 	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
 	cfg := serviceconfig.ModelConfig{PlannerRetryBudget: 2}

@@ -77,6 +77,7 @@ type budgetDowngradeDecision struct {
 	TriggerStage   string
 	DegradeActions []string
 	Summary        string
+	Trace          map[string]any
 }
 
 // NewService wires the main orchestration dependencies.
@@ -4638,6 +4639,7 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 	if !boolValue(dataLogSettings, "budget_auto_downgrade", true) {
 		return budgetDowngradeDecision{}
 	}
+	policy := budgetPolicySettings(dataLogSettings)
 	decision := budgetDowngradeDecision{
 		Enabled:      true,
 		TriggerStage: "execution_preflight",
@@ -4646,24 +4648,28 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 	if !supportsBudgetProvider(provider) {
 		decision.Applied = true
 		decision.TriggerReason = "provider_unavailable"
-		decision.DegradeActions = []string{"lightweight_delivery", "skip_expensive_tools"}
+		decision.DegradeActions = budgetDegradeActionsForReason(policy, "provider_unavailable")
 		decision.Summary = "预算降级已生效：当前模型提供方不可用，任务改走轻量交付路径。"
+		decision.Trace = buildBudgetDecisionTrace(task, decision, policy, 0, 0)
 		return decision
 	}
-	if recentBudgetFailureCount(task) > 0 {
+	failureSignals := recentBudgetFailureCount(task)
+	if failureSignals >= intValue(policy, "failure_signal_window", 2) {
 		decision.Applied = true
 		decision.TriggerReason = "failure_pressure"
-		decision.DegradeActions = []string{"lightweight_delivery", "skip_expensive_tools", "shrink_context"}
+		decision.DegradeActions = budgetDegradeActionsForReason(policy, "failure_pressure")
 		decision.Summary = "预算降级已生效：最近出现模型/提供方失败，任务改走轻量保守执行路径。"
+		decision.Trace = buildBudgetDecisionTrace(task, decision, policy, failureSignals, 0)
 		return decision
 	}
 	totalTokens := intValueFromAny(task.TokenUsage["total_tokens"])
 	estimatedCost := floatValueFromAny(task.TokenUsage["estimated_cost"])
-	if totalTokens >= 64 || estimatedCost >= 0.05 {
+	if totalTokens >= intValue(policy, "token_pressure_threshold", 64) || estimatedCost >= floatValueFromAny(policy["cost_pressure_threshold"]) {
 		decision.Applied = true
 		decision.TriggerReason = "budget_pressure"
-		decision.DegradeActions = []string{"lightweight_delivery", "shrink_context"}
+		decision.DegradeActions = budgetDegradeActionsForReason(policy, "budget_pressure")
 		decision.Summary = "预算降级已生效：当前任务命中 token/成本压力，改为轻量交付并压缩上下文。"
+		decision.Trace = buildBudgetDecisionTrace(task, decision, policy, failureSignals, map[string]any{"total_tokens": totalTokens, "estimated_cost": estimatedCost})
 	}
 	return decision
 }
@@ -4704,6 +4710,7 @@ func mergeBudgetDowngradeSummary(current map[string]any, decision budgetDowngrad
 	updated["budget_auto_downgrade_reason"] = decision.TriggerReason
 	updated["budget_auto_downgrade_actions"] = append([]string(nil), decision.DegradeActions...)
 	updated["budget_auto_downgrade_summary"] = decision.Summary
+	updated["budget_auto_downgrade_trace"] = cloneMap(decision.Trace)
 	return updated
 }
 
@@ -4722,6 +4729,60 @@ func supportsBudgetProvider(provider string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func budgetPolicySettings(dataLogSettings map[string]any) map[string]any {
+	policy := cloneMap(mapValue(dataLogSettings, "budget_policy"))
+	if policy == nil {
+		policy = map[string]any{}
+	}
+	if _, ok := policy["planner_retry_budget"]; !ok {
+		policy["planner_retry_budget"] = 1
+	}
+	if _, ok := policy["failure_signal_window"]; !ok {
+		policy["failure_signal_window"] = 2
+	}
+	if _, ok := policy["token_pressure_threshold"]; !ok {
+		policy["token_pressure_threshold"] = 64
+	}
+	if _, ok := policy["cost_pressure_threshold"]; !ok {
+		policy["cost_pressure_threshold"] = 0.05
+	}
+	if _, ok := policy["expensive_tool_categories"]; !ok {
+		policy["expensive_tool_categories"] = []string{"command", "browser_mutation", "media_heavy"}
+	}
+	return policy
+}
+
+func budgetDegradeActionsForReason(policy map[string]any, reason string) []string {
+	actions := []string{"lightweight_delivery"}
+	switch reason {
+	case "provider_unavailable", "failure_pressure":
+		actions = append(actions, "skip_expensive_tools", "shrink_context")
+	case "budget_pressure":
+		actions = append(actions, "shrink_context")
+	}
+	if len(stringSliceValue(policy["expensive_tool_categories"])) > 0 && !containsString(actions, "skip_expensive_tools") && reason != "budget_pressure" {
+		actions = append(actions, "skip_expensive_tools")
+	}
+	return actions
+}
+
+func buildBudgetDecisionTrace(task runengine.TaskRecord, decision budgetDowngradeDecision, policy map[string]any, failureSignals int, pressure any) map[string]any {
+	return map[string]any{
+		"task_id":                   task.TaskID,
+		"run_id":                    task.RunID,
+		"trigger_reason":            decision.TriggerReason,
+		"trigger_stage":             decision.TriggerStage,
+		"degrade_actions":           append([]string(nil), decision.DegradeActions...),
+		"failure_signal_count":      failureSignals,
+		"planner_retry_budget":      intValue(policy, "planner_retry_budget", 1),
+		"failure_signal_window":     intValue(policy, "failure_signal_window", 2),
+		"token_pressure_threshold":  intValue(policy, "token_pressure_threshold", 64),
+		"cost_pressure_threshold":   floatValueFromAny(policy["cost_pressure_threshold"]),
+		"expensive_tool_categories": stringSliceValue(policy["expensive_tool_categories"]),
+		"pressure":                  pressure,
 	}
 }
 
@@ -4897,11 +4958,20 @@ func intValue(values map[string]any, key string, fallback int) int {
 	if !ok {
 		return fallback
 	}
-	value, ok := rawValue.(float64)
-	if !ok {
+	switch value := rawValue.(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float32:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
 		return fallback
 	}
-	return int(value)
 }
 
 // truncateText trims text to a fixed length for recommendation and memory
@@ -4979,6 +5049,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 			"trigger_stage":   budgetDecision.TriggerStage,
 			"degrade_actions": append([]string(nil), budgetDecision.DegradeActions...),
 			"summary":         budgetDecision.Summary,
+			"trace":           cloneMap(budgetDecision.Trace),
 		},
 	})
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
@@ -5325,6 +5396,7 @@ func (s *Service) buildBudgetDowngradeAudit(task runengine.TaskRecord, decision 
 			"trigger_stage":   decision.TriggerStage,
 			"degrade_actions": append([]string(nil), decision.DegradeActions...),
 			"summary":         decision.Summary,
+			"trace":           cloneMap(decision.Trace),
 		},
 	}
 }
@@ -5359,6 +5431,7 @@ func (s *Service) recordBudgetDowngradeEvent(task runengine.TaskRecord, decision
 		"trigger_stage":    decision.TriggerStage,
 		"degrade_actions":  append([]string(nil), decision.DegradeActions...),
 		"summary":          decision.Summary,
+		"trace":            cloneMap(decision.Trace),
 		"budget_auto_down": true,
 	})
 	if !ok {

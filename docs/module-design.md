@@ -73,6 +73,8 @@
 4. **治理与反馈层不等于外围附属，而是主链路一部分**  
    风险评估、授权、审查、Trace、熔断、恢复、预算控制必须能影响主链路，不只是做日志记录。
 
+在 owner-5 的当前后端实现中，`budget_auto_downgrade` 已进入 Harness 主链路：编排层在执行前依据 token/cost、provider 可用性和 failure signal window 评估预算策略，执行层在模型或 provider 失败后转入 lightweight delivery fallback，并对高成本工具类别执行阻断；命中结果统一回流到 audit / event / trace 链路，而不只是停留在设置项展示。
+
 5. **平台层必须抽象，不得反向污染业务层**  
    文件、路径、通知、快捷键、执行后端等能力必须经抽象层暴露，业务层不能依赖具体平台实现名和平台路径。
 

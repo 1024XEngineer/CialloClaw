@@ -635,6 +635,9 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 	if intentName == "" || intentName == "write_file" {
 		return Result{}, false, nil
 	}
+	if budgetDowngradeDisallowsDirectTool(request, intentName) {
+		return Result{}, false, nil
+	}
 	if s.executor == nil || s.tools == nil {
 		return Result{}, false, nil
 	}
@@ -756,6 +759,9 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	}
 
 	if s.tools == nil || intentName == "" {
+		return "", nil, false
+	}
+	if budgetDowngradeDisallowsDirectTool(request, intentName) {
 		return "", nil, false
 	}
 	if _, err := s.tools.Get(intentName); err != nil {
@@ -1445,7 +1451,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		CompressChars:      s.agentLoopCompressionChars(),
 		KeepRecent:         s.agentLoopKeepRecent(),
 		RepeatedToolBudget: 2,
-		PlannerRetryBudget: s.agentLoopPlannerRetryBudget(),
+		PlannerRetryBudget: budgetPlannerRetryBudget(request, s.agentLoopPlannerRetryBudget()),
 		ToolRetryBudget:    s.agentLoopToolRetryBudget(),
 		Hook:               noopAgentLoopHook{},
 		EmitEvent: func(event agentloop.LifecycleEvent) {
@@ -1537,6 +1543,53 @@ func invocationRecordMap(record *model.InvocationRecord) map[string]any {
 
 func budgetDowngradeDisablesToolCalls(request Request) bool {
 	return boolValue(request.BudgetDowngrade, "applied") && containsExecutionString(stringSliceValue(request.BudgetDowngrade, "degrade_actions"), "skip_expensive_tools")
+}
+
+func budgetDowngradeDisallowsDirectTool(request Request, toolName string) bool {
+	if !budgetDowngradeDisablesToolCalls(request) {
+		return false
+	}
+	category := budgetToolCategory(toolName)
+	if category == "" {
+		return false
+	}
+	return containsExecutionString(budgetExpensiveToolCategories(request), category)
+}
+
+func budgetPlannerRetryBudget(request Request, fallback int) int {
+	if fallback <= 0 {
+		fallback = 1
+	}
+	trace := mapValue(request.BudgetDowngrade, "trace")
+	override := intValue(trace, "planner_retry_budget")
+	if override <= 0 {
+		return fallback
+	}
+	if override < fallback {
+		return override
+	}
+	return fallback
+}
+
+func budgetExpensiveToolCategories(request Request) []string {
+	trace := mapValue(request.BudgetDowngrade, "trace")
+	if categories := stringSliceValue(trace, "expensive_tool_categories"); len(categories) > 0 {
+		return categories
+	}
+	return []string{"command", "browser_mutation", "media_heavy"}
+}
+
+func budgetToolCategory(toolName string) string {
+	switch strings.TrimSpace(toolName) {
+	case "exec_command":
+		return "command"
+	case "page_interact":
+		return "browser_mutation"
+	case "transcode_media", "normalize_recording", "extract_frames":
+		return "media_heavy"
+	default:
+		return ""
+	}
 }
 
 func budgetDowngradeGenerationFallback(request Request, inputText string, generationErr error) (generationTrace, bool) {
@@ -2347,6 +2400,9 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 	)
 	if s.tools != nil && intentName != "" && intentName != "write_file" {
 		if _, err := s.tools.Get(intentName); err == nil {
+			if budgetDowngradeDisallowsDirectTool(request, intentName) {
+				return "", nil, nil, false, nil
+			}
 			switch intentName {
 			case "read_file":
 				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))

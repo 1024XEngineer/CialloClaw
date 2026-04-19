@@ -5526,6 +5526,11 @@ func TestServiceBudgetAutoDowngradeUsesFailurePressureSignal(t *testing.T) {
 			"action":   "budget_auto_downgrade.failure_signal",
 			"result":   "failed",
 			"reason":   model.ErrClientNotConfigured.Error(),
+		}, {
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrModelProviderUnsupported.Error(),
 		}},
 	}
 	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
@@ -5534,6 +5539,9 @@ func TestServiceBudgetAutoDowngradeUsesFailurePressureSignal(t *testing.T) {
 	}
 	if !containsString(decision.DegradeActions, "skip_expensive_tools") {
 		t.Fatalf("expected failure pressure decision to disable expensive tools, got %+v", decision)
+	}
+	if decision.Trace == nil || decision.Trace["failure_signal_window"] != 2 {
+		t.Fatalf("expected failure pressure trace to expose configured policy window, got %+v", decision.Trace)
 	}
 }
 
@@ -5570,6 +5578,53 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 	}
 	if !foundBudgetFailure {
 		t.Fatalf("expected failExecutionTask to append budget failure signal, got %+v", updatedTask.AuditRecords)
+	}
+}
+
+func TestServiceBudgetAutoDowngradeUsesConfiguredPolicyThresholds(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed configured thresholds")
+	_, _, _, needRestart := service.runEngine.UpdateSettings(map[string]any{
+		"data_log": map[string]any{
+			"budget_auto_downgrade": true,
+			"budget_policy": map[string]any{
+				"failure_signal_window":     3,
+				"token_pressure_threshold":  120,
+				"cost_pressure_threshold":   0.20,
+				"planner_retry_budget":      2,
+				"expensive_tool_categories": []any{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if needRestart {
+		t.Fatal("expected nested budget policy update to remain immediate")
+	}
+	task := runengine.TaskRecord{
+		TaskID:            "task_budget_policy_thresholds",
+		SessionID:         "sess_budget_policy_thresholds",
+		RunID:             "run_budget_policy_thresholds",
+		Title:             "configured thresholds task",
+		SourceType:        "hover_input",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		StartedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		TokenUsage: map[string]any{
+			"total_tokens":   96,
+			"estimated_cost": 0.08,
+		},
+	}
+	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if decision.Applied {
+		t.Fatalf("expected configured thresholds to suppress downgrade below custom limits, got %+v", decision)
+	}
+	task.TokenUsage["total_tokens"] = 140
+	decision = service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if !decision.Applied || decision.Trace == nil || decision.Trace["planner_retry_budget"] != 2 || decision.Trace["failure_signal_window"] != 3 {
+		t.Fatalf("expected configured thresholds and trace metadata to be respected, got %+v", decision)
 	}
 }
 

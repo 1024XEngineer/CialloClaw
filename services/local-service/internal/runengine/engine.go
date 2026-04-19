@@ -2559,6 +2559,13 @@ func buildDefaultSettings() map[string]any {
 		"data_log": map[string]any{
 			"provider":              "openai",
 			"budget_auto_downgrade": true,
+			"budget_policy": map[string]any{
+				"planner_retry_budget":      1,
+				"failure_signal_window":     2,
+				"token_pressure_threshold":  64,
+				"cost_pressure_threshold":   0.05,
+				"expensive_tool_categories": []string{"command", "browser_mutation", "media_heavy"},
+			},
 		},
 	}
 }

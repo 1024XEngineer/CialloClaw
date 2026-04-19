@@ -261,6 +261,55 @@ func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
 	}
 }
 
+func TestEngineDefaultSettingsIncludeBudgetPolicy(t *testing.T) {
+	engine := NewEngine()
+	settings := engine.Settings()
+	dataLog := settings["data_log"].(map[string]any)
+	policy := dataLog["budget_policy"].(map[string]any)
+	if dataLog["budget_auto_downgrade"] != true {
+		t.Fatalf("expected budget_auto_downgrade default to remain true, got %+v", dataLog)
+	}
+	if policy["planner_retry_budget"] != 1 || policy["failure_signal_window"] != 2 || policy["token_pressure_threshold"] != 64 {
+		t.Fatalf("expected default budget policy thresholds, got %+v", policy)
+	}
+	categories := policy["expensive_tool_categories"].([]string)
+	if len(categories) != 3 || categories[0] != "command" {
+		t.Fatalf("expected default expensive tool categories, got %+v", policy)
+	}
+}
+
+func TestEngineUpdateSettingsMergesNestedBudgetPolicy(t *testing.T) {
+	engine := NewEngine()
+	effective, updatedKeys, applyMode, needRestart := engine.UpdateSettings(map[string]any{
+		"data_log": map[string]any{
+			"budget_policy": map[string]any{
+				"failure_signal_window":     3,
+				"planner_retry_budget":      2,
+				"expensive_tool_categories": []any{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if applyMode != "immediate" || needRestart {
+		t.Fatalf("expected budget policy update to stay immediate, got applyMode=%s needRestart=%v", applyMode, needRestart)
+	}
+	if len(updatedKeys) != 1 || updatedKeys[0] != "data_log.budget_policy" {
+		t.Fatalf("expected nested budget policy update key, got %+v", updatedKeys)
+	}
+	policyPatch := effective["data_log"].(map[string]any)["budget_policy"].(map[string]any)
+	if policyPatch["failure_signal_window"] != 3 || policyPatch["planner_retry_budget"] != 2 {
+		t.Fatalf("expected effective settings to expose nested budget policy patch, got %+v", effective)
+	}
+	settings := engine.Settings()
+	policy := settings["data_log"].(map[string]any)["budget_policy"].(map[string]any)
+	if policy["failure_signal_window"] != 3 || policy["planner_retry_budget"] != 2 {
+		t.Fatalf("expected nested budget policy merge to persist, got %+v", policy)
+	}
+	categories := policy["expensive_tool_categories"].([]any)
+	if len(categories) != 3 {
+		t.Fatalf("expected updated expensive tool categories, got %+v", categories)
+	}
+}
+
 func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	engine := NewEngine()
 	fixedTime := time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC)
