@@ -524,7 +524,7 @@ func TestExecuteAgentLoopPersistsPlannerErrors(t *testing.T) {
 }
 
 func TestExecuteAgentLoopRetriesPlannerOnceBeforeFailing(t *testing.T) {
-	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
+	modelClient := &stubModelClient{err: model.ErrOpenAIRequestTimeout}
 	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
 	_, err := service.Execute(context.Background(), Request{
 		TaskID:       "task_loop_retry_planner",
@@ -538,10 +538,13 @@ func TestExecuteAgentLoopRetriesPlannerOnceBeforeFailing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected planner retry path to still surface final error")
 	}
+	if modelClient.generateToolCallsCount != 2 {
+		t.Fatalf("expected one retry for timeout planner error, got %d", modelClient.generateToolCallsCount)
+	}
 }
 
 func TestExecuteAgentLoopHonorsConfiguredPlannerRetryBudget(t *testing.T) {
-	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
+	modelClient := &stubModelClient{err: model.ErrOpenAIRequestTimeout}
 	cfg := serviceconfig.ModelConfig{PlannerRetryBudget: 2}
 	service, _ := newTestExecutionServiceWithModelClientAndConfig(t, cfg, modelClient)
 	_, err := service.Execute(context.Background(), Request{
@@ -558,6 +561,27 @@ func TestExecuteAgentLoopHonorsConfiguredPlannerRetryBudget(t *testing.T) {
 	}
 	if modelClient.generateToolCallsCount != 3 {
 		t.Fatalf("expected planner to be attempted three times, got %d", modelClient.generateToolCallsCount)
+	}
+}
+
+func TestExecuteAgentLoopDoesNotRetryNonRetryablePlannerErrors(t *testing.T) {
+	modelClient := &stubModelClient{err: &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"}}
+	cfg := serviceconfig.ModelConfig{PlannerRetryBudget: 2}
+	service, _ := newTestExecutionServiceWithModelClientAndConfig(t, cfg, modelClient)
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_non_retryable_planner",
+		RunID:        "run_loop_non_retryable_planner",
+		Title:        "Loop non-retryable planner",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop non-retryable result",
+	})
+	if err == nil {
+		t.Fatal("expected non-retryable planner error to surface")
+	}
+	if modelClient.generateToolCallsCount != 1 {
+		t.Fatalf("expected non-retryable planner error to stop after one attempt, got %d", modelClient.generateToolCallsCount)
 	}
 }
 

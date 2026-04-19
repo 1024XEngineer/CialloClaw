@@ -140,7 +140,7 @@ func TestRunRetriesPlannerUpToConfiguredBudget(t *testing.T) {
 	}
 	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 		attempts++
-		return model.ToolCallResult{}, errors.New("temporary planner error")
+		return model.ToolCallResult{}, model.ErrOpenAIRequestTimeout
 	}
 
 	result, handled, err := runtime.Run(context.Background(), request)
@@ -158,6 +158,42 @@ func TestRunRetriesPlannerUpToConfiguredBudget(t *testing.T) {
 	}
 	if countEventType(result.Events, "loop.retrying") != 2 {
 		t.Fatalf("expected two retry events, got %+v", result.Events)
+	}
+	if !hasEventType(result.Events, "loop.failed") {
+		t.Fatalf("expected loop.failed event in %+v", result.Events)
+	}
+}
+
+func TestRunStopsPlannerRetriesForNonRetryableErrors(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.PlannerRetryBudget = 2
+	attempts := 0
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
+	request.AllowedTool = func(string) bool { return true }
+	request.ExecuteTool = func(context.Context, model.ToolInvocation, int) (string, tools.ToolCallRecord) {
+		return "unused", tools.ToolCallRecord{ToolName: "read_file", Status: tools.ToolCallStatusSucceeded}
+	}
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		attempts++
+		return model.ToolCallResult{}, &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err == nil {
+		t.Fatalf("expected planner error to be returned, got result=%+v handled=%v", result, handled)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected non-retryable planner error to stop immediately, got %d attempts", attempts)
+	}
+	if countEventType(result.Events, "loop.retrying") != 0 {
+		t.Fatalf("expected no retry event for non-retryable planner error, got %+v", result.Events)
+	}
+	if result.StopReason != StopReasonPlannerError {
+		t.Fatalf("expected planner_error stop reason, got %s", result.StopReason)
 	}
 	if !hasEventType(result.Events, "loop.failed") {
 		t.Fatalf("expected loop.failed event in %+v", result.Events)

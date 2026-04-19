@@ -227,7 +227,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			if err == nil {
 				break
 			}
-			if attempt < request.PlannerRetryBudget {
+			if attempt < request.PlannerRetryBudget && shouldRetryPlannerError(err) {
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 					"loop_round": round.LoopRound,
 					"phase":      "planner",
@@ -235,7 +235,9 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 					"reason":     plannerRetryReason(err),
 					"error":      err.Error(),
 				}))
+				continue
 			}
+			break
 		}
 		if err != nil {
 			round.Status = "failed"
