@@ -713,14 +713,14 @@
 
 .shell-ball-input-bar {
   --shell-ball-input-accent: rgba(138, 138, 138, 0.42);
-  align-items: end;
+  align-items: stretch;
   background: transparent;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  display: grid;
-  gap: 0.5rem;
-  grid-template-columns: auto auto auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
   min-height: 2rem;
   padding: 0.05rem 0.12rem 0.22rem 0.2rem;
   position: relative;
@@ -743,6 +743,14 @@
   min-width: 0;
   padding: 0 0.82rem 0.08rem 0;
   position: relative;
+}
+
+.shell-ball-input-bar__actions {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+  padding-right: 0.08rem;
 }
 
 .shell-ball-input-bar__field {

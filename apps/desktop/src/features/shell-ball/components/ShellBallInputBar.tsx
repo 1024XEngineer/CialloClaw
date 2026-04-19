@@ -387,24 +387,26 @@ export function ShellBallInputBar({
           />
         )}
       </div>
-      <button
-        type="button"
-        className="shell-ball-input-bar__action"
-        onClick={onAttachFile}
-        disabled={buttonsDisabled}
-        aria-label="Attach file"
-      >
-        <Paperclip className="shell-ball-input-bar__action-icon" />
-      </button>
-      <button
-        type="button"
-        className="shell-ball-input-bar__action shell-ball-input-bar__action--send"
-        onClick={onSubmit}
-        disabled={submitDisabled}
-        aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
-      >
-        <ArrowUp className="shell-ball-input-bar__action-icon" />
-      </button>
+      <div className="shell-ball-input-bar__actions">
+        <button
+          type="button"
+          className="shell-ball-input-bar__action"
+          onClick={onAttachFile}
+          disabled={buttonsDisabled}
+          aria-label="Attach file"
+        >
+          <Paperclip className="shell-ball-input-bar__action-icon" />
+        </button>
+        <button
+          type="button"
+          className="shell-ball-input-bar__action shell-ball-input-bar__action--send"
+          onClick={onSubmit}
+          disabled={submitDisabled}
+          aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
+        >
+          <ArrowUp className="shell-ball-input-bar__action-icon" />
+        </button>
+      </div>
     </div>
   );
 }
