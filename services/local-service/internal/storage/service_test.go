@@ -507,6 +507,8 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 		RunID:         "run_loop_001",
 		TaskID:        "task_loop_001",
 		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "initial",
 		LoopRound:     1,
 		Name:          "agent_loop_round",
 		Status:        "completed",
@@ -553,6 +555,14 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	assertTableCount(t, sqliteStore.db, "runs", 1)
 	assertTableCount(t, sqliteStore.db, "steps", 1)
+	var attemptIndex int
+	var segmentKind string
+	if err := sqliteStore.db.QueryRow(`SELECT attempt_index, segment_kind FROM steps WHERE step_id = ?`, "step_loop_001").Scan(&attemptIndex, &segmentKind); err != nil {
+		t.Fatalf("query step attempt/segment failed: %v", err)
+	}
+	if attemptIndex != 1 || segmentKind != "initial" {
+		t.Fatalf("expected step attempt/segment to persist, got attempt=%d segment=%s", attemptIndex, segmentKind)
+	}
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
 

@@ -100,6 +100,8 @@ type Request struct {
 	RunID                string
 	Title                string
 	Intent               map[string]any
+	AttemptIndex         int
+	SegmentKind          string
 	Snapshot             contextsvc.TaskContextSnapshot
 	SteeringMessages     []string
 	DeliveryType         string
@@ -1391,6 +1393,8 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		TaskID:          request.TaskID,
 		RunID:           request.RunID,
 		Intent:          request.Intent,
+		AttemptIndex:    request.AttemptIndex,
+		SegmentKind:     request.SegmentKind,
 		InputText:       runtimeInput,
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
@@ -2128,6 +2132,8 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 			RunID:         round.RunID,
 			TaskID:        round.TaskID,
 			OrderIndex:    round.LoopRound,
+			AttemptIndex:  round.AttemptIndex,
+			SegmentKind:   round.SegmentKind,
 			LoopRound:     round.LoopRound,
 			Name:          round.Name,
 			Status:        round.Status,

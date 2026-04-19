@@ -43,6 +43,12 @@ var (
 	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
 )
 
+const (
+	executionSegmentInitial = "initial"
+	executionSegmentResume  = "resume"
+	executionSegmentRestart = "restart"
+)
+
 // Service is the task-centric orchestration entrypoint for the local-service
 // backend.
 type Service struct {
@@ -4839,6 +4845,8 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		RunID:                processingTask.RunID,
 		Title:                processingTask.Title,
 		Intent:               taskIntent,
+		AttemptIndex:         executionAttemptIndex(task, processingTask),
+		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
@@ -4880,6 +4888,23 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+func executionAttemptIndex(previousTask, processingTask runengine.TaskRecord) int {
+	if strings.TrimSpace(previousTask.RunID) == "" || previousTask.RunID == processingTask.RunID {
+		return 1
+	}
+	return 2
+}
+
+func executionSegmentKind(previousTask, processingTask runengine.TaskRecord) string {
+	if strings.TrimSpace(previousTask.RunID) != "" && previousTask.RunID != processingTask.RunID {
+		return executionSegmentRestart
+	}
+	if previousTask.Status == "paused" || taskIsBlockedHumanLoop(previousTask) {
+		return executionSegmentResume
+	}
+	return executionSegmentInitial
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC

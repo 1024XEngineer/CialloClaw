@@ -28,6 +28,8 @@ type StepRecord struct {
 	RunID         string
 	TaskID        string
 	OrderIndex    int
+	AttemptIndex  int
+	SegmentKind   string
 	LoopRound     int
 	Name          string
 	Status        string
@@ -173,9 +175,9 @@ func (s *SQLiteLoopRuntimeStore) SaveRun(ctx context.Context, record RunRecord) 
 func (s *SQLiteLoopRuntimeStore) SaveSteps(ctx context.Context, records []StepRecord) error {
 	for _, record := range records {
 		_, err := s.db.ExecContext(ctx, `
-			INSERT OR REPLACE INTO steps (step_id, run_id, task_id, order_index, loop_round, name, status, input_summary, output_summary, stop_reason, started_at, completed_at, planner_input, planner_output, observation, tool_name, tool_call_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, record.StepID, record.RunID, record.TaskID, record.OrderIndex, record.LoopRound, record.Name, record.Status, record.InputSummary, record.OutputSummary, nullableRuntimeString(record.StopReason), record.StartedAt, nullableRuntimeString(record.CompletedAt), record.PlannerInput, record.PlannerOutput, record.Observation, nullableRuntimeString(record.ToolName), nullableRuntimeString(record.ToolCallID))
+			INSERT OR REPLACE INTO steps (step_id, run_id, task_id, order_index, attempt_index, segment_kind, loop_round, name, status, input_summary, output_summary, stop_reason, started_at, completed_at, planner_input, planner_output, observation, tool_name, tool_call_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, record.StepID, record.RunID, record.TaskID, record.OrderIndex, record.AttemptIndex, nullableRuntimeString(record.SegmentKind), record.LoopRound, record.Name, record.Status, record.InputSummary, record.OutputSummary, nullableRuntimeString(record.StopReason), record.StartedAt, nullableRuntimeString(record.CompletedAt), record.PlannerInput, record.PlannerOutput, record.Observation, nullableRuntimeString(record.ToolName), nullableRuntimeString(record.ToolCallID))
 		if err != nil {
 			return fmt.Errorf("write step record %s: %w", record.StepID, err)
 		}
@@ -270,7 +272,9 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, intent_name TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, stop_reason TEXT);`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_task_time ON runs(task_id, started_at DESC);`,
-		`CREATE TABLE IF NOT EXISTS steps (step_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, order_index INTEGER NOT NULL, loop_round INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, status TEXT NOT NULL, input_summary TEXT, output_summary TEXT, stop_reason TEXT, started_at TEXT NOT NULL, completed_at TEXT, planner_input TEXT, planner_output TEXT, observation TEXT, tool_name TEXT, tool_call_id TEXT);`,
+		`CREATE TABLE IF NOT EXISTS steps (step_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, order_index INTEGER NOT NULL, attempt_index INTEGER NOT NULL DEFAULT 1, segment_kind TEXT NOT NULL DEFAULT 'initial', loop_round INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, status TEXT NOT NULL, input_summary TEXT, output_summary TEXT, stop_reason TEXT, started_at TEXT NOT NULL, completed_at TEXT, planner_input TEXT, planner_output TEXT, observation TEXT, tool_name TEXT, tool_call_id TEXT);`,
+		`ALTER TABLE steps ADD COLUMN attempt_index INTEGER NOT NULL DEFAULT 1;`,
+		`ALTER TABLE steps ADD COLUMN segment_kind TEXT NOT NULL DEFAULT 'initial';`,
 		`CREATE INDEX IF NOT EXISTS idx_steps_run_order ON steps(run_id, order_index);`,
 		`CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT, type TEXT NOT NULL, level TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_task_time ON events(task_id, created_at DESC);`,
@@ -279,10 +283,20 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if isSQLiteDuplicateColumnError(err) {
+				continue
+			}
 			return fmt.Errorf("initialize loop runtime store: %w", err)
 		}
 	}
 	return nil
+}
+
+func isSQLiteDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
 }
 
 func (s *SQLiteLoopRuntimeStore) Close() error {
