@@ -4650,6 +4650,13 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 		decision.Summary = "预算降级已生效：当前模型提供方不可用，任务改走轻量交付路径。"
 		return decision
 	}
+	if recentBudgetFailureCount(task) > 0 {
+		decision.Applied = true
+		decision.TriggerReason = "failure_pressure"
+		decision.DegradeActions = []string{"lightweight_delivery", "skip_expensive_tools", "shrink_context"}
+		decision.Summary = "预算降级已生效：最近出现模型/提供方失败，任务改走轻量保守执行路径。"
+		return decision
+	}
 	totalTokens := intValueFromAny(task.TokenUsage["total_tokens"])
 	estimatedCost := floatValueFromAny(task.TokenUsage["estimated_cost"])
 	if totalTokens >= 64 || estimatedCost >= 0.05 {
@@ -4716,6 +4723,20 @@ func supportsBudgetProvider(provider string) bool {
 	default:
 		return false
 	}
+}
+
+func recentBudgetFailureCount(task runengine.TaskRecord) int {
+	count := 0
+	for _, record := range task.AuditRecords {
+		if stringValue(record, "category", "") != "budget_auto_downgrade" {
+			continue
+		}
+		if stringValue(record, "result", "") != "failed" {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func firstNonEmptyString(primary, fallback string) string {
@@ -4951,6 +4972,14 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		ApprovalGranted:      processingTask.Authorization != nil,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		BudgetDowngrade: map[string]any{
+			"enabled":         budgetDecision.Enabled,
+			"applied":         budgetDecision.Applied,
+			"trigger_reason":  budgetDecision.TriggerReason,
+			"trigger_stage":   budgetDecision.TriggerStage,
+			"degrade_actions": append([]string(nil), budgetDecision.DegradeActions...),
+			"summary":         budgetDecision.Summary,
+		},
 	})
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
@@ -5223,7 +5252,8 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 		return task, bubble
 	}
 	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, auditType, auditAction, bubbleText, auditTarget, auditResult)
-	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
+	budgetFailureAudit := s.buildBudgetFailureAudit(updatedTask, err)
+	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord, budgetFailureAudit), nil)
 	return updatedTask, bubble
 }
 
@@ -5296,6 +5326,25 @@ func (s *Service) buildBudgetDowngradeAudit(task runengine.TaskRecord, decision 
 			"degrade_actions": append([]string(nil), decision.DegradeActions...),
 			"summary":         decision.Summary,
 		},
+	}
+}
+
+func (s *Service) buildBudgetFailureAudit(task runengine.TaskRecord, executionErr error) map[string]any {
+	if executionErr == nil {
+		return nil
+	}
+	if !errors.Is(executionErr, model.ErrClientNotConfigured) && !errors.Is(executionErr, model.ErrToolCallingNotSupported) && !errors.Is(executionErr, model.ErrModelProviderUnsupported) && !errors.Is(executionErr, model.ErrSecretNotFound) && !errors.Is(executionErr, model.ErrSecretSourceFailed) {
+		return nil
+	}
+	return map[string]any{
+		"audit_record_id": fmt.Sprintf("audit_budget_failure_%s_%d", task.TaskID, time.Now().UnixNano()),
+		"task_id":         task.TaskID,
+		"run_id":          task.RunID,
+		"category":        "budget_auto_downgrade",
+		"action":          "budget_auto_downgrade.failure_signal",
+		"result":          "failed",
+		"reason":          executionErr.Error(),
+		"created_at":      time.Now().Format(dateTimeLayout),
 	}
 }
 

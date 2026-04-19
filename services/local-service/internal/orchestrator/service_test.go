@@ -5505,6 +5505,74 @@ func TestServiceBudgetAutoDowngradeDisabledKeepsWorkspaceDelivery(t *testing.T) 
 	}
 }
 
+func TestServiceBudgetAutoDowngradeUsesFailurePressureSignal(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed failure pressure")
+	task := runengine.TaskRecord{
+		TaskID:            "task_budget_failure_pressure",
+		SessionID:         "sess_budget_failure_pressure",
+		RunID:             "run_budget_failure_pressure",
+		Title:             "failure pressure task",
+		SourceType:        "hover_input",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		StartedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		AuditRecords: []map[string]any{{
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrClientNotConfigured.Error(),
+		}},
+	}
+	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
+	if !decision.Applied || decision.TriggerReason != "failure_pressure" {
+		t.Fatalf("expected failure pressure downgrade decision, got %+v", decision)
+	}
+	if !containsString(decision.DegradeActions, "skip_expensive_tools") {
+		t.Fatalf("expected failure pressure decision to disable expensive tools, got %+v", decision)
+	}
+}
+
+func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed failure signal")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_budget_failure_audit",
+		Title:       "failure signal task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:      "provider failure should leave budget signal",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	updatedTask, bubble := service.failExecutionTask(task, task.Intent, execution.Result{}, model.ErrClientNotConfigured)
+	if bubble == nil {
+		t.Fatal("expected failure bubble")
+	}
+	foundBudgetFailure := false
+	for _, record := range updatedTask.AuditRecords {
+		if stringValue(record, "category", "") != "budget_auto_downgrade" {
+			continue
+		}
+		if stringValue(record, "result", "") != "failed" {
+			continue
+		}
+		foundBudgetFailure = true
+		break
+	}
+	if !foundBudgetFailure {
+		t.Fatalf("expected failExecutionTask to append budget failure signal, got %+v", updatedTask.AuditRecords)
+	}
+}
+
 func TestServiceSecuritySummaryFallsBackToStoredRecoveryPoint(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
 	if service.storage == nil {

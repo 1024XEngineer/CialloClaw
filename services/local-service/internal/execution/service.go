@@ -107,6 +107,7 @@ type Request struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	BudgetDowngrade      map[string]any
 }
 
 // Result 描述执行完成后需要回填给 orchestrator 的交付与痕迹。
@@ -1333,23 +1334,50 @@ func (s *Service) fileSection(filePath string) string {
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	if trace, ok, err := s.generateOutputWithAgentLoop(ctx, request, inputText); err != nil {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+			return fallbackTrace, nil
+		}
 		return generationTrace{}, err
 	} else if ok {
 		return trace, nil
 	}
 
-	return s.generateOutputWithPrompt(ctx, request, inputText)
+	trace, err := s.generateOutputWithPrompt(ctx, request, inputText)
+	if err != nil {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+			return fallbackTrace, nil
+		}
+		return generationTrace{}, err
+	}
+	return trace, nil
 }
 
 func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	prompt := buildPrompt(request, inputText)
+	fallbackText := fallbackOutput(request, inputText)
+	if boolValue(request.BudgetDowngrade, "applied") {
+		fallbackText = budgetDowngradeFallbackText(request, inputText)
+	}
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, "generate_text", map[string]any{
 		"prompt":        prompt,
-		"fallback_text": fallbackOutput(request, inputText),
+		"fallback_text": fallbackText,
 		"intent_name":   effectiveIntentName(request.Intent),
 	})
 	if err != nil {
 		return generationTrace{}, fmt.Errorf("generate text: %w", err)
+	}
+	if boolValue(toolResult.RawOutput, "fallback") && boolValue(request.BudgetDowngrade, "applied") {
+		return generationTrace{
+			OutputText: budgetDowngradeFallbackText(request, inputText),
+			ModelInvocation: map[string]any{
+				"provider":   "budget_downgrade_fallback",
+				"model_id":   "lightweight_delivery",
+				"request_id": fmt.Sprintf("budget_fallback_%s", request.TaskID),
+				"fallback":   true,
+				"reason":     stringValue(request.BudgetDowngrade, "trigger_reason", "execution_fallback"),
+			},
+			GenerationOutput: cloneMap(toolResult.RawOutput),
+		}, nil
 	}
 
 	outputText, ok := toolResult.RawOutput["content"].(string)
@@ -1377,6 +1405,9 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 // The loop stops when the model returns a final answer or when the turn budget
 // is exhausted, in which case the normal fallback output is returned.
 func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Request, inputText string) (generationTrace, bool, error) {
+	if budgetDowngradeDisablesToolCalls(request) {
+		return generationTrace{}, false, nil
+	}
 	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
@@ -1502,6 +1533,49 @@ func invocationRecordMap(record *model.InvocationRecord) map[string]any {
 		return nil
 	}
 	return record.Map()
+}
+
+func budgetDowngradeDisablesToolCalls(request Request) bool {
+	return boolValue(request.BudgetDowngrade, "applied") && containsExecutionString(stringSliceValue(request.BudgetDowngrade, "degrade_actions"), "skip_expensive_tools")
+}
+
+func budgetDowngradeGenerationFallback(request Request, inputText string, generationErr error) (generationTrace, bool) {
+	if !boolValue(request.BudgetDowngrade, "applied") {
+		return generationTrace{}, false
+	}
+	summary := firstNonEmpty(stringValue(request.BudgetDowngrade, "summary", ""), "Budget downgrade fallback applied.")
+	triggerReason := stringValue(request.BudgetDowngrade, "trigger_reason", "execution_fallback")
+	fallbackText := fallbackOutput(request, inputText)
+	output := strings.TrimSpace(summary + "\n\n" + fallbackText)
+	return generationTrace{
+		OutputText: output,
+		ModelInvocation: map[string]any{
+			"provider":   "budget_downgrade_fallback",
+			"model_id":   "lightweight_delivery",
+			"request_id": fmt.Sprintf("budget_fallback_%s", request.TaskID),
+			"fallback":   true,
+			"reason":     triggerReason,
+		},
+		GenerationOutput: map[string]any{
+			"content":  output,
+			"fallback": true,
+			"reason":   triggerReason,
+		},
+	}, true
+}
+
+func budgetDowngradeFallbackText(request Request, inputText string) string {
+	summary := firstNonEmpty(stringValue(request.BudgetDowngrade, "summary", ""), "Budget downgrade fallback applied.")
+	return strings.TrimSpace(summary + "\n\n" + fallbackOutput(request, inputText))
+}
+
+func containsExecutionString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func buildPrompt(request Request, inputText string) string {

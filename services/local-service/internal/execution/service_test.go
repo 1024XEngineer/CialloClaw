@@ -540,6 +540,79 @@ func TestExecuteAgentLoopRetriesPlannerOnceBeforeFailing(t *testing.T) {
 	}
 }
 
+func TestExecuteBudgetDowngradeFallsBackWhenModelClientUnavailable(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, nil)
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_fallback_prompt",
+		RunID:        "run_budget_fallback_prompt",
+		Title:        "Budget fallback prompt",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget fallback result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "provider_unavailable",
+			"degrade_actions": []string{"lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.DeliveryResult["type"] != "bubble" {
+		t.Fatalf("expected budget fallback to keep bubble delivery, got %+v", result.DeliveryResult)
+	}
+	if !strings.Contains(result.Content, "Budget downgrade fallback applied.") {
+		t.Fatalf("expected fallback content to include budget downgrade summary, got %q", result.Content)
+	}
+	if result.ModelInvocation["provider"] != "budget_downgrade_fallback" || result.ModelInvocation["fallback"] != true {
+		t.Fatalf("expected fallback model invocation marker, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestExecuteBudgetDowngradeSkipsToolCallingAgentLoop(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID: "req_loop_should_not_run",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "."}}},
+		}},
+	}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_skip_tools",
+		RunID:        "run_budget_skip_tools",
+		Title:        "Budget skip tools",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget skip tools result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "provider_unavailable",
+			"degrade_actions": []string{"skip_expensive_tools", "lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if modelClient.generateToolCallsCount != 0 {
+		t.Fatalf("expected tool-calling planner to be skipped, got %d calls", modelClient.generateToolCallsCount)
+	}
+	if result.DeliveryResult["type"] != "bubble" {
+		t.Fatalf("expected skip-tools downgrade to keep bubble delivery, got %+v", result.DeliveryResult)
+	}
+	if !strings.Contains(result.Content, "Budget downgrade fallback applied.") {
+		t.Fatalf("expected skip-tools downgrade to use budget fallback output, got %q", result.Content)
+	}
+	if result.ModelInvocation["provider"] != "budget_downgrade_fallback" {
+		t.Fatalf("expected skip-tools downgrade to record fallback invocation, got %+v", result.ModelInvocation)
+	}
+}
+
 func TestExecuteAgentLoopHonorsConfiguredPlannerRetryBudget(t *testing.T) {
 	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
 	cfg := serviceconfig.ModelConfig{PlannerRetryBudget: 2}
