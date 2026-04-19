@@ -7,9 +7,15 @@ const destroyOnCloseLabels = new Set(["control-panel"]);
 
 export function installHideOnCloseRequest(windowHandle: HideOnCloseWindow = getCurrentWindow()) {
   let hiding = false;
+  const destroysOnClose = destroyOnCloseLabels.has(windowHandle.label);
 
   return windowHandle.onCloseRequested(async (event) => {
     if (hiding) {
+      // Destroy-on-close windows re-enter the handler through the native destroy path,
+      // but hide-on-close windows must keep blocking repeated close requests.
+      if (!destroysOnClose) {
+        event.preventDefault();
+      }
       return;
     }
 
@@ -22,7 +28,7 @@ export function installHideOnCloseRequest(windowHandle: HideOnCloseWindow = getC
         await requestShellBallDashboardCloseTransition();
       }
 
-      if (destroyOnCloseLabels.has(windowHandle.label)) {
+      if (destroysOnClose) {
         await windowHandle.destroy();
         return;
       }
