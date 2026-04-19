@@ -4722,12 +4722,15 @@ test("shell-ball screenshot command stays local and stores captures in apps temp
 test("shell-ball window command stays local and replies with active window context", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const windowContextPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopWindowContext.ts"), "utf8");
+  const windowContextHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
 
   assert.match(coordinatorSource, /const SHELL_BALL_WINDOW_COMMAND = "窗口";/);
   assert.match(coordinatorSource, /shouldHandleShellBallWindowCommand\(/);
   assert.match(coordinatorSource, /const context = await getActiveWindowContext\(\);/);
   assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.title, context\.url\)/);
   assert.match(windowContextPlatformSource, /invoke<DesktopWindowContextPayload \| null>\("desktop_get_active_window_context"\)/);
+  assert.match(windowContextHostSource, /BROWSER_KIND_CHROME \| BROWSER_KIND_EDGE \| BROWSER_KIND_OTHER_BROWSER => \{/);
+  assert.doesNotMatch(windowContextHostSource, /read_chrome_url_via_mcp/);
 });
 
 test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
