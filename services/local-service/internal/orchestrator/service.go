@@ -292,6 +292,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -396,6 +397,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		return handledResponse, nil
 	}
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -518,6 +520,33 @@ func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot 
 	return s.handleScreenAnalyzeStart(params, snapshot, suggestion.Intent)
 }
 
+func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) intent.Suggestion {
+	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" {
+		return suggestion
+	}
+	if s.executor != nil && s.executor.ScreenCapabilitySnapshot().Available {
+		return suggestion
+	}
+	fallback := suggestion
+	fallback.Intent = map[string]any{
+		"name":      "agent_loop",
+		"arguments": map[string]any{},
+	}
+	fallback.IntentConfirmed = true
+	fallback.RequiresConfirm = false
+	fallback.TaskSourceType = "hover_input"
+	fallback.TaskTitle = "处理：" + inferredScreenFallbackSubject(snapshot)
+	fallback.DirectDeliveryType = "bubble"
+	fallback.ResultTitle = "处理结果"
+	fallback.ResultPreview = "结果已通过气泡返回"
+	fallback.ResultBubbleText = "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。"
+	return fallback
+}
+
+func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+}
+
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
 // from the task intent so queued resumes can re-enter the same authorization
 // path instead of falling through to the generic executor.
@@ -589,11 +618,15 @@ func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnap
 }
 
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
-	target := firstNonEmptyString(snapshot.PageTitle, firstNonEmptyString(snapshot.WindowTitle, "当前屏幕"))
+	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
 		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
 	}
 	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+}
+
+func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+	return firstNonEmptyString(snapshot.PageTitle, firstNonEmptyString(snapshot.WindowTitle, "当前屏幕"))
 }
 
 func screenTargetObject(arguments map[string]any) string {

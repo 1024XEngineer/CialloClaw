@@ -5213,6 +5213,45 @@ func TestServiceSubmitInputInfersScreenAnalyzeFromVisualErrorRequest(t *testing.
 	}
 }
 
+func TestServiceStartTaskFallsBackWhenScreenCapabilityUnavailable(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_capability_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看看这个页面的报错",
+			"page_context": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+		},
+		"context": map[string]any{
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task with unavailable screen capability failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] == "screen_capture" {
+		t.Fatalf("expected unavailable screen capability to avoid screen_capture task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected fallback to agent_loop, got %+v", intentValue)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected fallback task to continue through normal flow, got %+v", task)
+	}
+	if task["current_step"] == "waiting_authorization" {
+		t.Fatalf("expected fallback task to avoid visual waiting_auth flow, got %+v", task)
+	}
+}
+
 func TestSecurityRespondScreenAnalyzeFailureReconcilesTaskState(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())

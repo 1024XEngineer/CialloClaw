@@ -118,7 +118,7 @@ func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intent
 	case defaultAgentLoopIntent:
 		return "处理：" + subject
 	case "screen_analyze":
-		return "查看屏幕：" + subject
+		return "查看屏幕：" + screenSubjectText(snapshot)
 	case "rewrite":
 		return "改写：" + subject
 	case "translate":
@@ -316,10 +316,6 @@ func intentPayload(name string) map[string]any {
 
 func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
 	switch {
-	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, 18)
-	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, 18)
 	case len(snapshot.Files) > 0:
 		return filepath.Base(snapshot.Files[0])
 	case strings.TrimSpace(snapshot.SelectionText) != "":
@@ -328,8 +324,23 @@ func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
 		return truncateText(snapshot.Text, 18)
 	case strings.TrimSpace(snapshot.ErrorText) != "":
 		return truncateText(snapshot.ErrorText, 18)
+	case strings.TrimSpace(snapshot.PageTitle) != "":
+		return truncateText(snapshot.PageTitle, 18)
+	case strings.TrimSpace(snapshot.WindowTitle) != "":
+		return truncateText(snapshot.WindowTitle, 18)
 	default:
 		return "当前内容"
+	}
+}
+
+func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
+	switch {
+	case strings.TrimSpace(snapshot.PageTitle) != "":
+		return truncateText(snapshot.PageTitle, 18)
+	case strings.TrimSpace(snapshot.WindowTitle) != "":
+		return truncateText(snapshot.WindowTitle, 18)
+	default:
+		return subjectText(snapshot)
 	}
 }
 

@@ -51,3 +51,18 @@ func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 		t.Fatalf("expected default agent loop intent, got %q", got)
 	}
 }
+
+func TestSuggestKeepsPlainTextSubjectAheadOfPageContextForAgentLoop(t *testing.T) {
+	service := NewService()
+
+	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+		InputType:   "text",
+		Text:        "帮我整理今天的会议纪要",
+		PageTitle:   "Build Dashboard",
+		WindowTitle: "Browser - Build Dashboard",
+	}, nil, false)
+
+	if suggestion.TaskTitle != "处理：帮我整理今天的会议纪要" {
+		t.Fatalf("expected task title to keep user text subject, got %q", suggestion.TaskTitle)
+	}
+}
