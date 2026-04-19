@@ -2517,6 +2517,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.summary`    | 统计摘要     |
 | `data.highlights` | 亮点信息列表 |
 
+当 `module = "tasks"` 时，`data.summary` 在通用统计摘要之外还会补充以下任务模块字段：
+
+| 字段                                  | 中文说明 |
+| ------------------------------------- | -------- |
+| `data.summary.processing_tasks`       | 当前未完成任务中处于 `processing` 的数量 |
+| `data.summary.waiting_auth_tasks`     | 当前未完成任务中处于 `waiting_auth` 的数量 |
+| `data.summary.blocked_tasks`          | 当前未完成任务中处于 `blocked`、`failed`、`ended_unfinished` 或 `paused` 的数量 |
+| `data.summary.focus_task_id`          | 当前焦点任务的 `task_id`，用于把任务模块运行态与 `agent.dashboard.overview.get` 的 `focus_summary.task_id` 对齐 |
+| `data.summary.focus_runtime_summary`  | 当前焦点任务的运行态摘要，仅当 `focus_task_id` 与前端持有的焦点任务一致时才应被展示 |
+| `data.summary.focus_runtime_summary.events_count` | 焦点任务累计运行事件数 |
+| `data.summary.focus_runtime_summary.latest_event_type` | 焦点任务最近一个关键运行事件类型 |
+| `data.summary.focus_runtime_summary.active_steering_count` | 焦点任务当前待消费的 steering 条数 |
+| `data.summary.focus_runtime_summary.loop_stop_reason` | 焦点任务最近一次 loop 停止原因 |
+
 ### agent.dashboard.module.get 出参示例
 
 ```json
@@ -2525,18 +2539,28 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   "id": "req_dashboard_module_001",
   "result": {
     "data": {
-      "module": "mirror",
-      "tab": "daily_summary",
+      "module": "tasks",
+      "tab": "focus",
       "summary": {
         "completed_tasks": 3,
         "generated_outputs": 5,
         "authorizations_used": 1,
-        "exceptions": 0
+        "exceptions": 0,
+        "processing_tasks": 2,
+        "waiting_auth_tasks": 1,
+        "blocked_tasks": 1,
+        "focus_task_id": "task_focus_001",
+        "focus_runtime_summary": {
+          "events_count": 6,
+          "latest_event_type": "loop.retrying",
+          "active_steering_count": 2,
+          "loop_stop_reason": "waiting_for_user_confirmation"
+        }
       },
       "highlights": [
-        "完成了 3 项内容整理任务",
-        "生成了 1 份方案稿和 2 份摘要",
-        "命中 2 条历史偏好记忆"
+        "焦点任务仍在执行中，当前步骤为 gather_context。",
+        "最近停止原因：waiting_for_user_confirmation。",
+        "当前仍有 2 条追加要求待消费。"
       ]
     },
     "meta": {

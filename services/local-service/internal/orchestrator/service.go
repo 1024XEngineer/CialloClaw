@@ -1566,18 +1566,83 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 		latestAudit = s.latestAuditRecordFromStorage("")
 	}
 	pluginSummary := s.pluginRuntimeSummary()
+	summary := map[string]any{
+		"completed_tasks":     len(finishedTasks),
+		"generated_outputs":   countGeneratedOutputs(finishedTasks),
+		"authorizations_used": countAuthorizedTasks(unfinishedTasks, finishedTasks),
+		"exceptions":          countExceptionTasks(unfinishedTasks, finishedTasks),
+		"plugin_runtime":      pluginSummary,
+	}
+	highlights := buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks, pendingTotal, latestAudit)
+	if module == "tasks" {
+		summary = s.buildDashboardTaskModuleSummary(unfinishedTasks, finishedTasks, summary)
+		highlights = s.buildDashboardTaskModuleHighlights(unfinishedTasks, finishedTasks, pendingTotal, latestAudit)
+	}
 	return map[string]any{
-		"module": module,
-		"tab":    tab,
-		"summary": map[string]any{
-			"completed_tasks":     len(finishedTasks),
-			"generated_outputs":   countGeneratedOutputs(finishedTasks),
-			"authorizations_used": countAuthorizedTasks(unfinishedTasks, finishedTasks),
-			"exceptions":          countExceptionTasks(unfinishedTasks, finishedTasks),
-			"plugin_runtime":      pluginSummary,
-		},
-		"highlights": buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks, pendingTotal, latestAudit),
+		"module":     module,
+		"tab":        tab,
+		"summary":    summary,
+		"highlights": highlights,
 	}, nil
+}
+
+// buildDashboardTaskModuleSummary keeps the generic dashboard module summary
+// while exposing one task-focused runtime summary for the current focus task.
+func (s *Service) buildDashboardTaskModuleSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, baseSummary map[string]any) map[string]any {
+	summary := cloneMap(baseSummary)
+	summary["processing_tasks"] = countTasksWithStatus(unfinishedTasks, "processing")
+	summary["waiting_auth_tasks"] = countTasksWithStatus(unfinishedTasks, "waiting_auth")
+	summary["blocked_tasks"] = countTasksWithStatus(unfinishedTasks, "blocked", "failed", "ended_unfinished", "paused")
+	focusTask, ok := focusTaskForOverview(unfinishedTasks, finishedTasks)
+	if !ok {
+		return summary
+	}
+	summary["focus_task_id"] = focusTask.TaskID
+	summary["focus_runtime_summary"] = s.buildDashboardFocusRuntimeSummary(focusTask)
+	return summary
+}
+
+// buildDashboardTaskModuleHighlights turns the current focus task runtime into
+// human-readable dashboard hints without adding a new protocol method.
+func (s *Service) buildDashboardTaskModuleHighlights(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingTotal int, latestAudit map[string]any) []string {
+	highlights := make([]string, 0, 6)
+	focusTask, ok := focusTaskForOverview(unfinishedTasks, finishedTasks)
+	if ok {
+		runtimeSummary := s.buildDashboardFocusRuntimeSummary(focusTask)
+		if focusTask.Status == "waiting_auth" {
+			highlights = append(highlights, "焦点任务当前正在等待授权确认。")
+		} else if focusTask.Status == "processing" {
+			highlights = append(highlights, fmt.Sprintf("焦点任务仍在执行中，当前步骤为 %s。", firstNonEmptyString(focusTask.CurrentStep, "generate_output")))
+		} else if focusTask.Status == "blocked" || focusTask.Status == "failed" || focusTask.Status == "paused" || focusTask.Status == "ended_unfinished" {
+			highlights = append(highlights, fmt.Sprintf("焦点任务当前状态为 %s。", focusTask.Status))
+		}
+		if stopReason := strings.TrimSpace(stringValue(runtimeSummary, "loop_stop_reason", "")); stopReason != "" {
+			highlights = append(highlights, fmt.Sprintf("最近停止原因：%s。", stopReason))
+		}
+		if latestEventType := strings.TrimSpace(stringValue(runtimeSummary, "latest_event_type", "")); latestEventType != "" {
+			highlights = append(highlights, fmt.Sprintf("最近运行事件：%s。", latestEventType))
+		}
+		if steeringCount := intValue(runtimeSummary, "active_steering_count", 0); steeringCount > 0 {
+			highlights = append(highlights, fmt.Sprintf("当前仍有 %d 条追加要求待消费。", steeringCount))
+		}
+	}
+	highlights = append(highlights, buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks, pendingTotal, latestAudit)...)
+	return dedupeStringSlice(highlights)
+}
+
+// buildDashboardFocusRuntimeSummary reuses the task detail runtime summary but
+// allows dashboard cards to fall back to the latest in-memory runtime event
+// when persistence has not yet flushed a loop event row.
+func (s *Service) buildDashboardFocusRuntimeSummary(task runengine.TaskRecord) map[string]any {
+	summary := s.buildTaskRuntimeSummary(task)
+	if strings.TrimSpace(stringValue(summary, "latest_event_type", "")) != "" {
+		return summary
+	}
+	latestEventType := strings.TrimSpace(stringValue(task.LatestEvent, "type", ""))
+	if strings.HasPrefix(latestEventType, "loop.") || latestEventType == "task.steered" {
+		summary["latest_event_type"] = latestEventType
+	}
+	return summary
 }
 
 // MirrorOverviewGet handles `agent.mirror.overview.get`.
@@ -3338,6 +3403,26 @@ func countAuthorizedTasks(taskGroups ...[]runengine.TaskRecord) int {
 			if len(task.Authorization) > 0 {
 				total++
 			}
+		}
+	}
+	return total
+}
+
+func countTasksWithStatus(tasks []runengine.TaskRecord, statuses ...string) int {
+	if len(statuses) == 0 {
+		return 0
+	}
+	allowed := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		if strings.TrimSpace(status) == "" {
+			continue
+		}
+		allowed[status] = struct{}{}
+	}
+	total := 0
+	for _, task := range tasks {
+		if _, ok := allowed[task.Status]; ok {
+			total++
 		}
 	}
 	return total

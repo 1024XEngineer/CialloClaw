@@ -861,7 +861,10 @@ test("shell-ball pinned window labels and capabilities stay deterministic", () =
   };
   const generatedCapabilitySchema = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/gen/schemas/capabilities.json"), "utf8"),
-  ) as {
+  ) as Record<string, {
+    windows: string[];
+    permissions: string[];
+  }> & {
     default: {
       windows: string[];
       permissions: string[];

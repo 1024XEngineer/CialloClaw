@@ -8052,6 +8052,67 @@ func TestDashboardModuleGetIncludesPluginRuntimeSummary(t *testing.T) {
 	}
 }
 
+func TestDashboardModuleGetTasksIncludesFocusRuntimeSummary(t *testing.T) {
+	service := newTestService()
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_dashboard_tasks_runtime",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "dashboard task runtime summary",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := service.runEngine.AppendSteeringMessage(taskID, "Also include a one-line recap.", nil); !ok {
+		t.Fatal("expected steering message to persist for dashboard focus task")
+	}
+	if _, ok := service.runEngine.RecordLoopLifecycle(taskID, "loop.retrying", "planner_timeout", map[string]any{"stop_reason": "planner_timeout"}); !ok {
+		t.Fatal("expected loop lifecycle to update focus task")
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "tasks",
+		"tab":    "focus",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	summary := moduleResult["summary"].(map[string]any)
+	if summary["waiting_auth_tasks"] != 1 {
+		t.Fatalf("expected one waiting_auth task in summary, got %+v", summary)
+	}
+	focusRuntimeSummary, ok := summary["focus_runtime_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected focus_runtime_summary map, got %+v", summary["focus_runtime_summary"])
+	}
+	if focusRuntimeSummary["latest_event_type"] != "loop.retrying" {
+		t.Fatalf("expected latest_event_type loop.retrying, got %+v", focusRuntimeSummary)
+	}
+	if focusRuntimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected active steering count 1, got %+v", focusRuntimeSummary)
+	}
+
+	highlights := moduleResult["highlights"].([]string)
+	joined := strings.Join(highlights, " ")
+	if !strings.Contains(joined, "最近运行事件：loop.retrying") {
+		t.Fatalf("expected runtime event highlight, got %+v", highlights)
+	}
+	if !strings.Contains(joined, "当前仍有 1 条追加要求待消费") {
+		t.Fatalf("expected steering highlight, got %+v", highlights)
+	}
+}
+
 func TestServiceTaskControlRequiresTaskID(t *testing.T) {
 	service := newTestService()
 
