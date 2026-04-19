@@ -1,34 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
+import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
+import styled from "styled-components";
 import { ArrowUp, Paperclip } from "lucide-react";
-import { cn } from "../../../utils/cn";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallInputBarMode } from "../shellBall.types";
-import {
-  focusShellBallInputField,
-  measureShellBallInputContentWidth,
-  resolveShellBallInputAutoWidth,
-  resolveShellBallInputFieldHeight,
-  resolveShellBallInputFieldWidth,
-  resolveShellBallInputMaxHeight,
-  resolveShellBallInputMaxWidth,
-  SHELL_BALL_INPUT_MAX_VISIBLE_LINES,
-} from "./shellBallInputBar.helpers";
-
-type ShellBallInputManualSize = {
-  width: number | null;
-  height: number | null;
-};
-
-const useShellBallInputLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
-
-function measureShellBallInputRestingWidth(field: HTMLTextAreaElement) {
-  const previousInlineWidth = field.style.width;
-  field.style.width = "";
-  const restingWidth = field.getBoundingClientRect().width;
-  field.style.width = previousInlineWidth;
-  return restingWidth;
-}
 
 type ShellBallInputBarProps = {
   mode: ShellBallInputBarMode;
@@ -48,8 +23,8 @@ type ShellBallInputBarProps = {
 const SHELL_BALL_INPUT_LABEL = "Message";
 
 /**
- * Renders the floating shell-ball input bar while preserving the attachment,
- * resize, and submit controls that surround the draft field.
+ * Renders the floating shell-ball input bar with the supplied Uiverse-inspired
+ * field while preserving the attach and send buttons below the field.
  *
  * @param props Shell-ball input mode, draft state, and interaction callbacks.
  * @returns The shell-ball input bar UI.
@@ -68,12 +43,8 @@ export function ShellBallInputBar({
   onCompositionStateChange = () => {},
   onTransientInputActivity = () => {},
 }: ShellBallInputBarProps) {
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const compositionActiveRef = useRef(false);
-  const [manualSize, setManualSize] = useState<ShellBallInputManualSize>({ width: null, height: null });
-  const [resolvedFieldWidth, setResolvedFieldWidth] = useState<number | null>(null);
-  const [resolvedFieldHeight, setResolvedFieldHeight] = useState<number | null>(null);
-  const [contentOverflowing, setContentOverflowing] = useState(false);
   const trimmedValue = value.trim();
   const isHidden = mode === "hidden";
   const isInteractive = mode === "interactive";
@@ -87,104 +58,20 @@ export function ShellBallInputBar({
       return;
     }
 
-    if (isInteractive) {
-      return;
-    }
-
-    if (inputRef.current === document.activeElement) {
-      inputRef.current.blur();
-      onFocusChange(false);
-    }
-  }, [isInteractive, onFocusChange]);
-
-  useEffect(() => {
-    if (!isInteractive || focusToken === 0 || inputRef.current === null) {
-      return;
-    }
-
-    focusShellBallInputField(inputRef.current);
-  }, [focusToken, isInteractive]);
-
-  useShellBallInputLayoutEffect(() => {
-    const field = inputRef.current;
-    if (field === null) {
-      return;
-    }
-
-    if (isHidden || isVoice) {
-      if (resolvedFieldWidth !== null) {
-        setResolvedFieldWidth(null);
-      }
-      if (resolvedFieldHeight !== null) {
-        setResolvedFieldHeight(null);
-      }
-      if (contentOverflowing) {
-        setContentOverflowing(false);
+    if (!isInteractive) {
+      if (inputRef.current === document.activeElement) {
+        inputRef.current.blur();
+        onFocusChange(false);
       }
       return;
     }
 
-    const restingWidth = measureShellBallInputRestingWidth(field);
-    const computedStyle = window.getComputedStyle(field);
-    const minWidth = restingWidth;
-    const maxWidth = resolveShellBallInputMaxWidth(minWidth);
-    const minHeight = parseFloat(computedStyle.minHeight) || field.getBoundingClientRect().height;
-    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
-    const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
-    const maxHeight = resolveShellBallInputMaxHeight({
-      lineHeight: parseFloat(computedStyle.lineHeight) || minHeight / SHELL_BALL_INPUT_MAX_VISIBLE_LINES,
-      paddingTop: parseFloat(computedStyle.paddingTop) || 0,
-      paddingBottom: parseFloat(computedStyle.paddingBottom) || 0,
-      minHeight,
-    });
-    const font = computedStyle.font || `${computedStyle.fontStyle} ${computedStyle.fontWeight} ${computedStyle.fontSize} ${computedStyle.fontFamily}`;
-    const autoWidth = resolveShellBallInputAutoWidth({
-      contentWidth: measureShellBallInputContentWidth({
-        value,
-        font,
-        letterSpacing: parseFloat(computedStyle.letterSpacing) || 0,
-        paddingLeft,
-        paddingRight,
-      }),
-      minWidth,
-      maxWidth,
-    });
-    const nextWidth = resolveShellBallInputFieldWidth({
-      autoWidth,
-      manualWidth: manualSize.width,
-      minWidth,
-      maxWidth,
-    });
-    const previousWidth = field.style.width;
-    const previousHeight = field.style.height;
-    field.style.width = `${nextWidth}px`;
-    field.style.height = "0px";
-    const contentHeight = field.scrollHeight;
-    field.style.width = previousWidth;
-    field.style.height = previousHeight;
-
-    const nextHeight = resolveShellBallInputFieldHeight({
-      contentHeight,
-      manualHeight: manualSize.height,
-      minHeight,
-      maxHeight,
-    });
-    const nextOverflow = contentHeight > nextHeight + 1;
-
-    if (resolvedFieldWidth !== nextWidth) {
-      setResolvedFieldWidth(nextWidth);
+    if (focusToken !== 0) {
+      inputRef.current.focus();
     }
+  }, [focusToken, isInteractive, onFocusChange]);
 
-    if (resolvedFieldHeight !== nextHeight) {
-      setResolvedFieldHeight(nextHeight);
-    }
-
-    if (contentOverflowing !== nextOverflow) {
-      setContentOverflowing(nextOverflow);
-    }
-  }, [contentOverflowing, isHidden, isVoice, manualSize.height, manualSize.width, resolvedFieldHeight, resolvedFieldWidth, value]);
-
-  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
+  function handleChange(event: ChangeEvent<HTMLInputElement>) {
     if (!isInteractive) {
       return;
     }
@@ -192,12 +79,12 @@ export function ShellBallInputBar({
     onValueChange(event.target.value);
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key.length === 1 || event.key === "Enter")) {
       onTransientInputActivity();
     }
 
-    if (event.key !== "Enter" || event.shiftKey || submitDisabled) {
+    if (event.key !== "Enter" || submitDisabled) {
       return;
     }
 
@@ -205,45 +92,31 @@ export function ShellBallInputBar({
     onSubmit();
   }
 
-  function handleCompositionStart(_event: CompositionEvent<HTMLTextAreaElement>) {
+  function handleCompositionStart(_event: CompositionEvent<HTMLInputElement>) {
     compositionActiveRef.current = true;
     onTransientInputActivity();
     onCompositionStateChange(true);
   }
 
-  function handleCompositionEnd(_event: CompositionEvent<HTMLTextAreaElement>) {
+  function handleCompositionEnd(_event: CompositionEvent<HTMLInputElement>) {
     compositionActiveRef.current = false;
     onCompositionStateChange(false);
   }
 
-  const textareaStyle: CSSProperties = {
-    height: resolvedFieldHeight ?? undefined,
-    overflowY: contentOverflowing ? "auto" : "hidden",
-    width: resolvedFieldWidth ?? undefined,
-  };
-
-  const fieldShellStyle: CSSProperties = {
-    height: resolvedFieldHeight ?? undefined,
-  };
+  const hiddenState = isHidden || isVoice;
 
   return (
-    <div
-      className={cn(
-        "shell-ball-input-bar",
-        `shell-ball-input-bar--${mode}`,
-        voicePreview !== null && `shell-ball-input-bar--preview-${voicePreview}`,
-      )}
+    <StyledInputBar
+      data-filled={trimmedValue !== "" ? "true" : "false"}
+      data-hidden={hiddenState ? "true" : "false"}
       data-mode={mode}
       data-voice-preview={voicePreview ?? undefined}
     >
-      <div
-        className="shell-ball-input-bar__field-shell"
-        data-filled={trimmedValue !== "" ? "true" : "false"}
-        style={fieldShellStyle}
-      >
-        <textarea
+      <div className="shell-ball-uiverse-inputbox">
+        <input
           ref={inputRef}
-          className="shell-ball-input-bar__field"
+          required
+          type="text"
           value={value}
           onChange={handleChange}
           onCompositionStart={handleCompositionStart}
@@ -251,7 +124,6 @@ export function ShellBallInputBar({
           onKeyDown={handleKeyDown}
           onFocus={() => onFocusChange(true)}
           onBlur={() => {
-            // Let the window-level IME guard decide when a composing session really ended.
             if (compositionActiveRef.current) {
               return;
             }
@@ -262,34 +134,145 @@ export function ShellBallInputBar({
           tabIndex={isHidden || isVoice ? -1 : 0}
           aria-label="Shell-ball input"
           placeholder={isVoice ? "Voice capture is active" : ""}
-          rows={1}
-          style={textareaStyle}
         />
-        <span aria-hidden="true" className="shell-ball-input-bar__field-label">
-          {SHELL_BALL_INPUT_LABEL}
-        </span>
-        <i aria-hidden="true" className="shell-ball-input-bar__field-line" />
+        <span>{SHELL_BALL_INPUT_LABEL}</span>
+        <i />
       </div>
-      <div className="shell-ball-input-bar__actions">
+      <div className="shell-ball-uiverse-actions">
         <button
           type="button"
-          className="shell-ball-input-bar__action"
+          className="shell-ball-uiverse-action"
           onClick={onAttachFile}
           disabled={buttonsDisabled}
           aria-label="Attach file"
         >
-          <Paperclip className="shell-ball-input-bar__action-icon" />
+          <Paperclip className="shell-ball-uiverse-action-icon" />
         </button>
         <button
           type="button"
-          className="shell-ball-input-bar__action shell-ball-input-bar__action--send"
+          className="shell-ball-uiverse-action shell-ball-uiverse-action--send"
           onClick={onSubmit}
           disabled={submitDisabled}
           aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
         >
-          <ArrowUp className="shell-ball-input-bar__action-icon" />
+          <ArrowUp className="shell-ball-uiverse-action-icon" />
         </button>
       </div>
-    </div>
+    </StyledInputBar>
   );
 }
+
+const StyledInputBar = styled.div`
+  align-items: flex-end;
+  background: transparent;
+  border: 0;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.42rem;
+  padding: 0;
+  width: max-content;
+
+  &[data-hidden="true"] {
+    display: none;
+  }
+
+  .shell-ball-uiverse-inputbox {
+    position: relative;
+    width: 196px;
+  }
+
+  .shell-ball-uiverse-inputbox input {
+    position: relative;
+    width: 100%;
+    padding: 20px 10px 10px;
+    background: transparent;
+    outline: none;
+    box-shadow: none;
+    border: none;
+    color: rgba(35, 36, 42, 0.96);
+    font-size: 1em;
+    letter-spacing: 0.05em;
+    transition: 0.5s;
+    z-index: 10;
+  }
+
+  .shell-ball-uiverse-inputbox span {
+    position: absolute;
+    left: 0;
+    padding: 20px 10px 10px;
+    font-size: 1em;
+    color: rgba(143, 143, 143, 0.74);
+    letter-spacing: 0.05em;
+    transition: 0.5s;
+    pointer-events: none;
+  }
+
+  .shell-ball-uiverse-inputbox input:valid ~ span,
+  .shell-ball-uiverse-inputbox input:focus ~ span,
+  &[data-filled="true"] .shell-ball-uiverse-inputbox span {
+    color: rgba(128, 128, 128, 0.82);
+    transform: translateX(-10px) translateY(-34px);
+    font-size: 0.75em;
+  }
+
+  .shell-ball-uiverse-inputbox i {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 2px;
+    background: rgba(128, 128, 128, 0.42);
+    border-radius: 4px;
+    transition: 0.5s;
+    pointer-events: none;
+    z-index: 9;
+  }
+
+  .shell-ball-uiverse-inputbox input:valid ~ i,
+  .shell-ball-uiverse-inputbox input:focus ~ i,
+  &[data-filled="true"] .shell-ball-uiverse-inputbox i {
+    height: 44px;
+    background: rgba(128, 128, 128, 0.24);
+  }
+
+  .shell-ball-uiverse-actions {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.35rem;
+    justify-content: flex-end;
+    width: fit-content;
+  }
+
+  .shell-ball-uiverse-action {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    color: rgba(108, 108, 108, 0.66);
+    cursor: pointer;
+    display: inline-flex;
+    height: 1.72rem;
+    justify-content: center;
+    transition:
+      transform 160ms ease,
+      background 160ms ease,
+      color 160ms ease,
+      opacity 160ms ease;
+    width: 1.72rem;
+  }
+
+  .shell-ball-uiverse-action:hover:not(:disabled) {
+    color: rgba(88, 88, 88, 0.84);
+    transform: translateY(-1px);
+  }
+
+  .shell-ball-uiverse-action:disabled {
+    cursor: default;
+    opacity: 0.58;
+  }
+
+  .shell-ball-uiverse-action-icon {
+    height: 0.75rem;
+    width: 0.75rem;
+  }
+`;
