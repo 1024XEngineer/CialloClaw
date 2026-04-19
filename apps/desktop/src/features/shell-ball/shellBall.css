@@ -20,8 +20,8 @@
 
 .shell-ball-window--input {
   gap: 0.42rem;
-  justify-items: stretch;
-  width: var(--shell-ball-helper-width);
+  justify-items: end;
+  width: max-content;
 }
 
 .shell-ball-window--voice {
@@ -714,7 +714,8 @@
 
 .shell-ball-input-bar {
   --shell-ball-input-accent: rgba(138, 138, 138, 0.42);
-  align-items: stretch;
+  --shell-ball-input-float-space: 28px;
+  align-items: flex-end;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -723,9 +724,9 @@
   flex-direction: column;
   gap: 0.42rem;
   min-height: 2rem;
-  padding: 0.05rem 0.12rem 0.22rem 0.2rem;
+  padding: 0.05rem 0 0.22rem 0;
   position: relative;
-  width: 100%;
+  width: max-content;
   transition:
     transform 180ms ease,
     box-shadow 180ms ease,
@@ -741,26 +742,32 @@
 }
 
 .shell-ball-input-bar__field-shell {
-  min-height: 44px;
-  min-width: 0;
-  padding: 0 0 0.08rem 0;
+  align-items: flex-end;
+  box-sizing: border-box;
+  display: flex;
+  min-height: calc(44px + var(--shell-ball-input-float-space));
+  min-width: 196px;
+  padding: 0;
   position: relative;
-  width: 100%;
+  width: max-content;
 }
 
 .shell-ball-input-bar__actions {
+  align-self: flex-end;
   align-items: center;
+  box-sizing: border-box;
   display: flex;
   gap: 0.35rem;
   justify-content: flex-end;
   padding-right: 0;
-  width: 100%;
+  width: max-content;
 }
 
 .shell-ball-input-bar__field {
   appearance: none;
   background: transparent;
   border: 0;
+  box-sizing: border-box;
   caret-color: rgba(35, 36, 42, 0.96);
   color: rgba(35, 36, 42, 0.96);
   display: block;
@@ -794,7 +801,7 @@
   padding: 20px 10px 10px;
   pointer-events: none;
   position: absolute;
-  top: 0;
+  top: var(--shell-ball-input-float-space);
   transform-origin: left center;
   transition:
     color 180ms ease,
@@ -896,6 +903,7 @@
 }
 
 .shell-ball-input-bar--interactive {
+  align-items: flex-end;
   background: transparent;
   box-shadow: none;
   min-height: 44px;
@@ -927,14 +935,14 @@
 .shell-ball-input-bar--readonly .shell-ball-input-bar__field-label {
   color: rgba(128, 128, 128, 0.82);
   font-size: 0.75em;
-  transform: translateX(-10px) translateY(-34px);
+  transform: translateX(-10px) translateY(-24px);
 }
 
 .shell-ball-input-bar__field-shell[data-filled="true"] .shell-ball-input-bar__field-line,
 .shell-ball-input-bar--interactive:focus-within .shell-ball-input-bar__field-line,
 .shell-ball-input-bar--readonly .shell-ball-input-bar__field-line {
   background: rgba(128, 128, 128, 0.24);
-  height: 100%;
+  height: calc(100% - var(--shell-ball-input-float-space));
 }
 
 .shell-ball-input-bar--readonly {

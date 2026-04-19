@@ -46,6 +46,7 @@ type ShellBallInputBarProps = {
 };
 
 const SHELL_BALL_INPUT_LABEL = "Message";
+const SHELL_BALL_INPUT_FLOAT_SPACE_PX = 28;
 
 /**
  * Renders the floating shell-ball input bar while preserving the attachment,
@@ -223,7 +224,7 @@ export function ShellBallInputBar({
   };
 
   const fieldShellStyle: CSSProperties = {
-    height: resolvedFieldHeight ?? undefined,
+    height: resolvedFieldHeight !== null ? resolvedFieldHeight + SHELL_BALL_INPUT_FLOAT_SPACE_PX : undefined,
     width: resolvedFieldWidth ?? undefined,
   };
 
