@@ -5182,6 +5182,21 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	if payload["screen_session_id"] == "" || payload["capture_mode"] != "screenshot" || payload["retention_policy"] == "" || payload["evidence_role"] != "error_evidence" {
 		t.Fatalf("expected persisted artifact payload to retain screen metadata, got %+v", payload)
 	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task["task_id"]})
+	if err != nil {
+		t.Fatalf("task detail get for screen task failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected one formal citation for screen task, got %+v", citations)
+	}
+	if citations[0]["source_type"] != "file" || !strings.Contains(stringValue(citations[0], "label", ""), "error_evidence") {
+		t.Fatalf("expected citation to preserve artifact-backed screen evidence metadata, got %+v", citations[0])
+	}
+	record, exists = service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || len(record.Citations) != 1 {
+		t.Fatalf("expected runtime task to retain one formal citation, got %+v", record)
+	}
 }
 
 func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
@@ -7189,6 +7204,10 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	if !ok || len(artifacts) != 0 {
 		t.Fatalf("expected empty artifact collection array, got %+v", detailResult["artifacts"])
 	}
+	citations, ok := detailResult["citations"].([]map[string]any)
+	if !ok || len(citations) != 0 {
+		t.Fatalf("expected empty citation collection array, got %+v", detailResult["citations"])
+	}
 	mirrorReferences, ok := detailResult["mirror_references"].([]map[string]any)
 	if !ok || len(mirrorReferences) != 0 {
 		t.Fatalf("expected empty mirror reference collection array, got %+v", detailResult["mirror_references"])
@@ -7259,6 +7278,10 @@ func TestServiceTaskDetailGetNormalizesProtocolCollections(t *testing.T) {
 	}
 	if _, ok := artifact["delivery_payload"]; ok {
 		t.Fatalf("expected detail artifact to omit undeclared delivery_payload, got %+v", artifact)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 0 {
+		t.Fatalf("expected no citations for generic detail payload, got %+v", citations)
 	}
 
 	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
@@ -7343,6 +7366,67 @@ func TestServiceTaskDetailGetFallsBackToStoredTaskRun(t *testing.T) {
 	artifacts := detailResult["artifacts"].([]map[string]any)
 	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_task_stored_detail" {
 		t.Fatalf("expected storage-backed artifacts, got %+v", artifacts)
+	}
+}
+
+func TestServiceTaskDetailGetFallsBackToTaskRunCitationsForScreenTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored screen detail citations")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if service.storage.TaskStore() == nil {
+		t.Fatal("expected task store to be wired")
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), "task_stored_screen_detail"); err != nil && !storage.IsTaskRecordNotFound(err) {
+		t.Fatalf("delete structured task shadow failed: %v", err)
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_screen_detail",
+		SessionID:   "sess_stored_screen",
+		RunID:       "run_stored_screen_detail",
+		Title:       "stored screen detail task",
+		SourceType:  "screen_capture",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 20, 10, 6, 0, 0, time.UTC)),
+		Artifacts: []map[string]any{{
+			"artifact_id":      "art_stored_screen_detail",
+			"task_id":          "task_stored_screen_detail",
+			"artifact_type":    "screen_capture",
+			"title":            "stored-screen.png",
+			"path":             "workspace/stored-screen.png",
+			"mime_type":        "image/png",
+			"delivery_type":    "open_file",
+			"delivery_payload": map[string]any{"path": "workspace/stored-screen.png", "task_id": "task_stored_screen_detail", "evidence_role": "error_evidence"},
+			"created_at":       "2026-04-20T10:06:00Z",
+		}},
+		Citations: []map[string]any{{
+			"citation_id": "cit_task_stored_screen_detail_art_stored_screen_detail",
+			"task_id":     "task_stored_screen_detail",
+			"run_id":      "run_stored_screen_detail",
+			"source_type": "file",
+			"source_ref":  "art_stored_screen_detail",
+			"label":       "error_evidence | screen_capture | fatal build error",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("save task run with citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask("task_stored_screen_detail"); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_stored_screen_detail"})
+	if err != nil {
+		t.Fatalf("task detail get with stored citations failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["source_ref"] != "art_stored_screen_detail" {
+		t.Fatalf("expected storage-backed citation to round-trip through task detail, got %+v", citations)
 	}
 }
 

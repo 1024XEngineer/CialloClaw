@@ -988,6 +988,7 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		"task":              taskMap(task),
 		"timeline":          protocolTaskStepList(timelineMap(task.Timeline)),
 		"artifacts":         protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
+		"citations":         protocolCitationList(task.Citations),
 		"mirror_references": protocolMirrorReferenceList(task.MirrorReferences),
 		"approval_request":  approvalRequestValue,
 		"security_summary":  securitySummary,
@@ -1220,6 +1221,28 @@ func protocolArtifactList(artifacts []map[string]any) []map[string]any {
 		return []map[string]any{}
 	}
 	return result
+}
+
+func protocolCitationList(citations []map[string]any) []map[string]any {
+	if len(citations) == 0 {
+		return []map[string]any{}
+	}
+	result := make([]map[string]any, 0, len(citations))
+	for _, citation := range citations {
+		result = append(result, protocolCitationMap(citation))
+	}
+	return result
+}
+
+func protocolCitationMap(citation map[string]any) map[string]any {
+	return map[string]any{
+		"citation_id": stringValue(citation, "citation_id", ""),
+		"task_id":     stringValue(citation, "task_id", ""),
+		"run_id":      stringValue(citation, "run_id", ""),
+		"source_type": stringValue(citation, "source_type", "context"),
+		"source_ref":  stringValue(citation, "source_ref", ""),
+		"label":       stringValue(citation, "label", ""),
+	}
 }
 
 // protocolArtifactMap trims one artifact to the formal Artifact contract.
@@ -2976,6 +2999,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		Citations:         cloneMapSlice(record.Citations),
 		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
@@ -4040,6 +4064,7 @@ func findTaskRecordFromStorage(records []storage.TaskRunRecord, taskID string) (
 				BubbleMessage:     cloneMap(record.BubbleMessage),
 				DeliveryResult:    cloneMap(record.DeliveryResult),
 				Artifacts:         cloneMapSlice(record.Artifacts),
+				Citations:         cloneMapSlice(record.Citations),
 				AuditRecords:      cloneMapSlice(record.AuditRecords),
 				MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 				SecuritySummary:   cloneMap(record.SecuritySummary),
@@ -5438,6 +5463,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 		}
+		updatedTask = s.attachFormalCitations(processingTask, updatedTask, nil, nil, deliveryResult, artifacts)
 		s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, deliveryResult, artifacts)
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
@@ -5503,8 +5529,119 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
+	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// attachFormalCitations upgrades execution-side citation seeds into protocol-facing
+// citation objects so task detail can expose stable evidence references without
+// leaking raw tool outputs or worker-only payloads.
+func (s *Service) attachFormalCitations(sourceTask runengine.TaskRecord, persistedTask runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) runengine.TaskRecord {
+	citations := buildTaskCitations(sourceTask, toolCalls, toolOutput, deliveryResult, artifacts)
+	if _, ok := s.runEngine.SetCitations(persistedTask.TaskID, citations); ok {
+		if updatedTask, exists := s.runEngine.GetTask(persistedTask.TaskID); exists {
+			return updatedTask
+		}
+	}
+	return persistedTask
+}
+
+func buildTaskCitations(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) []map[string]any {
+	citations := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	artifactsByID := make(map[string]map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactID := stringValue(artifact, "artifact_id", "")
+		if strings.TrimSpace(artifactID) != "" {
+			artifactsByID[artifactID] = cloneMap(artifact)
+		}
+	}
+	for _, call := range toolCalls {
+		seed := mapValue(call.Output, "citation_seed")
+		if len(seed) == 0 {
+			continue
+		}
+		citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+		if len(citation) == 0 {
+			continue
+		}
+		citationID := stringValue(citation, "citation_id", "")
+		if _, ok := seen[citationID]; ok {
+			continue
+		}
+		seen[citationID] = struct{}{}
+		citations = append(citations, citation)
+	}
+	if seed := mapValue(toolOutput, "citation_seed"); len(seed) > 0 {
+		citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+		if len(citation) > 0 {
+			citationID := stringValue(citation, "citation_id", "")
+			if _, ok := seen[citationID]; !ok {
+				seen[citationID] = struct{}{}
+				citations = append(citations, citation)
+			}
+		}
+	}
+	if latestSeed := mapValue(task.LatestToolCall, "output"); len(latestSeed) > 0 {
+		seed := mapValue(latestSeed, "citation_seed")
+		if len(seed) > 0 {
+			citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+			if len(citation) > 0 {
+				citationID := stringValue(citation, "citation_id", "")
+				if _, ok := seen[citationID]; !ok {
+					citations = append(citations, citation)
+				}
+			}
+		}
+	}
+	return citations
+}
+
+func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsByID map[string]map[string]any, deliveryResult map[string]any) map[string]any {
+	artifactID := stringValue(seed, "artifact_id", "")
+	artifactType := stringValue(seed, "artifact_type", "")
+	evidenceRole := stringValue(seed, "evidence_role", "")
+	ocrExcerpt := stringValue(seed, "ocr_excerpt", "")
+	sourceRef := firstNonEmptyString(artifactID, stringValue(seed, "screen_session_id", ""))
+	if strings.TrimSpace(sourceRef) == "" {
+		sourceRef = stringValue(mapValue(deliveryResult, "payload"), "task_id", task.TaskID)
+	}
+	labelParts := make([]string, 0, 3)
+	if strings.TrimSpace(evidenceRole) != "" {
+		labelParts = append(labelParts, evidenceRole)
+	}
+	if strings.TrimSpace(artifactType) != "" {
+		labelParts = append(labelParts, artifactType)
+	}
+	if strings.TrimSpace(ocrExcerpt) != "" {
+		labelParts = append(labelParts, truncateText(ocrExcerpt, 64))
+	}
+	label := strings.Join(labelParts, " | ")
+	if strings.TrimSpace(label) == "" {
+		label = "screen evidence"
+	}
+	sourceType := "context"
+	if _, ok := artifactsByID[artifactID]; ok {
+		sourceType = "file"
+	}
+	return map[string]any{
+		"citation_id": fmt.Sprintf("cit_%s_%s", task.TaskID, sanitizeCitationSuffix(sourceRef)),
+		"task_id":     task.TaskID,
+		"run_id":      task.RunID,
+		"source_type": sourceType,
+		"source_ref":  sourceRef,
+		"label":       label,
+	}
+}
+
+func sanitizeCitationSuffix(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "evidence"
+	}
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_", ".", "_")
+	return replacer.Replace(trimmed)
 }
 
 func executionAttemptIndex(previousTask, processingTask runengine.TaskRecord) int {
