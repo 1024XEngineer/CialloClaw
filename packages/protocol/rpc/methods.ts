@@ -318,6 +318,8 @@ export interface AgentTaskEventsListParams {
   task_id: string;
   run_id?: string;
   type?: string;
+  created_at_from?: string;
+  created_at_to?: string;
   limit?: number;
   offset?: number;
 }

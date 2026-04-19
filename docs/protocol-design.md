@@ -1567,7 +1567,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：任务详情页、任务巡检页或调试入口需要查看正式运行时事件时
 - **系统处理**：按 `task_id` 返回归一化后的 `events` 记录，覆盖 `loop.*`、`task.steered` 等兼容运行时事件
-- **入参**：任务 ID、分页参数
+- **入参**：任务 ID、可选事件过滤条件、分页参数
 - **出参**：事件列表、分页信息
 
 ### agent.task.events.list 入参说明
@@ -1577,6 +1577,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `task_id` | 目标任务 ID |
 | `run_id`  | 可选，用于只看某一次执行的事件 |
 | `type`    | 可选，用于按事件类型过滤，如 `loop.failed` |
+| `created_at_from` | 可选，按开始时间过滤，使用 RFC3339 时间戳 |
+| `created_at_to` | 可选，按结束时间过滤，使用 RFC3339 时间戳 |
 | `limit`   | 每页条数    |
 | `offset`  | 偏移量      |
 
@@ -1595,6 +1597,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "task_id": "task_201",
     "run_id": "run_201",
     "type": "loop.round.completed",
+    "created_at_from": "2026-04-18T09:43:00+08:00",
+    "created_at_to": "2026-04-18T10:43:00+08:00",
     "limit": 20,
     "offset": 0
   }
