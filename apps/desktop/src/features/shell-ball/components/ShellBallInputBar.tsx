@@ -206,9 +206,15 @@ const StyledInputBar = styled.div`
     line-height: 1.4;
     min-height: 44px;
     overflow-y: auto;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
     resize: none;
     transition: 0.5s;
     z-index: 10;
+  }
+
+  .shell-ball-uiverse-inputbox textarea::-webkit-scrollbar {
+    display: none;
   }
 
   .shell-ball-uiverse-inputbox span {
