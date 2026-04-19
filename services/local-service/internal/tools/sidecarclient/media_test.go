@@ -38,7 +38,7 @@ func TestMediaWorkerRuntimeLifecycle(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewMediaWorkerRuntime(plugin.NewService(), osCapability)
 	if err != nil {
-		return
+		t.Fatalf("NewMediaWorkerRuntime returned error: %v", err)
 	}
 	runtime.invoker = &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
 	if err := runtime.Start(); err != nil {

@@ -38,7 +38,7 @@ func TestOCRWorkerRuntimeLifecycle(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewOCRWorkerRuntime(plugin.NewService(), osCapability)
 	if err != nil {
-		return
+		t.Fatalf("NewOCRWorkerRuntime returned error: %v", err)
 	}
 	runtime.invoker = &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
 	if err := runtime.Start(); err != nil {
