@@ -686,6 +686,7 @@ export interface AgentSettingsUpdateParams {
   task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
   data_log?: Partial<SettingsSnapshot["settings"]["data_log"]> & {
     api_key?: string;
+    delete_api_key?: boolean;
   };
 }
 

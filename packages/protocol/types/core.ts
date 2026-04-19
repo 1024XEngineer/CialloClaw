@@ -189,6 +189,16 @@ export interface TimeInterval {
   value: number;
 }
 
+// StrongholdStatus captures the formal secret-backend lifecycle metadata that
+// can be surfaced in settings responses without exposing secret values.
+export interface StrongholdStatus {
+  backend: string;
+  available: boolean;
+  fallback: boolean;
+  initialized: boolean;
+  formal_store: boolean;
+}
+
 // Task 定义当前模块的接口约束。
 export interface Task {
   task_id: string;
@@ -438,6 +448,7 @@ export interface SettingsSnapshot {
       provider: string;
       budget_auto_downgrade: boolean;
       provider_api_key_configured: boolean;
+      stronghold: StrongholdStatus;
     };
   };
 }
