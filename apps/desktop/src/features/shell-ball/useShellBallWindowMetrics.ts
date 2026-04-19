@@ -401,6 +401,7 @@ export function useShellBallWindowMetrics({
   const helperWindowVisibleRef = useRef(false);
   const helperWindowShouldBeVisibleRef = useRef(visible);
   const helperWindowFrameRef = useRef<ShellBallResolvedHelperFrame | null>(null);
+  const appliedWindowSizeRef = useRef<ShellBallWindowSize | null>(null);
   const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
   const helperWindowMoveAnimationTokenRef = useRef(0);
@@ -832,6 +833,18 @@ export function useShellBallWindowMetrics({
       return;
     }
 
+    if (
+      appliedWindowSizeRef.current?.width === windowFrame.width
+      && appliedWindowSizeRef.current?.height === windowFrame.height
+    ) {
+      return;
+    }
+
+    appliedWindowSizeRef.current = {
+      width: windowFrame.width,
+      height: windowFrame.height,
+    };
+
     void setShellBallWindowSize(role, createShellBallLogicalSize(windowFrame.width, windowFrame.height));
   }, [role, windowFrame]);
 
@@ -907,6 +920,7 @@ export function useShellBallWindowMetrics({
       cancelBallGeometryEmitAnimation();
       cancelBallGeometryPublishAnimation();
       cancelBallWindowDragAnimation();
+      appliedWindowSizeRef.current = null;
       ballDragSessionRef.current = null;
       pendingBallDragFrameRef.current = null;
       ballDragPositionQueueRef.current = null;
