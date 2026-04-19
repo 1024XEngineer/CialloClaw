@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -70,6 +71,7 @@ func (c runtimeMediaWorkerClient) ExtractFrames(ctx context.Context, inputPath, 
 // MediaWorkerRuntime manages the media worker lifecycle.
 type MediaWorkerRuntime struct {
 	mu        sync.Mutex
+	plugins   *plugin.Service
 	os        platform.OSCapabilityAdapter
 	ready     bool
 	available bool
@@ -78,12 +80,15 @@ type MediaWorkerRuntime struct {
 	name      string
 }
 
-func NewMediaWorkerRuntime(osCapability platform.OSCapabilityAdapter) (*MediaWorkerRuntime, error) {
+func NewMediaWorkerRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) (*MediaWorkerRuntime, error) {
 	entryPath, err := resolveRelativePathFromRoots(mediaWorkerRelativePath, workerSearchRoots())
 	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindWorker, "media_worker", err)
 		return nil, err
 	}
+	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindWorker, "media_worker")
 	runtime := &MediaWorkerRuntime{
+		plugins:   pluginService,
 		os:        osCapability,
 		ready:     false,
 		available: true,
@@ -94,8 +99,9 @@ func NewMediaWorkerRuntime(osCapability platform.OSCapabilityAdapter) (*MediaWor
 	return runtime, nil
 }
 
-func NewUnavailableMediaWorkerRuntime(osCapability platform.OSCapabilityAdapter) *MediaWorkerRuntime {
-	runtime := &MediaWorkerRuntime{os: osCapability, ready: false, available: false, name: "media_worker"}
+func NewUnavailableMediaWorkerRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) *MediaWorkerRuntime {
+	markPluginRuntimeUnavailable(pluginService, plugin.RuntimeKindWorker, "media_worker", "media worker unavailable")
+	runtime := &MediaWorkerRuntime{plugins: pluginService, os: osCapability, ready: false, available: false, name: "media_worker"}
 	runtime.client = runtimeMediaWorkerClient{runtime: runtime}
 	return runtime
 }
@@ -124,17 +130,20 @@ func (r *MediaWorkerRuntime) Start() error {
 		return errors.New("os capability adapter is required")
 	}
 	if err := r.os.EnsureNamedPipe(r.PipeName()); err != nil {
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindWorker, r.name, err)
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sidecarHealthTimeout)
 	defer cancel()
 	if _, err := r.invoke(ctx, sidecarRequest{Action: "health"}); err != nil {
 		_ = r.os.CloseNamedPipe(r.PipeName())
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindWorker, r.name, err)
 		return fmt.Errorf("%w: %v", tools.ErrMediaWorkerFailed, err)
 	}
 	r.mu.Lock()
 	r.ready = true
 	r.mu.Unlock()
+	markPluginRuntimeHealthy(r.plugins, plugin.RuntimeKindWorker, r.name)
 	return nil
 }
 
@@ -151,6 +160,7 @@ func (r *MediaWorkerRuntime) Stop() error {
 	r.mu.Lock()
 	r.ready = false
 	r.mu.Unlock()
+	markPluginRuntimeStopped(r.plugins, plugin.RuntimeKindWorker, r.name)
 	return nil
 }
 
@@ -175,6 +185,7 @@ func (r *MediaWorkerRuntime) markFailure() error {
 	r.mu.Lock()
 	r.ready = false
 	r.mu.Unlock()
+	markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindWorker, r.name, errors.New("media worker marked failed"))
 	if r.os == nil {
 		return nil
 	}

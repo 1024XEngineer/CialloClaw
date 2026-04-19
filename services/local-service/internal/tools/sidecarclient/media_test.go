@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -35,7 +36,7 @@ func TestMediaWorkerRuntimeClientExtractFrames(t *testing.T) {
 
 func TestMediaWorkerRuntimeLifecycle(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := NewMediaWorkerRuntime(osCapability)
+	runtime, err := NewMediaWorkerRuntime(plugin.NewService(), osCapability)
 	if err != nil {
 		return
 	}
@@ -171,7 +172,7 @@ func TestMediaNoopUnavailableAndValidationBranches(t *testing.T) {
 	if _, err := client.NormalizeRecording(context.Background(), "workspace/demo.mov", "workspace/demo.mp4"); !errors.Is(err, tools.ErrMediaWorkerFailed) {
 		t.Fatalf("expected noop media failure, got %v", err)
 	}
-	runtime := NewUnavailableMediaWorkerRuntime(platform.NewLocalOSCapabilityAdapter())
+	runtime := NewUnavailableMediaWorkerRuntime(plugin.NewService(), platform.NewLocalOSCapabilityAdapter())
 	if runtime.Available() {
 		t.Fatal("expected unavailable media runtime")
 	}

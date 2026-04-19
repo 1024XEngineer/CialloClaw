@@ -52,30 +52,31 @@ func New(cfg config.Config) (*App, error) {
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executionBackend := platform.NewControlledExecutionBackend(cfg.WorkspaceRoot)
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	pluginService := plugin.NewService()
+	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
 	if err != nil {
-		playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+		playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
 	} else {
 		if err := playwrightRuntime.Start(); err != nil {
-			playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+			playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
 		}
 	}
 	playwrightClient := playwrightRuntime.Client()
-	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(osCapability)
+	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(pluginService, osCapability)
 	if err != nil {
-		ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(osCapability)
+		ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
 	} else {
 		if err := ocrRuntime.Start(); err != nil {
-			ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(osCapability)
+			ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
 		}
 	}
 	ocrClient := ocrRuntime.Client()
-	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(osCapability)
+	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(pluginService, osCapability)
 	if err != nil {
-		mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(osCapability)
+		mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
 	} else {
 		if err := mediaRuntime.Start(); err != nil {
-			mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(osCapability)
+			mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
 		}
 	}
 	mediaClient := mediaRuntime.Client()
@@ -112,7 +113,6 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	deliveryService := delivery.NewService()
-	pluginService := plugin.NewService()
 	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
 	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
 		WithArtifactStore(storageService.ArtifactStore()).

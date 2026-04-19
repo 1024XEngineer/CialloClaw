@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -35,7 +36,7 @@ func TestOCRWorkerRuntimeClientExtractText(t *testing.T) {
 
 func TestOCRWorkerRuntimeLifecycle(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := NewOCRWorkerRuntime(osCapability)
+	runtime, err := NewOCRWorkerRuntime(plugin.NewService(), osCapability)
 	if err != nil {
 		return
 	}
@@ -193,7 +194,7 @@ func TestOCRNoopAndUnavailableRuntime(t *testing.T) {
 	if _, err := client.ExtractText(context.Background(), "workspace/demo.txt"); !errors.Is(err, tools.ErrOCRWorkerFailed) {
 		t.Fatalf("expected noop OCR failure, got %v", err)
 	}
-	runtime := NewUnavailableOCRWorkerRuntime(platform.NewLocalOSCapabilityAdapter())
+	runtime := NewUnavailableOCRWorkerRuntime(plugin.NewService(), platform.NewLocalOSCapabilityAdapter())
 	if runtime.Available() {
 		t.Fatal("expected unavailable OCR runtime")
 	}
