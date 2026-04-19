@@ -292,7 +292,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -397,7 +397,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		return handledResponse, nil
 	}
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -520,7 +520,7 @@ func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot 
 	return s.handleScreenAnalyzeStart(params, snapshot, suggestion.Intent)
 }
 
-func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) intent.Suggestion {
+func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) intent.Suggestion {
 	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" {
 		return suggestion
 	}
@@ -533,7 +533,9 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 		"arguments": map[string]any{},
 	}
 	fallback.IntentConfirmed = true
-	fallback.RequiresConfirm = false
+	// Preserve the caller's confirmation gate when screen-specific handling is
+	// unavailable so the downgrade does not auto-execute a generic task.
+	fallback.RequiresConfirm = confirmRequired
 	fallback.TaskSourceType = "hover_input"
 	fallback.TaskTitle = "处理：" + inferredScreenFallbackSubject(snapshot)
 	fallback.DirectDeliveryType = "bubble"
