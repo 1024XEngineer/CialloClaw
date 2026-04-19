@@ -879,7 +879,7 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 	// Keep latest_event_type scoped to normalized runtime events so task-level
 	// notifications such as task.updated or task.steered do not leak into the
 	// runtime summary contract when no runtime events have been persisted yet.
-	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, "", "", 1, 0)
+	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, "", "", "", "", 1, 0)
 	if err == nil {
 		summary["events_count"] = total
 		if len(records) > 0 && strings.TrimSpace(records[0].Type) != "" {
@@ -897,13 +897,24 @@ func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) 
 	taskID := stringValue(params, "task_id", "")
 	runID := stringValue(params, "run_id", "")
 	eventType := stringValue(params, "type", "")
+	createdAtFrom, err := normalizeEventTimeFilter(stringValue(params, "created_at_from", ""))
+	if err != nil {
+		return nil, fmt.Errorf("created_at_from must be RFC3339: %w", err)
+	}
+	createdAtTo, err := normalizeEventTimeFilter(stringValue(params, "created_at_to", ""))
+	if err != nil {
+		return nil, fmt.Errorf("created_at_to must be RFC3339: %w", err)
+	}
 	if strings.TrimSpace(taskID) == "" {
 		return nil, errors.New("task_id is required")
+	}
+	if createdAtFrom != "" && createdAtTo != "" && parseEventTimeFilter(createdAtFrom).After(parseEventTimeFilter(createdAtTo)) {
+		return nil, errors.New("created_at_from must be earlier than or equal to created_at_to")
 	}
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
 	}
-	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), taskID, runID, eventType, limit, offset)
+	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), taskID, runID, eventType, createdAtFrom, createdAtTo, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 	}
@@ -924,6 +935,28 @@ func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) 
 		"items": items,
 		"page":  pageMap(limit, offset, total),
 	}, nil
+}
+
+func normalizeEventTimeFilter(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	parsed := parseEventTimeFilter(trimmed)
+	if parsed.IsZero() {
+		return "", fmt.Errorf("invalid time %q", trimmed)
+	}
+	return parsed.UTC().Format(time.RFC3339Nano), nil
+}
+
+func parseEventTimeFilter(value string) time.Time {
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed
+	}
+	return time.Time{}
 }
 
 // TaskSteer handles agent.task.steer by persisting one follow-up instruction for

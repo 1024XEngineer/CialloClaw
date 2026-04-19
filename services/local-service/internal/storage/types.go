@@ -329,7 +329,7 @@ type LoopRuntimeStore interface {
 	SaveSteps(ctx context.Context, records []StepRecord) error
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
-	ListEvents(ctx context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error)
+	ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error)
 }
 
 // ToolCallStore defines persistence for tool_call records.

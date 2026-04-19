@@ -60,8 +60,16 @@ func (s *recordingLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record
 	return nil
 }
 
-func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType string, limit, offset int) ([]storage.EventRecord, int, error) {
+func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]storage.EventRecord, int, error) {
 	filtered := make([]storage.EventRecord, 0, len(s.events))
+	fromTime := time.Time{}
+	toTime := time.Time{}
+	if createdAtFrom != "" {
+		fromTime, _ = time.Parse(time.RFC3339Nano, createdAtFrom)
+	}
+	if createdAtTo != "" {
+		toTime, _ = time.Parse(time.RFC3339Nano, createdAtTo)
+	}
 	for _, record := range s.events {
 		if taskID != "" && record.TaskID != taskID {
 			continue
@@ -70,6 +78,13 @@ func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID,
 			continue
 		}
 		if eventType != "" && record.Type != eventType {
+			continue
+		}
+		recordTime, _ := time.Parse(time.RFC3339Nano, record.CreatedAt)
+		if !fromTime.IsZero() && recordTime.Before(fromTime) {
+			continue
+		}
+		if !toTime.IsZero() && recordTime.After(toTime) {
 			continue
 		}
 		filtered = append(filtered, record)
@@ -512,7 +527,7 @@ func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
 	if result.Content != "Loop runtime finished cleanly." {
 		t.Fatalf("unexpected loop runtime result: %+v", result)
 	}
-	events, total, err := loopStore.ListEvents(context.Background(), "task_loop_runtime", "", "", 20, 0)
+	events, total, err := loopStore.ListEvents(context.Background(), "task_loop_runtime", "", "", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListEvents returned error: %v", err)
 	}
@@ -628,7 +643,7 @@ func TestExecuteAgentLoopPersistsPlannerErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected planner error to surface")
 	}
-	events, total, listErr := loopStore.ListEvents(context.Background(), "task_loop_planner_error", "", "", 20, 0)
+	events, total, listErr := loopStore.ListEvents(context.Background(), "task_loop_planner_error", "", "", "", "", 20, 0)
 	if listErr != nil {
 		t.Fatalf("ListEvents returned error: %v", listErr)
 	}

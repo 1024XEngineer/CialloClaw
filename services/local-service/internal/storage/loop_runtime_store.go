@@ -115,9 +115,11 @@ func (s *inMemoryLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record 
 	return nil
 }
 
-func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error) {
+func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	fromTime := parseGovernanceTime(createdAtFrom)
+	toTime := parseGovernanceTime(createdAtTo)
 	filtered := make([]EventRecord, 0, len(s.events))
 	for _, record := range s.events {
 		if taskID != "" && record.TaskID != taskID {
@@ -127,6 +129,13 @@ func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, 
 			continue
 		}
 		if eventType != "" && record.Type != eventType {
+			continue
+		}
+		recordTime := parseGovernanceTime(record.CreatedAt)
+		if !fromTime.IsZero() && recordTime.Before(fromTime) {
+			continue
+		}
+		if !toTime.IsZero() && recordTime.After(toTime) {
 			continue
 		}
 		filtered = append(filtered, record)
@@ -209,9 +218,9 @@ func (s *SQLiteLoopRuntimeStore) SaveDeliveryResult(ctx context.Context, record 
 	return nil
 }
 
-func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error) {
-	filters := make([]string, 0, 3)
-	filterArgs := make([]any, 0, 3)
+func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
+	filters := make([]string, 0, 5)
+	filterArgs := make([]any, 0, 5)
 	if strings.TrimSpace(taskID) != "" {
 		filters = append(filters, `task_id = ?`)
 		filterArgs = append(filterArgs, taskID)
@@ -223,6 +232,14 @@ func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, 
 	if strings.TrimSpace(eventType) != "" {
 		filters = append(filters, `type = ?`)
 		filterArgs = append(filterArgs, eventType)
+	}
+	if strings.TrimSpace(createdAtFrom) != "" {
+		filters = append(filters, `datetime(created_at) >= datetime(?)`)
+		filterArgs = append(filterArgs, createdAtFrom)
+	}
+	if strings.TrimSpace(createdAtTo) != "" {
+		filters = append(filters, `datetime(created_at) <= datetime(?)`)
+		filterArgs = append(filterArgs, createdAtTo)
 	}
 	countQuery := `SELECT COUNT(1) FROM events`
 	query := `SELECT event_id, run_id, task_id, step_id, type, level, payload_json, created_at FROM events`
