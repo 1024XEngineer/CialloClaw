@@ -175,6 +175,67 @@ type EvalStore interface {
 	ListEvalSnapshots(ctx context.Context, taskID string, limit, offset int) ([]EvalSnapshotRecord, int, error)
 }
 
+// SkillManifestRecord reserves the formal skill_manifests table without turning
+// on any marketplace or installation flow ahead of the current roadmap.
+type SkillManifestRecord struct {
+	SkillManifestID string
+	Name            string
+	Version         string
+	Source          string
+	Summary         string
+	ManifestJSON    string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
+// BlueprintDefinitionRecord reserves the formal blueprint_definitions table for
+// future execution assets without expanding blueprint product behavior yet.
+type BlueprintDefinitionRecord struct {
+	BlueprintDefinitionID string
+	Name                  string
+	Version               string
+	Source                string
+	Summary               string
+	DefinitionJSON        string
+	CreatedAt             string
+	UpdatedAt             string
+}
+
+// PromptTemplateVersionRecord reserves the formal prompt_template_versions
+// table so future prompt assets can attach to traceable versioned records.
+type PromptTemplateVersionRecord struct {
+	PromptTemplateVersionID string
+	TemplateName            string
+	Version                 string
+	Source                  string
+	Summary                 string
+	TemplateBody            string
+	VariablesJSON           string
+	CreatedAt               string
+	UpdatedAt               string
+}
+
+// SkillManifestStore persists versioned skill manifest assets.
+type SkillManifestStore interface {
+	WriteSkillManifest(ctx context.Context, record SkillManifestRecord) error
+	GetSkillManifest(ctx context.Context, skillManifestID string) (SkillManifestRecord, error)
+	ListSkillManifests(ctx context.Context, limit, offset int) ([]SkillManifestRecord, int, error)
+}
+
+// BlueprintDefinitionStore persists versioned blueprint definition assets.
+type BlueprintDefinitionStore interface {
+	WriteBlueprintDefinition(ctx context.Context, record BlueprintDefinitionRecord) error
+	GetBlueprintDefinition(ctx context.Context, blueprintDefinitionID string) (BlueprintDefinitionRecord, error)
+	ListBlueprintDefinitions(ctx context.Context, limit, offset int) ([]BlueprintDefinitionRecord, int, error)
+}
+
+// PromptTemplateVersionStore persists versioned prompt template assets.
+type PromptTemplateVersionStore interface {
+	WritePromptTemplateVersion(ctx context.Context, record PromptTemplateVersionRecord) error
+	GetPromptTemplateVersion(ctx context.Context, promptTemplateVersionID string) (PromptTemplateVersionRecord, error)
+	ListPromptTemplateVersions(ctx context.Context, limit, offset int) ([]PromptTemplateVersionRecord, int, error)
+}
+
 // SecretRecord captures one secret value persisted outside the normal settings path.
 type SecretRecord struct {
 	Namespace string

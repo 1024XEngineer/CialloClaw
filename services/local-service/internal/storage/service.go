@@ -63,6 +63,9 @@ type Service struct {
 	todoStore                TodoStore
 	traceStore               TraceStore
 	evalStore                EvalStore
+	skillManifestStore       SkillManifestStore
+	blueprintDefinitionStore BlueprintDefinitionStore
+	promptTemplateStore      PromptTemplateVersionStore
 	secretStore              SecretStore
 	stronghold               StrongholdProvider
 	auditStore               AuditStore
@@ -91,6 +94,9 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	todoStore := TodoStore(NewInMemoryTodoStore())
 	traceStore := TraceStore(newInMemoryTraceStore())
 	evalStore := EvalStore(newInMemoryEvalStore())
+	skillManifestStore := SkillManifestStore(newInMemorySkillManifestStore())
+	blueprintDefinitionStore := BlueprintDefinitionStore(newInMemoryBlueprintDefinitionStore())
+	promptTemplateStore := PromptTemplateVersionStore(newInMemoryPromptTemplateVersionStore())
 	secretStore := SecretStore(newInMemorySecretStore())
 	strongholdProvider := StrongholdProvider(nil)
 	auditStore := AuditStore(newInMemoryAuditStore())
@@ -199,6 +205,33 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			sqliteSkillManifestStore, err := NewSQLiteSkillManifestStore(databasePath)
+			if err == nil {
+				skillManifestStore = sqliteSkillManifestStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite skill manifest store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteBlueprintDefinitionStore, err := NewSQLiteBlueprintDefinitionStore(databasePath)
+			if err == nil {
+				blueprintDefinitionStore = sqliteBlueprintDefinitionStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite blueprint definition store: %w", err))
+				fallbackActive = true
+			}
+
+			sqlitePromptTemplateStore, err := NewSQLitePromptTemplateVersionStore(databasePath)
+			if err == nil {
+				promptTemplateStore = sqlitePromptTemplateStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite prompt template store: %w", err))
+				fallbackActive = true
+			}
+
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
 				strongholdProvider = NewStrongholdSQLiteFallbackProvider(secretPath)
 				strongholdStore, err := strongholdProvider.Open(context.Background())
@@ -266,6 +299,9 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		todoStore:                todoStore,
 		traceStore:               traceStore,
 		evalStore:                evalStore,
+		skillManifestStore:       skillManifestStore,
+		blueprintDefinitionStore: blueprintDefinitionStore,
+		promptTemplateStore:      promptTemplateStore,
 		secretStore:              secretStore,
 		stronghold:               strongholdProvider,
 		auditStore:               auditStore,
@@ -311,6 +347,21 @@ func (s *Service) TraceStore() TraceStore {
 // EvalStore returns the configured eval snapshot persistence store.
 func (s *Service) EvalStore() EvalStore {
 	return s.evalStore
+}
+
+// SkillManifestStore returns the configured skill manifest asset store.
+func (s *Service) SkillManifestStore() SkillManifestStore {
+	return s.skillManifestStore
+}
+
+// BlueprintDefinitionStore returns the configured blueprint definition asset store.
+func (s *Service) BlueprintDefinitionStore() BlueprintDefinitionStore {
+	return s.blueprintDefinitionStore
+}
+
+// PromptTemplateVersionStore returns the configured prompt template asset store.
+func (s *Service) PromptTemplateVersionStore() PromptTemplateVersionStore {
+	return s.promptTemplateStore
 }
 
 // Backend 处理当前模块的相关逻辑。
@@ -500,6 +551,15 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.evalStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.skillManifestStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.blueprintDefinitionStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.promptTemplateStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.secretStore.(interface{ Close() error }); ok {

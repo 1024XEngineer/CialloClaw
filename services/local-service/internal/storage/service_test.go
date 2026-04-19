@@ -172,6 +172,33 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
 		t.Fatalf("unexpected secret backend: %+v", capabilities)
 	}
+	if service.SkillManifestStore() == nil || service.BlueprintDefinitionStore() == nil || service.PromptTemplateVersionStore() == nil {
+		t.Fatalf("expected config asset stores to be wired: %+v", capabilities)
+	}
+}
+
+func TestServiceConfigAssetStoresPersistRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config-assets-service.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	if err := service.SkillManifestStore().WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_001", Name: "skill", Version: "v1", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write skill manifest failed: %v", err)
+	}
+	if err := service.BlueprintDefinitionStore().WriteBlueprintDefinition(context.Background(), BlueprintDefinitionRecord{BlueprintDefinitionID: "blueprint_001", Name: "blueprint", Version: "v1", Source: "builtin", Summary: "summary", DefinitionJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write blueprint definition failed: %v", err)
+	}
+	if err := service.PromptTemplateVersionStore().WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_001", TemplateName: "default", Version: "v1", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write prompt template version failed: %v", err)
+	}
+	if _, err := service.SkillManifestStore().GetSkillManifest(context.Background(), "skill_001"); err != nil {
+		t.Fatalf("get skill manifest failed: %v", err)
+	}
+	if _, err := service.BlueprintDefinitionStore().GetBlueprintDefinition(context.Background(), "blueprint_001"); err != nil {
+		t.Fatalf("get blueprint definition failed: %v", err)
+	}
+	if _, err := service.PromptTemplateVersionStore().GetPromptTemplateVersion(context.Background(), "prompt_001"); err != nil {
+		t.Fatalf("get prompt template version failed: %v", err)
+	}
 }
 
 // TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing 验证CapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing。

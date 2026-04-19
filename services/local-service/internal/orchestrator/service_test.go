@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -64,6 +65,8 @@ type stubPlaywrightClient struct {
 	err              error
 }
 
+type localHTTPPlaywrightClient struct{}
+
 type stubOCRWorkerClient struct {
 	result tools.OCRTextResult
 	err    error
@@ -91,6 +94,46 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
+	response, err := http.Get(url)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	text := string(body)
+	title := ""
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, "<title>")
+	end := strings.Index(lower, "</title>")
+	if start >= 0 && end > start+len("<title>") {
+		title = text[start+len("<title>") : end]
+	}
+	return tools.BrowserPageReadResult{
+		URL:         url,
+		Title:       title,
+		TextContent: text,
+		MIMEType:    response.Header.Get("Content-Type"),
+		TextType:    "html",
+		Source:      "local_http_playwright_client",
+	}, nil
+}
+
+func (localHTTPPlaywrightClient) SearchPage(_ context.Context, url, query string, _ int) (tools.BrowserPageSearchResult, error) {
+	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
+	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
@@ -487,6 +530,14 @@ func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mu
 	}
 	record := recordValue.Interface().(*runengine.TaskRecord)
 	mutate(record)
+}
+
+func replaceRuntimeClock(t *testing.T, engine *runengine.Engine, clock func() time.Time) {
+	t.Helper()
+
+	engineValue := reflect.ValueOf(engine).Elem()
+	field := engineValue.FieldByName("now")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(clock))
 }
 
 func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.TaskRunStore) {
@@ -3805,6 +3856,17 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 // TestServiceTaskListSupportsSortParams verifies task list sorting parameters.
 func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	service := newTestService()
+	baseTime := time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC)
+	times := []time.Time{baseTime, baseTime.Add(10 * time.Millisecond)}
+	index := 0
+	replaceRuntimeClock(t, service.runEngine, func() time.Time {
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		current := times[index]
+		index++
+		return current
+	})
 
 	firstResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -3824,7 +3886,6 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start first task failed: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
 
 	secondResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -8757,17 +8818,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 		_ = server.Serve(listener)
 	}()
 
-	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
-	if err != nil {
-		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
-	}
-	if err := runtime.Start(); err != nil {
-		t.Skipf("playwright runtime unavailable in test environment: %v", err)
-	}
-	defer runtime.Stop()
-
-	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, runtime.Client())
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, localHTTPPlaywrightClient{})
 	result, err := service.StartTask(map[string]any{
 		"session_id": "sess_real_page_read",
 		"source":     "floating_ball",
@@ -8815,6 +8866,36 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	}
 	if record.LatestEvent["type"] != "delivery.ready" {
 		t.Fatalf("expected delivery.ready latest event, got %+v", record.LatestEvent)
+	}
+}
+
+func TestLocalHTTPPlaywrightClientReadPageFetchesLocalHTML(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Local Acceptance Page</title></head><body><p>Local acceptance page verifies direct local http page reads.</p></body></html>`))
+	})}
+	defer server.Close()
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	client := localHTTPPlaywrightClient{}
+	result, err := client.ReadPage(context.Background(), "http://"+listener.Addr().String())
+	if err != nil {
+		t.Fatalf("ReadPage returned error: %v", err)
+	}
+	if result.Title != "Local Acceptance Page" {
+		t.Fatalf("expected local title to be parsed, got %+v", result)
+	}
+	if !strings.Contains(result.TextContent, "direct local http page reads") {
+		t.Fatalf("expected local page content to be captured, got %+v", result)
+	}
+	if result.Source != "local_http_playwright_client" {
+		t.Fatalf("expected local http source marker, got %+v", result)
 	}
 }
 

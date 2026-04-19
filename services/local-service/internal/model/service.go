@@ -217,19 +217,7 @@ func ValidateModelConfig(cfg config.ModelConfig) error {
 	if provider == "" {
 		return ErrModelProviderRequired
 	}
-
-	switch provider {
-	case OpenAIResponsesProvider:
-		if endpoint == "" {
-			return ErrOpenAIEndpointRequired
-		}
-		if modelID == "" {
-			return ErrOpenAIModelIDRequired
-		}
-		return nil
-	default:
-		return ErrModelProviderUnsupported
-	}
+	return validateProviderConfig(config.ModelConfig{Provider: provider, Endpoint: endpoint, ModelID: modelID})
 }
 
 // buildClient 处理当前模块的相关逻辑。
@@ -249,14 +237,5 @@ func buildClient(cfg ServiceConfig) (Client, error) {
 		return nil, errors.Join(ErrSecretSourceFailed, ErrSecretNotFound)
 	}
 
-	switch strings.TrimSpace(cfg.ModelConfig.Provider) {
-	case OpenAIResponsesProvider:
-		return NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
-			APIKey:   apiKey,
-			Endpoint: strings.TrimSpace(cfg.ModelConfig.Endpoint),
-			ModelID:  strings.TrimSpace(cfg.ModelConfig.ModelID),
-		})
-	default:
-		return nil, ErrModelProviderUnsupported
-	}
+	return buildProviderClient(cfg, apiKey)
 }
