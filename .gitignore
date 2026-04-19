@@ -23,7 +23,6 @@ services/local-service/internal/rpc/workspace/
 .DS_Store
 
 apps/.temp/*
-!apps/.temp/.gitkeep
 
 # Local desktop build artifacts and debug snapshots.
 apps/desktop/src-tauri/target-codex/
