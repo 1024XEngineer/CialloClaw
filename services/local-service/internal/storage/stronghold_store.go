@@ -16,6 +16,8 @@ var ErrStrongholdUnavailable = fmt.Errorf("%w: stronghold backend unavailable", 
 type StrongholdSQLiteFallbackProvider struct {
 	databasePath string
 	available    bool
+	initialized  bool
+	lastOpenErr  error
 }
 
 // NewStrongholdSQLiteFallbackProvider creates a provider that advertises the
@@ -29,26 +31,37 @@ func NewStrongholdSQLiteFallbackProvider(databasePath string) *StrongholdSQLiteF
 
 func (p *StrongholdSQLiteFallbackProvider) Open(ctx context.Context) (SecretStore, error) {
 	if p == nil || !p.available || strings.TrimSpace(p.databasePath) == "" {
+		if p != nil {
+			p.initialized = false
+			p.lastOpenErr = ErrStrongholdUnavailable
+		}
 		return nil, ErrStrongholdUnavailable
 	}
 	store, err := NewSQLiteSecretStore(p.databasePath)
 	if err != nil {
+		p.initialized = false
+		p.lastOpenErr = err
 		return nil, fmt.Errorf("%w: %v", ErrStrongholdUnavailable, err)
 	}
 	select {
 	case <-ctx.Done():
 		_ = store.Close()
+		p.initialized = false
+		p.lastOpenErr = ctx.Err()
 		return nil, ctx.Err()
 	default:
 	}
+	p.initialized = true
+	p.lastOpenErr = nil
 	return store, nil
 }
 
 func (p *StrongholdSQLiteFallbackProvider) Descriptor() StrongholdDescriptor {
+	available := p != nil && p.available && p.initialized && p.lastOpenErr == nil
 	return StrongholdDescriptor{
 		Backend:     "stronghold_sqlite_fallback",
-		Available:   p != nil && p.available,
+		Available:   available,
 		Fallback:    true,
-		Initialized: p != nil && p.available,
+		Initialized: p != nil && p.initialized,
 	}
 }

@@ -106,12 +106,16 @@ func TestValidateSecretRecordRejectsMissingFields(t *testing.T) {
 func TestStrongholdSQLiteFallbackProviderLifecycle(t *testing.T) {
 	provider := NewStrongholdSQLiteFallbackProvider(filepath.Join(t.TempDir(), "stronghold-fallback.db"))
 	descriptor := provider.Descriptor()
-	if !descriptor.Available || !descriptor.Fallback || descriptor.Backend == "" {
-		t.Fatalf("expected fallback provider descriptor to expose availability, got %+v", descriptor)
+	if descriptor.Available || descriptor.Initialized || !descriptor.Fallback || descriptor.Backend == "" {
+		t.Fatalf("expected unopened provider descriptor to stay unavailable until lifecycle open succeeds, got %+v", descriptor)
 	}
 	store, err := provider.Open(context.Background())
 	if err != nil {
 		t.Fatalf("Open returned error: %v", err)
+	}
+	descriptor = provider.Descriptor()
+	if !descriptor.Available || !descriptor.Initialized {
+		t.Fatalf("expected opened provider descriptor to expose live availability, got %+v", descriptor)
 	}
 	defer func() {
 		if closer, ok := store.(interface{ Close() error }); ok {
@@ -127,6 +131,10 @@ func TestStrongholdSQLiteFallbackProviderLifecycle(t *testing.T) {
 	missingProvider := NewStrongholdSQLiteFallbackProvider("   ")
 	if _, err := missingProvider.Open(context.Background()); err == nil || !errors.Is(err, ErrStrongholdUnavailable) {
 		t.Fatalf("expected missing fallback provider to report ErrStrongholdUnavailable, got %v", err)
+	}
+	missingDescriptor := missingProvider.Descriptor()
+	if missingDescriptor.Available || missingDescriptor.Initialized {
+		t.Fatalf("expected failed provider descriptor to report unavailable status, got %+v", missingDescriptor)
 	}
 }
 
