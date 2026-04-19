@@ -336,6 +336,11 @@ export function ShellBallInputBar({
     width: resolvedFieldWidth ?? undefined,
   };
 
+  const fieldShellStyle: CSSProperties = {
+    height: resolvedFieldHeight ?? undefined,
+    width: resolvedFieldWidth ?? undefined,
+  };
+
   return (
     <div
       className={cn(
@@ -349,6 +354,7 @@ export function ShellBallInputBar({
       <div
         className="shell-ball-input-bar__field-shell"
         data-filled={trimmedValue !== "" ? "true" : "false"}
+        style={fieldShellStyle}
       >
         <textarea
           ref={inputRef}

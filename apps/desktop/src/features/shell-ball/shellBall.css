@@ -989,7 +989,7 @@
 .shell-ball-input-bar--interactive:focus-within .shell-ball-input-bar__field-line,
 .shell-ball-input-bar--readonly .shell-ball-input-bar__field-line {
   background: rgba(128, 128, 128, 0.24);
-  height: 44px;
+  height: 100%;
 }
 
 .shell-ball-input-bar--readonly {
