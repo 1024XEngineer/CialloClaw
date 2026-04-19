@@ -1954,6 +1954,46 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	}
 }
 
+func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
+	initialTask := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	initialProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(initialTask, initialProcessing); segment != executionSegmentInitial {
+		t.Fatalf("expected initial segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(initialTask, initialProcessing); attempt != 1 {
+		t.Fatalf("expected initial attempt index 1, got %d", attempt)
+	}
+
+	resumedTask := runengine.TaskRecord{RunID: "run_same", Status: "paused", ExecutionAttempt: 1}
+	resumedProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(resumedTask, resumedProcessing); segment != executionSegmentResume {
+		t.Fatalf("expected resume segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(resumedTask, resumedProcessing); attempt != 1 {
+		t.Fatalf("expected resume to stay in first attempt, got %d", attempt)
+	}
+
+	restartedTask := runengine.TaskRecord{RunID: "run_before_restart", Status: "completed", ExecutionAttempt: 1}
+	restartedProcessing := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	if segment := executionSegmentKind(restartedTask, restartedProcessing); segment != executionSegmentRestart {
+		t.Fatalf("expected restart segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(restartedTask, restartedProcessing); attempt != 2 {
+		t.Fatalf("expected restart to increment attempt index, got %d", attempt)
+	}
+
+	restartedAgainTask := runengine.TaskRecord{RunID: "run_after_restart", Status: "completed", ExecutionAttempt: 2}
+	restartedAgainProcessing := runengine.TaskRecord{RunID: "run_after_restart_2", Status: "processing", ExecutionAttempt: 3}
+	if attempt := executionAttemptIndex(restartedAgainTask, restartedAgainProcessing); attempt != 3 {
+		t.Fatalf("expected second restart to reach attempt index 3, got %d", attempt)
+	}
+
+	legacyRestartProcessing := runengine.TaskRecord{RunID: "run_after_restart_3", Status: "processing"}
+	if attempt := executionAttemptIndex(restartedAgainTask, legacyRestartProcessing); attempt != 3 {
+		t.Fatalf("expected fallback attempt inference to reach 3, got %d", attempt)
+	}
+}
+
 func TestServiceTaskControlResumeConsumesHumanLoopPendingPayload(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{

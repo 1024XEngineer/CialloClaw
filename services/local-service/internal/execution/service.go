@@ -100,6 +100,8 @@ type Request struct {
 	RunID                string
 	Title                string
 	Intent               map[string]any
+	AttemptIndex         int
+	SegmentKind          string
 	Snapshot             contextsvc.TaskContextSnapshot
 	SteeringMessages     []string
 	DeliveryType         string
@@ -1435,6 +1437,8 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		TaskID:          request.TaskID,
 		RunID:           request.RunID,
 		Intent:          request.Intent,
+		AttemptIndex:    request.AttemptIndex,
+		SegmentKind:     request.SegmentKind,
 		InputText:       runtimeInput,
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
@@ -2280,6 +2284,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		return
 	}
 	updatedAt := time.Now().UTC().Format(time.RFC3339)
+	segmentToken := loopSegmentToken(result)
 	runRecord := storage.RunRecord{
 		RunID:      request.RunID,
 		TaskID:     request.TaskID,
@@ -2303,13 +2308,18 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		})
 	}
 
+	roundStepIDs := make(map[string]string, len(result.Rounds))
 	stepRecords := make([]storage.StepRecord, 0, len(result.Rounds))
 	for _, round := range result.Rounds {
+		stepID := loopStepRecordID(request.TaskID, segmentToken, round)
+		roundStepIDs[round.StepID] = stepID
 		stepRecords = append(stepRecords, storage.StepRecord{
-			StepID:        fmt.Sprintf("%s_%s", request.RunID, round.StepID),
+			StepID:        stepID,
 			RunID:         round.RunID,
 			TaskID:        round.TaskID,
 			OrderIndex:    round.LoopRound,
+			AttemptIndex:  round.AttemptIndex,
+			SegmentKind:   round.SegmentKind,
 			LoopRound:     round.LoopRound,
 			Name:          round.Name,
 			Status:        round.Status,
@@ -2332,10 +2342,10 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 	eventRecords := make([]storage.EventRecord, 0, len(result.Events))
 	for index, event := range result.Events {
 		eventRecords = append(eventRecords, storage.EventRecord{
-			EventID:     fmt.Sprintf("evt_loop_%s_%03d", request.RunID, index+1),
+			EventID:     loopEventRecordID(request.TaskID, request.AttemptIndex, request.SegmentKind, segmentToken, index, event.Type),
 			RunID:       request.RunID,
 			TaskID:      request.TaskID,
-			StepID:      stepEventID(request.RunID, event.StepID),
+			StepID:      loopEventStepID(event.StepID, roundStepIDs),
 			Type:        event.Type,
 			Level:       firstNonEmpty(event.Level, "info"),
 			PayloadJSON: marshalEventPayload(event.Payload),
@@ -2374,11 +2384,81 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 	}
 }
 
-func stepEventID(runID, stepID string) string {
-	if strings.TrimSpace(stepID) == "" {
+// loopSegmentToken derives one deterministic token for a persisted execution
+// segment so repeated resumes keep distinct rows without inventing new state.
+func loopSegmentToken(result agentloop.Result) string {
+	switch {
+	case len(result.Rounds) > 0:
+		return loopRuntimeTimeToken(firstNonZeroLoopTime(result.Rounds[0].StartedAt, result.Rounds[0].CompletedAt))
+	case len(result.Events) > 0:
+		return loopRuntimeTimeToken(result.Events[0].CreatedAt)
+	case result.DeliveryRecord != nil:
+		return loopRuntimeTimeToken(result.DeliveryRecord.CreatedAt)
+	default:
+		return "0"
+	}
+}
+
+func loopStepRecordID(taskID, segmentToken string, round agentloop.PersistedRound) string {
+	return fmt.Sprintf(
+		"%s_attempt_%02d_%s_%s_%s",
+		taskID,
+		normalizedLoopAttemptIndex(round.AttemptIndex),
+		normalizedLoopSegmentKind(round.SegmentKind),
+		firstNonEmpty(segmentToken, "0"),
+		round.StepID,
+	)
+}
+
+func loopEventRecordID(taskID string, attemptIndex int, segmentKind, segmentToken string, index int, eventType string) string {
+	return fmt.Sprintf(
+		"evt_loop_%s_attempt_%02d_%s_%s_%03d_%s",
+		taskID,
+		normalizedLoopAttemptIndex(attemptIndex),
+		normalizedLoopSegmentKind(segmentKind),
+		firstNonEmpty(segmentToken, "0"),
+		index+1,
+		strings.ReplaceAll(strings.TrimSpace(eventType), ".", "_"),
+	)
+}
+
+func loopEventStepID(stepID string, roundStepIDs map[string]string) string {
+	trimmedStepID := strings.TrimSpace(stepID)
+	if trimmedStepID == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s_%s", runID, stepID)
+	if stableStepID, ok := roundStepIDs[trimmedStepID]; ok {
+		return stableStepID
+	}
+	return trimmedStepID
+}
+
+func normalizedLoopAttemptIndex(value int) int {
+	if value > 0 {
+		return value
+	}
+	return 1
+}
+
+func normalizedLoopSegmentKind(value string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return "initial"
+}
+
+func loopRuntimeTimeToken(value time.Time) string {
+	if value.IsZero() {
+		return "0"
+	}
+	return fmt.Sprintf("%d", value.UTC().UnixNano())
+}
+
+func firstNonZeroLoopTime(primary, fallback time.Time) time.Time {
+	if !primary.IsZero() {
+		return primary
+	}
+	return fallback
 }
 
 func formatOptionalTime(value time.Time) string {

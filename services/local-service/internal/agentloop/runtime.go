@@ -3,7 +3,9 @@ package agentloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -66,6 +68,8 @@ type PersistedRound struct {
 	StepID         string
 	RunID          string
 	TaskID         string
+	AttemptIndex   int
+	SegmentKind    string
 	LoopRound      int
 	Name           string
 	Status         string
@@ -100,6 +104,8 @@ type Request struct {
 	TaskID             string
 	RunID              string
 	Intent             map[string]any
+	AttemptIndex       int
+	SegmentKind        string
 	InputText          string
 	ResultTitle        string
 	FallbackOutput     string
@@ -143,6 +149,12 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 
 	if request.MaxTurns <= 0 {
 		request.MaxTurns = 4
+	}
+	if request.AttemptIndex <= 0 {
+		request.AttemptIndex = 1
+	}
+	if strings.TrimSpace(request.SegmentKind) == "" {
+		request.SegmentKind = "initial"
 	}
 	if request.KeepRecent < 0 {
 		request.KeepRecent = 0
@@ -193,6 +205,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			StepID:        fmt.Sprintf("step_loop_%02d", turn+1),
 			RunID:         request.RunID,
 			TaskID:        request.TaskID,
+			AttemptIndex:  request.AttemptIndex,
+			SegmentKind:   request.SegmentKind,
 			LoopRound:     turn + 1,
 			Name:          "agent_loop_round",
 			Status:        "running",
@@ -211,7 +225,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.PlannerInput = plannerInput
 			round.InputSummary = truncateText(singleLineSummary(plannerInput), 160)
 		}
-		events = appendEvent(events, request, newEventForRound(round, "loop.round.started", map[string]any{"loop_round": round.LoopRound}))
+		events = appendEvent(events, request, newEventForRound(round, "loop.round.started", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound}))
 
 		var plan model.ToolCallResult
 		var err error
@@ -225,14 +239,19 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			if err == nil {
 				break
 			}
-			if attempt < request.PlannerRetryBudget {
+			if attempt < request.PlannerRetryBudget && shouldRetryPlannerError(err) {
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
-					"loop_round": round.LoopRound,
-					"phase":      "planner",
-					"attempt":    attempt + 1,
-					"error":      err.Error(),
+					"attempt_index": round.AttemptIndex,
+					"segment_kind":  round.SegmentKind,
+					"loop_round":    round.LoopRound,
+					"phase":         "planner",
+					"attempt":       attempt + 1,
+					"reason":        plannerRetryReason(err),
+					"error":         err.Error(),
 				}))
+				continue
 			}
+			break
 		}
 		if err != nil {
 			round.Status = "failed"
@@ -241,9 +260,11 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.OutputSummary = truncateText(singleLineSummary(err.Error()), 160)
 			rounds = append(rounds, round)
 			events = appendEvent(events, request, newEventForRound(round, "loop.failed", map[string]any{
-				"loop_round":  round.LoopRound,
-				"stop_reason": string(StopReasonPlannerError),
-				"error":       err.Error(),
+				"attempt_index": round.AttemptIndex,
+				"segment_kind":  round.SegmentKind,
+				"loop_round":    round.LoopRound,
+				"stop_reason":   string(StopReasonPlannerError),
+				"error":         err.Error(),
 			}))
 			return Result{
 				ToolCalls:       allToolCalls,
@@ -267,6 +288,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 
 		if len(compactedHistory) < len(history) {
 			events = appendEvent(events, request, newEventForRound(round, "loop.compacted", map[string]any{
+				"attempt_index":       round.AttemptIndex,
+				"segment_kind":        round.SegmentKind,
 				"loop_round":          round.LoopRound,
 				"history_before":      len(history),
 				"history_after":       len(compactedHistory),
@@ -290,7 +313,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.StopReason = stopReason
 			round.OutputSummary = truncateText(singleLineSummary(outputText), 160)
 			rounds = append(rounds, round)
-			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(stopReason)}))
+			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(stopReason)}))
 			events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(stopReason)}))
 			return Result{
 				OutputText:      outputText,
@@ -322,12 +345,15 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			}
 
 			observation, record := request.ExecuteTool(ctx, call, turn+1)
-			for attempt := 0; attempt < request.ToolRetryBudget && record.Status == tools.ToolCallStatusTimeout; attempt++ {
+			for attempt := 0; attempt < request.ToolRetryBudget && shouldRetryToolRecord(record); attempt++ {
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
-					"loop_round": round.LoopRound,
-					"phase":      "tool",
-					"attempt":    attempt + 1,
-					"tool_name":  toolName,
+					"attempt_index": round.AttemptIndex,
+					"segment_kind":  round.SegmentKind,
+					"loop_round":    round.LoopRound,
+					"phase":         "tool",
+					"attempt":       attempt + 1,
+					"tool_name":     toolName,
+					"reason":        toolRetryReason(record),
 				}))
 				observation, record = request.ExecuteTool(ctx, call, turn+1)
 			}
@@ -342,7 +368,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				round.StopReason = StopReasonToolRetryExhausted
 				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
 				rounds = append(rounds, round)
-				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonToolRetryExhausted)}))
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonToolRetryExhausted)}))
 				events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonToolRetryExhausted), "tool_name": toolName}))
 				auditRecord, auditErr := request.BuildAuditRecord(ctx, latestInvocation)
 				if auditErr != nil {
@@ -361,9 +387,11 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			observations = append(observations, observation)
 			round.Observation = truncateText(singleLineSummary(observation), 240)
 			events = appendEvent(events, request, newEventForRound(round, "tool_call.observed", map[string]any{
-				"loop_round":  round.LoopRound,
-				"tool_name":   round.ToolName,
-				"observation": round.Observation,
+				"attempt_index": round.AttemptIndex,
+				"segment_kind":  round.SegmentKind,
+				"loop_round":    round.LoopRound,
+				"tool_name":     round.ToolName,
+				"observation":   round.Observation,
 			}))
 			if request.Hook != nil {
 				if err := request.Hook.AfterTool(ctx, round, record, observation); err != nil {
@@ -385,7 +413,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				round.StopReason = StopReasonRepeatedToolChoice
 				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
 				rounds = append(rounds, round)
-				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonRepeatedToolChoice)}))
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonRepeatedToolChoice)}))
 				events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonRepeatedToolChoice), "tool_name": round.ToolName}))
 				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
 				if err != nil {
@@ -409,7 +437,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		round.StopReason = StopReasonCompleted
 		round.OutputSummary = truncateText(singleLineSummary(strings.Join(observations, " | ")), 160)
 		rounds = append(rounds, round)
-		events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+		events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
 		if request.Hook != nil {
 			if err := request.Hook.AfterRound(ctx, round); err != nil {
 				return Result{}, true, err
@@ -630,4 +658,59 @@ func marshalJSON(input map[string]any) string {
 		return "{}"
 	}
 	return string(payload)
+}
+
+// shouldRetryPlannerError keeps planner retries narrow and deterministic so
+// runtime behavior stays explainable across timeout, rate-limit, and hard-fail
+// branches.
+func shouldRetryPlannerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch plannerRetryReason(err) {
+	case "timeout", "rate_limited", "provider_unavailable":
+		return true
+	default:
+		return false
+	}
+}
+
+func plannerRetryReason(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if errors.Is(err, model.ErrOpenAIRequestTimeout) {
+		return "timeout"
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if errors.As(err, &statusErr) {
+		switch {
+		case statusErr.StatusCode == http.StatusTooManyRequests:
+			return "rate_limited"
+		case statusErr.StatusCode >= 500 && statusErr.StatusCode <= 599:
+			return "provider_unavailable"
+		default:
+			return "non_retryable_status"
+		}
+	}
+	return "non_retryable_error"
+}
+
+func shouldRetryToolRecord(record tools.ToolCallRecord) bool {
+	return toolRetryReason(record) == "timeout"
+}
+
+func toolRetryReason(record tools.ToolCallRecord) string {
+	if record.Status == tools.ToolCallStatusTimeout {
+		return "timeout"
+	}
+	if record.Status == tools.ToolCallStatusFailed && record.ErrorCode != nil {
+		switch *record.ErrorCode {
+		case tools.ToolErrorCodeExecutionFailed, tools.ToolErrorCodeWorkerNotAvailable, tools.ToolErrorCodePlaywrightSidecarFail, tools.ToolErrorCodeOCRWorkerFailed, tools.ToolErrorCodeMediaWorkerFailed:
+			return "non_retryable_failure"
+		case tools.ToolErrorCodeOutputInvalid, tools.ToolErrorCodeNotFound:
+			return "validation"
+		}
+	}
+	return "non_retryable"
 }

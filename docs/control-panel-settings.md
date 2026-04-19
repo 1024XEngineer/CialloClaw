@@ -391,9 +391,23 @@
 
 - 当前使用模型
 - 模型提供商
+- Provider Base URL（当桌面端处于本地兼容模式时）
 - Token 消耗统计
 - 单任务成本
 - 达到预算时自动降级
+
+#### 7.2.1.1 桌面端模型与路由兼容层
+
+当前桌面端控制面板中的“模型与路由”需要同时承接两类数据：
+
+- 正式共享字段：`settings.data_log.provider`、`settings.data_log.budget_auto_downgrade`、`settings.data_log.provider_api_key_configured`
+- 桌面本地兼容字段：`settings.models.base_url`、`settings.models.model`
+
+约束如下：
+
+- `provider`、`budget_auto_downgrade`、`provider_api_key_configured` 仍以正式 `data_log` 为准，不允许被桌面本地快照反向覆盖。
+- `base_url` 与 `model` 只在桌面端本地快照中持久化，用于兼容当前 UI，不代表后端正式协议已经新增这两个字段。
+- 控制面板读取 RPC 设置后，应先以正式 `data_log` 同步共享字段，再把共享字段镜像到桌面 `models` 视图，避免本地陈旧别名覆盖后端返回。
 
 #### 7.2.2 页面表达建议
 
@@ -417,6 +431,10 @@
 
 - 当开启“达到预算时自动降级”后，应明确说明会降到哪类模型或策略。
 - 当预算已接近阈值时，设置页应出现预警提示，而不是仅在执行时提示。
+- 当显示 `Base URL` / `Model` 时，应明确这是桌面端路由兼容视图；如果当前后端协议未提供对应字段，不要把它们表达成已写入正式后端设置的共享配置。
+- `API Key` 的保存提示必须区分数据来源：
+  - `source === "rpc"`：通过 JSON-RPC `agent.settings.update` 提交，只写入后端 Stronghold，不回显明文。
+  - `source === "mock"` 或 RPC 不可用：只更新桌面本地快照，不写入后端 Stronghold，也不在桌面端保存明文 key。
 
 ### 7.3 隐私与数据
 

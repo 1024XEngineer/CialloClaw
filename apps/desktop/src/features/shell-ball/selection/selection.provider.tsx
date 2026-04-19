@@ -34,6 +34,6 @@ export function areShellBallSelectionSnapshotsEqual(
  *
  * @returns `null`; host-side listeners now publish selection snapshots.
  */
-export function ShellBallSelectionProvider() {
+export function ShellBallSelectionProvider(): null {
   return null;
 }

@@ -871,6 +871,37 @@ test("shell-ball pinned window labels and capabilities stay deterministic", () =
   assert.equal(generatedCapabilitySchema.default.windows.includes("shell-ball-bubble-pinned-*"), true);
 });
 
+test("shell-ball window controller caches helper handles for drag-time updates", () => {
+  const controllerSource = readFileSync(
+    resolve(desktopRoot, "src/platform/shellBallWindowController.ts"),
+    "utf8",
+  );
+
+  assert.match(controllerSource, /const shellBallWindowHandleCache = new Map<string, Window>\(\);/);
+  assert.match(controllerSource, /shellBallWindowHandleCache\.set\(currentWindow\.label, currentWindow\);/);
+  assert.match(controllerSource, /const cachedWindowHandle = shellBallWindowHandleCache\.get\(label\);/);
+  assert.match(controllerSource, /if \(cachedWindowHandle !== undefined\) \{\s*return cachedWindowHandle;\s*\}/);
+  assert.match(controllerSource, /shellBallWindowHandleCache\.set\(label, windowHandle\);/);
+});
+
+test("shell-ball drag sync keeps geometry publishes coalesced and visibility-aware", () => {
+  const metricsSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
+    "utf8",
+  );
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+
+  assert.match(metricsSource, /const scheduleBallGeometryEmit = useCallback\(\(geometry: ShellBallWindowGeometry\) => \{/);
+  assert.match(metricsSource, /const scheduleBallGeometryPublish = useCallback\(\(input\?: \{ snapToBounds\?: boolean \}\) => \{/);
+  assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
+  assert.match(metricsSource, /pendingBallDragFrameRef\.current = nextFrame;/);
+  assert.match(metricsSource, /if \(ballDragPositionQueueRef\.current !== null\) \{\s*return ballDragPositionQueueRef\.current;\s*\}/);
+  assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
+  assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
+  assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
+  assert.match(appSource, /helperVisibility: snapshot\.visibility/);
+});
+
 test("dashboard and control-panel stay hidden on cold launch until explicitly opened", () => {
   const tauriConfig = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8"),
@@ -1757,8 +1788,14 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /const updateBallWindowPointerDrag = useCallback\(\(pointer: ShellBallPointerPosition\) => \{/);
   assert.match(metricsSource, /const endBallWindowPointerDrag = useCallback\(async \(pointer\?: ShellBallPointerPosition\) => \{/);
   assert.match(metricsSource, /ballDragMoveAnimationFrameRef = useRef<number \| null>\(null\)/);
+  assert.match(metricsSource, /const scheduleBallGeometryEmit = useCallback\(\(geometry: ShellBallWindowGeometry\) => \{/);
+  assert.match(metricsSource, /const scheduleBallGeometryPublish = useCallback\(\(input\?: \{ snapToBounds\?: boolean \}\) => \{/);
+  assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
   assert.match(metricsSource, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(metricsSource, /await queueBallWindowDragPosition\(finalFrame\);/);
+  assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
+  assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
+  assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
   assert.match(metricsSource, /await publishBallGeometry\(\{ snapToBounds: true \}\);/);
   assert.doesNotMatch(metricsSource, /SHELL_BALL_DRAG_RELEASE_POLL_MS/);
   assert.doesNotMatch(metricsSource, /armBallWindowBoundsSnapOnRelease/);
@@ -4704,6 +4741,35 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(coordinatorSource, /trigger: "hover_text_input"/);
   assert.match(coordinatorSource, /inputMode: "text"/);
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
+});
+
+test("shell-ball screenshot command stays local and stores captures in apps temp", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const screenPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopScreen.ts"), "utf8");
+  const rootGitIgnoreSource = readFileSync(resolve(desktopRoot, "../../.gitignore"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallScreenshotCommand\(/);
+  assert.match(coordinatorSource, /const screenshot = await captureDesktopScreenshot\(\);/);
+  assert.match(coordinatorSource, /Screenshot saved to \$\{screenshot\.relative_path\}/);
+  assert.match(screenPlatformSource, /invoke<DesktopScreenCapturePayload>\("desktop_capture_screenshot"\)/);
+  assert.match(rootGitIgnoreSource, /apps\/\.temp\/\*/);
+});
+
+test("shell-ball window command stays local and replies with active window context", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const windowContextPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopWindowContext.ts"), "utf8");
+  const windowContextHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
+
+  assert.match(coordinatorSource, /const SHELL_BALL_WINDOW_COMMAND = "窗口";/);
+  assert.match(coordinatorSource, /shouldHandleShellBallWindowCommand\(/);
+  assert.match(coordinatorSource, /const context = await getActiveWindowContext\(\);/);
+  assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.title, context\.url\)/);
+  assert.match(coordinatorSource, /URL: get failed/);
+  assert.match(windowContextPlatformSource, /invoke<DesktopWindowContextPayload \| null>\("desktop_get_active_window_context"\)/);
+  assert.match(windowContextHostSource, /BROWSER_KIND_CHROME \| BROWSER_KIND_EDGE \| BROWSER_KIND_OTHER_BROWSER => \{/);
+  assert.doesNotMatch(windowContextHostSource, /read_chrome_url_via_mcp/);
+  assert.match(windowContextHostSource, /looks_like_address_bar_name/);
 });
 
 test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {

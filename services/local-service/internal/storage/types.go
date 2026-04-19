@@ -207,7 +207,7 @@ type StrongholdDescriptor struct {
 	Initialized bool
 }
 
-// TaskStepSnapshot 描述 task timeline 在存储层的快照格式。
+// TaskStepSnapshot describes the storage snapshot for one task timeline entry.
 type TaskStepSnapshot struct {
 	StepID        string
 	TaskID        string
@@ -218,18 +218,19 @@ type TaskStepSnapshot struct {
 	OutputSummary string
 }
 
-// NotificationSnapshot 描述待发送通知在存储层的快照格式。
+// NotificationSnapshot describes one pending notification snapshot in storage.
 type NotificationSnapshot struct {
 	Method    string
 	Params    map[string]any
 	CreatedAt time.Time
 }
 
-// TaskRunRecord 描述 task/run 主状态在存储层的完整快照。
+// TaskRunRecord captures the full task/run snapshot persisted by storage.
 type TaskRunRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	ExecutionAttempt  int
 	Title             string
 	SourceType        string
 	Status            string
@@ -266,7 +267,7 @@ type TaskRunRecord struct {
 	CurrentStepStatus string
 }
 
-// TaskRunStore 定义 task/run 主状态的持久化契约。
+// TaskRunStore defines persistence for the task/run primary state snapshot.
 type TaskRunStore interface {
 	AllocateIdentifier(ctx context.Context, prefix string) (string, error)
 	DeleteTaskRun(ctx context.Context, taskID string) error
@@ -331,18 +332,18 @@ type LoopRuntimeStore interface {
 	ListEvents(ctx context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error)
 }
 
-// ToolCallStore 定义 tool_call 持久化契约。
+// ToolCallStore defines persistence for tool_call records.
 type ToolCallStore interface {
 	SaveToolCall(ctx context.Context, record tools.ToolCallRecord) error
 }
 
-// AuditStore 定义 audit 记录持久化契约。
+// AuditStore defines persistence for audit records.
 type AuditStore interface {
 	WriteAuditRecord(ctx context.Context, record audit.Record) error
 	ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error)
 }
 
-// RecoveryPointStore 定义恢复点持久化契约。
+// RecoveryPointStore defines persistence for recovery points.
 type RecoveryPointStore interface {
 	WriteRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) error
 	ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error)

@@ -32,6 +32,7 @@ type TaskRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	ExecutionAttempt  int
 	Title             string
 	SourceType        string
 	Status            string
@@ -238,6 +239,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		TaskID:            taskID,
 		SessionID:         firstNonEmpty(input.SessionID, e.nextIdentifier("sess")),
 		RunID:             runID,
+		ExecutionAttempt:  1,
 		Title:             input.Title,
 		SourceType:        input.SourceType,
 		Status:            input.Status,
@@ -955,6 +957,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		// Restart begins a fresh execution attempt for the same task, so it must
 		// allocate a new run identifier before any loop/runtime rows are emitted.
 		record.RunID = e.nextIdentifier("run")
+		record.ExecutionAttempt++
 		record.Status = "processing"
 		record.FinishedAt = nil
 		record.CurrentStep = "generate_output"
@@ -2067,7 +2070,7 @@ func isSessionBusyTask(record *TaskRecord) bool {
 func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary string) []TaskStepRecord {
 	if len(timeline) == 0 {
 		return []TaskStepRecord{{
-			StepID:        fmt.Sprintf("step_%s", stepName),
+			StepID:        timelineStepID("", stepName, 1),
 			Name:          stepName,
 			Status:        status,
 			OrderIndex:    1,
@@ -2080,12 +2083,13 @@ func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary 
 	lastIndex := len(updated) - 1
 	if updated[lastIndex].Name != stepName {
 		updated[lastIndex].Status = "completed"
+		nextOrderIndex := updated[lastIndex].OrderIndex + 1
 		updated = append(updated, TaskStepRecord{
-			StepID:        fmt.Sprintf("step_%s", stepName),
+			StepID:        timelineStepID(updated[lastIndex].TaskID, stepName, nextOrderIndex),
 			TaskID:        updated[lastIndex].TaskID,
 			Name:          stepName,
 			Status:        status,
-			OrderIndex:    updated[lastIndex].OrderIndex + 1,
+			OrderIndex:    nextOrderIndex,
 			InputSummary:  updated[lastIndex].OutputSummary,
 			OutputSummary: outputSummary,
 		})
@@ -2095,6 +2099,14 @@ func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary 
 	updated[lastIndex].Status = status
 	updated[lastIndex].OutputSummary = outputSummary
 	return updated
+}
+
+func timelineStepID(taskID, stepName string, orderIndex int) string {
+	orderIndex = maxInt(orderIndex, 1)
+	if strings.TrimSpace(taskID) != "" {
+		return fmt.Sprintf("%s_step_%03d_%s", taskID, orderIndex, stepName)
+	}
+	return fmt.Sprintf("step_%03d_%s", orderIndex, stepName)
 }
 
 // buildSecuritySummary creates the minimal security summary shown in task
@@ -2626,6 +2638,7 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		ExecutionAttempt:  record.ExecutionAttempt,
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -2668,6 +2681,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		ExecutionAttempt:  maxInt(record.ExecutionAttempt, 1),
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -2788,6 +2802,13 @@ func cloneTimePointer(value *time.Time) *time.Time {
 
 	cloned := *value
 	return &cloned
+}
+
+func maxInt(primary, fallback int) int {
+	if primary > 0 {
+		return primary
+	}
+	return fallback
 }
 
 func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {

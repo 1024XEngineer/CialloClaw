@@ -1,4 +1,15 @@
-import type { AgentTaskDetailGetResult, AgentTaskControlParams, AgentTaskEventsListParams, AgentTaskSteerParams, RequestMeta, Task, TaskControlAction, TaskEvent, TaskListGroup } from "@cialloclaw/protocol";
+import type {
+  AgentTaskDetailGetResult,
+  AgentTaskControlParams,
+  AgentTaskEventsListParams,
+  AgentTaskSteerParams,
+  RequestMeta,
+  Task,
+  TaskControlAction,
+  TaskEvent,
+  TaskListGroup,
+  TaskRuntimeSummary,
+} from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTaskEvents, listTasks, steerTask } from "@/rpc/methods";
 import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
@@ -147,6 +158,18 @@ const riskLevels = new Set<string>(RISK_LEVELS);
 const securityStatuses = new Set<string>(SECURITY_STATUSES);
 const taskStepStatuses = new Set<string>(TASK_STEP_STATUSES);
 
+function isValidRuntimeSummary(summary: Partial<TaskRuntimeSummary> | null | undefined): summary is TaskRuntimeSummary {
+  return Boolean(
+    summary &&
+      typeof summary.events_count === "number" &&
+      Number.isFinite(summary.events_count) &&
+      typeof summary.active_steering_count === "number" &&
+      Number.isFinite(summary.active_steering_count) &&
+      (typeof summary.latest_event_type === "string" || summary.latest_event_type === null || typeof summary.latest_event_type === "undefined") &&
+      (typeof summary.loop_stop_reason === "string" || summary.loop_stop_reason === null || typeof summary.loop_stop_reason === "undefined"),
+  );
+}
+
 function hasValidSecuritySummary(detail: AgentTaskDetailGetResult): boolean {
   const summary = detail.security_summary as Partial<AgentTaskDetailGetResult["security_summary"]> | null | undefined;
   return Boolean(
@@ -169,6 +192,10 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
 
   if (!hasValidSecuritySummary(detail)) {
     throw new Error("task detail payload is missing security summary");
+  }
+
+  if (!isValidRuntimeSummary(detail.runtime_summary)) {
+    throw new Error("task detail payload is missing runtime summary");
   }
 
   const approvalRequest = normalizeNullable(detail.approval_request, isApprovalRequest, "task detail payload approval_request");

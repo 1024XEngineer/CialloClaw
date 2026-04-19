@@ -129,6 +129,9 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].TaskID != taskID || records[0].RunID != runID {
 		t.Fatalf("unexpected loaded record: %+v", records[0])
 	}
+	if records[0].ExecutionAttempt != 1 {
+		t.Fatalf("expected execution attempt to default to 1, got %d", records[0].ExecutionAttempt)
+	}
 	if records[0].DeliveryResult["type"] != "workspace_document" {
 		t.Fatalf("expected delivery result to round-trip, got %+v", records[0].DeliveryResult)
 	}
@@ -192,6 +195,31 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	taskItems, taskTotal, err = store.taskStore.ListTasks(context.Background(), 10, 0)
 	if err != nil || taskTotal != 0 || len(taskItems) != 0 {
 		t.Fatalf("expected sqlite structured task record to be deleted, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
+	}
+}
+
+func TestSQLiteTaskRunStorePersistsExecutionAttempt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-attempt.db")
+	store, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	record := sampleTaskRunRecord()
+	record.ExecutionAttempt = 3
+	if err := store.SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("SaveTaskRun returned error: %v", err)
+	}
+	records, err := store.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTaskRuns returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one task run record, got %d", len(records))
+	}
+	if records[0].ExecutionAttempt != 3 {
+		t.Fatalf("expected execution attempt 3 to round-trip, got %d", records[0].ExecutionAttempt)
 	}
 }
 
@@ -425,6 +453,7 @@ func sampleTaskRunRecord() TaskRunRecord {
 		TaskID:            "task_001",
 		SessionID:         "sess_001",
 		RunID:             "run_001",
+		ExecutionAttempt:  1,
 		Title:             "sqlite task record",
 		SourceType:        "hover_input",
 		Status:            "completed",

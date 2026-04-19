@@ -2,6 +2,7 @@
 package runengine
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -1247,6 +1248,89 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	}
 	if restarted.LoopStopReason != "" {
 		t.Fatalf("expected restart to clear loop stop reason, got %q", restarted.LoopStopReason)
+	}
+	if restarted.ExecutionAttempt != 2 {
+		t.Fatalf("expected first restart to increment attempt to 2, got %d", restarted.ExecutionAttempt)
+	}
+
+	completedAgain, ok := engine.CompleteTask(task.TaskID, deliveryResult, map[string]any{"task_id": task.TaskID, "type": "result"}, artifacts)
+	if !ok || completedAgain.Status != "completed" {
+		t.Fatalf("expected task to complete again before second restart, got %#v ok=%v", completedAgain, ok)
+	}
+	restartedAgain, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("expected second restart to succeed: %v", err)
+	}
+	if restartedAgain.ExecutionAttempt != 3 {
+		t.Fatalf("expected second restart to increment attempt to 3, got %d", restartedAgain.ExecutionAttempt)
+	}
+}
+
+func TestEngineRestartPersistsExecutionAttemptAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-attempts.db")
+	store, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	engine, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore returned error: %v", err)
+	}
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_restart_attempts",
+		Title:       "restart attempts",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Timeline:    []TaskStepRecord{{Name: "generate_output", Status: "running", OrderIndex: 1}},
+	})
+	completed, ok := engine.CompleteTask(task.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": task.TaskID, "type": "result"}, nil)
+	if !ok || completed.Status != "completed" {
+		t.Fatalf("expected initial completion before restart, got %#v ok=%v", completed, ok)
+	}
+	restarted, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("first restart failed: %v", err)
+	}
+	completedAgain, ok := engine.CompleteTask(restarted.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": restarted.TaskID, "type": "result"}, nil)
+	if !ok || completedAgain.Status != "completed" {
+		t.Fatalf("expected second completion before restart, got %#v ok=%v", completedAgain, ok)
+	}
+	restartedAgain, err := engine.ControlTask(completedAgain.TaskID, "restart", map[string]any{"task_id": completedAgain.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("second restart failed: %v", err)
+	}
+	if restartedAgain.ExecutionAttempt != 3 {
+		t.Fatalf("expected in-memory execution attempt to reach 3, got %d", restartedAgain.ExecutionAttempt)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close sqlite store before reload: %v", err)
+	}
+	reloadStore, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("reopen sqlite task run store: %v", err)
+	}
+	defer func() { _ = reloadStore.Close() }()
+	records, err := reloadStore.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("load task runs before engine reload: %v", err)
+	}
+	if len(records) != 1 || records[0].ExecutionAttempt != 3 {
+		t.Fatalf("expected persisted store attempt to be 3 before engine reload, got %+v", records)
+	}
+
+	reloaded, err := NewEngineWithStore(reloadStore)
+	if err != nil {
+		t.Fatalf("reloading engine failed: %v", err)
+	}
+	persisted, ok := reloaded.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to reload from store")
+	}
+	if persisted.ExecutionAttempt != 3 {
+		t.Fatalf("expected persisted execution attempt to stay 3 after reload, got %d", persisted.ExecutionAttempt)
 	}
 }
 
