@@ -919,14 +919,18 @@ test("task page no longer exposes edit guidance and uses 安全总览 without an
   assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
-test("security board styles stay scoped to the safety feature stylesheet", () => {
+test("security styles stay scoped to the safety feature stylesheet", () => {
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const securityPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityPage.css"), "utf8");
   const securityBoardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityBoard.css"), "utf8");
   const globalsSource = readFileSync(resolve(desktopRoot, "src/styles/globals.css"), "utf8");
 
-  assert.match(securityAppSource, /import "\.\/securityBoard\.css";/);
-  assert.match(securityBoardSource, /\.security-page__canvas\s*\{/);
-  assert.match(securityBoardSource, /@media \(max-width: 980px\)[\s\S]*\.security-page__detail-grid\s*\{/);
+  assert.match(securityAppSource, /import "\.\/securityPage\.css";/);
+  assert.doesNotMatch(securityAppSource, /import "\.\/securityBoard\.css";/);
+  assert.match(securityPageSource, /\.security-page__canvas\s*\{/);
+  assert.match(securityPageSource, /\.security-page__draggable\[data-card-type="approval"\]\s+\.security-page__card-surface\s*\{/);
+  assert.match(securityPageSource, /@media \(max-width: 980px\)[\s\S]*\.security-page__detail-grid\s*\{/);
+  assert.match(securityBoardSource, /consolidated into securityPage\.css/);
   assert.doesNotMatch(globalsSource, /\.security-page__canvas\s*\{/);
   assert.doesNotMatch(globalsSource, /\.security-page__draggable\s*\{/);
 });
