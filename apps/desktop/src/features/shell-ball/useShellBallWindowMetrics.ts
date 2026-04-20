@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow, monitorFromPoint, type Monitor } from "@tauri-apps/api/window";
 import {
+  applyShellBallCurrentWindowFrame,
   createShellBallLogicalPosition,
   createShellBallLogicalSize,
   hideShellBallWindow,
@@ -26,10 +27,6 @@ export const SHELL_BALL_BUBBLE_DRAG_CLEARANCE_PX = 24;
 export const SHELL_BALL_BUBBLE_REPOSITION_DURATION_MS = 180;
 export const SHELL_BALL_INPUT_GAP_PX = 4;
 export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 50;
-export const SHELL_BALL_FIXED_WINDOW_SIZE = Object.freeze({
-  width: 800,
-  height: 800,
-});
 
 type ShellBallContentSize = {
   width: number;
@@ -48,6 +45,16 @@ type ShellBallMeasurableElement = {
 type ShellBallWindowSize = {
   width: number;
   height: number;
+};
+
+type ShellBallAnchorOffset = {
+  x: number;
+  y: number;
+};
+
+type ShellBallGlobalAnchor = {
+  x: number;
+  y: number;
 };
 
 type ShellBallWindowFrame = ShellBallWindowSize & {
@@ -140,7 +147,6 @@ export function measureShellBallContentSize(element: ShellBallMeasurableElement,
     const rootRect = element.getBoundingClientRect();
     const measuredRegions = [
       element.querySelector<HTMLElement>(".shell-ball-surface__mascot-shell"),
-      element.querySelector<HTMLElement>(".shell-ball-surface__slot--top"),
       element.querySelector<HTMLElement>(".shell-ball-surface__slot--bottom"),
       element.querySelector<HTMLElement>(".shell-ball-voice-window"),
     ].filter((region): region is HTMLElement => region !== null);
@@ -457,6 +463,9 @@ export function useShellBallWindowMetrics({
   const helperWindowShouldBeVisibleRef = useRef(visible);
   const helperWindowFrameRef = useRef<ShellBallResolvedHelperFrame | null>(null);
   const appliedWindowSizeRef = useRef<ShellBallWindowSize | null>(null);
+  const measuredAnchorOffsetRef = useRef<ShellBallAnchorOffset | null>(null);
+  const appliedAnchorOffsetRef = useRef<ShellBallAnchorOffset | null>(null);
+  const globalAnchorRef = useRef<ShellBallGlobalAnchor | null>(null);
   const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
   const helperWindowMoveAnimationTokenRef = useRef(0);
@@ -595,6 +604,14 @@ export function useShellBallWindowMetrics({
     });
 
     geometryRef.current = geometry;
+    const currentAnchorOffset = appliedAnchorOffsetRef.current;
+
+    if (currentAnchorOffset !== null) {
+      globalAnchorRef.current = {
+        x: geometry.ballFrame.x + currentAnchorOffset.x,
+        y: geometry.ballFrame.y + currentAnchorOffset.y,
+      };
+    }
 
     if (input?.snapToBounds && (geometry.ballFrame.x !== logicalPosition.x || geometry.ballFrame.y !== logicalPosition.y)) {
       await currentWindow.setPosition(createShellBallLogicalPosition(geometry.ballFrame.x, geometry.ballFrame.y));
@@ -856,16 +873,29 @@ export function useShellBallWindowMetrics({
       }
 
       if (role === "ball") {
-        setWindowFrame(SHELL_BALL_FIXED_WINDOW_SIZE);
-        return;
+        const rootRect = nextElement.getBoundingClientRect();
+        const mascotElement = nextElement.querySelector<HTMLElement>(".shell-ball-surface__mascot-shell");
+
+        if (mascotElement !== null) {
+          const mascotRect = mascotElement.getBoundingClientRect();
+
+          // The mascot top-left corner is the stable shell-ball anchor. Helper
+          // panels can expand around it, but this corner stays pinned in screen
+          // space across merged-window resizes.
+          measuredAnchorOffsetRef.current = {
+            x: mascotRect.left - rootRect.left,
+            y: mascotRect.top - rootRect.top,
+          };
+        }
       }
 
-      const includeScrollBounds = role !== "bubble";
+      const isBallWindow = role === "ball";
+      const includeScrollBounds = !isBallWindow && role !== "bubble";
       const contentSize = measureShellBallContentSize(nextElement, includeScrollBounds);
       setWindowFrame(
         createShellBallWindowFrame(
           contentSize,
-          SHELL_BALL_WINDOW_SAFE_MARGIN_PX,
+          isBallWindow ? SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX : SHELL_BALL_WINDOW_SAFE_MARGIN_PX,
         ),
       );
     }
@@ -887,7 +917,7 @@ export function useShellBallWindowMetrics({
     };
   }, [role]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (windowFrame === null) {
       return;
     }
@@ -895,12 +925,53 @@ export function useShellBallWindowMetrics({
     if (
       appliedWindowSizeRef.current?.width === windowFrame.width
       && appliedWindowSizeRef.current?.height === windowFrame.height
+      && (role !== "ball"
+        || measuredAnchorOffsetRef.current === null
+        || (
+          appliedAnchorOffsetRef.current?.x === measuredAnchorOffsetRef.current.x
+          && appliedAnchorOffsetRef.current?.y === measuredAnchorOffsetRef.current.y
+        ))
     ) {
       return;
     }
 
+    const nextAnchorOffset = measuredAnchorOffsetRef.current;
+
     void (async () => {
-      if (role !== "ball") {
+      if (role === "ball") {
+        const currentWindow = getCurrentWindow();
+
+        if (currentWindow.label === shellBallWindowLabels.ball) {
+          const outerPosition = await currentWindow.outerPosition();
+          const scaleFactor = await currentWindow.scaleFactor();
+          const logicalPosition = outerPosition.toLogical(scaleFactor);
+
+          if (nextAnchorOffset !== null) {
+            const stableGlobalAnchor = globalAnchorRef.current ?? {
+              x: logicalPosition.x + nextAnchorOffset.x,
+              y: logicalPosition.y + nextAnchorOffset.y,
+            };
+
+            globalAnchorRef.current = stableGlobalAnchor;
+
+            await applyShellBallCurrentWindowFrame({
+              x: stableGlobalAnchor.x - nextAnchorOffset.x,
+              y: stableGlobalAnchor.y - nextAnchorOffset.y,
+              width: windowFrame.width,
+              height: windowFrame.height,
+            });
+          } else {
+            await applyShellBallCurrentWindowFrame({
+              x: logicalPosition.x,
+              y: logicalPosition.y,
+              width: windowFrame.width,
+              height: windowFrame.height,
+            });
+          }
+        } else {
+          await setShellBallWindowSize(role, createShellBallLogicalSize(windowFrame.width, windowFrame.height));
+        }
+      } else {
         await setShellBallWindowSize(role, createShellBallLogicalSize(windowFrame.width, windowFrame.height));
       }
 
@@ -908,6 +979,7 @@ export function useShellBallWindowMetrics({
         width: windowFrame.width,
         height: windowFrame.height,
       };
+      appliedAnchorOffsetRef.current = nextAnchorOffset;
     })();
   }, [role, windowFrame]);
 
@@ -984,6 +1056,9 @@ export function useShellBallWindowMetrics({
       cancelBallGeometryPublishAnimation();
       cancelBallWindowDragAnimation();
       appliedWindowSizeRef.current = null;
+      appliedAnchorOffsetRef.current = null;
+      globalAnchorRef.current = null;
+      measuredAnchorOffsetRef.current = null;
       ballDragSessionRef.current = null;
       pendingBallDragFrameRef.current = null;
       ballDragPositionQueueRef.current = null;
