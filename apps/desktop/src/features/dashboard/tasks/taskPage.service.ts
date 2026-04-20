@@ -11,7 +11,7 @@ import type {
   TaskRuntimeSummary,
 } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTaskEvents, listTasks, steerTask } from "@/rpc/methods";
-import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isAuditRecord, isAuthorizationRecord, isBinaryPendingAuthorizations, isCitation, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
+import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isAuditRecord, isAuthorizationRecord, isBinaryPendingAuthorizations, isCitation, isDeliveryResult, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
 import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskEventFilters, TaskEventPageData, TaskEventTimeRange, TaskExperience, TaskListItem } from "./taskPage.types";
@@ -98,6 +98,7 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
     artifacts: [],
     authorization_record: null,
     citations: [],
+    delivery_result: null,
     mirror_references: [],
     runtime_summary: {
       active_steering_count: 0,
@@ -267,6 +268,7 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
   const approvalRequest = normalizeNullable(detail.approval_request, isApprovalRequest, "task detail payload approval_request");
   const authorizationRecord = detail.authorization_record === undefined ? null : normalizeNullable(detail.authorization_record, isAuthorizationRecord, "task detail payload authorization_record");
   const auditRecord = detail.audit_record === undefined ? null : normalizeNullable(detail.audit_record, isAuditRecord, "task detail payload audit_record");
+  const deliveryResult = detail.delivery_result === undefined ? null : normalizeNullable(detail.delivery_result, isDeliveryResult, "task detail payload delivery_result");
   const latestRestorePoint = normalizeNullable(detail.security_summary.latest_restore_point, isRecoveryPoint, "task detail payload restore point");
   const artifacts = normalizeArray(detail.artifacts, isArtifact, "task detail payload artifacts");
   const citations = normalizeArray(detail.citations, isCitation, "task detail payload citations");
@@ -303,6 +305,7 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
     artifacts,
     authorization_record: authorizationRecord,
     citations,
+    delivery_result: deliveryResult,
     mirror_references: mirrorReferences,
     runtime_summary: runtimeSummary,
     security_summary: {

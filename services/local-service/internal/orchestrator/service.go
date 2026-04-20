@@ -1041,12 +1041,17 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		securitySummary["latest_restore_point"] = latestRestorePoint
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
+	deliveryResultValue := any(nil)
+	if normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, task.DeliveryResult); len(normalizedDelivery) > 0 {
+		deliveryResultValue = normalizedDelivery
+	}
 
 	return map[string]any{
 		"task":                 taskMap(task),
 		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
+		"delivery_result":      deliveryResultValue,
 		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
-		"citations":            protocolCitationList(task.Citations),
+		"citations":            protocolCitationList(s.citationsForTask(task.TaskID, task.Citations)),
 		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
 		"approval_request":     approvalRequestValue,
 		"authorization_record": authorizationRecordValue,
@@ -1364,7 +1369,7 @@ func protocolCitationList(citations []map[string]any) []map[string]any {
 }
 
 func protocolCitationMap(citation map[string]any) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"citation_id": stringValue(citation, "citation_id", ""),
 		"task_id":     stringValue(citation, "task_id", ""),
 		"run_id":      stringValue(citation, "run_id", ""),
@@ -1372,6 +1377,22 @@ func protocolCitationMap(citation map[string]any) map[string]any {
 		"source_ref":  stringValue(citation, "source_ref", ""),
 		"label":       stringValue(citation, "label", ""),
 	}
+	if artifactID := strings.TrimSpace(stringValue(citation, "artifact_id", "")); artifactID != "" {
+		result["artifact_id"] = artifactID
+	}
+	if artifactType := strings.TrimSpace(stringValue(citation, "artifact_type", "")); artifactType != "" {
+		result["artifact_type"] = artifactType
+	}
+	if evidenceRole := strings.TrimSpace(stringValue(citation, "evidence_role", "")); evidenceRole != "" {
+		result["evidence_role"] = evidenceRole
+	}
+	if excerptText := strings.TrimSpace(stringValue(citation, "excerpt_text", "")); excerptText != "" {
+		result["excerpt_text"] = excerptText
+	}
+	if screenSessionID := strings.TrimSpace(stringValue(citation, "screen_session_id", "")); screenSessionID != "" {
+		result["screen_session_id"] = screenSessionID
+	}
+	return result
 }
 
 // protocolArtifactMap trims one artifact to the formal Artifact contract.
@@ -1437,7 +1458,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		return map[string]any{
 			"type":         firstNonEmptyString(stringValue(artifact, "delivery_type", ""), inferArtifactDeliveryType(artifact)),
 			"title":        stringValue(artifact, "title", ""),
-			"payload":      payload,
+			"payload":      normalizeFormalDeliveryPayload(payload, taskID),
 			"preview_text": stringValue(artifact, "title", ""),
 		}
 	}
@@ -1446,10 +1467,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if payload["task_id"] == nil {
-		payload["task_id"] = taskID
-	}
-	resolved["payload"] = payload
+	resolved["payload"] = normalizeFormalDeliveryPayload(payload, taskID)
 	if stringValue(resolved, "type", "") == "" {
 		resolved["type"] = "task_detail"
 	}
@@ -1460,6 +1478,38 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		resolved["preview_text"] = stringValue(resolved, "title", "")
 	}
 	return resolved
+}
+
+// normalizeFormalDeliveryPayload keeps formal delivery payload keys stable for
+// protocol consumers even when historical storage records omitted sparse fields.
+func normalizeFormalDeliveryPayload(payload map[string]any, taskID string) map[string]any {
+	normalized := cloneMap(payload)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	if normalized["path"] == nil {
+		normalized["path"] = nil
+	}
+	if normalized["url"] == nil {
+		normalized["url"] = nil
+	}
+	if normalized["task_id"] == nil {
+		if strings.TrimSpace(taskID) == "" {
+			normalized["task_id"] = nil
+		} else {
+			normalized["task_id"] = taskID
+		}
+	}
+	return normalized
+}
+
+// normalizeTaskDetailDeliveryResult keeps task detail aligned with the formal
+// delivery contract without forcing the dashboard to infer missing payload fields.
+func normalizeTaskDetailDeliveryResult(taskID string, deliveryResult map[string]any) map[string]any {
+	if len(deliveryResult) == 0 {
+		return nil
+	}
+	return normalizeDeliveryOpenResult(nil, cloneMap(deliveryResult), taskID)
 }
 
 // TaskControl handles agent.task.control and converts user actions into runtime
@@ -2976,6 +3026,71 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	return task
 }
 
+// latestDeliveryResultFromStorage restores the newest first-class
+// delivery_result when structured task detail cannot rely on task_run
+// compatibility snapshots anymore.
+func (s *Service) latestDeliveryResultFromStorage(taskID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	record, ok, err := s.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil || !ok {
+		return nil
+	}
+	payload := map[string]any{}
+	if strings.TrimSpace(record.PayloadJSON) != "" {
+		if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
+			payload = map[string]any{}
+		}
+	}
+	return map[string]any{
+		"type":         record.Type,
+		"title":        record.Title,
+		"payload":      payload,
+		"preview_text": record.PreviewText,
+	}
+}
+
+// loadTaskCitationsFromStorage restores the current formal citation chain from
+// first-class loop runtime storage when task_run snapshots are unavailable.
+func (s *Service) loadTaskCitationsFromStorage(taskID string) []map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID)
+	if err != nil {
+		return nil
+	}
+	citations := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		citation := map[string]any{
+			"citation_id": record.CitationID,
+			"task_id":     record.TaskID,
+			"run_id":      record.RunID,
+			"source_type": record.SourceType,
+			"source_ref":  record.SourceRef,
+			"label":       record.Label,
+		}
+		if strings.TrimSpace(record.ArtifactID) != "" {
+			citation["artifact_id"] = record.ArtifactID
+		}
+		if strings.TrimSpace(record.ArtifactType) != "" {
+			citation["artifact_type"] = record.ArtifactType
+		}
+		if strings.TrimSpace(record.EvidenceRole) != "" {
+			citation["evidence_role"] = record.EvidenceRole
+		}
+		if strings.TrimSpace(record.ExcerptText) != "" {
+			citation["excerpt_text"] = record.ExcerptText
+		}
+		if strings.TrimSpace(record.ScreenSessionID) != "" {
+			citation["screen_session_id"] = record.ScreenSessionID
+		}
+		citations = append(citations, citation)
+	}
+	return citations
+}
+
 func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
 	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
@@ -3233,6 +3348,10 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 			if len(runtime.Timeline) == 0 {
 				runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
 			}
+			// Keep the compatibility snapshot as the base read model, but always
+			// let first-class task detail fields override it when structured
+			// storage already has newer formal delivery or citation records.
+			s.hydrateStructuredTaskGovernance(&runtime)
 			return runtime, true
 		}
 	}
@@ -3284,6 +3403,12 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	if s == nil || s.storage == nil || task == nil {
 		return
+	}
+	if deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID); len(deliveryResult) > 0 {
+		task.DeliveryResult = deliveryResult
+	}
+	if citations := s.loadTaskCitationsFromStorage(task.TaskID); len(citations) > 0 {
+		task.Citations = citations
 	}
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {
@@ -5159,6 +5284,13 @@ func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]
 	return mergeArtifactsWithStored(delivery.EnsureArtifactIdentifiers(taskID, runtimeArtifacts), s.loadArtifactsFromStorage(taskID, 0, 0))
 }
 
+func (s *Service) citationsForTask(taskID string, runtimeCitations []map[string]any) []map[string]any {
+	if len(runtimeCitations) > 0 {
+		return cloneMapSlice(runtimeCitations)
+	}
+	return s.loadTaskCitationsFromStorage(taskID)
+}
+
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
 	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
@@ -5839,12 +5971,39 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // leaking raw tool outputs or worker-only payloads.
 func (s *Service) attachFormalCitations(sourceTask runengine.TaskRecord, persistedTask runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) runengine.TaskRecord {
 	citations := buildTaskCitations(sourceTask, toolCalls, toolOutput, deliveryResult, artifacts)
+	s.persistFormalCitations(persistedTask.TaskID, citations)
 	if _, ok := s.runEngine.SetCitations(persistedTask.TaskID, citations); ok {
 		if updatedTask, exists := s.runEngine.GetTask(persistedTask.TaskID); exists {
 			return updatedTask
 		}
 	}
 	return persistedTask
+}
+
+// persistFormalCitations keeps the first-class citation chain queryable even
+// after task_run compatibility snapshots have been compacted away.
+func (s *Service) persistFormalCitations(taskID string, citations []map[string]any) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return
+	}
+	records := make([]storage.CitationRecord, 0, len(citations))
+	for index, citation := range citations {
+		records = append(records, storage.CitationRecord{
+			CitationID:      stringValue(citation, "citation_id", ""),
+			TaskID:          firstNonEmptyString(stringValue(citation, "task_id", ""), taskID),
+			RunID:           stringValue(citation, "run_id", ""),
+			SourceType:      stringValue(citation, "source_type", "context"),
+			SourceRef:       stringValue(citation, "source_ref", ""),
+			Label:           stringValue(citation, "label", ""),
+			ArtifactID:      stringValue(citation, "artifact_id", ""),
+			ArtifactType:    stringValue(citation, "artifact_type", ""),
+			EvidenceRole:    stringValue(citation, "evidence_role", ""),
+			ExcerptText:     stringValue(citation, "excerpt_text", ""),
+			ScreenSessionID: stringValue(citation, "screen_session_id", ""),
+			OrderIndex:      index,
+		})
+	}
+	_ = s.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, records)
 }
 
 func buildTaskCitations(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) []map[string]any {
@@ -5926,7 +6085,7 @@ func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsB
 		sourceType = "file"
 	}
 	identity := stableCitationIdentity(task.TaskID, sourceType, sourceRef, seed)
-	return map[string]any{
+	result := map[string]any{
 		"citation_id": fmt.Sprintf("cit_%s_%s", task.TaskID, identity),
 		"task_id":     task.TaskID,
 		"run_id":      task.RunID,
@@ -5934,6 +6093,22 @@ func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsB
 		"source_ref":  sourceRef,
 		"label":       label,
 	}
+	if strings.TrimSpace(artifactID) != "" {
+		result["artifact_id"] = artifactID
+	}
+	if strings.TrimSpace(artifactType) != "" {
+		result["artifact_type"] = artifactType
+	}
+	if strings.TrimSpace(evidenceRole) != "" {
+		result["evidence_role"] = evidenceRole
+	}
+	if strings.TrimSpace(ocrExcerpt) != "" {
+		result["excerpt_text"] = ocrExcerpt
+	}
+	if screenSessionID := strings.TrimSpace(stringValue(seed, "screen_session_id", "")); screenSessionID != "" {
+		result["screen_session_id"] = screenSessionID
+	}
+	return result
 }
 
 // stableCitationIdentity derives a deterministic citation fingerprint from the

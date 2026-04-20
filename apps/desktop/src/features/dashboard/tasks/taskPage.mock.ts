@@ -539,6 +539,7 @@ function createDetail(
     artifacts,
     authorization_record: null,
     citations: [],
+    delivery_result: null,
     mirror_references: mirrorReferences,
     runtime_summary: runtimeSummary,
     security_summary: securitySummary,

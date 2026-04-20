@@ -4878,6 +4878,60 @@ func TestBuildTaskCitationsPreservesDistinctFormalReferencesForSameArtifact(t *t
 	if citations[0]["citation_id"] == citations[1]["citation_id"] {
 		t.Fatalf("expected distinct formal references on the same artifact to keep unique citation ids, got %+v", citations)
 	}
+	if citations[0]["artifact_id"] != "art_screen_multi_citation" || citations[1]["artifact_type"] != "screen_capture" {
+		t.Fatalf("expected structured citation metadata to survive deduping, got %+v", citations)
+	}
+	if citations[0]["excerpt_text"] == citations[1]["excerpt_text"] {
+		t.Fatalf("expected distinct citations to preserve their excerpt text, got %+v", citations)
+	}
+}
+
+func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "persist formal citations")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	task := runengine.TaskRecord{
+		TaskID: "task_persist_citations",
+		RunID:  "run_persist_citations",
+	}
+	artifacts := []map[string]any{{
+		"artifact_id":   "art_persist_citations",
+		"task_id":       task.TaskID,
+		"artifact_type": "screen_capture",
+		"title":         "persist-screen.png",
+		"path":          "workspace/persist-screen.png",
+		"mime_type":     "image/png",
+	}}
+	toolCalls := []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_persist_citations",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "Fatal build error",
+				"screen_session_id": "screen_sess_persist",
+			},
+		},
+	}}
+
+	service.attachFormalCitations(task, task, toolCalls, nil, map[string]any{
+		"payload": map[string]any{"task_id": task.TaskID},
+	}, artifacts)
+
+	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
+	if err != nil {
+		t.Fatalf("list first-class citations failed: %v", err)
+	}
+	if len(citations) != 1 {
+		t.Fatalf("expected one persisted citation, got %+v", citations)
+	}
+	if citations[0].ArtifactID != "art_persist_citations" || citations[0].EvidenceRole != "error_evidence" {
+		t.Fatalf("expected persisted citation metadata to survive, got %+v", citations[0])
+	}
+	if citations[0].ScreenSessionID != "screen_sess_persist" || citations[0].ExcerptText != "Fatal build error" {
+		t.Fatalf("expected persisted citation evidence fields to survive, got %+v", citations[0])
+	}
 }
 
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
@@ -5387,6 +5441,16 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 	if citations[0]["source_type"] != "file" || !strings.Contains(stringValue(citations[0], "label", ""), "error_evidence") {
 		t.Fatalf("expected citation to preserve artifact-backed screen evidence metadata, got %+v", citations[0])
+	}
+	if citations[0]["artifact_type"] != "screen_capture" || citations[0]["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected citation to expose structured screen evidence role and artifact type, got %+v", citations[0])
+	}
+	if citations[0]["excerpt_text"] == nil || citations[0]["screen_session_id"] == nil {
+		t.Fatalf("expected citation to expose OCR excerpt and screen session metadata, got %+v", citations[0])
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || stringValue(deliveryResult, "preview_text", "") == "" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", detailResult["delivery_result"])
 	}
 	record, exists = service.runEngine.GetTask(task["task_id"].(string))
 	if !exists || len(record.Citations) != 1 {
@@ -7420,8 +7484,8 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 		t.Fatalf("task detail get failed: %v", err)
 	}
 
-	if _, ok := detailResult["delivery_result"]; ok {
-		t.Fatalf("expected task detail response not to expose undeclared delivery_result field, got %+v", detailResult["delivery_result"])
+	if _, ok := detailResult["delivery_result"]; !ok {
+		t.Fatal("expected task detail response to expose formal delivery_result field")
 	}
 	if _, ok := detailResult["audit_records"]; ok {
 		t.Fatalf("expected task detail response not to expose undeclared audit_records field, got %+v", detailResult["audit_records"])
@@ -7775,6 +7839,16 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 		StartedAt:   time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC),
 		UpdatedAt:   time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC),
 		FinishedAt:  timePointer(time.Date(2026, 4, 15, 13, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "屏幕分析结果",
+			"preview_text": "fatal build error",
+			"payload": map[string]any{
+				"task_id": taskID,
+				"path":    "workspace/structured-screen.png",
+				"url":     nil,
+			},
+		},
 		Citations: []map[string]any{{
 			"citation_id": "cit_" + taskID + "_" + stableCitationIdentity(taskID, "file", "art_structured_screen_evidence", map[string]any{
 				"artifact_id":   "art_structured_screen_evidence",
@@ -7782,11 +7856,15 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 				"evidence_role": "error_evidence",
 				"ocr_excerpt":   "fatal build error",
 			}),
-			"task_id":     taskID,
-			"run_id":      "run_structured_screen_evidence",
-			"source_type": "file",
-			"source_ref":  "art_structured_screen_evidence",
-			"label":       "error_evidence | screen_capture | fatal build error",
+			"task_id":       taskID,
+			"run_id":        "run_structured_screen_evidence",
+			"source_type":   "file",
+			"source_ref":    "art_structured_screen_evidence",
+			"label":         "error_evidence | screen_capture | fatal build error",
+			"artifact_id":   "art_structured_screen_evidence",
+			"artifact_type": "screen_capture",
+			"evidence_role": "error_evidence",
+			"excerpt_text":  "fatal build error",
 		}},
 		AuditRecords: []map[string]any{{
 			"audit_id":   "audit_structured_screen_evidence",
@@ -7820,6 +7898,370 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 	citations := detailResult["citations"].([]map[string]any)
 	if len(citations) != 1 || citations[0]["source_ref"] != "art_structured_screen_evidence" {
 		t.Fatalf("expected structured fallback to backfill citations, got %+v", citations)
+	}
+	if citations[0]["excerpt_text"] != "fatal build error" || citations[0]["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected structured fallback to preserve citation metadata, got %+v", citations[0])
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["preview_text"] != "fatal build error" {
+		t.Fatalf("expected structured fallback to backfill delivery result, got %+v", detailResult["delivery_result"])
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackReadsFormalDeliveryFromLoopStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail delivery fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_delivery_only"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_delivery",
+		RunID:               "run_structured_delivery_only",
+		Title:               "structured delivery only task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_delivery_only",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "结构化交付结果",
+		PayloadJSON:      `{"task_id":"` + taskID + `","path":"workspace/structured-delivery.md","url":null}`,
+		PreviewText:      "formal delivery from loop store",
+		CreatedAt:        "2026-04-15T14:06:00Z",
+	}); err != nil {
+		t.Fatalf("save loop runtime delivery result failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback to read delivery_result from loop store, got %+v", detailResult["delivery_result"])
+	}
+	if deliveryResult["title"] != "结构化交付结果" || deliveryResult["preview_text"] != "formal delivery from loop store" {
+		t.Fatalf("unexpected loop-store delivery result: %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != "workspace/structured-delivery.md" || payload["task_id"] != taskID {
+		t.Fatalf("expected loop-store delivery payload to stay intact, got %+v", payload)
+	}
+	if _, ok := payload["url"]; !ok || payload["url"] != nil {
+		t.Fatalf("expected loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackReadsFormalCitationsFromLoopStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail citation fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_citation_only"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_citation",
+		RunID:               "run_structured_citation_only",
+		Title:               "structured citation only task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_citation_only",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_citation_only",
+		SourceType:      "file",
+		SourceRef:       "art_structured_citation_only",
+		Label:           "error_evidence | screen_capture | fatal build error",
+		ArtifactID:      "art_structured_citation_only",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "fatal build error",
+		ScreenSessionID: "screen_sess_citation_only",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save loop runtime citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected loop-store citations to backfill task detail, got %+v", citations)
+	}
+	if citations[0]["artifact_id"] != "art_structured_citation_only" || citations[0]["source_ref"] != "art_structured_citation_only" {
+		t.Fatalf("expected loop-store citation artifact fields to survive, got %+v", citations[0])
+	}
+	if citations[0]["evidence_role"] != "error_evidence" || citations[0]["excerpt_text"] != "fatal build error" {
+		t.Fatalf("expected loop-store citation evidence metadata to survive, got %+v", citations[0])
+	}
+	if citations[0]["screen_session_id"] != "screen_sess_citation_only" {
+		t.Fatalf("expected loop-store citation screen session id to survive, got %+v", citations[0])
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackPrefersFirstClassDeliveryAndCitationsOverSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail mixed state precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_mixed_state"
+	finishedAt := time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_mixed_state",
+		RunID:             "run_structured_mixed_state",
+		Title:             "structured mixed state task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Timeline: []storage.TaskStepSnapshot{{
+			StepID:        "step_structured_mixed_state_snapshot",
+			TaskID:        taskID,
+			Name:          "deliver_result",
+			Status:        "completed",
+			OrderIndex:    1,
+			InputSummary:  "snapshot input",
+			OutputSummary: "snapshot output",
+		}},
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "snapshot delivery",
+			"preview_text": "stale snapshot delivery",
+			"payload":      map[string]any{"task_id": taskID, "path": "workspace/stale-snapshot.md", "url": nil},
+		},
+		Citations: []map[string]any{{
+			"citation_id": "cit_snapshot_" + taskID,
+			"task_id":     taskID,
+			"run_id":      "run_structured_mixed_state",
+			"source_type": "file",
+			"source_ref":  "art_snapshot_only",
+			"label":       "snapshot evidence",
+			"artifact_id": "art_snapshot_only",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_mixed_state",
+		RunID:               "run_structured_mixed_state",
+		Title:               "structured mixed state task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "first-class delivery",
+		PayloadJSON:      `{"task_id":"` + taskID + `","path":"workspace/formal-delivery.md","url":null}`,
+		PreviewText:      "newer first-class delivery",
+		CreatedAt:        "2026-04-15T14:07:00Z",
+	}); err != nil {
+		t.Fatalf("save first-class delivery result failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_mixed_state",
+		SourceType:      "file",
+		SourceRef:       "art_first_class",
+		Label:           "error_evidence | screen_capture | formal excerpt",
+		ArtifactID:      "art_first_class",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "formal excerpt",
+		ScreenSessionID: "screen_sess_first_class",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save first-class citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected mixed-state detail to expose formal delivery_result, got %+v", detailResult["delivery_result"])
+	}
+	if deliveryResult["title"] != "first-class delivery" || deliveryResult["preview_text"] != "newer first-class delivery" {
+		t.Fatalf("expected first-class delivery to override snapshot delivery, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != "workspace/formal-delivery.md" {
+		t.Fatalf("expected first-class delivery payload to override snapshot payload, got %+v", payload)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected first-class citations to override snapshot citations, got %+v", citations)
+	}
+	if citations[0]["source_ref"] != "art_first_class" || citations[0]["artifact_id"] != "art_first_class" {
+		t.Fatalf("expected first-class citation source to override snapshot citation, got %+v", citations[0])
+	}
+	if citations[0]["screen_session_id"] != "screen_sess_first_class" || citations[0]["excerpt_text"] != "formal excerpt" {
+		t.Fatalf("expected first-class citation metadata to override snapshot citation, got %+v", citations[0])
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKeys(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail sparse delivery fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_delivery_sparse"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_delivery_sparse",
+		RunID:             "run_structured_delivery_sparse",
+		Title:             "structured sparse delivery task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		IntentName:        "screen_analyze",
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		CurrentStepStatus: "completed",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:         time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:        time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:      "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write sparse structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_delivery_sparse",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace sparse structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "结构化稀疏交付结果",
+		PayloadJSON:      `{}`,
+		PreviewText:      "sparse formal delivery from loop store",
+		CreatedAt:        "2026-04-15T14:06:00Z",
+	}); err != nil {
+		t.Fatalf("save sparse loop runtime delivery result failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete sparse runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback to read sparse delivery_result from loop store, got %+v", detailResult["delivery_result"])
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if _, ok := payload["path"]; !ok || payload["path"] != nil {
+		t.Fatalf("expected sparse loop-store delivery payload to expose missing path as null, got %+v", payload)
+	}
+	if _, ok := payload["url"]; !ok || payload["url"] != nil {
+		t.Fatalf("expected sparse loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+	if payload["task_id"] != taskID {
+		t.Fatalf("expected sparse loop-store delivery payload to backfill task_id, got %+v", payload)
 	}
 }
 

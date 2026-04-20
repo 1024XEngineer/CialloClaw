@@ -349,6 +349,8 @@ export interface TaskRuntimeSummary {
 export interface AgentTaskDetailGetResult {
   task: Task;
   timeline: TaskStep[];
+  // delivery_result carries the latest formal conclusion for task detail.
+  delivery_result: DeliveryResult | null;
   artifacts: Artifact[];
   citations: Citation[];
   mirror_references: MirrorReference[];

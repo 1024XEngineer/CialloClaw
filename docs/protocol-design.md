@@ -1516,8 +1516,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
 - `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
-- 对屏幕感知类任务，任务详情应通过正式 `artifact`、事件和交付对象回看截图证据、OCR 摘要和授权过程，而不是直接渲染平台采样结果或裸 worker 输出。
-- 若任务存在正式视觉或上下文引用，`citations` 应返回稳定 `citation` 对象列表，用于区分截图证据、OCR 摘要等正式引用，而不是把引用信息混进 artifact 扩展字段或裸 tool output。
+- 对屏幕感知类任务，任务详情应通过正式 `delivery_result`、`artifact`、事件和治理对象回看模型结论、截图证据、OCR 摘要和授权过程，而不是直接渲染平台采样结果或裸 worker 输出。
+- 当 `task_run.snapshot_json` 与一等运行态存储同时存在时，`delivery_result` 与 `citations` 必须以前者的正式一等存储记录为准，兼容快照只能作为缺省回退，不能覆盖更新后的正式交付或引用链。
+- 若任务存在正式视觉或上下文引用，`citations` 应返回稳定 `citation` 对象列表，并在需要时补齐 `artifact_id / artifact_type / evidence_role / excerpt_text / screen_session_id` 等结构化字段，用于区分截图证据、OCR 摘要和引用片段，而不是把引用信息混进 artifact 扩展字段或裸 tool output。
+- 当 `tasks / task_steps` 已进入结构化读取路径时，`citations` 仍必须可从一等存储重建；不能把 `task_run` 兼容快照当作任务详情正式引用链的唯一来源。
 
 ### agent.task.detail.get 入参说明
 
@@ -1548,8 +1550,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | ------------------------ | -------------- |
 | `data.task`              | 任务基础信息   |
 | `data.timeline`          | 步骤时间线     |
+| `data.delivery_result`   | 最新正式交付结果；若当前任务尚未形成正式交付则返回 `null` |
 | `data.artifacts`         | 产出物列表     |
-| `data.citations`         | 正式引用列表   |
+| `data.citations`         | 正式引用列表；可携带截图证据、OCR 摘要和引用片段的结构化元信息 |
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.approval_request`  | 当前任务的正式安全锚点 |
 | `data.authorization_record` | 当前任务最近一条正式授权记录 |
@@ -1596,6 +1599,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "output_summary": "正在生成摘要"
         }
       ],
+      "delivery_result": {
+        "type": "task_detail",
+        "title": "屏幕分析结果",
+        "payload": {
+          "path": "D:/CialloClawWorkspace/screen-artifacts/frame_001.png",
+          "url": null,
+          "task_id": "task_201"
+        },
+        "preview_text": "当前屏幕主要错误为缺少 release asset。"
+      },
       "artifacts": [
         {
           "artifact_id": "art_001",
@@ -1613,7 +1626,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "run_id": "run_201",
           "source_type": "file",
           "source_ref": "art_001",
-          "label": "summary_input | generated_doc | Q3复盘提纲"
+          "label": "error_evidence | screen_capture | release asset missing",
+          "artifact_id": "art_001",
+          "artifact_type": "screen_capture",
+          "evidence_role": "error_evidence",
+          "excerpt_text": "release asset missing",
+          "screen_session_id": "screen_sess_001"
         }
       ],
       "mirror_references": [

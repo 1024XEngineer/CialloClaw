@@ -81,6 +81,7 @@ export function TaskDetailPanel({
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
   const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
   const canSteerTask = !ended && task.status !== "cancelled";
+  const formalDeliveryResult = detail.delivery_result;
   const runtimeSummary = detail.runtime_summary;
   const evidenceItems = detail.citations;
   // Evidence artifacts stay task-centric by following the formal citation links
@@ -244,6 +245,38 @@ export function TaskDetailPanel({
     );
   }
 
+  function renderFormalDeliverySection() {
+    if (!formalDeliveryResult) {
+      return null;
+    }
+
+    return (
+      <section className="task-detail-card">
+        <div className="task-detail-card__header task-detail-card__header--actionable">
+          <div>
+            <p className="task-detail-card__eyebrow">Formal Delivery</p>
+            <h3 className="task-detail-card__title">模型结论与正式交付</h3>
+          </div>
+          <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
+            <ArrowUpRight className="h-4 w-4" />
+            {deliveryActionPending ? "打开中..." : "打开交付"}
+          </button>
+        </div>
+        <p className="task-detail-card__hint">该区域只消费正式 `delivery_result`，用于回看模型结论与最终交付出口。</p>
+        <article className="task-detail-output-item">
+          <SendHorizonal className="h-4 w-4" />
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="task-detail-output-item__title">{formalDeliveryResult.title}</p>
+              <Badge variant="outline">{formalDeliveryResult.type}</Badge>
+            </div>
+            <p className="task-detail-card__hint">{formalDeliveryResult.preview_text}</p>
+          </div>
+        </article>
+      </section>
+    );
+  }
+
   function renderEvidenceSection() {
     return (
       <section className="task-detail-card">
@@ -253,14 +286,19 @@ export function TaskDetailPanel({
             <h3 className="task-detail-card__title">截图证据与正式引用</h3>
           </div>
         </div>
-        <p className="task-detail-card__hint">该区域只消费正式 `artifact` 与 `citation`，用于回看屏幕截图、OCR 摘要和引用标记。</p>
+        <p className="task-detail-card__hint">该区域只消费正式 `artifact` 与 `citation`，用于回看屏幕截图、OCR 摘要和引用片段。</p>
         <div className="task-detail-output-list">
           {evidenceItems.length > 0
             ? evidenceItems.map((citation) => (
                 <article key={citation.citation_id} className="task-detail-output-item">
                   <AlertTriangle className="h-4 w-4" />
                   <div>
-                    <p className="task-detail-output-item__title">{citation.label}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="task-detail-output-item__title">{citation.label}</p>
+                      {citation.evidence_role ? <Badge variant="outline">{citation.evidence_role}</Badge> : null}
+                      {citation.artifact_type ? <Badge variant="secondary">{citation.artifact_type}</Badge> : null}
+                    </div>
+                    {citation.excerpt_text ? <p className="task-detail-card__hint">{citation.excerpt_text}</p> : null}
                     <p className="task-detail-output-item__path">{citation.source_ref}</p>
                   </div>
                 </article>
@@ -511,6 +549,8 @@ export function TaskDetailPanel({
 
               {renderRuntimeSummarySection()}
 
+              {renderFormalDeliverySection()}
+
               {renderEvidenceSection()}
 
               {renderScreenGovernanceSection()}
@@ -647,6 +687,8 @@ export function TaskDetailPanel({
               </section>
 
               {renderRuntimeSummarySection()}
+
+              {renderFormalDeliverySection()}
 
               {renderEvidenceSection()}
 

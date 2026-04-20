@@ -575,6 +575,22 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
+	if err := store.ReplaceTaskCitations(context.Background(), "task_loop_001", []CitationRecord{{
+		CitationID:      "cit_loop_001",
+		TaskID:          "task_loop_001",
+		RunID:           "run_loop_001",
+		SourceType:      "file",
+		SourceRef:       "art_loop_001",
+		Label:           "error_evidence | screen_capture | missing release asset",
+		ArtifactID:      "art_loop_001",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "missing release asset",
+		ScreenSessionID: "screen_sess_001",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
+	}
 
 	sqliteStore, ok := service.loopRuntimeStore.(*SQLiteLoopRuntimeStore)
 	if !ok {
@@ -611,6 +627,7 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	assertTableCount(t, sqliteStore.db, "steps", 2)
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
+	assertTableCount(t, sqliteStore.db, "task_citations", 1)
 
 	events, total, err := store.ListEvents(context.Background(), "task_loop_001", "", "", "", "", 20, 0)
 	if err != nil {
@@ -618,6 +635,20 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
+	}
+	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001")
+	if err != nil {
+		t.Fatalf("GetLatestDeliveryResult returned error: %v", err)
+	}
+	if !ok || deliveryResult.DeliveryResultID != "delivery_result_001" || deliveryResult.PreviewText != "loop preview" {
+		t.Fatalf("unexpected latest delivery_result: ok=%v record=%+v", ok, deliveryResult)
+	}
+	citations, err := store.ListTaskCitations(context.Background(), "task_loop_001")
+	if err != nil {
+		t.Fatalf("ListTaskCitations returned error: %v", err)
+	}
+	if len(citations) != 1 || citations[0].CitationID != "cit_loop_001" || citations[0].ExcerptText != "missing release asset" {
+		t.Fatalf("unexpected stored citations: %+v", citations)
 	}
 }
 
