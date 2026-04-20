@@ -59,14 +59,11 @@ export function ShellBallInputBar({
       return;
     }
 
-    // Keep the decorative highlight layer aligned with the real textarea height
-    // so multiline growth and shrink stay visually locked together.
     field.style.height = "auto";
     const maxHeight = Number.parseFloat(window.getComputedStyle(field).maxHeight) || Number.POSITIVE_INFINITY;
     const nextHeight = Math.min(Math.max(44, field.scrollHeight), maxHeight);
 
     field.style.height = `${nextHeight}px`;
-    field.parentElement?.style.setProperty("--shell-ball-input-height", `${nextHeight}px`);
   }, [value]);
 
   useEffect(() => {
@@ -196,7 +193,6 @@ const StyledInputBar = styled.div`
   }
 
   .shell-ball-uiverse-inputbox {
-    --shell-ball-input-height: 44px;
     position: relative;
     width: 196px;
   }
@@ -205,10 +201,11 @@ const StyledInputBar = styled.div`
     position: relative;
     width: 100%;
     padding: 10px;
-    background: transparent;
+    background: rgba(128, 128, 128, 0.24);
     outline: none;
     box-shadow: none;
     border: none;
+    border-radius: 4px;
     caret-color: rgba(255, 255, 255, 0.96);
     color: rgba(255, 255, 255, 0.96);
     font-size: 1em;
@@ -263,8 +260,8 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox textarea:valid ~ i,
   .shell-ball-uiverse-inputbox textarea:focus ~ i,
   &[data-filled="true"] .shell-ball-uiverse-inputbox i {
-    height: var(--shell-ball-input-height);
-    background: rgba(128, 128, 128, 0.24);
+    height: 2px;
+    background: rgba(128, 128, 128, 0.42);
   }
 
   .shell-ball-uiverse-actions {
