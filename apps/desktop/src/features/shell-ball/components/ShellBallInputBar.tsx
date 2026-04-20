@@ -144,7 +144,7 @@ export function ShellBallInputBar({
     focusHighlightTimerRef.current = window.setTimeout(() => {
       setDelayedHighlightVisible(true);
       focusHighlightTimerRef.current = null;
-    }, 2000);
+    }, 1000);
   }
 
   const hiddenState = isHidden || isVoice;
@@ -259,7 +259,7 @@ const StyledInputBar = styled.div`
   }
 
   &[data-delayed-highlight="true"] .shell-ball-uiverse-inputbox textarea {
-    background: rgba(128, 128, 128, 0.24);
+    background: rgb(128, 128, 128);
     border-radius: 4px;
   }
 
@@ -303,7 +303,7 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox textarea:focus ~ i,
   &[data-filled="true"] .shell-ball-uiverse-inputbox i {
     height: 44px;
-    background: rgba(128, 128, 128, 0.24);
+    background: rgb(128, 128, 128);
   }
 
   .shell-ball-uiverse-actions {
