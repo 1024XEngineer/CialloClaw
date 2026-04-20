@@ -438,6 +438,7 @@ function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentT
     artifacts: [],
     authorization_record: null,
     citations: [],
+    delivery_result: null,
     mirror_references: [],
     runtime_summary: {
       active_steering_count: 0,
@@ -1928,6 +1929,17 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
   assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
   assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+});
+
+test("TaskDetailPanel separates formal delivery from structured evidence metadata", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /const formalDeliveryResult = detail\.delivery_result;/);
+  assert.match(panelSource, /Formal Delivery/);
+  assert.match(panelSource, /该区域只消费正式 `delivery_result`/);
+  assert.match(panelSource, /citation\.evidence_role/);
+  assert.match(panelSource, /citation\.artifact_type/);
+  assert.match(panelSource, /citation\.excerpt_text/);
 });
 
 test("TaskDetailPanel renders a formal screen governance section only for screen tasks with synced detail", () => {

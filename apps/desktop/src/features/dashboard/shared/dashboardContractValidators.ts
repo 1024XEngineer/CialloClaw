@@ -1,8 +1,9 @@
-import { APPROVAL_STATUSES, RISK_LEVELS, TASK_SOURCE_TYPES, TASK_STATUSES } from "@cialloclaw/protocol";
-import type { ApprovalRequest, Artifact, AuditRecord, AuthorizationRecord, Citation, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
+import { APPROVAL_STATUSES, DELIVERY_TYPES, RISK_LEVELS, TASK_SOURCE_TYPES, TASK_STATUSES } from "@cialloclaw/protocol";
+import type { ApprovalRequest, Artifact, AuditRecord, AuthorizationRecord, Citation, DeliveryResult, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
 
 type Guard<T> = (value: unknown) => value is T;
 const approvalStatuses = new Set<string>(APPROVAL_STATUSES);
+const deliveryTypes = new Set<string>(DELIVERY_TYPES);
 const riskLevels = new Set<string>(RISK_LEVELS);
 const taskSourceTypes = new Set<string>(TASK_SOURCE_TYPES);
 const taskStatuses = new Set<string>(TASK_STATUSES);
@@ -125,6 +126,26 @@ export function isArtifact(value: unknown): value is Artifact {
   );
 }
 
+export function isDeliveryResult(value: unknown): value is DeliveryResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<DeliveryResult>;
+  const payload = candidate.payload;
+  return (
+    typeof candidate.type === "string" &&
+    deliveryTypes.has(candidate.type) &&
+    typeof candidate.title === "string" &&
+    typeof candidate.preview_text === "string" &&
+    Boolean(payload) &&
+    typeof payload === "object" &&
+    ((payload as DeliveryResult["payload"]).path === null || typeof (payload as DeliveryResult["payload"]).path === "string") &&
+    ((payload as DeliveryResult["payload"]).url === null || typeof (payload as DeliveryResult["payload"]).url === "string") &&
+    ((payload as DeliveryResult["payload"]).task_id === null || typeof (payload as DeliveryResult["payload"]).task_id === "string")
+  );
+}
+
 export function isCitation(value: unknown): value is Citation {
   if (!value || typeof value !== "object") {
     return false;
@@ -137,7 +158,12 @@ export function isCitation(value: unknown): value is Citation {
     typeof candidate.run_id === "string" &&
     (candidate.source_type === "file" || candidate.source_type === "web" || candidate.source_type === "context") &&
     typeof candidate.source_ref === "string" &&
-    typeof candidate.label === "string"
+    typeof candidate.label === "string" &&
+    (candidate.artifact_id === undefined || candidate.artifact_id === null || typeof candidate.artifact_id === "string") &&
+    (candidate.artifact_type === undefined || candidate.artifact_type === null || typeof candidate.artifact_type === "string") &&
+    (candidate.evidence_role === undefined || candidate.evidence_role === null || typeof candidate.evidence_role === "string") &&
+    (candidate.excerpt_text === undefined || candidate.excerpt_text === null || typeof candidate.excerpt_text === "string") &&
+    (candidate.screen_session_id === undefined || candidate.screen_session_id === null || typeof candidate.screen_session_id === "string")
   );
 }
 
