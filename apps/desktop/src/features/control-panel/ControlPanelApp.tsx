@@ -2,12 +2,11 @@
  * ControlPanelApp renders the desktop settings surface with a sidebar-driven
  * layout while preserving the existing draft, inspection, and save flows.
  */
-import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   BrainCircuit,
   CircleHelp,
   GripHorizontal,
-  Save,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -29,7 +28,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
 import "./controlPanel.css";
 
-type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "actions";
+type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models";
 
 type NavigationGroup = {
   label: string;
@@ -80,12 +79,6 @@ type InfoRowProps = {
 };
 
 const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
-  actions: {
-    group: "治理与应用",
-    icon: Save,
-    navLabel: "保存与操作",
-    title: "保存与操作",
-  },
   automation: {
     group: "协作策略",
     icon: Workflow,
@@ -129,32 +122,9 @@ const NAVIGATION_GROUPS: NavigationGroup[] = [
   },
   {
     label: "治理与应用",
-    items: ["models", "actions"],
+    items: ["models"],
   },
 ];
-
-/**
- * Maps the current data source into a presentational badge for the control
- * panel header.
- *
- * @param source Control-panel data source mode.
- * @returns Badge copy and color metadata for the UI.
- */
-function getSourceCopy(source: ControlPanelData["source"]) {
-  if (source === "rpc") {
-    return {
-      badge: "LIVE",
-      label: "JSON-RPC",
-      tone: "live" as const,
-    };
-  }
-
-  return {
-    badge: "MOCK",
-    label: "本地快照",
-    tone: "mock" as const,
-  };
-}
 
 /**
  * Resolves the save feedback copy shown after settings are persisted.
@@ -319,9 +289,7 @@ export function ControlPanelApp() {
     });
   }, []);
 
-  const sourceCopy = useMemo(() => (draft ? getSourceCopy(draft.source) : null), [draft]);
-
-  if (!draft || !panelData || !sourceCopy) {
+  if (!draft || !panelData) {
     return (
       <main className="app-shell control-panel-shell">
         <div className="control-panel-shell__loading">
@@ -337,7 +305,6 @@ export function ControlPanelApp() {
   const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
   const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
   const hasChanges = inspectorDirty || settingsDirty;
-  const latestRestorePoint = draft.securitySummary.latest_restore_point?.summary ?? "暂无恢复点";
   const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
   const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
@@ -346,13 +313,6 @@ export function ControlPanelApp() {
     draft.source === "rpc"
       ? "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
       : "当前为本地快照模式：不会写入后端 Stronghold，也不会在桌面端保存明文 API key。";
-
-  const sourceValue = (
-    <span className="control-panel-shell__value-cluster">
-      <StatusPill tone={sourceCopy.tone}>{sourceCopy.badge}</StatusPill>
-      <span className="control-panel-shell__value-text">{sourceCopy.label}</span>
-    </span>
-  );
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -851,39 +811,6 @@ export function ControlPanelApp() {
           </>
         );
 
-      case "actions":
-        return (
-          <>
-            <SettingsCard title="当前快照" description="汇总当前来源、保存状态和最近恢复点。">
-              <InfoRow label="数据来源" value={sourceValue} />
-              <InfoRow label="保存状态" value={saveStateValue} />
-              <InfoRow label="巡检频率" value={inspectionInterval} />
-              <InfoRow label="最近恢复点" value={latestRestorePoint} />
-            </SettingsCard>
-
-            <SettingsCard title="即时反馈" description="显示最近一次巡检与保存的执行结果。">
-              <div className="control-panel-shell__feedback-grid">
-                <div className="control-panel-shell__feedback-card">
-                  <Text as="p" size="1" className="control-panel-shell__feedback-label">
-                    巡检结果
-                  </Text>
-                  <Text as="p" size="2" className="control-panel-shell__feedback-text" aria-live="polite">
-                    {inspectionSummary ?? "手动巡检后显示结果。"}
-                  </Text>
-                </div>
-
-                <div className="control-panel-shell__feedback-card">
-                  <Text as="p" size="1" className="control-panel-shell__feedback-label">
-                    保存结果
-                  </Text>
-                  <Text as="p" size="2" className="control-panel-shell__feedback-text" aria-live="polite">
-                    {saveFeedback ?? "保存后显示结果。"}
-                  </Text>
-                </div>
-              </div>
-            </SettingsCard>
-          </>
-        );
     }
   };
 
@@ -958,6 +885,16 @@ export function ControlPanelApp() {
           <div className="control-panel-shell__action-bar">
             <div className="control-panel-shell__action-statuses">
               {saveStateValue}
+              {saveFeedback ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {saveFeedback}
+                </Text>
+              ) : null}
+              {inspectionSummary ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {inspectionSummary}
+                </Text>
+              ) : null}
             </div>
 
             <div className="control-panel-shell__action-buttons">
