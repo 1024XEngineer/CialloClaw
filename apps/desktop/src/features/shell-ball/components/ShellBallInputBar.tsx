@@ -45,6 +45,7 @@ export function ShellBallInputBar({
 }: ShellBallInputBarProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const compositionActiveRef = useRef(false);
+  const multilineStateRef = useRef(false);
   const trimmedValue = value.trim();
   const isHidden = mode === "hidden";
   const isInteractive = mode === "interactive";
@@ -70,13 +71,17 @@ export function ShellBallInputBar({
     const multilineThreshold = lineHeight > 0 ? 44 + lineHeight * 0.5 : 52;
     const isMultiline = nextHeight > multilineThreshold && nextHeight > verticalPadding + lineHeight;
     const inputShell = field.parentElement;
+    const isCollapsingToSingleLine = multilineStateRef.current && !isMultiline;
 
     field.style.height = `${nextHeight}px`;
 
     if (inputShell !== null) {
-      inputShell.style.setProperty("--shell-ball-input-height", `${Math.max(46, nextHeight)}px`);
+      inputShell.style.setProperty("--shell-ball-input-height", `${Math.max(44, nextHeight)}px`);
+      inputShell.dataset.collapseToSingleLine = isCollapsingToSingleLine ? "true" : "false";
       inputShell.dataset.multiline = isMultiline ? "true" : "false";
     }
+
+    multilineStateRef.current = isMultiline;
   }, [value]);
 
   useEffect(() => {
@@ -206,13 +211,14 @@ const StyledInputBar = styled.div`
   }
 
   .shell-ball-uiverse-inputbox {
-    --shell-ball-input-height: 46px;
+    --shell-ball-input-height: 44px;
     position: relative;
     width: 196px;
   }
 
   .shell-ball-uiverse-inputbox textarea {
     position: relative;
+    top: 6px;
     width: 100%;
     padding: 10px;
     background: transparent;
@@ -241,7 +247,7 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox span {
     position: absolute;
     left: 0;
-    top: 0;
+    top: 4px;
     padding: 0 10px;
     font-size: 1em;
     color: rgba(143, 143, 143, 0.74);
@@ -259,7 +265,7 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox textarea:focus ~ span,
   &[data-filled="true"] .shell-ball-uiverse-inputbox span {
     color: rgba(128, 128, 128, 0.82);
-    transform: translateX(-10px) translateY(-10px);
+    transform: translateX(-10px) translateY(-14px);
     font-size: 0.75em;
   }
 
@@ -271,12 +277,17 @@ const StyledInputBar = styled.div`
     height: 2px;
     background: rgba(128, 128, 128, 0.42);
     border-radius: 4px;
+    transform: none;
     transition: 0.5s;
     pointer-events: none;
     z-index: 9;
   }
 
   .shell-ball-uiverse-inputbox[data-multiline="true"] i {
+    transition: none;
+  }
+
+  .shell-ball-uiverse-inputbox[data-collapse-to-single-line="true"] i {
     transition: none;
   }
 
