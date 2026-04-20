@@ -740,12 +740,26 @@ fn shell_ball_apply_window_frame(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|error| format!("failed to read shell-ball scale factor: {error}"))?;
+    let physical_x = (x * scale_factor).round();
+    let physical_y = (y * scale_factor).round();
+    let physical_width = (width * scale_factor).round().max(1.0);
+    let physical_height = (height * scale_factor).round().max(1.0);
+
     window
-        .set_size(tauri::LogicalSize::new(width, height))
+        .set_size(tauri::PhysicalSize::new(
+            physical_width as u32,
+            physical_height as u32,
+        ))
         .map_err(|error| format!("failed to set shell-ball window size: {error}"))?;
 
     window
-        .set_position(tauri::LogicalPosition::new(x, y))
+        .set_position(tauri::PhysicalPosition::new(
+            physical_x as i32,
+            physical_y as i32,
+        ))
         .map_err(|error| format!("failed to set shell-ball window position: {error}"))
 }
 

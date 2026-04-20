@@ -26,7 +26,7 @@ export const SHELL_BALL_BUBBLE_GAP_PX = 6;
 export const SHELL_BALL_BUBBLE_DRAG_CLEARANCE_PX = 24;
 export const SHELL_BALL_BUBBLE_REPOSITION_DURATION_MS = 180;
 export const SHELL_BALL_INPUT_GAP_PX = 4;
-export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 10;
+export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 50;
 
 type ShellBallContentSize = {
   width: number;
@@ -880,11 +880,12 @@ export function useShellBallWindowMetrics({
         if (mascotElement !== null) {
           const mascotRect = mascotElement.getBoundingClientRect();
 
-          // The mascot center is the stable shell-ball anchor. Helper panels can
-          // expand around it, but the anchor stays pinned in screen space.
+          // The mascot top-left corner is the stable shell-ball anchor. Helper
+          // panels can expand around it, but this corner stays pinned in screen
+          // space across merged-window resizes.
           measuredAnchorOffsetRef.current = {
-            x: mascotRect.left - rootRect.left + mascotRect.width / 2,
-            y: mascotRect.top - rootRect.top + mascotRect.height / 2,
+            x: mascotRect.left - rootRect.left,
+            y: mascotRect.top - rootRect.top,
           };
         }
       }
