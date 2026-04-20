@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -973,25 +973,30 @@ fn resolve_desktop_resource_path_with_roots(
 
     let candidate_path = PathBuf::from(trimmed_path);
     if candidate_path.is_absolute() {
-        return ensure_existing_path(candidate_path, trimmed_path);
+        return canonicalize_existing_path(candidate_path, trimmed_path);
     }
 
     for root in roots {
         let joined_path = root.join(&candidate_path);
-        if joined_path.exists() {
-            return Ok(joined_path);
+        let canonical_root = match fs::canonicalize(root) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        let canonical_target = match fs::canonicalize(&joined_path) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+
+        if canonical_target.starts_with(&canonical_root) {
+            return Ok(canonical_target);
         }
     }
 
     Err(format!("resource path does not exist: {trimmed_path}"))
 }
 
-fn ensure_existing_path(path: PathBuf, original_path: &str) -> Result<PathBuf, String> {
-    if path.exists() {
-        return Ok(path);
-    }
-
-    Err(format!("resource path does not exist: {original_path}"))
+fn canonicalize_existing_path(path: PathBuf, original_path: &str) -> Result<PathBuf, String> {
+    fs::canonicalize(path).map_err(|_| format!("resource path does not exist: {original_path}"))
 }
 
 fn build_desktop_resource_resolution_roots() -> Vec<PathBuf> {
@@ -1208,6 +1213,29 @@ mod tests {
         assert_eq!(resolved, target);
         let _ = fs::remove_dir_all(missing_root);
         let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn resolve_desktop_resource_path_with_roots_rejects_relative_escape() {
+        let repo_root = create_temp_root("repo_escape_root");
+        let outside_root = create_temp_root("repo_escape_outside");
+        let escaped_target = outside_root.join("secret.txt");
+        fs::write(&escaped_target, "secret").expect("escaped target should be created");
+
+        let relative_escape = PathBuf::from("..")
+            .join(outside_root.file_name().expect("outside root should have a file name"))
+            .join("secret.txt");
+        let resolution = resolve_desktop_resource_path_with_roots(
+            relative_escape
+                .to_str()
+                .expect("relative escape should be utf-8"),
+            &[repo_root.clone()],
+        );
+
+        assert!(resolution.is_err(), "relative escape should be rejected");
+
+        let _ = fs::remove_dir_all(repo_root);
+        let _ = fs::remove_dir_all(outside_root);
     }
 
     #[test]

@@ -266,6 +266,14 @@ function loadSettingsServiceModule() {
   );
 }
 
+function loadStorageModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/platform/storage.js")) as {
+      loadStoredValue: <T>(key: string) => T | null;
+    },
+  );
+}
+
 function loadDashboardSettingsMutationModule(rpcMethods?: {
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
@@ -1206,6 +1214,44 @@ test("settings service keeps RPC data_log fields authoritative over stale deskto
     assert.equal(persisted.settings.data_log.provider_api_key_configured, true);
     assert.equal(persisted.settings.models.provider, "anthropic");
     assert.equal(persisted.settings.models.provider_api_key_configured, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("local storage helpers clear corrupted JSON snapshots instead of throwing", () => {
+  const { loadStoredValue } = loadStorageModule();
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem("dashboard.notes.canvas-layout", "{not-json");
+
+    const loaded = loadStoredValue<Record<string, unknown>>("dashboard.notes.canvas-layout");
+
+    assert.equal(loaded, null);
+    assert.equal(localStorage.getItem("dashboard.notes.canvas-layout"), null);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
