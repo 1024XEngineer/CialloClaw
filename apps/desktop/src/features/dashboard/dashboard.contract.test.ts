@@ -981,6 +981,34 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(mirrorDetailSource, /reference\.summary \|\| reference\.reason/);
 });
 
+test("shared Button forwards refs so tooltip triggers can anchor without React warnings", () => {
+  const buttonSource = readFileSync(resolve(desktopRoot, "src/components/ui/button.tsx"), "utf8");
+
+  assert.match(buttonSource, /const Button = React\.forwardRef</);
+  assert.match(buttonSource, /ref=\{ref\}/);
+  assert.match(buttonSource, /Button\.displayName = "Button"/);
+});
+
+test("rpc client and subscriptions stop repeating unavailable transport failures across the dashboard", () => {
+  const rpcClientSource = readFileSync(resolve(desktopRoot, "src/rpc/client.ts"), "utf8");
+  const fallbackSource = readFileSync(resolve(desktopRoot, "src/rpc/fallback.ts"), "utf8");
+  const subscriptionsSource = readFileSync(resolve(desktopRoot, "src/rpc/subscriptions.ts"), "utf8");
+
+  assert.match(rpcClientSource, /const DEBUG_HTTP_UNAVAILABLE_COOLDOWN_MS = 10_000;/);
+  assert.match(rpcClientSource, /const debugHttpTransportState: DebugHttpTransportState = \{/);
+  assert.match(rpcClientSource, /if \(this\.shouldShortCircuit\(\)\) \{/);
+  assert.match(rpcClientSource, /if \(state\.pending\) \{/);
+  assert.match(rpcClientSource, /state\.pending = availabilityGate;/);
+  assert.match(rpcClientSource, /function isDebugHttpTransportUnavailable\(error: unknown\)/);
+  assert.match(fallbackSource, /const loggedFallbackScopes = new Set<string>\(\);/);
+  assert.match(fallbackSource, /if \(loggedFallbackScopes\.has\(scope\)\) \{/);
+  assert.match(fallbackSource, /"failed to open named pipe"/);
+  assert.match(subscriptionsSource, /let namedPipeSubscriptionsUnavailable = false;/);
+  assert.match(subscriptionsSource, /if \(isRpcChannelUnavailable\(error\)\) \{/);
+  assert.match(subscriptionsSource, /namedPipeSubscriptionsUnavailable = true;/);
+  assert.match(subscriptionsSource, /\.catch\(handleNamedPipeSubscriptionFailure\)/);
+});
+
 test("task context links back into mirror detail state instead of plain text dead ends", () => {
   const taskContextSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskContextBlock.tsx"), "utf8");
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
@@ -1530,6 +1558,18 @@ test("TaskPage routes local and route-driven task focus through one guarded stag
   assert.match(taskPageSource, /setRequestedTaskId\(taskId\);\s*setSelectedTaskId\(taskId\);\s*setDetailOpen\(openDetail\);/s);
   assert.match(taskPageSource, /focusTaskDetail\(routeFocusTaskId, routeFocusState\?\.openDetail \?\? true\);/);
   assert.match(taskPageSource, /function handleSelectTask\(taskId: string\)\s*{\s*focusTaskDetail\(taskId\);\s*}/s);
+});
+
+test("TaskPreviewCard keeps task selection resilient when frameless pointer clicks get swallowed", () => {
+  const previewCardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskPreviewCard.tsx"), "utf8");
+
+  assert.match(previewCardSource, /function handlePointerSelect\(event: PointerEvent<HTMLButtonElement>\)/);
+  assert.match(previewCardSource, /if \(!event\.isPrimary \|\| event\.button !== 0\) \{/);
+  assert.match(previewCardSource, /function handleKeyboardSelect\(event: MouseEvent<HTMLButtonElement>\)/);
+  assert.match(previewCardSource, /Pointer-triggered selection is handled on pointer-up/);
+  assert.match(previewCardSource, /if \(event\.detail !== 0\) \{/);
+  assert.match(previewCardSource, /onClick=\{handleKeyboardSelect\}/);
+  assert.match(previewCardSource, /onPointerUp=\{handlePointerSelect\}/);
 });
 
 test("task stage keeps rotated task clusters above the stage hitbox", () => {

@@ -1,3 +1,4 @@
+import type { MouseEvent, PointerEvent } from "react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/utils/cn";
@@ -32,11 +33,31 @@ export function TaskPreviewCard({ isActive, isPeeked = false, item, onSelect, ru
   const progressCopy = ended ? item.experience.endedSummary ?? getTaskPreviewStatusLabel(item.task.status) : describeCurrentStep(item.task, item.experience);
   const focusCopy = ended ? formatTimestamp(item.task.finished_at) : item.experience.nextAction;
 
+  function handlePointerSelect(event: PointerEvent<HTMLButtonElement>) {
+    if (!event.isPrimary || event.button !== 0) {
+      return;
+    }
+
+    onSelect(item.task.task_id);
+  }
+
+  function handleKeyboardSelect(event: MouseEvent<HTMLButtonElement>) {
+    // Pointer-triggered selection is handled on pointer-up so frameless desktop
+    // drags cannot swallow the follow-up click event. Keep the semantic button
+    // click only for keyboard activation, where React reports detail as zero.
+    if (event.detail !== 0) {
+      return;
+    }
+
+    onSelect(item.task.task_id);
+  }
+
   return (
     <motion.button
       className={cn("task-preview-card", `is-${tone}`, ended && "task-preview-card--ended", isActive && "task-preview-card--active", isPeeked && "task-preview-card--peeked")}
       layout
-      onClick={() => onSelect(item.task.task_id)}
+      onClick={handleKeyboardSelect}
+      onPointerUp={handlePointerSelect}
       type="button"
       transition={{ bounce: 0.18, damping: 24, stiffness: 260, type: "spring" }}
       whileHover={{ scale: 1.01, y: -6 }}

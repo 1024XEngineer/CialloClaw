@@ -6,36 +6,51 @@ import type {
   TaskSteeredNotification,
   TaskUpdatedNotification,
 } from "@cialloclaw/protocol";
+import { isRpcChannelUnavailable } from "./fallback";
 import { NOTIFICATION_METHODS } from "./protocolConstants";
+
+let namedPipeSubscriptionsUnavailable = false;
+
+function handleNamedPipeSubscriptionFailure(error: unknown) {
+  if (isRpcChannelUnavailable(error)) {
+    namedPipeSubscriptionsUnavailable = true;
+    return;
+  }
+
+  console.warn("rpc subscription failed", error);
+}
 
 // subscribeTask 处理当前模块的相关逻辑。
 export function subscribeTask(taskId: string, onMessage: (payload: unknown) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe) {
+  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
     return () => {};
   }
 
   let disposed = false;
   let unsubscribe: (() => Promise<void>) | null = null;
 
-  void bridge.subscribe(NOTIFICATION_METHODS.TASK_UPDATED, (payload) => {
-    if (disposed) {
-      return;
-    }
+  void bridge
+    .subscribe(NOTIFICATION_METHODS.TASK_UPDATED, (payload) => {
+      if (disposed) {
+        return;
+      }
 
-    const message = payload as { params?: { task_id?: string } };
-    if (!message.params?.task_id || message.params.task_id === taskId) {
-      onMessage(payload);
-    }
-  }).then((subscription) => {
-    if (disposed) {
-      void subscription.unsubscribe();
-      return;
-    }
+      const message = payload as { params?: { task_id?: string } };
+      if (!message.params?.task_id || message.params.task_id === taskId) {
+        onMessage(payload);
+      }
+    })
+    .then((subscription) => {
+      if (disposed) {
+        void subscription.unsubscribe();
+        return;
+      }
 
-    unsubscribe = subscription.unsubscribe;
-  });
+      unsubscribe = subscription.unsubscribe;
+    })
+    .catch(handleNamedPipeSubscriptionFailure);
 
   return () => {
     disposed = true;
@@ -48,7 +63,7 @@ export function subscribeTask(taskId: string, onMessage: (payload: unknown) => v
 export function subscribeTaskUpdated(onMessage: (payload: TaskUpdatedNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe) {
+  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
     return () => {};
   }
 
@@ -71,7 +86,8 @@ export function subscribeTaskUpdated(onMessage: (payload: TaskUpdatedNotificatio
       }
 
       unsubscribe = subscription.unsubscribe;
-    });
+    })
+    .catch(handleNamedPipeSubscriptionFailure);
 
   return () => {
     disposed = true;
@@ -84,7 +100,7 @@ export function subscribeTaskUpdated(onMessage: (payload: TaskUpdatedNotificatio
 export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOverviewUpdatedNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe) {
+  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
     return () => {};
   }
 
@@ -107,7 +123,8 @@ export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOvervi
       }
 
       unsubscribe = subscription.unsubscribe;
-    });
+    })
+    .catch(handleNamedPipeSubscriptionFailure);
 
   return () => {
     disposed = true;
@@ -120,7 +137,7 @@ export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOvervi
 export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe) {
+  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
     return () => {};
   }
 
@@ -143,7 +160,8 @@ export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNot
       }
 
       unsubscribe = subscription.unsubscribe;
-    });
+    })
+    .catch(handleNamedPipeSubscriptionFailure);
 
   return () => {
     disposed = true;
@@ -156,7 +174,7 @@ export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNot
 export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe) {
+  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
     return () => {};
   }
 
@@ -179,7 +197,8 @@ export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotific
       }
 
       unsubscribe = subscription.unsubscribe;
-    });
+    })
+    .catch(handleNamedPipeSubscriptionFailure);
 
   return () => {
     disposed = true;
@@ -195,7 +214,7 @@ export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotific
 export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSteeredNotification | TaskRuntimeNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe) {
+  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
     return () => {};
   }
 
@@ -232,7 +251,8 @@ export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSt
         }
 
         unsubscribes.push(subscription.unsubscribe);
-      });
+      })
+      .catch(handleNamedPipeSubscriptionFailure);
   }
 
   return () => {

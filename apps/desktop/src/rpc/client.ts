@@ -48,6 +48,32 @@ type NamedPipeSubscription = {
   unsubscribe: () => Promise<void>;
 };
 
+type DebugHttpTransportState = {
+  endpoint: string | null;
+  failure: Error | null;
+  lastFailureAt: number;
+  pending: Promise<void> | null;
+  status: "unknown" | "available" | "unavailable";
+};
+
+const DEBUG_HTTP_UNAVAILABLE_MESSAGE_PARTS = [
+  "failed to fetch",
+  "fetch failed",
+  "network request failed",
+  "networkerror",
+  "load failed",
+  "request timed out",
+  "timed out",
+] as const;
+const DEBUG_HTTP_UNAVAILABLE_COOLDOWN_MS = 10_000;
+const debugHttpTransportState: DebugHttpTransportState = {
+  endpoint: null,
+  failure: null,
+  lastFailureAt: 0,
+  pending: null,
+  status: "unknown",
+};
+
 // JsonRpcTransport is the minimal transport contract shared by both runtime modes.
 interface JsonRpcTransport {
   send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>>;
@@ -83,7 +109,39 @@ class NamedPipeJsonRpcTransport implements JsonRpcTransport {
 class DebugHttpJsonRpcTransport implements JsonRpcTransport {
   constructor(private readonly endpoint: string) {}
 
-  async send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>> {
+  private readState() {
+    if (debugHttpTransportState.endpoint !== this.endpoint) {
+      debugHttpTransportState.endpoint = this.endpoint;
+      debugHttpTransportState.failure = null;
+      debugHttpTransportState.lastFailureAt = 0;
+      debugHttpTransportState.pending = null;
+      debugHttpTransportState.status = "unknown";
+    }
+
+    return debugHttpTransportState;
+  }
+
+  private markUnavailable(error: Error) {
+    const state = this.readState();
+    state.failure = error;
+    state.lastFailureAt = Date.now();
+    state.status = "unavailable";
+  }
+
+  private clearUnavailable() {
+    const state = this.readState();
+    state.failure = null;
+    state.lastFailureAt = 0;
+    state.status = "available";
+  }
+
+  private shouldShortCircuit() {
+    const state = this.readState();
+
+    return state.status === "unavailable" && state.failure && Date.now() - state.lastFailureAt < DEBUG_HTTP_UNAVAILABLE_COOLDOWN_MS;
+  }
+
+  private async performRequest<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>> {
     const response = await fetch(this.endpoint, {
       method: "POST",
       headers: {
@@ -97,6 +155,61 @@ class DebugHttpJsonRpcTransport implements JsonRpcTransport {
     }
 
     return (await response.json()) as JsonRpcEnvelope<T>;
+  }
+
+  async send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>> {
+    const state = this.readState();
+
+    if (this.shouldShortCircuit()) {
+      throw state.failure!;
+    }
+
+    if (state.pending) {
+      await state.pending;
+
+      if (this.shouldShortCircuit()) {
+        throw state.failure!;
+      }
+    }
+
+    if (state.status !== "available") {
+      const pendingProbe = this.performRequest<T>(payload)
+        .then((response) => {
+          this.clearUnavailable();
+          return response;
+        })
+        .catch((error: unknown) => {
+          if (isDebugHttpTransportUnavailable(error)) {
+            this.markUnavailable(error instanceof Error ? error : new Error(String(error)));
+          } else {
+            state.status = "unknown";
+          }
+
+          throw error;
+        })
+        .finally(() => {
+          if (state.pending === availabilityGate) {
+            state.pending = null;
+          }
+        });
+      const availabilityGate = pendingProbe.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      state.pending = availabilityGate;
+      return pendingProbe;
+    }
+
+    try {
+      return await this.performRequest<T>(payload);
+    } catch (error) {
+      if (isDebugHttpTransportUnavailable(error)) {
+        this.markUnavailable(error instanceof Error ? error : new Error(String(error)));
+      }
+
+      throw error;
+    }
   }
 }
 
@@ -209,6 +322,15 @@ function createRequestId() {
   }
 
   return `rpc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function isDebugHttpTransportUnavailable(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const normalizedMessage = error.message.toLowerCase();
+  return DEBUG_HTTP_UNAVAILABLE_MESSAGE_PARTS.some((fragment) => normalizedMessage.includes(fragment));
 }
 
 function logJsonRpcResponse(method: string, envelope: JsonRpcEnvelope<unknown>) {
