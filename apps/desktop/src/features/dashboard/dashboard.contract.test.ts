@@ -1917,6 +1917,15 @@ test("TaskDetailPanel renders runtime summary fields from the formal detail payl
   assert.match(panelSource, /runtimeSummary\.active_steering_count/);
 });
 
+test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /const evidenceArtifactRefs = new Set\(evidenceItems\.map\(\(citation\) => citation\.source_ref\)\)/);
+  assert.match(panelSource, /const evidenceArtifacts = artifactItems\.filter\(\(artifact\) => evidenceArtifactRefs\.has\(artifact\.artifact_id\) \|\| evidenceArtifactRefs\.has\(artifact\.path\)\)/);
+  assert.match(panelSource, /const outputArtifacts = artifactItems\.filter\(\(artifact\) => !evidenceArtifactRefs\.has\(artifact\.artifact_id\) && !evidenceArtifactRefs\.has\(artifact\.path\)\)/);
+  assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+});
+
 test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserves steering draft until success", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");

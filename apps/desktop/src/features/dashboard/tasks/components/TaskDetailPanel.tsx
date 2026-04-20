@@ -83,6 +83,11 @@ export function TaskDetailPanel({
   const canSteerTask = !ended && task.status !== "cancelled";
   const runtimeSummary = detail.runtime_summary;
   const evidenceItems = detail.citations;
+  // Evidence artifacts stay task-centric by following the formal citation links
+  // instead of treating every task artifact as screen evidence.
+  const evidenceArtifactRefs = new Set(evidenceItems.map((citation) => citation.source_ref));
+  const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
+  const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
 
   useEffect(() => {
     if (steeringPending) {
@@ -253,8 +258,8 @@ export function TaskDetailPanel({
                 </article>
               ))
             : null}
-          {artifactItems.length > 0
-            ? artifactItems.map((artifact) => (
+          {evidenceArtifacts.length > 0
+            ? evidenceArtifacts.map((artifact) => (
                 <article key={`evidence_${artifact.artifact_id}`} className="task-detail-output-item">
                   <FolderOutput className="h-4 w-4" />
                   <div>
@@ -273,7 +278,7 @@ export function TaskDetailPanel({
                 </article>
               ))
             : null}
-          {evidenceItems.length === 0 && artifactItems.length === 0 ? <p className="task-detail-card__empty">当前没有可展示的正式证据链。</p> : null}
+          {evidenceItems.length === 0 && evidenceArtifacts.length === 0 ? <p className="task-detail-card__empty">当前没有可展示的正式证据链。</p> : null}
         </div>
       </section>
     );
@@ -473,9 +478,9 @@ export function TaskDetailPanel({
                 </div>
                 <div className="task-detail-output-list">
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
-                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
-                  {artifactItems.length > 0 ? (
-                    artifactItems.map((artifact) => (
+                  {artifactLoading && outputArtifacts.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {outputArtifacts.length > 0 ? (
+                    outputArtifacts.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
                         <FolderOutput className="h-4 w-4" />
                         <div>
@@ -586,9 +591,9 @@ export function TaskDetailPanel({
                 </div>
                 <div className="task-detail-output-list">
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
-                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
-                  {artifactItems.length > 0 ? (
-                    artifactItems.map((artifact) => (
+                  {artifactLoading && outputArtifacts.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {outputArtifacts.length > 0 ? (
+                    outputArtifacts.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
                         <FolderOutput className="h-4 w-4" />
                         <div>
