@@ -132,6 +132,24 @@ export function createShellBallWindowFrame(
 export function measureShellBallContentSize(element: ShellBallMeasurableElement, includeScrollBounds = true): ShellBallContentSize {
   const rect = element.getBoundingClientRect();
 
+  if (element instanceof HTMLElement && element.dataset.shellBallInputWindow === "true") {
+    const inputBoxes = Array.from(element.querySelectorAll<HTMLElement>(".shell-ball-uiverse-inputbox"));
+    const actions = Array.from(element.querySelectorAll<HTMLElement>(".shell-ball-uiverse-actions"));
+
+    if (inputBoxes.length > 0) {
+      const contentWidth = Math.max(
+        ...inputBoxes.map((inputBox) => inputBox.getBoundingClientRect().width),
+        ...actions.map((actionRow) => actionRow.getBoundingClientRect().width),
+        0,
+      );
+
+      return {
+        width: contentWidth,
+        height: includeScrollBounds ? Math.max(rect.height, element.scrollHeight) : rect.height,
+      };
+    }
+  }
+
   return {
     width: includeScrollBounds ? Math.max(rect.width, element.scrollWidth) : rect.width,
     height: includeScrollBounds ? Math.max(rect.height, element.scrollHeight) : rect.height,
@@ -401,6 +419,7 @@ export function useShellBallWindowMetrics({
   const helperWindowVisibleRef = useRef(false);
   const helperWindowShouldBeVisibleRef = useRef(visible);
   const helperWindowFrameRef = useRef<ShellBallResolvedHelperFrame | null>(null);
+  const appliedWindowSizeRef = useRef<ShellBallWindowSize | null>(null);
   const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
   const helperWindowMoveAnimationTokenRef = useRef(0);
@@ -832,6 +851,18 @@ export function useShellBallWindowMetrics({
       return;
     }
 
+    if (
+      appliedWindowSizeRef.current?.width === windowFrame.width
+      && appliedWindowSizeRef.current?.height === windowFrame.height
+    ) {
+      return;
+    }
+
+    appliedWindowSizeRef.current = {
+      width: windowFrame.width,
+      height: windowFrame.height,
+    };
+
     void setShellBallWindowSize(role, createShellBallLogicalSize(windowFrame.width, windowFrame.height));
   }, [role, windowFrame]);
 
@@ -907,6 +938,7 @@ export function useShellBallWindowMetrics({
       cancelBallGeometryEmitAnimation();
       cancelBallGeometryPublishAnimation();
       cancelBallWindowDragAnimation();
+      appliedWindowSizeRef.current = null;
       ballDragSessionRef.current = null;
       pendingBallDragFrameRef.current = null;
       ballDragPositionQueueRef.current = null;
