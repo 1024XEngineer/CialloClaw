@@ -302,6 +302,8 @@ export function TaskDetailPanel({
       "当前没有失败记录";
     const latestFailureSummary = runtimeSummary.latest_failure_summary ?? "当前没有失败摘要";
     const approvalAnchor = detail.approval_request;
+    const authorizationRecord = detail.authorization_record;
+    const auditRecord = detail.audit_record;
     const restorePoint = detail.security_summary.latest_restore_point;
 
     return (
@@ -312,13 +314,22 @@ export function TaskDetailPanel({
             <h3 className="task-detail-card__title">屏幕授权、恢复与失败收口</h3>
           </div>
         </div>
-        <p className="task-detail-card__hint">该区域只消费正式 `approval_request`、`recovery_point` 与 `runtime_summary` 字段，不读取裸 worker 输出。</p>
+        <p className="task-detail-card__hint">该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段，不读取裸 worker 输出。</p>
         <div className="task-detail-current-grid">
           <article className="task-detail-current-card">
             <ShieldAlert className="h-4 w-4" />
             <div>
               <p className="task-detail-current-card__label">Approval anchor</p>
               <p className="task-detail-current-card__text">{approvalAnchor?.operation_name ?? "当前没有活跃授权"}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <SendHorizonal className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Authorization record</p>
+              <p className="task-detail-current-card__text">
+                {authorizationRecord ? `${authorizationRecord.decision} · ${authorizationRecord.operator}` : "当前没有授权记录"}
+              </p>
             </div>
           </article>
           <article className="task-detail-current-card">
@@ -333,6 +344,13 @@ export function TaskDetailPanel({
             <div>
               <p className="task-detail-current-card__label">Latest failure category</p>
               <p className="task-detail-current-card__text">{latestFailureLabel}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <FolderOutput className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Audit record</p>
+              <p className="task-detail-current-card__text">{auditRecord ? `${auditRecord.action} · ${auditRecord.result}` : "当前没有审计记录"}</p>
             </div>
           </article>
           <article className="task-detail-current-card">

@@ -1168,6 +1168,14 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	if detailResult["approval_request"] != nil {
 		t.Fatalf("expected completed queued screen task to clear approval_request, got %+v", detailResult["approval_request"])
 	}
+	authorizationRecord, ok := detailResult["authorization_record"].(map[string]any)
+	if !ok || authorizationRecord["task_id"] != secondTaskID || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected queued screen task detail to retain authorization record, got %+v", detailResult["authorization_record"])
+	}
+	auditRecord, ok := detailResult["audit_record"].(map[string]any)
+	if !ok || auditRecord["task_id"] != secondTaskID {
+		t.Fatalf("expected queued screen task detail to retain latest audit record, got %+v", detailResult["audit_record"])
+	}
 	citations := detailResult["citations"].([]map[string]any)
 	if len(citations) != 1 {
 		t.Fatalf("expected queued screen task detail to retain one formal citation, got %+v", citations)
@@ -5365,6 +5373,14 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task detail get for screen task failed: %v", err)
 	}
+	authorizationRecord, ok := detailResult["authorization_record"].(map[string]any)
+	if !ok || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected task detail to expose latest authorization_record, got %+v", detailResult["authorization_record"])
+	}
+	auditRecord, ok := detailResult["audit_record"].(map[string]any)
+	if !ok || auditRecord["task_id"] != task["task_id"] {
+		t.Fatalf("expected task detail to expose latest audit_record, got %+v", detailResult["audit_record"])
+	}
 	citations := detailResult["citations"].([]map[string]any)
 	if len(citations) != 1 {
 		t.Fatalf("expected one formal citation for screen task, got %+v", citations)
@@ -7872,9 +7888,134 @@ func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *test
 	if approvalRequest["approval_id"] != "appr_structured_waiting_auth" {
 		t.Fatalf("unexpected structured fallback approval request: %+v", approvalRequest)
 	}
+	if detailResult["authorization_record"] != nil {
+		t.Fatalf("expected structured fallback waiting_auth task to omit authorization_record, got %+v", detailResult["authorization_record"])
+	}
+	if detailResult["audit_record"] != nil {
+		t.Fatalf("expected structured fallback waiting_auth task to omit audit_record, got %+v", detailResult["audit_record"])
+	}
 	securitySummary := detailResult["security_summary"].(map[string]any)
 	if securitySummary["pending_authorizations"] != 1 || securitySummary["security_status"] != "pending_confirmation" {
 		t.Fatalf("expected structured fallback security summary to reflect pending approval, got %+v", securitySummary)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackRehydratesAuthorizationAndAudit(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail governance")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_governance"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_governance",
+		RunID:               "run_structured_screen_governance",
+		Title:               "structured screen governance task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "bubble",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 16, 9, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_screen_governance",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "screen analysis complete",
+		CreatedAt:     time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_structured_screen_governance",
+		TaskID:                taskID,
+		ApprovalID:            "appr_structured_screen_governance",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-16T09:04:00Z",
+	}); err != nil {
+		t.Fatalf("write structured authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_structured_screen_governance",
+		TaskID:    taskID,
+		Type:      "execution",
+		Action:    "execute_task",
+		Summary:   "screen analysis completed with stored evidence.",
+		Target:    "workspace/stored-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T09:05:00Z",
+	}); err != nil {
+		t.Fatalf("write structured audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_structured_screen_governance" {
+		t.Fatalf("expected structured fallback authorization record, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_structured_screen_governance" {
+		t.Fatalf("expected structured fallback audit record, got %+v", auditRecord)
+	}
+}
+
+func TestNormalizeTaskDetailAuthorizationRecordCoercesLegacyDecisions(t *testing.T) {
+	allowRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
+		"authorization_record_id": "auth_allow",
+		"task_id":                 "task_auth_detail",
+		"approval_id":             "appr_allow",
+		"decision":                "allow_always",
+		"remember_rule":           true,
+		"operator":                "user",
+		"created_at":              "2026-04-20T16:00:00Z",
+	})
+	if allowRecord == nil || allowRecord["decision"] != "allow_once" {
+		t.Fatalf("expected legacy allow decision to coerce to protocol enum, got %+v", allowRecord)
+	}
+
+	denyRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
+		"authorization_record_id": "auth_deny",
+		"task_id":                 "task_auth_detail",
+		"approval_id":             "appr_deny",
+		"decision":                "deny_always",
+		"remember_rule":           false,
+		"operator":                "user",
+		"created_at":              "2026-04-20T16:01:00Z",
+	})
+	if denyRecord == nil || denyRecord["decision"] != "deny_once" {
+		t.Fatalf("expected legacy deny decision to coerce to protocol enum, got %+v", denyRecord)
+	}
+
+	invalidRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
+		"authorization_record_id": "auth_invalid",
+		"task_id":                 "task_auth_detail",
+		"approval_id":             "appr_invalid",
+		"decision":                "manual_override",
+		"remember_rule":           false,
+		"operator":                "user",
+		"created_at":              "2026-04-20T16:02:00Z",
+	})
+	if invalidRecord != nil {
+		t.Fatalf("expected unsupported decision to be dropped from task detail, got %+v", invalidRecord)
 	}
 }
 

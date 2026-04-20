@@ -1014,6 +1014,22 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest
 	}
+	authorizationRecord := normalizeTaskDetailAuthorizationRecord(task.TaskID, task.Authorization)
+	if authorizationRecord == nil {
+		authorizationRecord = s.latestAuthorizationRecordFromStorage(task.TaskID)
+	}
+	authorizationRecordValue := any(nil)
+	if authorizationRecord != nil {
+		authorizationRecordValue = authorizationRecord
+	}
+	auditRecord := latestFormalTaskAuditRecord(task.TaskID, task.AuditRecords)
+	if auditRecord == nil {
+		auditRecord = s.latestAuditRecordFromStorage(task.TaskID)
+	}
+	auditRecordValue := any(nil)
+	if auditRecord != nil {
+		auditRecordValue = auditRecord
+	}
 	securitySummary["pending_authorizations"] = 0
 	if approvalRequest != nil {
 		securitySummary["pending_authorizations"] = 1
@@ -1027,14 +1043,16 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
 
 	return map[string]any{
-		"task":              taskMap(task),
-		"timeline":          protocolTaskStepList(timelineMap(task.Timeline)),
-		"artifacts":         protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
-		"citations":         protocolCitationList(task.Citations),
-		"mirror_references": protocolMirrorReferenceList(task.MirrorReferences),
-		"approval_request":  approvalRequestValue,
-		"security_summary":  securitySummary,
-		"runtime_summary":   runtimeSummary,
+		"task":                 taskMap(task),
+		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
+		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
+		"citations":            protocolCitationList(task.Citations),
+		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
+		"approval_request":     approvalRequestValue,
+		"authorization_record": authorizationRecordValue,
+		"audit_record":         auditRecordValue,
+		"security_summary":     securitySummary,
+		"runtime_summary":      runtimeSummary,
 	}, nil
 }
 
@@ -3303,6 +3321,17 @@ func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel st
 	return nil
 }
 
+func (s *Service) latestAuthorizationRecordFromStorage(taskID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.AuthorizationRecordStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	items, _, err := s.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 1, 0)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	return normalizeTaskDetailAuthorizationRecord(taskID, authorizationRecordRecordToMap(items[0]))
+}
+
 func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string]any {
 	result := map[string]any{
 		"approval_id":    record.ApprovalID,
@@ -3322,6 +3351,18 @@ func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string
 		}
 	}
 	return result
+}
+
+func authorizationRecordRecordToMap(record storage.AuthorizationRecordRecord) map[string]any {
+	return map[string]any{
+		"authorization_record_id": record.AuthorizationRecordID,
+		"task_id":                 record.TaskID,
+		"approval_id":             record.ApprovalID,
+		"decision":                record.Decision,
+		"remember_rule":           record.RememberRule,
+		"operator":                record.Operator,
+		"created_at":              record.CreatedAt,
+	}
 }
 
 func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.TaskStepRecord {
@@ -3914,7 +3955,7 @@ func (s *Service) latestAuditRecordFromStorage(taskID string) map[string]any {
 	if err != nil || len(items) == 0 {
 		return nil
 	}
-	return items[0].Map()
+	return normalizeTaskDetailAuditRecord(taskID, items[0].Map())
 }
 
 func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool) map[string]any {
@@ -4288,6 +4329,81 @@ func taskTimelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.Ta
 		}
 	}
 	return result
+}
+
+func normalizeTaskDetailAuthorizationRecord(taskID string, authorizationRecord map[string]any) map[string]any {
+	if len(authorizationRecord) == 0 {
+		return nil
+	}
+
+	recordID := strings.TrimSpace(stringValue(authorizationRecord, "authorization_record_id", ""))
+	recordTaskID := strings.TrimSpace(stringValue(authorizationRecord, "task_id", ""))
+	approvalID := strings.TrimSpace(stringValue(authorizationRecord, "approval_id", ""))
+	decision := normalizeTaskDetailAuthorizationDecision(stringValue(authorizationRecord, "decision", ""))
+	operator := strings.TrimSpace(stringValue(authorizationRecord, "operator", ""))
+	createdAt := strings.TrimSpace(stringValue(authorizationRecord, "created_at", ""))
+	if recordID == "" || recordTaskID != taskID || approvalID == "" || decision == "" || operator == "" || createdAt == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"authorization_record_id": recordID,
+		"task_id":                 recordTaskID,
+		"approval_id":             approvalID,
+		"decision":                decision,
+		"remember_rule":           boolValue(authorizationRecord, "remember_rule", false),
+		"operator":                operator,
+		"created_at":              createdAt,
+	}
+}
+
+func normalizeTaskDetailAuthorizationDecision(decision string) string {
+	switch strings.TrimSpace(decision) {
+	case "allow_once", "allow_always":
+		return "allow_once"
+	case "deny_once", "deny_always":
+		return "deny_once"
+	default:
+		return ""
+	}
+}
+
+func latestFormalTaskAuditRecord(taskID string, auditRecords []map[string]any) map[string]any {
+	for index := len(auditRecords) - 1; index >= 0; index-- {
+		if normalized := normalizeTaskDetailAuditRecord(taskID, auditRecords[index]); normalized != nil {
+			return normalized
+		}
+	}
+	return nil
+}
+
+func normalizeTaskDetailAuditRecord(taskID string, auditRecord map[string]any) map[string]any {
+	if len(auditRecord) == 0 {
+		return nil
+	}
+
+	recordID := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "audit_id", ""), stringValue(auditRecord, "audit_record_id", "")))
+	recordTaskID := strings.TrimSpace(stringValue(auditRecord, "task_id", ""))
+	recordType := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "type", ""), stringValue(auditRecord, "category", "")))
+	action := strings.TrimSpace(stringValue(auditRecord, "action", ""))
+	summary := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "summary", ""), stringValue(auditRecord, "reason", "")))
+	target := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "target", ""), impactScopeTarget(mapValue(auditRecord, "impact_scope"), "")))
+	result := strings.TrimSpace(stringValue(auditRecord, "result", ""))
+	createdAt := strings.TrimSpace(stringValue(auditRecord, "created_at", ""))
+	if recordID == "" || recordTaskID != taskID || recordType == "" || action == "" || summary == "" || target == "" || result == "" || createdAt == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"audit_id":   recordID,
+		"task_id":    recordTaskID,
+		"type":       recordType,
+		"action":     action,
+		"summary":    summary,
+		"target":     target,
+		"result":     result,
+		"created_at": createdAt,
+	}
 }
 
 func taskNotificationsFromStorage(values []storage.NotificationSnapshot) []runengine.NotificationRecord {

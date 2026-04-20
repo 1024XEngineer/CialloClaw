@@ -535,7 +535,9 @@ function createDetail(
 ) {
   return {
     approval_request: approvalRequest,
+    audit_record: null,
     artifacts,
+    authorization_record: null,
     citations: [],
     mirror_references: mirrorReferences,
     runtime_summary: {

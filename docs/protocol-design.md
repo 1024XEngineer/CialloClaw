@@ -1511,6 +1511,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 补充约束：
 
 - `approval_request` 是任务详情里的单个安全锚点，只在当前任务处于 `waiting_auth` 且仍持有活跃正式授权对象时返回；否则返回 `null`。
+- `authorization_record` 返回当前任务最近一条正式授权记录；若任务还没有进入授权决策阶段则返回 `null`。
+- `audit_record` 返回当前任务最近一条正式审计记录；若当前任务还没有正式审计记录则返回 `null`。
 - 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
 - `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
@@ -1550,6 +1552,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.citations`         | 正式引用列表   |
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.approval_request`  | 当前任务的正式安全锚点 |
+| `data.authorization_record` | 当前任务最近一条正式授权记录 |
+| `data.audit_record`      | 当前任务最近一条正式审计记录 |
 | `data.security_summary`  | 安全摘要       |
 | `data.runtime_summary`   | 运行态摘要，包含最新 runtime event、停止原因、最近失败错误码 / 分类 / 摘要与 observation signals |
 
@@ -1620,6 +1624,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         }
       ],
       "approval_request": null,
+      "authorization_record": {
+        "authorization_record_id": "auth_001",
+        "task_id": "task_201",
+        "approval_id": "appr_001",
+        "decision": "allow_once",
+        "remember_rule": false,
+        "operator": "user",
+        "created_at": "2026-04-07T10:39:40+08:00"
+      },
+      "audit_record": {
+        "audit_id": "audit_001",
+        "task_id": "task_201",
+        "type": "execution",
+        "action": "execute_task",
+        "summary": "已根据正式授权完成摘要生成。",
+        "target": "workspace/Q3复盘.md",
+        "result": "success",
+        "created_at": "2026-04-07T10:40:10+08:00"
+      },
       "security_summary": {
         "security_status": "normal",
         "risk_level": "green",

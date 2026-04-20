@@ -434,7 +434,9 @@ function createRecoveryPoint(overrides: Partial<RecoveryPoint> = {}): RecoveryPo
 function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentTaskDetailGetResult {
   return {
     approval_request: createApprovalRequest(),
+    audit_record: null,
     artifacts: [],
+    authorization_record: null,
     citations: [],
     mirror_references: [],
     runtime_summary: {
@@ -1935,9 +1937,11 @@ test("TaskDetailPanel renders a formal screen governance section only for screen
   assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary\) \{/);
   assert.match(panelSource, /Screen Governance/);
   assert.match(panelSource, /屏幕授权、恢复与失败收口/);
-  assert.match(panelSource, /该区域只消费正式 `approval_request`、`recovery_point` 与 `runtime_summary` 字段/);
+  assert.match(panelSource, /该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段/);
   assert.match(panelSource, /runtimeSummary\.latest_failure_category/);
   assert.match(panelSource, /detail\.approval_request/);
+  assert.match(panelSource, /detail\.authorization_record/);
+  assert.match(panelSource, /detail\.audit_record/);
   assert.match(panelSource, /detail\.security_summary\.latest_restore_point/);
   assert.match(panelSource, /formalEvidenceCount/);
   assert.doesNotMatch(panelSource, /evidenceItems\.length \+ evidenceArtifacts\.length/);

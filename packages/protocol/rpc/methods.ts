@@ -353,6 +353,8 @@ export interface AgentTaskDetailGetResult {
   citations: Citation[];
   mirror_references: MirrorReference[];
   approval_request: ApprovalRequest | null;
+  authorization_record: AuthorizationRecord | null;
+  audit_record: AuditRecord | null;
   security_summary: SecuritySummary;
   runtime_summary: TaskRuntimeSummary;
 }
