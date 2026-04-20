@@ -666,16 +666,13 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
+                open_or_focus_dashboard_window(tray.app_handle());
+
                 if let Err(error) = request_shell_ball_dashboard_open_transition(tray.app_handle())
                 {
                     eprintln!(
                         "failed to trigger shell-ball dashboard transition from tray: {error}"
                     );
-                }
-
-                if let Err(error) = focus_webview_window(tray.app_handle(), DASHBOARD_WINDOW_LABEL)
-                {
-                    eprintln!("failed to open dashboard from tray: {error}");
                 }
             }
         });
@@ -730,6 +727,44 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
         .into_iter()
         .map(|path| path.display().to_string())
         .collect())
+}
+
+fn open_or_focus_dashboard_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW_LABEL) {
+        if let Err(error) = window.unminimize() {
+            eprintln!("failed to unminimize dashboard from tray: {error}");
+        }
+        if let Err(error) = window.set_fullscreen(true) {
+            eprintln!("failed to set dashboard fullscreen from tray: {error}");
+        }
+        if let Err(error) = window.show() {
+            eprintln!("failed to show dashboard from tray: {error}");
+        }
+        if let Err(error) = window.set_focus() {
+            eprintln!("failed to focus dashboard from tray: {error}");
+        }
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let create_result = WebviewWindowBuilder::new(
+            &handle,
+            DASHBOARD_WINDOW_LABEL,
+            WebviewUrl::App("dashboard.html".into()),
+        )
+        .title("CialloClaw Dashboard")
+        .inner_size(1280.0, 860.0)
+        .decorations(false)
+        .visible(true)
+        .focused(true)
+        .fullscreen(true)
+        .build();
+
+        if let Err(error) = create_result {
+            eprintln!("failed to create dashboard from tray: {error}");
+        }
+    });
 }
 
 #[tauri::command]
