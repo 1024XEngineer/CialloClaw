@@ -12,12 +12,6 @@ import type { DashboardEntranceOrbConfig } from "../dashboardHome.types";
 type DashboardEntranceOrbProps = {
   config: DashboardEntranceOrbConfig;
   dimmed: boolean;
-  hoverCard: {
-    accentColor: string;
-    eyebrow: string;
-    headline: string;
-    supporting: string;
-  };
   isHovered: boolean;
   offset: { x: number; y: number };
   onClick: () => void;
@@ -38,7 +32,7 @@ const entranceIcons = {
  * @param props Orb configuration, pointer state, and navigation callbacks.
  * @returns The animated entrance orb button.
  */
-export function DashboardEntranceOrb({ config, dimmed, hoverCard, isHovered, offset, onClick, onHoverChange }: DashboardEntranceOrbProps) {
+export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClick, onHoverChange }: DashboardEntranceOrbProps) {
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSnapping, setIsSnapping] = useState(false);
@@ -76,7 +70,6 @@ export function DashboardEntranceOrb({ config, dimmed, hoverCard, isHovered, off
   const x = dragPos ? dragPos.x : orbitX;
   const y = dragPos ? dragPos.y : orbitY;
   const showHoverMeta = isHovered && !isDragging;
-  const hoverSide = x >= 0 ? "left" : "right";
 
   const handleMouseDown = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -192,17 +185,6 @@ export function DashboardEntranceOrb({ config, dimmed, hoverCard, isHovered, off
         </span>
       </span>
       <span className="dashboard-orbit-entrance__label">{config.label}</span>
-      {showHoverMeta ? (
-        <span
-          className="dashboard-orbit-entrance__hover-card"
-          data-side={hoverSide}
-          style={{ "--dashboard-orbit-hover-accent": hoverCard.accentColor } as CSSProperties}
-        >
-          <span className="dashboard-orbit-entrance__hover-eyebrow">{hoverCard.eyebrow}</span>
-          <span className="dashboard-orbit-entrance__hover-title">{hoverCard.headline}</span>
-          <span className="dashboard-orbit-entrance__hover-copy">{hoverCard.supporting}</span>
-        </span>
-      ) : null}
     </motion.button>
   );
 }

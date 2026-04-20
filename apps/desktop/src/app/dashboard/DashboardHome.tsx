@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Keyboard, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -41,19 +41,6 @@ function getCenterState(activeStateKey: DashboardHomeEventStateKey | null) {
   return "hover_input" as const;
 }
 
-function getModuleHoverCard(data: DashboardHomeData, module: DashboardHomeModuleKey) {
-  const activeGroup = data.stateGroups.find((group) => group.key === module);
-  const activeStateKey = activeGroup?.states[0] ?? null;
-  const activeState = activeStateKey ? data.stateMap[activeStateKey] : null;
-
-  return {
-    accentColor: activeState?.accentColor ?? dashboardModuleColors[module].color,
-    eyebrow: activeState?.label ?? "Top signal",
-    headline: activeState?.headline ?? data.focusLine.headline,
-    supporting: activeState?.subline ?? activeState?.context[0]?.text ?? data.focusLine.reason,
-  };
-}
-
 type DashboardHomeProps = {
   data?: DashboardHomeData;
   onVoiceOpen: () => void;
@@ -88,16 +75,6 @@ export function DashboardHome({
   const currentFocusLine = activeState?.headline ?? summons[0]?.message ?? data.focusLine.headline;
   const currentReasonLine = activeState?.subline ?? summons[0]?.reason ?? data.focusLine.reason;
   const isOverlayOpen = Boolean(activeState || voiceOpen);
-  const moduleHoverCards = useMemo(
-    () =>
-      ({
-        tasks: getModuleHoverCard(data, "tasks"),
-        notes: getModuleHoverCard(data, "notes"),
-        memory: getModuleHoverCard(data, "memory"),
-        safety: getModuleHoverCard(data, "safety"),
-      }) satisfies Record<DashboardHomeModuleKey, ReturnType<typeof getModuleHoverCard>>,
-    [data],
-  );
 
   const scheduleSummon = useCallback(() => {
     const template = data.summonTemplates[summonIndexRef.current % data.summonTemplates.length];
@@ -202,7 +179,6 @@ export function DashboardHome({
             key={config.key}
             config={config}
             dimmed={Boolean(activeState && activeState.module !== config.module) || voiceOpen}
-            hoverCard={moduleHoverCards[config.module]}
             isHovered={hoveredEntranceKey === config.key}
             offset={orbDragOffset}
             onClick={() => handleModuleNavigate(config.module)}
