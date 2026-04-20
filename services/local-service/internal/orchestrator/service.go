@@ -3348,6 +3348,10 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 			if len(runtime.Timeline) == 0 {
 				runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
 			}
+			// Keep the compatibility snapshot as the base read model, but always
+			// let first-class task detail fields override it when structured
+			// storage already has newer formal delivery or citation records.
+			s.hydrateStructuredTaskGovernance(&runtime)
 			return runtime, true
 		}
 	}
@@ -3400,11 +3404,11 @@ func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	if s == nil || s.storage == nil || task == nil {
 		return
 	}
-	if len(task.DeliveryResult) == 0 {
-		task.DeliveryResult = s.latestDeliveryResultFromStorage(task.TaskID)
+	if deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID); len(deliveryResult) > 0 {
+		task.DeliveryResult = deliveryResult
 	}
-	if len(task.Citations) == 0 {
-		task.Citations = s.loadTaskCitationsFromStorage(task.TaskID)
+	if citations := s.loadTaskCitationsFromStorage(task.TaskID); len(citations) > 0 {
+		task.Citations = citations
 	}
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {
