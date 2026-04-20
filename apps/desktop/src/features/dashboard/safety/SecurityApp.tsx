@@ -102,7 +102,7 @@ const DRAG_THRESHOLD = 8;
 const CARD_CLEARANCE = 14;
 const CARD_STEP = 18;
 const BOARD_INSET_X = 22;
-const BOARD_INSET_TOP = 220;
+const BOARD_INSET_TOP = 112;
 const BOARD_INSET_BOTTOM = 24;
 const DEFAULT_CARD_SIZE: CardSize = { width: 248, height: 176 };
 const FALLBACK_POSITION: CardPosition = { x: BOARD_INSET_X, y: BOARD_INSET_TOP };
@@ -1267,57 +1267,24 @@ export function SecurityApp() {
   if (!moduleData) {
     return (
       <main className="app-shell security-page">
-        <div className="security-page__canvas" aria-label="Security 卡片画布">
+        <div className="security-page__canvas" aria-label="Security board">
           {renderDashboardTopbar()}
-          <div className="security-page__hero">
-            <p className="security-page__eyebrow">security desk</p>
-            <h1 className="security-page__title">
-              安全卫士
-            </h1>
-            <p className="security-page__hero-copy">
-              Pending approvals stay in the foreground while restore, governance, and budget cards remain available as
-              supporting controls.
-            </p>
-            <div className="security-page__detail-callout">{loadError ? `安全页同步失败：${loadError}` : "正在同步安全数据..."}</div>
+          <div className="security-page__load-state">
+            <div className="security-page__detail-callout">
+              {loadError ? `安全页同步失败：${loadError}` : "正在同步安全数据..."}
+            </div>
           </div>
         </div>
-        <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
+        <DashboardMockToggle
+          enabled={dataMode === "mock"}
+          onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))}
+        />
       </main>
     );
   }
 
   const sourceBadgeLabel = moduleData.source === "rpc" ? "RPC" : "MOCK";
   const sourceBadgeColor = moduleData.source === "rpc" ? "green" : "amber";
-  const sourceSurfaceTone = loadError ? "red" : moduleData.source === "rpc" ? (moduleData.rpcContext.warnings.length > 0 ? "amber" : "green") : "amber";
-  const leadApproval = moduleData.pending[0] ?? null;
-  const securityHeroMetrics = [
-    {
-      copy: leadApproval ? leadApproval.operation_name : "No approval is waiting at the desk right now.",
-      label: "Pending queue",
-      tone: moduleData.summary.pending_authorizations > 0 ? ("amber" as const) : ("gray" as const),
-      value: `${moduleData.summary.pending_authorizations} pending`,
-    },
-    {
-      copy: moduleData.summary.latest_restore_point ? moduleData.summary.latest_restore_point.summary : "Restore coverage will surface here before risky changes continue.",
-      label: "Restore",
-      tone: moduleData.summary.latest_restore_point ? ("orange" as const) : ("gray" as const),
-      value: moduleData.summary.latest_restore_point ? "restore ready" : "standby",
-    },
-    {
-      copy:
-        moduleData.summary.security_status === "normal"
-          ? "Risk color stays quiet until a real decision point needs contrast."
-          : "The page only raises contrast around the live risk and authorization edges.",
-      label: "Governance",
-      tone: getStatusColor(moduleData.summary.security_status),
-      value: moduleData.summary.security_status,
-    },
-  ] as const;
-  const sourceSummaryCopy = loadError
-    ? loadError
-    : moduleData.source === "rpc"
-      ? "Live JSON-RPC is supplying the summary, pending list, restore points, and task-scoped audit trail."
-      : "JSON-RPC is unavailable, so the page is using the protocol-shaped mock fallback without pretending it is live.";
 
   const handleRespond = async (approval: ApprovalRequest, decision: ApprovalDecision, rememberRule: boolean) => {
     setActionError(null);
@@ -2302,67 +2269,20 @@ export function SecurityApp() {
 
   return (
     <main className="app-shell security-page">
-      <div className="security-page__canvas" ref={canvasRef} aria-label="Security 卡片画布">
+      <div className="security-page__canvas" ref={canvasRef} aria-label="Security board">
         {renderDashboardTopbar()}
-        <div className="security-page__hero">
-          <Text as="p" size="1" className="security-page__eyebrow">
-            transit approval desk
-          </Text>
-          <Heading size="9" className="security-page__title">
-            安全卫士
-          </Heading>
-          <p className="security-page__hero-copy">
-            Queue-first triage keeps the pending approvals in front, while restore, governance, and budget remain
-            readable as supporting controls.
-          </p>
-          <Flex align="center" gap="2" wrap="wrap">
-            <Badge color={sourceBadgeColor} variant="soft" highContrast>
-              {sourceBadgeLabel}
-            </Badge>
-            <Badge color={getStatusColor(moduleData.summary.security_status)} variant="soft" highContrast>
-              {moduleData.summary.security_status}
-            </Badge>
-            <Badge color={moduleData.summary.pending_authorizations > 0 ? "amber" : "gray"} variant="soft" highContrast>
-              {moduleData.summary.pending_authorizations} pending
-            </Badge>
-            <Badge color={moduleData.summary.latest_restore_point ? "orange" : "gray"} variant="soft" highContrast>
-              {moduleData.summary.latest_restore_point ? "restore ready" : "no restore"}
-            </Badge>
-          </Flex>
-          <div className="security-page__hero-metrics">
-            {securityHeroMetrics.map((metric) => (
-              <article key={metric.label} className="security-page__hero-metric">
-                <Badge color={metric.tone} variant="soft" highContrast>
-                  {metric.label}
-                </Badge>
-                <p className="security-page__hero-metric-value">{metric.value}</p>
-                <p className="security-page__hero-metric-copy">{metric.copy}</p>
-              </article>
-            ))}
+        {loadError ? (
+          <div className="security-page__load-state">
+            <div className="security-page__detail-callout">同步失败：{loadError}</div>
           </div>
-          {loadError ? <div className="security-page__detail-callout">同步失败：{loadError}</div> : null}
-        </div>
-        <aside className="security-page__source-panel" data-tone={sourceSurfaceTone}>
-          <div className="security-page__source-header">
-            <p className="security-page__eyebrow">source</p>
-            <Badge color={sourceBadgeColor} variant="soft" highContrast>
-              {sourceBadgeLabel}
-            </Badge>
-          </div>
-          <p className="security-page__source-title">
-            {moduleData.source === "rpc" ? "Live RPC is connected." : "Mock fallback is active."}
-          </p>
-          <p className="security-page__source-copy">{sourceSummaryCopy}</p>
-          <div className="security-page__source-meta">
-            {moduleData.rpcContext.serverTime ? <span>server {formatDateTime(moduleData.rpcContext.serverTime)}</span> : <span>No server clock yet</span>}
-            <span>{leadApproval ? `lead task ${leadApproval.task_id}` : "Queue is currently clear"}</span>
-            {moduleData.rpcContext.warnings.length > 0 ? <span>{moduleData.rpcContext.warnings.length} warning</span> : null}
-          </div>
-        </aside>
+        ) : null}
         {cardStack.map(renderDraggableCard)}
         {renderDetailOverlay()}
       </div>
-      <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
+      <DashboardMockToggle
+        enabled={dataMode === "mock"}
+        onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))}
+      />
     </main>
   );
 }
