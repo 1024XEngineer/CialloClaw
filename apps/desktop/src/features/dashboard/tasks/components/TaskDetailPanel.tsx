@@ -546,8 +546,7 @@ export function TaskDetailPanel({
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
                   <div>
-                    <p className="task-detail-card__eyebrow">成果区</p>
-                    <h3 className="task-detail-card__title">已生成的文件与草稿</h3>
+                    <h3 className="task-detail-card__title">产物</h3>
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
