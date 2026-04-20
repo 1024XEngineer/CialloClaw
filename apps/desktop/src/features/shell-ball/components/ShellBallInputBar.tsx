@@ -61,8 +61,9 @@ export function ShellBallInputBar({
 
     // Keep the decorative highlight layer aligned with the real textarea height
     // so multiline growth and shrink stay visually locked together.
-    field.style.height = "0px";
-    const nextHeight = Math.max(44, field.scrollHeight);
+    field.style.height = "auto";
+    const maxHeight = Number.parseFloat(window.getComputedStyle(field).maxHeight) || Number.POSITIVE_INFINITY;
+    const nextHeight = Math.min(Math.max(44, field.scrollHeight), maxHeight);
 
     field.style.height = `${nextHeight}px`;
     field.parentElement?.style.setProperty("--shell-ball-input-height", `${nextHeight}px`);
@@ -213,6 +214,7 @@ const StyledInputBar = styled.div`
     font-size: 1em;
     letter-spacing: 0.05em;
     line-height: 1.4;
+    max-height: calc(1.4em * 3 + 20px);
     min-height: 44px;
     overflow-y: auto;
     -ms-overflow-style: none;
