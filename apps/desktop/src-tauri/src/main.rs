@@ -8,9 +8,10 @@ mod window_context;
 
 use serde::Deserialize;
 use serde_json::Value;
+use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -19,12 +20,6 @@ use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-
-#[cfg(windows)]
-use once_cell::sync::Lazy;
-
-#[cfg(windows)]
-use std::collections::HashSet;
 
 #[cfg(windows)]
 use std::ffi::OsStr;
@@ -70,6 +65,9 @@ const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
+
+static DESKTOP_EXTERNAL_OPEN_APPROVALS: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(windows)]
 macro_rules! makelparam {
@@ -949,10 +947,21 @@ enum DesktopOpenOperation {
 
 #[tauri::command]
 fn desktop_open_resource(
+    window: tauri::Window,
     action: DesktopOpenResourceAction,
     path: String,
 ) -> Result<(), String> {
     let resolved_path = resolve_desktop_resource_path(&path)?;
+    if desktop_open_requires_host_confirmation(&resolved_path)
+        && !desktop_window_has_external_open_approval(window.label())
+    {
+        if !prompt_desktop_external_open_approval(window.label(), &resolved_path)? {
+            return Err("desktop host rejected the outside-workspace open request".to_string());
+        }
+
+        mark_desktop_window_external_open_approval(window.label());
+    }
+
     let operation = build_desktop_open_operation(action, resolved_path);
     execute_desktop_open_operation(&operation)
 }
@@ -997,6 +1006,60 @@ fn resolve_desktop_resource_path_with_roots(
 
 fn canonicalize_existing_path(path: PathBuf, original_path: &str) -> Result<PathBuf, String> {
     fs::canonicalize(path).map_err(|_| format!("resource path does not exist: {original_path}"))
+}
+
+fn desktop_open_requires_host_confirmation(target_path: &Path) -> bool {
+    !is_desktop_resource_path_within_roots(
+        target_path,
+        &build_desktop_resource_resolution_roots(),
+    )
+}
+
+fn is_desktop_resource_path_within_roots(target_path: &Path, roots: &[PathBuf]) -> bool {
+    let canonical_target = match fs::canonicalize(target_path) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+
+    roots.iter().any(|root| {
+        fs::canonicalize(root)
+            .map(|canonical_root| canonical_target.starts_with(&canonical_root))
+            .unwrap_or(false)
+    })
+}
+
+fn desktop_window_has_external_open_approval(window_label: &str) -> bool {
+    DESKTOP_EXTERNAL_OPEN_APPROVALS
+        .lock()
+        .expect("desktop external approvals mutex should not be poisoned")
+        .contains(window_label)
+}
+
+fn mark_desktop_window_external_open_approval(window_label: &str) {
+    DESKTOP_EXTERNAL_OPEN_APPROVALS
+        .lock()
+        .expect("desktop external approvals mutex should not be poisoned")
+        .insert(window_label.to_string());
+}
+
+fn prompt_desktop_external_open_approval(
+    window_label: &str,
+    target_path: &Path,
+) -> Result<bool, String> {
+    let prompt_result = rfd::MessageDialog::new()
+        .set_title("Confirm outside-workspace open")
+        .set_description(format!(
+            "The dashboard window \"{window_label}\" is trying to open a path outside the trusted desktop roots:\n{}",
+            target_path.display()
+        ))
+        .set_level(rfd::MessageLevel::Warning)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show();
+
+    Ok(matches!(
+        prompt_result,
+        rfd::MessageDialogResult::Yes | rfd::MessageDialogResult::Ok
+    ))
 }
 
 fn build_desktop_resource_resolution_roots() -> Vec<PathBuf> {
@@ -1157,7 +1220,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_desktop_open_operation, resolve_desktop_resource_path_with_roots,
+        build_desktop_open_operation, is_desktop_resource_path_within_roots,
+        resolve_desktop_resource_path_with_roots,
         DesktopOpenOperation, DesktopOpenResourceAction,
     };
     use std::fs;
@@ -1233,6 +1297,31 @@ mod tests {
         );
 
         assert!(resolution.is_err(), "relative escape should be rejected");
+
+        let _ = fs::remove_dir_all(repo_root);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn is_desktop_resource_path_within_roots_accepts_rooted_targets_only() {
+        let repo_root = create_temp_root("rooted_target");
+        let repo_target = repo_root.join("docs").join("artifact.txt");
+        fs::create_dir_all(repo_target.parent().expect("repo target should have a parent"))
+            .expect("repo target parent should be created");
+        fs::write(&repo_target, "artifact").expect("repo target should be created");
+
+        let outside_root = create_temp_root("outside_target");
+        let outside_target = outside_root.join("artifact.txt");
+        fs::write(&outside_target, "artifact").expect("outside target should be created");
+
+        assert!(is_desktop_resource_path_within_roots(
+            &repo_target,
+            &[repo_root.clone()]
+        ));
+        assert!(!is_desktop_resource_path_within_roots(
+            &outside_target,
+            &[repo_root.clone()]
+        ));
 
         let _ = fs::remove_dir_all(repo_root);
         let _ = fs::remove_dir_all(outside_root);
