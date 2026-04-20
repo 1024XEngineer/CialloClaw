@@ -895,7 +895,7 @@ export function MirrorApp() {
         type="button"
       >
         <ArrowLeft className="h-4 w-4" />
-        杩斿洖棣栭〉
+        返回首页
       </button>
 
       <nav aria-label="Dashboard modules" className="dashboard-page__module-nav">
