@@ -877,6 +877,22 @@ export function useShellBallInteraction() {
     } catch {}
   }, []);
 
+  /**
+   * Manual submits own the draft lifecycle, so any in-flight voice capture state
+   * must be cleared before the draft reset runs.
+   */
+  function clearVoiceCaptureLocalState() {
+    clearLongPressTimer();
+    disposeVoiceRecognition();
+    clearLockedVoiceSession();
+    voiceBaseDraftRef.current = "";
+    voiceTranscriptRef.current = "";
+    pressStartXRef.current = null;
+    pressStartYRef.current = null;
+    setCurrentVoiceHintMode("hidden");
+    setCurrentVoicePreview(null);
+  }
+
   function stopVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
     recognitionStopReasonRef.current = reason;
     if (reason === "finish" && (controllerRef.current?.getState() ?? visualState) === "voice_locked") {
@@ -1127,6 +1143,7 @@ export function useShellBallInteraction() {
     }
 
     try {
+      clearVoiceCaptureLocalState();
       const result =
         pendingFiles.length > 0
           ? await startShellBallFileTask({
@@ -1409,16 +1426,10 @@ export function useShellBallInteraction() {
   }
 
   function handleForceState(state: ShellBallVisualState) {
-    clearLongPressTimer();
-    disposeVoiceRecognition();
-    clearLockedVoiceSession();
+    clearVoiceCaptureLocalState();
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("force_state_reset"));
-    pressStartXRef.current = null;
-    pressStartYRef.current = null;
     inputFocusedRef.current = false;
     setInputFocused(false);
-    setCurrentVoiceHintMode("hidden");
-    setCurrentVoicePreview(null);
     controllerRef.current?.forceState(state, { regionActive: regionActiveRef.current });
     syncVisualState();
   }
@@ -1449,6 +1460,8 @@ export function useShellBallInteraction() {
     clearLongPressTimer();
     disposeVoiceRecognition();
     clearLockedVoiceSession();
+    voiceBaseDraftRef.current = "";
+    voiceTranscriptRef.current = "";
     pressStartXRef.current = null;
     pressStartYRef.current = null;
     voicePreviewRef.current = null;

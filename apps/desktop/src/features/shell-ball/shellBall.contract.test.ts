@@ -3052,6 +3052,14 @@ test("shell-ball submit reset clears draft retention after submit", () => {
   );
 });
 
+test("shell-ball manual submit clears retained voice state before resetting the draft", () => {
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(interactionSource, /function clearVoiceCaptureLocalState\(\) \{[\s\S]*voiceBaseDraftRef\.current = "";/);
+  assert.match(interactionSource, /function clearVoiceCaptureLocalState\(\) \{[\s\S]*voiceTranscriptRef\.current = "";/);
+  assert.match(interactionSource, /async function handleSubmitText\(\) \{[\s\S]*clearVoiceCaptureLocalState\(\);[\s\S]*setInputValue\(reset\.nextInputValue\);/);
+});
+
 test("shell-ball input bar removes keyboard focus stops outside interactive mode", () => {
   const readonlyMarkup = renderToStaticMarkup(
     createElement(ShellBallInputBar, {
