@@ -1551,6 +1551,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.approval_request`  | 当前任务的正式安全锚点 |
 | `data.security_summary`  | 安全摘要       |
+| `data.runtime_summary`   | 运行态摘要，包含最新 runtime event、停止原因、最近失败摘要与 observation signals |
 
 其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
 

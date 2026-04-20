@@ -4653,6 +4653,12 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 	if runtimeSummary["active_steering_count"] != 1 {
 		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
 	}
+	if _, ok := runtimeSummary["latest_failure_code"]; !ok {
+		t.Fatalf("expected runtime_summary latest_failure_code field, got %+v", runtimeSummary)
+	}
+	if _, ok := runtimeSummary["observation_signals"]; !ok {
+		t.Fatalf("expected runtime_summary observation_signals field, got %+v", runtimeSummary)
+	}
 }
 
 func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing.T) {
@@ -4690,6 +4696,41 @@ func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing
 	}
 	if runtimeSummary["active_steering_count"] != 1 {
 		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_failure_detail",
+		Title:             "查看当前屏幕：Build Dashboard",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze"},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "generate_output"),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:     "Build Dashboard",
+			VisibleText:   "Fatal build error",
+			ScreenSummary: "release validation failed",
+		},
+	})
+	updatedTask, _ := service.failExecutionTask(task, task.Intent, execution.Result{}, tools.ErrOCRWorkerFailed)
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": updatedTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_summary"] == nil {
+		t.Fatalf("expected failed screen task to expose latest_failure_summary, got %+v", runtimeSummary)
+	}
+	observationSignals := runtimeSummary["observation_signals"].([]string)
+	if len(observationSignals) == 0 {
+		t.Fatalf("expected failed screen task to expose observation signals, got %+v", runtimeSummary)
 	}
 }
 

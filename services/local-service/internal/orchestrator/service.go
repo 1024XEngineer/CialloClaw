@@ -897,6 +897,7 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 		WindowSwitches:  signals.WindowSwitchCount,
 		PageSwitches:    signals.PageSwitchCount,
 		CopyCount:       signals.CopyCount,
+		Observations:    s.recommendationObservations(signals),
 		Signals:         signals,
 		UnfinishedTasks: unfinishedTasks,
 		FinishedTasks:   finishedTasks,
@@ -906,6 +907,40 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 		"cooldown_hit": result.CooldownHit,
 		"items":        result.Items,
 	}, nil
+}
+
+func (s *Service) recommendationObservations(signals perception.SignalSnapshot) []string {
+	observations := perception.BehaviorSignals(signals)
+	if hasErrorOpportunity := strings.TrimSpace(signals.ErrorText) != "" || strings.Contains(strings.ToLower(strings.Join([]string{signals.VisibleText, signals.ScreenSummary}, " ")), "error") || strings.Contains(strings.ToLower(strings.Join([]string{signals.VisibleText, signals.ScreenSummary}, " ")), "报错"); hasErrorOpportunity {
+		observations = append(observations, "当前上下文包含可解释的视觉错误信号。")
+	}
+	if strings.TrimSpace(signals.ScreenSummary) != "" {
+		observations = append(observations, fmt.Sprintf("screen:%s", truncateText(signals.ScreenSummary, 48)))
+	}
+	if strings.TrimSpace(signals.VisibleText) != "" {
+		observations = append(observations, fmt.Sprintf("visible:%s", truncateText(signals.VisibleText, 48)))
+	}
+	return uniqueTrimmedStrings(observations)
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 // RecommendationFeedbackSubmit handles agent.recommendation.feedback.submit.
@@ -998,13 +1033,27 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 
 func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]any {
 	summary := map[string]any{
-		"loop_stop_reason":      nil,
-		"events_count":          0,
-		"latest_event_type":     nil,
-		"active_steering_count": len(task.SteeringMessages),
+		"loop_stop_reason":       nil,
+		"events_count":           0,
+		"latest_event_type":      nil,
+		"active_steering_count":  len(task.SteeringMessages),
+		"latest_failure_code":    nil,
+		"latest_failure_summary": nil,
+		"observation_signals":    []string{},
 	}
 	if strings.TrimSpace(task.LoopStopReason) != "" {
 		summary["loop_stop_reason"] = task.LoopStopReason
+	}
+	if failureCode, failureSummary := latestTaskFailure(task); failureCode != "" || failureSummary != "" {
+		if failureCode != "" {
+			summary["latest_failure_code"] = failureCode
+		}
+		if failureSummary != "" {
+			summary["latest_failure_summary"] = failureSummary
+		}
+	}
+	if observationSignals := taskObservationSignals(task); len(observationSignals) > 0 {
+		summary["observation_signals"] = observationSignals
 	}
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return summary
@@ -1020,6 +1069,32 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 		}
 	}
 	return summary
+}
+
+func latestTaskFailure(task runengine.TaskRecord) (string, string) {
+	for index := len(task.AuditRecords) - 1; index >= 0; index-- {
+		record := task.AuditRecords[index]
+		if stringValue(record, "result", "") != "failed" {
+			continue
+		}
+		return firstNonEmptyString(stringValue(record, "action", ""), stringValue(record, "category", "")), firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
+	}
+	if task.Status == "failed" {
+		return firstNonEmptyString(task.CurrentStep, "execution_failed"), firstNonEmptyString(stringValue(task.BubbleMessage, "text", ""), "任务执行失败")
+	}
+	return "", ""
+}
+
+func taskObservationSignals(task runengine.TaskRecord) []string {
+	result := make([]string, 0, 5)
+	for _, value := range []string{task.Snapshot.ScreenSummary, task.Snapshot.VisibleText, task.Snapshot.PageTitle, task.Snapshot.WindowTitle} {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, truncateText(trimmed, 48))
+	}
+	return uniqueTrimmedStrings(result)
 }
 
 // TaskEventsList handles agent.task.events.list and exposes normalized runtime

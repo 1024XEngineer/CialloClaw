@@ -209,3 +209,18 @@ func TestRecommendationFingerprintIncludesPerceptionSignals(t *testing.T) {
 		t.Fatal("expected meaningful perception context changes to affect fingerprint")
 	}
 }
+
+func TestRecommendationFingerprintIncludesObservations(t *testing.T) {
+	base := GenerateInput{
+		Source:       "floating_ball",
+		Scene:        "hover",
+		PageTitle:    "Dashboard",
+		Observations: []string{"screen:build failed", "visible:warning banner"},
+	}
+	changed := base
+	changed.Observations = []string{"screen:build failed", "visible:all checks passed"}
+
+	if recommendationFingerprint(base) == recommendationFingerprint(changed) {
+		t.Fatal("expected observation changes to affect recommendation fingerprint")
+	}
+}

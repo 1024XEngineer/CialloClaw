@@ -340,6 +340,9 @@ export interface TaskRuntimeSummary {
   events_count: number;
   latest_event_type?: string | null;
   active_steering_count: number;
+  latest_failure_code?: string | null;
+  latest_failure_summary?: string | null;
+  observation_signals: string[];
 }
 
 export interface AgentTaskDetailGetResult {
