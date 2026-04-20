@@ -14,7 +14,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { Button, Heading, SegmentedControl, Slider, Switch, Text, TextArea, TextField } from "@radix-ui/themes";
+import { Button, Heading, Select, Slider, Text, TextArea, TextField } from "@radix-ui/themes";
 import isEqual from "react-fast-compare";
 import {
   ControlPanelSaveError,
@@ -77,6 +77,61 @@ type InfoRowProps = {
   label: string;
   value: ReactNode;
 };
+
+type ChoiceOption<T extends string = string> = {
+  label: string;
+  value: T;
+};
+
+const LANGUAGE_OPTIONS = [
+  { label: "简体中文", value: "zh-CN" },
+  { label: "English", value: "en-US" },
+] as const;
+
+const MEMORY_LIFECYCLE_OPTIONS = [
+  { label: "3 天", value: "3d" },
+  { label: "7 天", value: "7d" },
+  { label: "15 天", value: "15d" },
+  { label: "30 天", value: "30d" },
+] as const;
+
+const INSPECTION_INTERVAL_OPTIONS = [
+  { label: "15 分钟", unit: "minute", value: 15 },
+  { label: "30 分钟", unit: "minute", value: 30 },
+  { label: "1 小时", unit: "hour", value: 1 },
+  { label: "6 小时", unit: "hour", value: 6 },
+  { label: "1 天", unit: "day", value: 1 },
+] as const;
+
+const THEME_MODE_OPTIONS = [
+  { label: "跟随系统", value: "follow_system" },
+  { label: "浅色", value: "light" },
+  { label: "深色", value: "dark" },
+] as const satisfies readonly ChoiceOption<"follow_system" | "light" | "dark">[];
+
+const POSITION_MODE_OPTIONS = [
+  { label: "固定", value: "fixed" },
+  { label: "可拖动", value: "draggable" },
+] as const satisfies readonly ChoiceOption<"fixed" | "draggable">[];
+
+function buildInspectionIntervalOptionValue(interval: { unit: string; value: number }) {
+  return `${interval.value}:${interval.unit}`;
+}
+
+function parseInspectionIntervalOptionValue(optionValue: string) {
+  const matchedOption = INSPECTION_INTERVAL_OPTIONS.find(
+    (option) => buildInspectionIntervalOptionValue(option) === optionValue,
+  );
+
+  if (matchedOption) {
+    return {
+      unit: matchedOption.unit,
+      value: matchedOption.value,
+    };
+  }
+
+  return INSPECTION_INTERVAL_OPTIONS[0];
+}
 
 const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
   automation: {
@@ -227,8 +282,53 @@ function ToggleLine({ checked, description, label, onCheckedChange }: ToggleLine
         </div>
       </div>
       <div className="control-panel-shell__row-field control-panel-shell__row-field--inline">
-        <Switch checked={checked} onCheckedChange={onCheckedChange} />
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          className="control-panel-shell__toggle"
+          data-state={checked ? "checked" : "unchecked"}
+          onClick={() => onCheckedChange(!checked)}
+        >
+          <span className="control-panel-shell__toggle-handle" aria-hidden="true" />
+        </button>
       </div>
+    </div>
+  );
+}
+
+function ChoiceGroup<T extends string>({
+  className,
+  options,
+  value,
+  onValueChange,
+}: {
+  className?: string;
+  options: readonly ChoiceOption<T>[];
+  value: T;
+  onValueChange: (value: T) => void;
+}) {
+  const classes = ["control-panel-shell__choice-group", className].filter(Boolean).join(" ");
+
+  return (
+    <div className={classes} role="radiogroup">
+      {options.map((option) => {
+        const checked = option.value === value;
+
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            className="control-panel-shell__choice-option"
+            data-state={checked ? "checked" : "unchecked"}
+            onClick={() => onValueChange(option.value)}
+          >
+            <span className="control-panel-shell__choice-label">{option.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -305,7 +405,6 @@ export function ControlPanelApp() {
   const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
   const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
   const hasChanges = inspectorDirty || settingsDirty;
-  const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
   const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
@@ -405,39 +504,44 @@ export function ControlPanelApp() {
           <>
             <SettingsCard title="界面偏好" description="语言与主题会影响整个桌面端界面。">
               <ControlLine label="语言" hint="统一控制仪表盘与操作面板界面语言。">
-                <TextField.Root
-                  className="control-panel-shell__input"
+                <Select.Root
                   value={draft.settings.general.language}
-                  onChange={(event) =>
+                  onValueChange={(value) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        general: { ...current.settings.general, language: event.target.value },
+                        general: { ...current.settings.general, language: value },
                       },
                     }))
                   }
-                />
+                >
+                  <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+                  <Select.Content className="control-panel-shell__select-content" position="popper">
+                    {LANGUAGE_OPTIONS.map((option) => (
+                      <Select.Item key={option.value} value={option.value}>
+                        {option.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
               </ControlLine>
 
               <ControlLine label="主题" hint="支持跟随系统或直接指定浅色、深色。">
-                <SegmentedControl.Root
+                <ChoiceGroup
                   value={draft.settings.general.theme_mode}
                   onValueChange={(value) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        general: { ...current.settings.general, theme_mode: value as typeof current.settings.general.theme_mode },
+                        general: { ...current.settings.general, theme_mode: value },
                       },
                     }))
                   }
-                  className="control-panel-shell__selector"
-                >
-                  <SegmentedControl.Item value="follow_system">跟随系统</SegmentedControl.Item>
-                  <SegmentedControl.Item value="light">浅色</SegmentedControl.Item>
-                  <SegmentedControl.Item value="dark">深色</SegmentedControl.Item>
-                </SegmentedControl.Root>
+                  className="control-panel-shell__choice-group--wide"
+                  options={THEME_MODE_OPTIONS}
+                />
               </ControlLine>
             </SettingsCard>
 
@@ -561,7 +665,7 @@ export function ControlPanelApp() {
               </ControlLine>
 
               <ControlLine label="停靠方式" hint="固定更稳定，可拖动更适合多屏与复杂工作区。">
-                <SegmentedControl.Root
+                <ChoiceGroup
                   value={draft.settings.floating_ball.position_mode}
                   onValueChange={(value) =>
                     updateSettings((current) => ({
@@ -570,16 +674,14 @@ export function ControlPanelApp() {
                         ...current.settings,
                         floating_ball: {
                           ...current.settings.floating_ball,
-                          position_mode: value as typeof current.settings.floating_ball.position_mode,
+                          position_mode: value,
                         },
                       },
                     }))
                   }
-                  className="control-panel-shell__selector"
-                >
-                  <SegmentedControl.Item value="fixed">固定</SegmentedControl.Item>
-                  <SegmentedControl.Item value="draggable">可拖动</SegmentedControl.Item>
-                </SegmentedControl.Root>
+                  className="control-panel-shell__choice-group--wide"
+                  options={POSITION_MODE_OPTIONS}
+                />
               </ControlLine>
             </SettingsCard>
           </>
@@ -605,19 +707,27 @@ export function ControlPanelApp() {
               />
 
               <ControlLine label="生命周期" hint="控制镜子记忆默认保留周期。">
-                <TextField.Root
-                  className="control-panel-shell__input"
+                <Select.Root
                   value={draft.settings.memory.lifecycle}
-                  onChange={(event) =>
+                  onValueChange={(value) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        memory: { ...current.settings.memory, lifecycle: event.target.value },
+                        memory: { ...current.settings.memory, lifecycle: value },
                       },
                     }))
                   }
-                />
+                >
+                  <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+                  <Select.Content className="control-panel-shell__select-content" position="popper">
+                    {MEMORY_LIFECYCLE_OPTIONS.map((option) => (
+                      <Select.Item key={option.value} value={option.value}>
+                        {option.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
               </ControlLine>
             </SettingsCard>
 
@@ -632,7 +742,32 @@ export function ControlPanelApp() {
         return (
           <>
             <SettingsCard title="巡检规则" description="控制任务巡检的启动方式与提醒节奏。">
-              <InfoRow label="巡检频率" value={inspectionInterval} />
+              <ControlLine label="巡检频率" hint="控制系统定时扫描待办来源的时间间隔。">
+                <Select.Root
+                  value={buildInspectionIntervalOptionValue(draft.inspector.inspection_interval)}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      inspector: {
+                        ...current.inspector,
+                        inspection_interval: parseInspectionIntervalOptionValue(value),
+                      },
+                    }))
+                  }
+                >
+                  <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+                  <Select.Content className="control-panel-shell__select-content" position="popper">
+                    {INSPECTION_INTERVAL_OPTIONS.map((option) => (
+                      <Select.Item
+                        key={buildInspectionIntervalOptionValue(option)}
+                        value={buildInspectionIntervalOptionValue(option)}
+                      >
+                        {option.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </ControlLine>
 
               <ToggleLine
                 label="开机巡检"
