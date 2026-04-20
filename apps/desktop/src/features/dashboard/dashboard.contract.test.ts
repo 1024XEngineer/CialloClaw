@@ -841,6 +841,11 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(securityAppSource, /disabled=\{rpcAuditRequiresTaskContext\}/);
   assert.match(securityAppSource, /当前后端仅支持按 task 查看审计记录/);
   assert.match(securityAppSource, /loadSecurityAuditRecords\(moduleData\.source, auditFilterTaskId/);
+  assert.match(securityAppSource, /loadSecurityFocusedTaskDetail\(focusedTaskId, moduleData\?\.source \?\? "rpc"\)/);
+  assert.match(securityAppSource, /当前屏幕任务治理链/);
+  assert.match(securityAppSource, /正式授权锚点/);
+  assert.match(securityAppSource, /正式引用/);
+  assert.match(securityAppSource, /latest_failure_category/);
   assert.match(securityAppSource, /title: "审计记录"/);
   assert.doesNotMatch(securityAppSource, /decisionHistory/);
   assert.doesNotMatch(securityAppSource, /loadDashboardSettingsSnapshot/);
