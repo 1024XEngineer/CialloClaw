@@ -88,6 +88,13 @@ export function TaskDetailPanel({
   const evidenceArtifactRefs = new Set(evidenceItems.map((citation) => citation.source_ref));
   const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
   const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
+  const formalEvidenceCount = new Set(
+    evidenceItems.map((citation) => {
+      const sourceRef = citation.source_ref.trim();
+
+      return sourceRef.length > 0 ? sourceRef : citation.citation_id;
+    }),
+  ).size;
   const isScreenTask = task.source_type === "screen_capture" || detail.task.intent?.name === "screen_analyze";
 
   useEffect(() => {
@@ -332,7 +339,7 @@ export function TaskDetailPanel({
             <FolderOutput className="h-4 w-4" />
             <div>
               <p className="task-detail-current-card__label">Formal evidence count</p>
-              <p className="task-detail-current-card__text">{evidenceItems.length + evidenceArtifacts.length}</p>
+              <p className="task-detail-current-card__text">{formalEvidenceCount}</p>
             </div>
           </article>
         </div>

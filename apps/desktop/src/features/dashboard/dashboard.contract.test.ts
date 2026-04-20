@@ -1923,6 +1923,8 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const evidenceArtifactRefs = new Set\(evidenceItems\.map\(\(citation\) => citation\.source_ref\)\)/);
   assert.match(panelSource, /const evidenceArtifacts = artifactItems\.filter\(\(artifact\) => evidenceArtifactRefs\.has\(artifact\.artifact_id\) \|\| evidenceArtifactRefs\.has\(artifact\.path\)\)/);
   assert.match(panelSource, /const outputArtifacts = artifactItems\.filter\(\(artifact\) => !evidenceArtifactRefs\.has\(artifact\.artifact_id\) && !evidenceArtifactRefs\.has\(artifact\.path\)\)/);
+  assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
+  assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
   assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
 });
 
@@ -1937,6 +1939,8 @@ test("TaskDetailPanel renders a formal screen governance section only for screen
   assert.match(panelSource, /runtimeSummary\.latest_failure_category/);
   assert.match(panelSource, /detail\.approval_request/);
   assert.match(panelSource, /detail\.security_summary\.latest_restore_point/);
+  assert.match(panelSource, /formalEvidenceCount/);
+  assert.doesNotMatch(panelSource, /evidenceItems\.length \+ evidenceArtifacts\.length/);
 });
 
 test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserves steering draft until success", () => {
