@@ -99,6 +99,7 @@ export function TaskPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(true);
   const [showMoreFinished, setShowMoreFinished] = useState(false);
   const [expandedClusterKey, setExpandedClusterKey] = useState<TaskClusterKey | null>(null);
@@ -110,6 +111,8 @@ export function TaskPage() {
   const [taskEventFilters, setTaskEventFilters] = useState<TaskEventFilters>(DEFAULT_TASK_EVENT_FILTERS);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const securityRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
+  const routeFocusState = location.state as { focusTaskId?: string; openDetail?: boolean } | null;
+  const routeFocusTaskId = typeof routeFocusState?.focusTaskId === "string" && routeFocusState.focusTaskId.trim().length > 0 ? routeFocusState.focusTaskId : null;
 
   const unfinishedQuery = useQuery({
     queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit),
@@ -213,31 +216,6 @@ export function TaskPage() {
     setTaskEventFilters(DEFAULT_TASK_EVENT_FILTERS);
   }, [selectedTaskId]);
 
-  useEffect(() => {
-    if (allTasks.length === 0) {
-      return;
-    }
-
-    const focusTaskId = (location.state as { focusTaskId?: string; openDetail?: boolean } | null)?.focusTaskId;
-    if (focusTaskId && allTasks.some((item) => item.task.task_id === focusTaskId)) {
-      setSelectedTaskId(focusTaskId);
-      setDetailOpen((location.state as { openDetail?: boolean } | null)?.openDetail ?? true);
-      navigate(location.pathname, { replace: true, state: null });
-      return;
-    }
-
-    const selectedExists = selectedTaskId ? allTasks.some((item) => item.task.task_id === selectedTaskId) : false;
-    if (selectedExists) {
-      return;
-    }
-
-    const nextTask = departureTasks[0] ?? holdingTasks[0] ?? irregularTasks[0] ?? archiveTasks[0] ?? allTasks[0] ?? null;
-    if (nextTask) {
-      setSelectedTaskId(nextTask.task.task_id);
-      setDetailOpen(true);
-    }
-  }, [allTasks, archiveTasks, departureTasks, holdingTasks, irregularTasks, location.pathname, location.state, navigate, selectedTaskId]);
-
   const taskDetailQuery = useQuery({
     enabled: shouldEnableDashboardTaskDetailQuery(selectedTaskId, detailOpen),
     queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId ?? ""),
@@ -248,6 +226,7 @@ export function TaskPage() {
     retry: false,
   });
 
+  const selectedDetailTaskId = taskDetailQuery.data?.task.task_id ?? null;
   const detailData = taskDetailQuery.data ?? (selectedTaskItem ? buildFallbackTaskDetailData(selectedTaskItem) : null);
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "任务详情请求失败") : null;
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
@@ -279,6 +258,64 @@ export function TaskPage() {
   const selectedStateVoice = detailData ? getTaskStateVoice(detailData.task, detailData.experience, detailData.detail.timeline) : null;
   const selectedArtifactCount = detailData ? artifactListQuery.data?.items.length ?? detailData.detail.artifacts.length : 0;
   const selectedUpdateLabel = detailData ? new Date(detailData.task.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "—";
+
+  useEffect(() => {
+    if (!routeFocusTaskId) {
+      return;
+    }
+
+    setRequestedTaskId(routeFocusTaskId);
+    setSelectedTaskId(routeFocusTaskId);
+    setDetailOpen(routeFocusState?.openDetail ?? true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, navigate, routeFocusState?.openDetail, routeFocusTaskId]);
+
+  useEffect(() => {
+    if (!requestedTaskId) {
+      return;
+    }
+
+    const taskBecameVisible = allTasks.some((item) => item.task.task_id === requestedTaskId);
+    if (!taskBecameVisible && selectedDetailTaskId !== requestedTaskId) {
+      return;
+    }
+
+    setRequestedTaskId(null);
+  }, [allTasks, requestedTaskId, selectedDetailTaskId]);
+
+  useEffect(() => {
+    if (routeFocusTaskId) {
+      return;
+    }
+
+    if (!selectedTaskId) {
+      if (allTasks.length === 0) {
+        return;
+      }
+
+      const nextTask = departureTasks[0] ?? holdingTasks[0] ?? irregularTasks[0] ?? archiveTasks[0] ?? allTasks[0] ?? null;
+      if (nextTask) {
+        setSelectedTaskId(nextTask.task.task_id);
+        setDetailOpen(true);
+      }
+      return;
+    }
+
+    const selectedExists = allTasks.some((item) => item.task.task_id === selectedTaskId);
+    if (selectedExists || requestedTaskId === selectedTaskId || selectedDetailTaskId === selectedTaskId) {
+      return;
+    }
+
+    const nextTask = departureTasks[0] ?? holdingTasks[0] ?? irregularTasks[0] ?? archiveTasks[0] ?? allTasks[0] ?? null;
+    if (nextTask) {
+      setSelectedTaskId(nextTask.task.task_id);
+      setDetailOpen(true);
+      return;
+    }
+
+    setSelectedTaskId(null);
+    setDetailOpen(false);
+  }, [allTasks, archiveTasks, departureTasks, holdingTasks, irregularTasks, requestedTaskId, routeFocusTaskId, selectedDetailTaskId, selectedTaskId]);
 
   useEffect(() => {
     saveDashboardDataMode("tasks", dataMode);
@@ -523,6 +560,7 @@ export function TaskPage() {
   }
 
   function handleSelectTask(taskId: string) {
+    setRequestedTaskId(null);
     setSelectedTaskId(taskId);
     setDetailOpen(true);
   }
@@ -817,7 +855,7 @@ export function TaskPage() {
       </section>
 
       <AnimatePresence>
-        {detailOpen && detailData ? (
+        {detailOpen && detailData && requestedTaskId === "__legacy_modal__" ? (
           <>
             <motion.button
               animate={{ opacity: 1 }}
@@ -834,6 +872,7 @@ export function TaskPage() {
               initial={{ opacity: 0, scale: 0.98, y: 16 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
+              {/* Detached modal rendering is intentionally disabled.
               <TaskDetailPanel
                 artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
                 artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
@@ -859,6 +898,7 @@ export function TaskPage() {
                 onSteerTask={handleSteerTask}
                 steeringPending={taskSteerMutation.isPending}
               />
+              */}
             </motion.div>
           </>
         ) : null}

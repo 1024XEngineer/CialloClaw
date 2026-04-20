@@ -1415,10 +1415,6 @@
     grid-template-columns: 1fr;
   }
 
-  .task-detail-modal {
-    inset: 0.75rem;
-  }
-
   .task-preview-layout {
     height: calc(100vh - 15rem);
   }

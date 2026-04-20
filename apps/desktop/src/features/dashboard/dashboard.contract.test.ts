@@ -1500,6 +1500,17 @@ test("TaskPage wiring helpers require real detail for safety focus and keep deta
   assert.equal(shouldEnableDashboardTaskDetailQuery(null, true), false);
 });
 
+test("TaskPage keeps route-focused task details renderable before task buckets catch up", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskMockSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mock.ts"), "utf8");
+
+  assert.match(taskPageSource, /requestedTaskId/);
+  assert.match(taskPageSource, /routeFocusTaskId/);
+  assert.match(taskPageSource, /selectedDetailTaskId/);
+  assert.match(taskMockSource, /createAdHocMockTask/);
+  assert.match(taskMockSource, /const detail = mockDetailsState\[taskId\];/);
+});
+
 test("dashboard open helpers require one-time confirmation only for outside-workspace desktop paths", async () => {
   const dashboardOpen = loadDashboardOpenModule();
   const windowHost = globalThis as unknown as {

@@ -533,12 +533,7 @@ function createDetail(
     approval_request: approvalRequest,
     artifacts,
     mirror_references: mirrorReferences,
-    runtime_summary: {
-      active_steering_count: 0,
-      events_count: 0,
-      latest_event_type: null,
-      loop_stop_reason: null,
-    },
+    runtime_summary: runtimeSummary,
     security_summary: securitySummary,
     task,
     timeline,
@@ -725,6 +720,111 @@ export function getTaskExperience(taskId: string) {
   return taskExperiences[taskId];
 }
 
+/*
+function createAdHocMockTask(taskId: string): Task {
+  const nowIso = new Date().toISOString();
+
+  return {
+    current_step: "cross_module_focus",
+    finished_at: null,
+    intent: { name: "open_task_detail", arguments: { task_id: taskId } },
+    risk_level: "green",
+    source_type: "todo",
+    started_at: nowIso,
+    status: "processing",
+    task_id: taskId,
+    title: `鍏宠仈浠诲姟 ${taskId.slice(-4).toUpperCase()}`,
+    updated_at: nowIso,
+  };
+}
+
+function createAdHocMockExperience(task: Task): TaskExperience {
+  return {
+    acceptance: ["璺ㄦā鍧楄烦杞椂鍙互绋冲畾鎵撳紑浠诲姟璇︽儏銆?],
+    assistantState: {
+      hint: "褰撳墠浣跨敤鐨勬槸 mock 妯″紡涓嬬殑涓存椂浠诲姟璇︽儏锛岀敤鏉ユ壙鎺ヨ法妯″潡鐨勪换鍔¤烦杞€?,
+      label: "detail focus",
+    },
+    background: "杩欐槸涓€鏉¤法妯″潡璺宠浆鍒颁换鍔￠〉鐨勪复鏃朵换鍔¤鍥撅紝鍏堜繚璇佽鎯呭彲鐢紝涓嶈鐣岄潰鍥炶惤鍒伴粯璁ょず渚嬨€?,
+    constraints: ["涓嶆柊澧炲崗璁瓧娈点€?, "淇濇寔褰撳墠 task detail 鍜屽畨鍏ㄨ烦杞摼璺€?],
+    dueAt: null,
+    goal: task.title,
+    nextAction: "鍏堟煡鐪嬪綋鍓嶄换鍔¤鎯咃紝鍐嶅喅瀹氭槸鍚︾户缁帹杩涖€?,
+    noteDraft: "璇ヤ换鍔℃潵鑷叾浠栨ā鍧楃殑璺宠浆鑱氱劍锛屽綋鍓嶅厛浣跨敤鏈€灏忚鎯呰鏄庢壙鎺ャ€?,
+    noteEntries: ["濡傛灉鍚庣画鎺ユ敹鍒版洿瀹屾暣鐨?task detail锛岄〉闈細鑷姩鍚屾銆?],
+    outputs: [
+      {
+        id: `${task.task_id}_snapshot`,
+        label: "褰撳墠蹇収",
+        content: "杩欐潯浠诲姟鏆傛椂浠ユ渶灏忓彲鐢ㄨ鎯呭舰鎬佹壙鎺ヨ法妯″潡璺宠浆銆?,
+        tone: "draft",
+      },
+    ],
+    phase: "cross module detail focus",
+    priority: "steady",
+    progressHint: "璇ヤ换鍔¤繕娌℃湁鍥炲埌褰撳墠鍒楄〃锛屽厛浠ヨ鎯呮ā寮忔壙鎺ャ€?,
+    quickContext: [
+      { id: `${task.task_id}_ctx_source`, label: "鏉ユ簮", content: "褰撳墠浠诲姟鏄粠鍏朵粬 dashboard 妯″潡璺宠浆杩涙潵鐨勩€? },
+    ],
+    recentConversation: ["璇︽儏褰撳墠鐢?mock 妯″紡涓嬬殑涓存椂 task 鏁版嵁鎵挎帴銆?],
+    relatedFiles: [],
+    stepTargets: {},
+    suggestedNext: "濡傛灉鍚庣画鍥炲埌浠诲姟鍒楄〃锛屽彲浠ユ巿鏉冩垨缁х画杩欐潯浠诲姟銆?,
+  };
+}
+
+*/
+
+function createAdHocMockTask(taskId: string): Task {
+  const nowIso = new Date().toISOString();
+
+  return {
+    current_step: "cross_module_focus",
+    finished_at: null,
+    intent: { name: "open_task_detail", arguments: { task_id: taskId } },
+    risk_level: "green",
+    source_type: "todo",
+    started_at: nowIso,
+    status: "processing",
+    task_id: taskId,
+    title: `Linked task ${taskId.slice(-4).toUpperCase()}`,
+    updated_at: nowIso,
+  };
+}
+
+function createAdHocMockExperience(task: Task): TaskExperience {
+  return {
+    acceptance: ["Cross-module jumps should still land on a readable task detail."],
+    assistantState: {
+      hint: "This temporary mock detail keeps cross-module task links usable before the task appears in the stage buckets.",
+      label: "detail focus",
+    },
+    background: "This is a temporary mock-stage detail used when another module asks the task page to focus a task that is not yet present in the current task buckets.",
+    constraints: ["Do not add new protocol fields.", "Keep the task detail and safety deep-link behavior intact."],
+    dueAt: null,
+    goal: task.title,
+    nextAction: "Inspect the current detail first, then decide whether to continue from the source module or from the task page.",
+    noteDraft: "This task was opened from another dashboard module, so the detail page uses a minimal temporary summary until richer task data becomes available.",
+    noteEntries: ["If the formal task detail arrives later, the page will refresh automatically."],
+    outputs: [
+      {
+        id: `${task.task_id}_snapshot`,
+        label: "Current snapshot",
+        content: "This task is temporarily rendered with the smallest viable detail shape so cross-module navigation stays usable in mock mode.",
+        tone: "draft",
+      },
+    ],
+    phase: "cross module detail focus",
+    priority: "steady",
+    progressHint: "This task has not reached the visible stage buckets yet, so the page is rendering its detail directly.",
+    quickContext: [{ id: `${task.task_id}_ctx_source`, label: "Source", content: "This task was opened from another dashboard module." }],
+    recentConversation: ["Mock mode is temporarily supplying the detail payload for this task link."],
+    relatedFiles: [],
+    stepTargets: {},
+    suggestedNext: "If the task later appears in the stage buckets, you can continue it from the regular task flow.",
+  };
+}
+
 export function getMockTaskBuckets() {
   const items: TaskListItem[] = mockTasksState.map((task) => ({
     task,
@@ -757,13 +857,24 @@ export function getMockTaskBuckets() {
 }
 
 export function getMockTaskDetail(taskId: string): TaskDetailData {
-  const detail = mockDetailsState[taskId] ?? mockDetailsState.task_focus_001;
+  const detail = mockDetailsState[taskId];
+
+  if (detail) {
+    return {
+      detail: clone(detail),
+      experience: taskExperiences[detail.task.task_id],
+      source: "mock",
+      task: clone(detail.task),
+    };
+  }
+
+  const task = createAdHocMockTask(taskId);
 
   return {
-    detail: clone(detail),
-    experience: taskExperiences[detail.task.task_id],
+    detail: createDetail(task, [], [], { latest_restore_point: null, pending_authorizations: 0, risk_level: "green", security_status: "normal" }, []),
+    experience: createAdHocMockExperience(task),
     source: "mock",
-    task: clone(detail.task),
+    task: clone(task),
   };
 }
 
