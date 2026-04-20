@@ -1511,6 +1511,34 @@ test("TaskPage keeps route-focused task details renderable before task buckets c
   assert.match(taskMockSource, /const detail = mockDetailsState\[taskId\];/);
 });
 
+test("TaskPage routes local and route-driven task focus through one guarded stage helper", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+
+  assert.match(taskPageSource, /function focusTaskDetail\(taskId: string, openDetail = true\)/);
+  assert.match(taskPageSource, /setRequestedTaskId\(taskId\);\s*setSelectedTaskId\(taskId\);\s*setDetailOpen\(openDetail\);/s);
+  assert.match(taskPageSource, /focusTaskDetail\(routeFocusTaskId, routeFocusState\?\.openDetail \?\? true\);/);
+  assert.match(taskPageSource, /function handleSelectTask\(taskId: string\)\s*{\s*focusTaskDetail\(taskId\);\s*}/s);
+});
+
+test("task stage keeps rotated task clusters above the stage hitbox", () => {
+  const taskPageCssSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.css"), "utf8");
+
+  assert.match(taskPageCssSource, /Keep the rotated task clusters above the center stage/);
+  assert.match(taskPageCssSource, /\.task-cloud__stage\s*{\s*min-height:\s*0;\s*z-index:\s*1;\s*}/s);
+  assert.match(taskPageCssSource, /\.task-cluster\s*{\s*min-height:\s*0;\s*z-index:\s*2;\s*}/s);
+});
+
+test("task page keeps task cards inside no-drag surfaces and avoids collapsing peek card hit areas", () => {
+  const taskPageCssSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.css"), "utf8");
+
+  assert.match(taskPageCssSource, /stealing pointer input away from/);
+  assert.match(taskPageCssSource, /\.task-tower-page \.dashboard-page__topbar\s*{\s*\/\*[\s\S]*?-webkit-app-region:\s*no-drag;\s*app-region:\s*no-drag;/s);
+  assert.match(taskPageCssSource, /\.task-preview-card\s*{\s*-webkit-app-region:\s*no-drag;\s*app-region:\s*no-drag;/s);
+  assert.match(taskPageCssSource, /\.task-runway__manifest\.is-condensed\s*{\s*gap:\s*0\.65rem;\s*}/s);
+  assert.match(taskPageCssSource, /\.task-preview-card--peeked\s*{\s*margin-top:\s*0;/s);
+  assert.match(taskPageCssSource, /\.task-preview-card--peeked \+ \.task-preview-card--peeked\s*{\s*margin-top:\s*0;/s);
+});
+
 test("dashboard open helpers require one-time confirmation only for outside-workspace desktop paths", async () => {
   const dashboardOpen = loadDashboardOpenModule();
   const windowHost = globalThis as unknown as {

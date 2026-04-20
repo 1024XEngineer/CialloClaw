@@ -63,6 +63,10 @@
 }
 
 .task-tower-page .dashboard-page__topbar {
+  /* Keep the frameless dashboard shell from stealing pointer input away from
+     task cards and stage controls inside the task workspace. */
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   align-items: center;
   backdrop-filter: blur(18px);
   background: linear-gradient(180deg, rgba(250, 246, 239, 0.92), rgba(250, 246, 239, 0.56) 74%, rgba(250, 246, 239, 0));
@@ -135,6 +139,8 @@
 .task-cloud__scene,
 .task-cloud__stage,
 .task-cluster {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   overflow: hidden;
   position: relative;
 }
@@ -225,10 +231,16 @@
   opacity: 0.62;
 }
 
-.task-cluster,
 .task-cloud__stage {
   min-height: 0;
   z-index: 1;
+}
+
+/* Keep the rotated task clusters above the center stage so overlapping card
+   bounds still receive pointer input instead of the stage shell. */
+.task-cluster {
+  min-height: 0;
+  z-index: 2;
 }
 
 .task-cluster {
@@ -387,7 +399,7 @@
 }
 
 .task-runway__manifest.is-condensed {
-  gap: 0.2rem;
+  gap: 0.65rem;
 }
 
 .task-runway__archive-group {
@@ -431,6 +443,8 @@
 }
 
 .task-preview-card {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
   background:
     linear-gradient(180deg, rgba(255, 254, 251, 0.98), rgba(247, 241, 232, 0.94)),
     var(--task-surface-strong);
@@ -478,15 +492,17 @@
 }
 
 .task-preview-card--peeked {
-  margin-top: -3.35rem;
-  opacity: 0.78;
-  transform: translateX(1rem) scale(0.965);
-  z-index: 1;
+  margin-top: 0;
+  opacity: 0.84;
+  transform: translateX(0.45rem) scale(0.985);
+  z-index: 2;
 }
 
 .task-preview-card--peeked + .task-preview-card--peeked {
-  margin-top: -4.1rem;
-  transform: translateX(1.5rem) scale(0.94);
+  margin-top: 0;
+  opacity: 0.78;
+  transform: translateX(0.8rem) scale(0.97);
+  z-index: 1;
 }
 
 .task-preview-card:hover,
@@ -500,9 +516,9 @@
 }
 
 .task-preview-card--active.task-preview-card--peeked {
-  margin-top: -2.1rem;
+  margin-top: 0;
   opacity: 1;
-  transform: translateX(0.35rem) translateY(-4px) scale(1);
+  transform: translateX(0.24rem) translateY(-4px) scale(1);
 }
 
 .task-preview-card__signal {
@@ -1376,8 +1392,8 @@
 
   .task-runway__manifest.is-condensed .task-preview-card--peeked,
   .task-runway__manifest.is-condensed .task-preview-card--peeked + .task-preview-card--peeked {
-    margin-top: -2.4rem;
-    transform: translateX(0.5rem) scale(0.97);
+    margin-top: 0;
+    transform: translateX(0.32rem) scale(0.985);
   }
 }
 

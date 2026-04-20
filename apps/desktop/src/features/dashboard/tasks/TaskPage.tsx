@@ -99,6 +99,8 @@ export function TaskPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Keep the current stage focus stable across transient bucket refreshes so
+  // task detail does not snap back to the auto-picked fallback selection.
   const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(true);
   const [showMoreFinished, setShowMoreFinished] = useState(false);
@@ -264,9 +266,7 @@ export function TaskPage() {
       return;
     }
 
-    setRequestedTaskId(routeFocusTaskId);
-    setSelectedTaskId(routeFocusTaskId);
-    setDetailOpen(routeFocusState?.openDetail ?? true);
+    focusTaskDetail(routeFocusTaskId, routeFocusState?.openDetail ?? true);
     navigate(location.pathname, { replace: true, state: null });
   }, [location.pathname, navigate, routeFocusState?.openDetail, routeFocusTaskId]);
 
@@ -390,6 +390,16 @@ export function TaskPage() {
     feedbackTimeoutRef.current = window.setTimeout(() => setFeedback(null), 2400);
   }
 
+  /**
+   * Routes every task focus change through the same guarded local state so the
+   * stage keeps the requested task selected while detail queries catch up.
+   */
+  function focusTaskDetail(taskId: string, openDetail = true) {
+    setRequestedTaskId(taskId);
+    setSelectedTaskId(taskId);
+    setDetailOpen(openDetail);
+  }
+
   const taskControlMutation = useMutation({
     mutationFn: ({ action, taskId }: { action: "pause" | "resume" | "cancel" | "restart"; taskId: string }) => controlTaskByAction(taskId, action, dataMode),
     onSuccess: (outcome, variables) => {
@@ -424,8 +434,7 @@ export function TaskPage() {
     setPendingConfirmation(null);
 
     if (result.type === "task_detail") {
-      setSelectedTaskId(result.taskId);
-      setDetailOpen(true);
+      focusTaskDetail(result.taskId);
       showFeedback(result.message);
       return;
     }
@@ -560,9 +569,7 @@ export function TaskPage() {
   }
 
   function handleSelectTask(taskId: string) {
-    setRequestedTaskId(null);
-    setSelectedTaskId(taskId);
-    setDetailOpen(true);
+    focusTaskDetail(taskId);
   }
 
   function toggleCluster(key: TaskClusterKey) {
