@@ -9,22 +9,35 @@ import type {
 import { isRpcChannelUnavailable } from "./fallback";
 import { NOTIFICATION_METHODS } from "./protocolConstants";
 
-let namedPipeSubscriptionsUnavailable = false;
+const NAMED_PIPE_SUBSCRIPTION_UNAVAILABLE_COOLDOWN_MS = 10_000;
+
+let namedPipeSubscriptionsUnavailableAt = 0;
+
+function clearNamedPipeSubscriptionFailureState() {
+  namedPipeSubscriptionsUnavailableAt = 0;
+}
+
+function shouldShortCircuitNamedPipeSubscriptions() {
+  return (
+    namedPipeSubscriptionsUnavailableAt !== 0 &&
+    Date.now() - namedPipeSubscriptionsUnavailableAt < NAMED_PIPE_SUBSCRIPTION_UNAVAILABLE_COOLDOWN_MS
+  );
+}
 
 function handleNamedPipeSubscriptionFailure(error: unknown) {
   if (isRpcChannelUnavailable(error)) {
-    namedPipeSubscriptionsUnavailable = true;
+    namedPipeSubscriptionsUnavailableAt = Date.now();
     return;
   }
 
   console.warn("rpc subscription failed", error);
 }
 
-// subscribeTask 处理当前模块的相关逻辑。
+// subscribeTask keeps task-centric views aligned with task.updated notifications.
 export function subscribeTask(taskId: string, onMessage: (payload: unknown) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
+  if (!bridge?.subscribe || shouldShortCircuitNamedPipeSubscriptions()) {
     return () => {};
   }
 
@@ -43,6 +56,7 @@ export function subscribeTask(taskId: string, onMessage: (payload: unknown) => v
       }
     })
     .then((subscription) => {
+      clearNamedPipeSubscriptionFailureState();
       if (disposed) {
         void subscription.unsubscribe();
         return;
@@ -63,7 +77,7 @@ export function subscribeTask(taskId: string, onMessage: (payload: unknown) => v
 export function subscribeTaskUpdated(onMessage: (payload: TaskUpdatedNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
+  if (!bridge?.subscribe || shouldShortCircuitNamedPipeSubscriptions()) {
     return () => {};
   }
 
@@ -80,6 +94,7 @@ export function subscribeTaskUpdated(onMessage: (payload: TaskUpdatedNotificatio
       }
     })
     .then((subscription) => {
+      clearNamedPipeSubscriptionFailureState();
       if (disposed) {
         void subscription.unsubscribe();
         return;
@@ -100,7 +115,7 @@ export function subscribeTaskUpdated(onMessage: (payload: TaskUpdatedNotificatio
 export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOverviewUpdatedNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
+  if (!bridge?.subscribe || shouldShortCircuitNamedPipeSubscriptions()) {
     return () => {};
   }
 
@@ -117,6 +132,7 @@ export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOvervi
       }
     })
     .then((subscription) => {
+      clearNamedPipeSubscriptionFailureState();
       if (disposed) {
         void subscription.unsubscribe();
         return;
@@ -137,7 +153,7 @@ export function subscribeMirrorOverviewUpdated(onMessage: (payload: MirrorOvervi
 export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
+  if (!bridge?.subscribe || shouldShortCircuitNamedPipeSubscriptions()) {
     return () => {};
   }
 
@@ -154,6 +170,7 @@ export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNot
       }
     })
     .then((subscription) => {
+      clearNamedPipeSubscriptionFailureState();
       if (disposed) {
         void subscription.unsubscribe();
         return;
@@ -174,7 +191,7 @@ export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNot
 export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
+  if (!bridge?.subscribe || shouldShortCircuitNamedPipeSubscriptions()) {
     return () => {};
   }
 
@@ -191,6 +208,7 @@ export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotific
       }
     })
     .then((subscription) => {
+      clearNamedPipeSubscriptionFailureState();
       if (disposed) {
         void subscription.unsubscribe();
         return;
@@ -214,7 +232,7 @@ export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotific
 export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSteeredNotification | TaskRuntimeNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
-  if (!bridge?.subscribe || namedPipeSubscriptionsUnavailable) {
+  if (!bridge?.subscribe || shouldShortCircuitNamedPipeSubscriptions()) {
     return () => {};
   }
 
@@ -245,6 +263,7 @@ export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSt
         }
       })
       .then((subscription) => {
+        clearNamedPipeSubscriptionFailureState();
         if (disposed) {
           void subscription.unsubscribe();
           return;

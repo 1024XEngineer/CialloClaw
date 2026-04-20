@@ -1012,9 +1012,12 @@ test("rpc client and subscriptions stop repeating unavailable transport failures
   assert.match(fallbackSource, /const loggedFallbackScopes = new Set<string>\(\);/);
   assert.match(fallbackSource, /if \(loggedFallbackScopes\.has\(scope\)\) \{/);
   assert.match(fallbackSource, /"failed to open named pipe"/);
-  assert.match(subscriptionsSource, /let namedPipeSubscriptionsUnavailable = false;/);
+  assert.match(subscriptionsSource, /const NAMED_PIPE_SUBSCRIPTION_UNAVAILABLE_COOLDOWN_MS = 10_000;/);
+  assert.match(subscriptionsSource, /let namedPipeSubscriptionsUnavailableAt = 0;/);
+  assert.match(subscriptionsSource, /function shouldShortCircuitNamedPipeSubscriptions\(\)/);
   assert.match(subscriptionsSource, /if \(isRpcChannelUnavailable\(error\)\) \{/);
-  assert.match(subscriptionsSource, /namedPipeSubscriptionsUnavailable = true;/);
+  assert.match(subscriptionsSource, /namedPipeSubscriptionsUnavailableAt = Date\.now\(\);/);
+  assert.match(subscriptionsSource, /clearNamedPipeSubscriptionFailureState\(\);/);
   assert.match(subscriptionsSource, /\.catch\(handleNamedPipeSubscriptionFailure\)/);
 });
 
