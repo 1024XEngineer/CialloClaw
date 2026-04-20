@@ -4886,6 +4886,54 @@ func TestBuildTaskCitationsPreservesDistinctFormalReferencesForSameArtifact(t *t
 	}
 }
 
+func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "persist formal citations")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	task := runengine.TaskRecord{
+		TaskID: "task_persist_citations",
+		RunID:  "run_persist_citations",
+	}
+	artifacts := []map[string]any{{
+		"artifact_id":   "art_persist_citations",
+		"task_id":       task.TaskID,
+		"artifact_type": "screen_capture",
+		"title":         "persist-screen.png",
+		"path":          "workspace/persist-screen.png",
+		"mime_type":     "image/png",
+	}}
+	toolCalls := []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_persist_citations",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "Fatal build error",
+				"screen_session_id": "screen_sess_persist",
+			},
+		},
+	}}
+
+	service.attachFormalCitations(task, task, toolCalls, nil, map[string]any{
+		"payload": map[string]any{"task_id": task.TaskID},
+	}, artifacts)
+
+	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
+	if err != nil {
+		t.Fatalf("list first-class citations failed: %v", err)
+	}
+	if len(citations) != 1 {
+		t.Fatalf("expected one persisted citation, got %+v", citations)
+	}
+	if citations[0].ArtifactID != "art_persist_citations" || citations[0].EvidenceRole != "error_evidence" {
+		t.Fatalf("expected persisted citation metadata to survive, got %+v", citations[0])
+	}
+	if citations[0].ScreenSessionID != "screen_sess_persist" || citations[0].ExcerptText != "Fatal build error" {
+		t.Fatalf("expected persisted citation evidence fields to survive, got %+v", citations[0])
+	}
+}
+
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 	service := newTestService()
 
@@ -7932,6 +7980,85 @@ func TestServiceTaskDetailGetStructuredFallbackReadsFormalDeliveryFromLoopStore(
 	}
 	if _, ok := payload["url"]; !ok || payload["url"] != nil {
 		t.Fatalf("expected loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackReadsFormalCitationsFromLoopStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail citation fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_citation_only"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_citation",
+		RunID:               "run_structured_citation_only",
+		Title:               "structured citation only task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_citation_only",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_citation_only",
+		SourceType:      "file",
+		SourceRef:       "art_structured_citation_only",
+		Label:           "error_evidence | screen_capture | fatal build error",
+		ArtifactID:      "art_structured_citation_only",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "fatal build error",
+		ScreenSessionID: "screen_sess_citation_only",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save loop runtime citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected loop-store citations to backfill task detail, got %+v", citations)
+	}
+	if citations[0]["artifact_id"] != "art_structured_citation_only" || citations[0]["source_ref"] != "art_structured_citation_only" {
+		t.Fatalf("expected loop-store citation artifact fields to survive, got %+v", citations[0])
+	}
+	if citations[0]["evidence_role"] != "error_evidence" || citations[0]["excerpt_text"] != "fatal build error" {
+		t.Fatalf("expected loop-store citation evidence metadata to survive, got %+v", citations[0])
+	}
+	if citations[0]["screen_session_id"] != "screen_sess_citation_only" {
+		t.Fatalf("expected loop-store citation screen session id to survive, got %+v", citations[0])
 	}
 }
 

@@ -1051,7 +1051,7 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
 		"delivery_result":      deliveryResultValue,
 		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
-		"citations":            protocolCitationList(task.Citations),
+		"citations":            protocolCitationList(s.citationsForTask(task.TaskID, task.Citations)),
 		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
 		"approval_request":     approvalRequestValue,
 		"authorization_record": authorizationRecordValue,
@@ -3051,6 +3051,46 @@ func (s *Service) latestDeliveryResultFromStorage(taskID string) map[string]any 
 	}
 }
 
+// loadTaskCitationsFromStorage restores the current formal citation chain from
+// first-class loop runtime storage when task_run snapshots are unavailable.
+func (s *Service) loadTaskCitationsFromStorage(taskID string) []map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID)
+	if err != nil {
+		return nil
+	}
+	citations := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		citation := map[string]any{
+			"citation_id": record.CitationID,
+			"task_id":     record.TaskID,
+			"run_id":      record.RunID,
+			"source_type": record.SourceType,
+			"source_ref":  record.SourceRef,
+			"label":       record.Label,
+		}
+		if strings.TrimSpace(record.ArtifactID) != "" {
+			citation["artifact_id"] = record.ArtifactID
+		}
+		if strings.TrimSpace(record.ArtifactType) != "" {
+			citation["artifact_type"] = record.ArtifactType
+		}
+		if strings.TrimSpace(record.EvidenceRole) != "" {
+			citation["evidence_role"] = record.EvidenceRole
+		}
+		if strings.TrimSpace(record.ExcerptText) != "" {
+			citation["excerpt_text"] = record.ExcerptText
+		}
+		if strings.TrimSpace(record.ScreenSessionID) != "" {
+			citation["screen_session_id"] = record.ScreenSessionID
+		}
+		citations = append(citations, citation)
+	}
+	return citations
+}
+
 func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
 	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
@@ -3362,6 +3402,9 @@ func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	}
 	if len(task.DeliveryResult) == 0 {
 		task.DeliveryResult = s.latestDeliveryResultFromStorage(task.TaskID)
+	}
+	if len(task.Citations) == 0 {
+		task.Citations = s.loadTaskCitationsFromStorage(task.TaskID)
 	}
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {
@@ -5237,6 +5280,13 @@ func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]
 	return mergeArtifactsWithStored(delivery.EnsureArtifactIdentifiers(taskID, runtimeArtifacts), s.loadArtifactsFromStorage(taskID, 0, 0))
 }
 
+func (s *Service) citationsForTask(taskID string, runtimeCitations []map[string]any) []map[string]any {
+	if len(runtimeCitations) > 0 {
+		return cloneMapSlice(runtimeCitations)
+	}
+	return s.loadTaskCitationsFromStorage(taskID)
+}
+
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
 	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
@@ -5917,12 +5967,39 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // leaking raw tool outputs or worker-only payloads.
 func (s *Service) attachFormalCitations(sourceTask runengine.TaskRecord, persistedTask runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) runengine.TaskRecord {
 	citations := buildTaskCitations(sourceTask, toolCalls, toolOutput, deliveryResult, artifacts)
+	s.persistFormalCitations(persistedTask.TaskID, citations)
 	if _, ok := s.runEngine.SetCitations(persistedTask.TaskID, citations); ok {
 		if updatedTask, exists := s.runEngine.GetTask(persistedTask.TaskID); exists {
 			return updatedTask
 		}
 	}
 	return persistedTask
+}
+
+// persistFormalCitations keeps the first-class citation chain queryable even
+// after task_run compatibility snapshots have been compacted away.
+func (s *Service) persistFormalCitations(taskID string, citations []map[string]any) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return
+	}
+	records := make([]storage.CitationRecord, 0, len(citations))
+	for index, citation := range citations {
+		records = append(records, storage.CitationRecord{
+			CitationID:      stringValue(citation, "citation_id", ""),
+			TaskID:          firstNonEmptyString(stringValue(citation, "task_id", ""), taskID),
+			RunID:           stringValue(citation, "run_id", ""),
+			SourceType:      stringValue(citation, "source_type", "context"),
+			SourceRef:       stringValue(citation, "source_ref", ""),
+			Label:           stringValue(citation, "label", ""),
+			ArtifactID:      stringValue(citation, "artifact_id", ""),
+			ArtifactType:    stringValue(citation, "artifact_type", ""),
+			EvidenceRole:    stringValue(citation, "evidence_role", ""),
+			ExcerptText:     stringValue(citation, "excerpt_text", ""),
+			ScreenSessionID: stringValue(citation, "screen_session_id", ""),
+			OrderIndex:      index,
+		})
+	}
+	_ = s.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, records)
 }
 
 func buildTaskCitations(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) []map[string]any {

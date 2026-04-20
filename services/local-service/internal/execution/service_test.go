@@ -38,6 +38,7 @@ type recordingLoopRuntimeStore struct {
 	steps           []storage.StepRecord
 	events          []storage.EventRecord
 	deliveryResults []storage.DeliveryResultRecord
+	citationsByTask map[string][]storage.CitationRecord
 }
 
 func (s *recordingLoopRuntimeStore) SaveRun(_ context.Context, record storage.RunRecord) error {
@@ -60,6 +61,14 @@ func (s *recordingLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record
 	return nil
 }
 
+func (s *recordingLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, taskID string, records []storage.CitationRecord) error {
+	if s.citationsByTask == nil {
+		s.citationsByTask = map[string][]storage.CitationRecord{}
+	}
+	s.citationsByTask[taskID] = append([]storage.CitationRecord(nil), records...)
+	return nil
+}
+
 func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (storage.DeliveryResultRecord, bool, error) {
 	var latest storage.DeliveryResultRecord
 	found := false
@@ -73,6 +82,10 @@ func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, t
 		}
 	}
 	return latest, found, nil
+}
+
+func (s *recordingLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID string) ([]storage.CitationRecord, error) {
+	return append([]storage.CitationRecord(nil), s.citationsByTask[taskID]...), nil
 }
 
 func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]storage.EventRecord, int, error) {

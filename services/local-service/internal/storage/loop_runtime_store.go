@@ -68,12 +68,29 @@ type DeliveryResultRecord struct {
 	CreatedAt        string
 }
 
+// CitationRecord persists one formal citation snapshot outside task_runs.
+type CitationRecord struct {
+	CitationID      string
+	TaskID          string
+	RunID           string
+	SourceType      string
+	SourceRef       string
+	Label           string
+	ArtifactID      string
+	ArtifactType    string
+	EvidenceRole    string
+	ExcerptText     string
+	ScreenSessionID string
+	OrderIndex      int
+}
+
 type inMemoryLoopRuntimeStore struct {
 	mu              sync.Mutex
 	runs            map[string]RunRecord
 	steps           map[string]StepRecord
 	events          []EventRecord
 	deliveryResults map[string]DeliveryResultRecord
+	citations       map[string][]CitationRecord
 }
 
 func newInMemoryLoopRuntimeStore() *inMemoryLoopRuntimeStore {
@@ -82,6 +99,7 @@ func newInMemoryLoopRuntimeStore() *inMemoryLoopRuntimeStore {
 		steps:           map[string]StepRecord{},
 		events:          []EventRecord{},
 		deliveryResults: map[string]DeliveryResultRecord{},
+		citations:       map[string][]CitationRecord{},
 	}
 }
 
@@ -115,6 +133,17 @@ func (s *inMemoryLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record 
 	return nil
 }
 
+func (s *inMemoryLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, taskID string, records []CitationRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cloned := make([]CitationRecord, 0, len(records))
+	for _, record := range records {
+		cloned = append(cloned, record)
+	}
+	s.citations[taskID] = cloned
+	return nil
+}
+
 func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (DeliveryResultRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,6 +159,19 @@ func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, ta
 		}
 	}
 	return latest, found, nil
+}
+
+func (s *inMemoryLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID string) ([]CitationRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := append([]CitationRecord(nil), s.citations[taskID]...)
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].OrderIndex == records[j].OrderIndex {
+			return records[i].CitationID < records[j].CitationID
+		}
+		return records[i].OrderIndex < records[j].OrderIndex
+	})
+	return records, nil
 }
 
 func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
@@ -235,6 +277,33 @@ func (s *SQLiteLoopRuntimeStore) SaveDeliveryResult(ctx context.Context, record 
 	return nil
 }
 
+func (s *SQLiteLoopRuntimeStore) ReplaceTaskCitations(ctx context.Context, taskID string, records []CitationRecord) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin task citation replace: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM task_citations WHERE task_id = ?`, taskID); err != nil {
+		return fmt.Errorf("delete task citations: %w", err)
+	}
+	for _, record := range records {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO task_citations (
+				citation_id, task_id, run_id, source_type, source_ref, label,
+				artifact_id, artifact_type, evidence_role, excerpt_text, screen_session_id, order_index
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, record.CitationID, record.TaskID, nullableRuntimeString(record.RunID), record.SourceType, record.SourceRef, record.Label,
+			nullableRuntimeString(record.ArtifactID), nullableRuntimeString(record.ArtifactType), nullableRuntimeString(record.EvidenceRole),
+			nullableRuntimeString(record.ExcerptText), nullableRuntimeString(record.ScreenSessionID), record.OrderIndex); err != nil {
+			return fmt.Errorf("insert task citation %s: %w", record.CitationID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task citation replace: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT delivery_result_id, task_id, type, title, payload_json, preview_text, created_at
@@ -253,6 +322,52 @@ func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, ta
 	}
 	record.PreviewText = previewText.String
 	return record, true, nil
+}
+
+func (s *SQLiteLoopRuntimeStore) ListTaskCitations(ctx context.Context, taskID string) ([]CitationRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT citation_id, task_id, run_id, source_type, source_ref, label,
+		       artifact_id, artifact_type, evidence_role, excerpt_text, screen_session_id, order_index
+		FROM task_citations
+		WHERE task_id = ?
+		ORDER BY order_index ASC, citation_id ASC
+	`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list task citations: %w", err)
+	}
+	defer rows.Close()
+	items := make([]CitationRecord, 0)
+	for rows.Next() {
+		var record CitationRecord
+		var runID, artifactID, artifactType, evidenceRole, excerptText, screenSessionID sql.NullString
+		if err := rows.Scan(
+			&record.CitationID,
+			&record.TaskID,
+			&runID,
+			&record.SourceType,
+			&record.SourceRef,
+			&record.Label,
+			&artifactID,
+			&artifactType,
+			&evidenceRole,
+			&excerptText,
+			&screenSessionID,
+			&record.OrderIndex,
+		); err != nil {
+			return nil, fmt.Errorf("scan task citation: %w", err)
+		}
+		record.RunID = runID.String
+		record.ArtifactID = artifactID.String
+		record.ArtifactType = artifactType.String
+		record.EvidenceRole = evidenceRole.String
+		record.ExcerptText = excerptText.String
+		record.ScreenSessionID = screenSessionID.String
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task citations: %w", err)
+	}
+	return items, nil
 }
 
 func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
@@ -334,6 +449,8 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_events_task_time ON events(task_id, created_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS delivery_results (delivery_result_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, preview_text TEXT, created_at TEXT NOT NULL);`,
 		`CREATE INDEX IF NOT EXISTS idx_delivery_results_task_time ON delivery_results(task_id, created_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS task_citations (citation_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT, source_type TEXT NOT NULL, source_ref TEXT NOT NULL, label TEXT NOT NULL, artifact_id TEXT, artifact_type TEXT, evidence_role TEXT, excerpt_text TEXT, screen_session_id TEXT, order_index INTEGER NOT NULL DEFAULT 0);`,
+		`CREATE INDEX IF NOT EXISTS idx_task_citations_task_order ON task_citations(task_id, order_index ASC, citation_id ASC);`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
