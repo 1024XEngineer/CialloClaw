@@ -8062,6 +8062,135 @@ func TestServiceTaskDetailGetStructuredFallbackReadsFormalCitationsFromLoopStore
 	}
 }
 
+func TestServiceTaskDetailGetStructuredFallbackPrefersFirstClassDeliveryAndCitationsOverSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail mixed state precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_mixed_state"
+	finishedAt := time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_mixed_state",
+		RunID:             "run_structured_mixed_state",
+		Title:             "structured mixed state task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Timeline: []storage.TaskStepSnapshot{{
+			StepID:        "step_structured_mixed_state_snapshot",
+			TaskID:        taskID,
+			Name:          "deliver_result",
+			Status:        "completed",
+			OrderIndex:    1,
+			InputSummary:  "snapshot input",
+			OutputSummary: "snapshot output",
+		}},
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "snapshot delivery",
+			"preview_text": "stale snapshot delivery",
+			"payload":      map[string]any{"task_id": taskID, "path": "workspace/stale-snapshot.md", "url": nil},
+		},
+		Citations: []map[string]any{{
+			"citation_id": "cit_snapshot_" + taskID,
+			"task_id":     taskID,
+			"run_id":      "run_structured_mixed_state",
+			"source_type": "file",
+			"source_ref":  "art_snapshot_only",
+			"label":       "snapshot evidence",
+			"artifact_id": "art_snapshot_only",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_mixed_state",
+		RunID:               "run_structured_mixed_state",
+		Title:               "structured mixed state task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "first-class delivery",
+		PayloadJSON:      `{"task_id":"` + taskID + `","path":"workspace/formal-delivery.md","url":null}`,
+		PreviewText:      "newer first-class delivery",
+		CreatedAt:        "2026-04-15T14:07:00Z",
+	}); err != nil {
+		t.Fatalf("save first-class delivery result failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_mixed_state",
+		SourceType:      "file",
+		SourceRef:       "art_first_class",
+		Label:           "error_evidence | screen_capture | formal excerpt",
+		ArtifactID:      "art_first_class",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "formal excerpt",
+		ScreenSessionID: "screen_sess_first_class",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save first-class citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected mixed-state detail to expose formal delivery_result, got %+v", detailResult["delivery_result"])
+	}
+	if deliveryResult["title"] != "first-class delivery" || deliveryResult["preview_text"] != "newer first-class delivery" {
+		t.Fatalf("expected first-class delivery to override snapshot delivery, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != "workspace/formal-delivery.md" {
+		t.Fatalf("expected first-class delivery payload to override snapshot payload, got %+v", payload)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected first-class citations to override snapshot citations, got %+v", citations)
+	}
+	if citations[0]["source_ref"] != "art_first_class" || citations[0]["artifact_id"] != "art_first_class" {
+		t.Fatalf("expected first-class citation source to override snapshot citation, got %+v", citations[0])
+	}
+	if citations[0]["screen_session_id"] != "screen_sess_first_class" || citations[0]["excerpt_text"] != "formal excerpt" {
+		t.Fatalf("expected first-class citation metadata to override snapshot citation, got %+v", citations[0])
+	}
+}
+
 func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKeys(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured task detail sparse delivery fallback")
 	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {

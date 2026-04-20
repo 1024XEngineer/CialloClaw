@@ -1517,6 +1517,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
 - `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
 - 对屏幕感知类任务，任务详情应通过正式 `delivery_result`、`artifact`、事件和治理对象回看模型结论、截图证据、OCR 摘要和授权过程，而不是直接渲染平台采样结果或裸 worker 输出。
+- 当 `task_run.snapshot_json` 与一等运行态存储同时存在时，`delivery_result` 与 `citations` 必须以前者的正式一等存储记录为准，兼容快照只能作为缺省回退，不能覆盖更新后的正式交付或引用链。
 - 若任务存在正式视觉或上下文引用，`citations` 应返回稳定 `citation` 对象列表，并在需要时补齐 `artifact_id / artifact_type / evidence_role / excerpt_text / screen_session_id` 等结构化字段，用于区分截图证据、OCR 摘要和引用片段，而不是把引用信息混进 artifact 扩展字段或裸 tool output。
 - 当 `tasks / task_steps` 已进入结构化读取路径时，`citations` 仍必须可从一等存储重建；不能把 `task_run` 兼容快照当作任务详情正式引用链的唯一来源。
 
