@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -628,7 +629,13 @@ func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
-	return firstNonEmptyString(snapshot.PageTitle, firstNonEmptyString(snapshot.WindowTitle, "当前屏幕"))
+	return firstNonEmptyString(
+		snapshot.PageTitle,
+		firstNonEmptyString(
+			snapshot.WindowTitle,
+			firstNonEmptyString(snapshot.ScreenSummary, firstNonEmptyString(snapshot.VisibleText, "当前屏幕")),
+		),
+	)
 }
 
 func screenTargetObject(arguments map[string]any) string {
@@ -897,6 +904,7 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 		WindowSwitches:  signals.WindowSwitchCount,
 		PageSwitches:    signals.PageSwitchCount,
 		CopyCount:       signals.CopyCount,
+		Observations:    s.recommendationObservations(signals),
 		Signals:         signals,
 		UnfinishedTasks: unfinishedTasks,
 		FinishedTasks:   finishedTasks,
@@ -906,6 +914,40 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 		"cooldown_hit": result.CooldownHit,
 		"items":        result.Items,
 	}, nil
+}
+
+func (s *Service) recommendationObservations(signals perception.SignalSnapshot) []string {
+	observations := perception.BehaviorSignals(signals)
+	if hasErrorOpportunity := strings.TrimSpace(signals.ErrorText) != "" || strings.Contains(strings.ToLower(strings.Join([]string{signals.VisibleText, signals.ScreenSummary}, " ")), "error") || strings.Contains(strings.ToLower(strings.Join([]string{signals.VisibleText, signals.ScreenSummary}, " ")), "报错"); hasErrorOpportunity {
+		observations = append(observations, "当前上下文包含可解释的视觉错误信号。")
+	}
+	if strings.TrimSpace(signals.ScreenSummary) != "" {
+		observations = append(observations, fmt.Sprintf("screen:%s", truncateText(signals.ScreenSummary, 48)))
+	}
+	if strings.TrimSpace(signals.VisibleText) != "" {
+		observations = append(observations, fmt.Sprintf("visible:%s", truncateText(signals.VisibleText, 48)))
+	}
+	return uniqueTrimmedStrings(observations)
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 // RecommendationFeedbackSubmit handles agent.recommendation.feedback.submit.
@@ -972,6 +1014,22 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest
 	}
+	authorizationRecord := normalizeTaskDetailAuthorizationRecord(task.TaskID, task.Authorization)
+	if authorizationRecord == nil {
+		authorizationRecord = s.latestAuthorizationRecordFromStorage(task.TaskID)
+	}
+	authorizationRecordValue := any(nil)
+	if authorizationRecord != nil {
+		authorizationRecordValue = authorizationRecord
+	}
+	auditRecord := latestFormalTaskAuditRecord(task.TaskID, task.AuditRecords)
+	if auditRecord == nil {
+		auditRecord = s.latestAuditRecordFromStorage(task.TaskID)
+	}
+	auditRecordValue := any(nil)
+	if auditRecord != nil {
+		auditRecordValue = auditRecord
+	}
 	securitySummary["pending_authorizations"] = 0
 	if approvalRequest != nil {
 		securitySummary["pending_authorizations"] = 1
@@ -985,25 +1043,46 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
 
 	return map[string]any{
-		"task":              taskMap(task),
-		"timeline":          protocolTaskStepList(timelineMap(task.Timeline)),
-		"artifacts":         protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
-		"mirror_references": protocolMirrorReferenceList(task.MirrorReferences),
-		"approval_request":  approvalRequestValue,
-		"security_summary":  securitySummary,
-		"runtime_summary":   runtimeSummary,
+		"task":                 taskMap(task),
+		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
+		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
+		"citations":            protocolCitationList(task.Citations),
+		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
+		"approval_request":     approvalRequestValue,
+		"authorization_record": authorizationRecordValue,
+		"audit_record":         auditRecordValue,
+		"security_summary":     securitySummary,
+		"runtime_summary":      runtimeSummary,
 	}, nil
 }
 
 func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]any {
 	summary := map[string]any{
-		"loop_stop_reason":      nil,
-		"events_count":          0,
-		"latest_event_type":     nil,
-		"active_steering_count": len(task.SteeringMessages),
+		"loop_stop_reason":        nil,
+		"events_count":            0,
+		"latest_event_type":       nil,
+		"active_steering_count":   len(task.SteeringMessages),
+		"latest_failure_code":     nil,
+		"latest_failure_category": nil,
+		"latest_failure_summary":  nil,
+		"observation_signals":     []string{},
 	}
 	if strings.TrimSpace(task.LoopStopReason) != "" {
 		summary["loop_stop_reason"] = task.LoopStopReason
+	}
+	if failureCode, failureCategory, failureSummary := latestTaskFailure(task); failureCode != "" || failureSummary != "" {
+		if failureCode != "" {
+			summary["latest_failure_code"] = failureCode
+		}
+		if failureCategory != "" {
+			summary["latest_failure_category"] = failureCategory
+		}
+		if failureSummary != "" {
+			summary["latest_failure_summary"] = failureSummary
+		}
+	}
+	if observationSignals := taskObservationSignals(task); len(observationSignals) > 0 {
+		summary["observation_signals"] = observationSignals
 	}
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return summary
@@ -1019,6 +1098,57 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 		}
 	}
 	return summary
+}
+
+func latestTaskFailure(task runengine.TaskRecord) (string, string, string) {
+	var fallbackCode string
+	var fallbackCategory string
+	var fallbackSummary string
+	for index := len(task.AuditRecords) - 1; index >= 0; index-- {
+		record := task.AuditRecords[index]
+		if stringValue(record, "result", "") != "failed" {
+			continue
+		}
+		metadata := mapValue(record, "metadata")
+		failureCode := strings.TrimSpace(stringValue(metadata, "failure_code", ""))
+		failureCategory := strings.TrimSpace(stringValue(metadata, "failure_category", ""))
+		failureSummary := firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
+		if failureCode != "" || failureCategory != "" {
+			return firstNonEmptyString(failureCode, stringValue(record, "action", "")), firstNonEmptyString(failureCategory, firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", ""))), failureSummary
+		}
+		if fallbackCode == "" && fallbackCategory == "" && fallbackSummary == "" {
+			fallbackCode = firstNonEmptyString(stringValue(record, "action", ""), firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", "")))
+			fallbackCategory = firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", ""))
+			fallbackSummary = failureSummary
+		}
+	}
+	if fallbackCode != "" || fallbackCategory != "" || fallbackSummary != "" {
+		return fallbackCode, fallbackCategory, fallbackSummary
+	}
+	if task.Status == "failed" {
+		return firstNonEmptyString(task.CurrentStep, "execution_failed"), "task_execution", firstNonEmptyString(stringValue(task.BubbleMessage, "text", ""), "任务执行失败")
+	}
+	return "", "", ""
+}
+
+func taskObservationSignals(task runengine.TaskRecord) []string {
+	result := make([]string, 0, 4)
+	observationSources := []struct {
+		signal string
+		value  string
+	}{
+		{signal: "screen_summary", value: task.Snapshot.ScreenSummary},
+		{signal: "visible_text", value: task.Snapshot.VisibleText},
+		{signal: "page_title", value: task.Snapshot.PageTitle},
+		{signal: "window_title", value: task.Snapshot.WindowTitle},
+	}
+	for _, item := range observationSources {
+		if strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		result = append(result, item.signal)
+	}
+	return uniqueTrimmedStrings(result)
 }
 
 // TaskEventsList handles agent.task.events.list and exposes normalized runtime
@@ -1220,6 +1350,28 @@ func protocolArtifactList(artifacts []map[string]any) []map[string]any {
 		return []map[string]any{}
 	}
 	return result
+}
+
+func protocolCitationList(citations []map[string]any) []map[string]any {
+	if len(citations) == 0 {
+		return []map[string]any{}
+	}
+	result := make([]map[string]any, 0, len(citations))
+	for _, citation := range citations {
+		result = append(result, protocolCitationMap(citation))
+	}
+	return result
+}
+
+func protocolCitationMap(citation map[string]any) map[string]any {
+	return map[string]any{
+		"citation_id": stringValue(citation, "citation_id", ""),
+		"task_id":     stringValue(citation, "task_id", ""),
+		"run_id":      stringValue(citation, "run_id", ""),
+		"source_type": stringValue(citation, "source_type", "context"),
+		"source_ref":  stringValue(citation, "source_ref", ""),
+		"label":       stringValue(citation, "label", ""),
+	}
 }
 
 // protocolArtifactMap trims one artifact to the formal Artifact contract.
@@ -2351,7 +2503,7 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
 	if s.executor == nil || s.executor.ScreenClient() == nil {
-		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, errors.New("screen capability unavailable"))
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, tools.ErrScreenCaptureNotSupported)
 		return failedTask, failureBubble, nil, nil
 	}
 	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
@@ -2734,10 +2886,24 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 	if s.storage == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
+	taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID)
 	if s.storage.TaskStore() != nil {
 		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			if taskRunOK {
+				task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+			}
 			return task, true
 		}
+	}
+	if taskRunOK {
+		return taskRunTask, true
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func (s *Service) taskDetailFromTaskRunStorage(taskID string) (runengine.TaskRecord, bool) {
+	if s.storage == nil || s.storage.TaskRunStore() == nil || strings.TrimSpace(taskID) == "" {
+		return runengine.TaskRecord{}, false
 	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil {
@@ -2749,6 +2915,65 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 		}
 	}
 	return runengine.TaskRecord{}, false
+}
+
+// mergeStructuredTaskDetailCompatibility fills task-detail fields that are
+// still sourced from task-run snapshots while the first-class task tables are
+// being rolled out. The structured row stays authoritative and the task-run
+// snapshot only backfills fields the structured read could not rebuild.
+func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskRecord) runengine.TaskRecord {
+	if task.FinishedAt == nil && taskRunTask.FinishedAt != nil {
+		task.FinishedAt = cloneTimePointer(taskRunTask.FinishedAt)
+	}
+	if len(task.BubbleMessage) == 0 {
+		task.BubbleMessage = cloneMap(taskRunTask.BubbleMessage)
+	}
+	if len(task.DeliveryResult) == 0 {
+		task.DeliveryResult = cloneMap(taskRunTask.DeliveryResult)
+	}
+	if len(task.Artifacts) == 0 {
+		task.Artifacts = cloneMapSlice(taskRunTask.Artifacts)
+	}
+	if len(task.Citations) == 0 {
+		task.Citations = cloneMapSlice(taskRunTask.Citations)
+	}
+	if len(task.AuditRecords) == 0 {
+		task.AuditRecords = cloneMapSlice(taskRunTask.AuditRecords)
+	}
+	if len(task.MirrorReferences) == 0 {
+		task.MirrorReferences = cloneMapSlice(taskRunTask.MirrorReferences)
+	}
+	if len(task.ApprovalRequest) == 0 {
+		task.ApprovalRequest = cloneMap(taskRunTask.ApprovalRequest)
+	}
+	if len(task.PendingExecution) == 0 {
+		task.PendingExecution = cloneMap(taskRunTask.PendingExecution)
+	}
+	if len(task.Authorization) == 0 {
+		task.Authorization = cloneMap(taskRunTask.Authorization)
+	}
+	if len(task.ImpactScope) == 0 {
+		task.ImpactScope = cloneMap(taskRunTask.ImpactScope)
+	}
+	if len(task.TokenUsage) == 0 {
+		task.TokenUsage = cloneMap(taskRunTask.TokenUsage)
+	}
+	if len(task.LatestEvent) == 0 {
+		task.LatestEvent = cloneMap(taskRunTask.LatestEvent)
+	}
+	if len(task.LatestToolCall) == 0 {
+		task.LatestToolCall = cloneMap(taskRunTask.LatestToolCall)
+	}
+	if strings.TrimSpace(task.LoopStopReason) == "" {
+		task.LoopStopReason = taskRunTask.LoopStopReason
+	}
+	if len(task.SteeringMessages) == 0 {
+		task.SteeringMessages = append([]string(nil), taskRunTask.SteeringMessages...)
+	}
+	if strings.TrimSpace(task.CurrentStepStatus) == "" {
+		task.CurrentStepStatus = taskRunTask.CurrentStepStatus
+	}
+	return task
 }
 
 func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
@@ -2976,6 +3201,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		Citations:         cloneMapSlice(record.Citations),
 		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
@@ -3095,6 +3321,17 @@ func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel st
 	return nil
 }
 
+func (s *Service) latestAuthorizationRecordFromStorage(taskID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.AuthorizationRecordStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	items, _, err := s.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 1, 0)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	return normalizeTaskDetailAuthorizationRecord(taskID, authorizationRecordRecordToMap(items[0]))
+}
+
 func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string]any {
 	result := map[string]any{
 		"approval_id":    record.ApprovalID,
@@ -3114,6 +3351,18 @@ func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string
 		}
 	}
 	return result
+}
+
+func authorizationRecordRecordToMap(record storage.AuthorizationRecordRecord) map[string]any {
+	return map[string]any{
+		"authorization_record_id": record.AuthorizationRecordID,
+		"task_id":                 record.TaskID,
+		"approval_id":             record.ApprovalID,
+		"decision":                record.Decision,
+		"remember_rule":           record.RememberRule,
+		"operator":                record.Operator,
+		"created_at":              record.CreatedAt,
+	}
 }
 
 func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.TaskStepRecord {
@@ -3706,7 +3955,7 @@ func (s *Service) latestAuditRecordFromStorage(taskID string) map[string]any {
 	if err != nil || len(items) == 0 {
 		return nil
 	}
-	return items[0].Map()
+	return normalizeTaskDetailAuditRecord(taskID, items[0].Map())
 }
 
 func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool) map[string]any {
@@ -4040,6 +4289,7 @@ func findTaskRecordFromStorage(records []storage.TaskRunRecord, taskID string) (
 				BubbleMessage:     cloneMap(record.BubbleMessage),
 				DeliveryResult:    cloneMap(record.DeliveryResult),
 				Artifacts:         cloneMapSlice(record.Artifacts),
+				Citations:         cloneMapSlice(record.Citations),
 				AuditRecords:      cloneMapSlice(record.AuditRecords),
 				MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 				SecuritySummary:   cloneMap(record.SecuritySummary),
@@ -4079,6 +4329,81 @@ func taskTimelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.Ta
 		}
 	}
 	return result
+}
+
+func normalizeTaskDetailAuthorizationRecord(taskID string, authorizationRecord map[string]any) map[string]any {
+	if len(authorizationRecord) == 0 {
+		return nil
+	}
+
+	recordID := strings.TrimSpace(stringValue(authorizationRecord, "authorization_record_id", ""))
+	recordTaskID := strings.TrimSpace(stringValue(authorizationRecord, "task_id", ""))
+	approvalID := strings.TrimSpace(stringValue(authorizationRecord, "approval_id", ""))
+	decision := normalizeTaskDetailAuthorizationDecision(stringValue(authorizationRecord, "decision", ""))
+	operator := strings.TrimSpace(stringValue(authorizationRecord, "operator", ""))
+	createdAt := strings.TrimSpace(stringValue(authorizationRecord, "created_at", ""))
+	if recordID == "" || recordTaskID != taskID || approvalID == "" || decision == "" || operator == "" || createdAt == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"authorization_record_id": recordID,
+		"task_id":                 recordTaskID,
+		"approval_id":             approvalID,
+		"decision":                decision,
+		"remember_rule":           boolValue(authorizationRecord, "remember_rule", false),
+		"operator":                operator,
+		"created_at":              createdAt,
+	}
+}
+
+func normalizeTaskDetailAuthorizationDecision(decision string) string {
+	switch strings.TrimSpace(decision) {
+	case "allow_once", "allow_always":
+		return "allow_once"
+	case "deny_once", "deny_always":
+		return "deny_once"
+	default:
+		return ""
+	}
+}
+
+func latestFormalTaskAuditRecord(taskID string, auditRecords []map[string]any) map[string]any {
+	for index := len(auditRecords) - 1; index >= 0; index-- {
+		if normalized := normalizeTaskDetailAuditRecord(taskID, auditRecords[index]); normalized != nil {
+			return normalized
+		}
+	}
+	return nil
+}
+
+func normalizeTaskDetailAuditRecord(taskID string, auditRecord map[string]any) map[string]any {
+	if len(auditRecord) == 0 {
+		return nil
+	}
+
+	recordID := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "audit_id", ""), stringValue(auditRecord, "audit_record_id", "")))
+	recordTaskID := strings.TrimSpace(stringValue(auditRecord, "task_id", ""))
+	recordType := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "type", ""), stringValue(auditRecord, "category", "")))
+	action := strings.TrimSpace(stringValue(auditRecord, "action", ""))
+	summary := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "summary", ""), stringValue(auditRecord, "reason", "")))
+	target := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "target", ""), impactScopeTarget(mapValue(auditRecord, "impact_scope"), "")))
+	result := strings.TrimSpace(stringValue(auditRecord, "result", ""))
+	createdAt := strings.TrimSpace(stringValue(auditRecord, "created_at", ""))
+	if recordID == "" || recordTaskID != taskID || recordType == "" || action == "" || summary == "" || target == "" || result == "" || createdAt == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"audit_id":   recordID,
+		"task_id":    recordTaskID,
+		"type":       recordType,
+		"action":     action,
+		"summary":    summary,
+		"target":     target,
+		"result":     result,
+		"created_at": createdAt,
+	}
 }
 
 func taskNotificationsFromStorage(values []storage.NotificationSnapshot) []runengine.NotificationRecord {
@@ -5438,6 +5763,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 		}
+		updatedTask = s.attachFormalCitations(processingTask, updatedTask, nil, nil, deliveryResult, artifacts)
 		s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, deliveryResult, artifacts)
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
@@ -5503,8 +5829,133 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
+	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// attachFormalCitations upgrades execution-side citation seeds into protocol-facing
+// citation objects so task detail can expose stable evidence references without
+// leaking raw tool outputs or worker-only payloads.
+func (s *Service) attachFormalCitations(sourceTask runengine.TaskRecord, persistedTask runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) runengine.TaskRecord {
+	citations := buildTaskCitations(sourceTask, toolCalls, toolOutput, deliveryResult, artifacts)
+	if _, ok := s.runEngine.SetCitations(persistedTask.TaskID, citations); ok {
+		if updatedTask, exists := s.runEngine.GetTask(persistedTask.TaskID); exists {
+			return updatedTask
+		}
+	}
+	return persistedTask
+}
+
+func buildTaskCitations(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) []map[string]any {
+	citations := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	artifactsByID := make(map[string]map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactID := stringValue(artifact, "artifact_id", "")
+		if strings.TrimSpace(artifactID) != "" {
+			artifactsByID[artifactID] = cloneMap(artifact)
+		}
+	}
+	for _, call := range toolCalls {
+		seed := mapValue(call.Output, "citation_seed")
+		if len(seed) == 0 {
+			continue
+		}
+		citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+		if len(citation) == 0 {
+			continue
+		}
+		citationID := stringValue(citation, "citation_id", "")
+		if _, ok := seen[citationID]; ok {
+			continue
+		}
+		seen[citationID] = struct{}{}
+		citations = append(citations, citation)
+	}
+	if seed := mapValue(toolOutput, "citation_seed"); len(seed) > 0 {
+		citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+		if len(citation) > 0 {
+			citationID := stringValue(citation, "citation_id", "")
+			if _, ok := seen[citationID]; !ok {
+				seen[citationID] = struct{}{}
+				citations = append(citations, citation)
+			}
+		}
+	}
+	if latestSeed := mapValue(task.LatestToolCall, "output"); len(latestSeed) > 0 {
+		seed := mapValue(latestSeed, "citation_seed")
+		if len(seed) > 0 {
+			citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+			if len(citation) > 0 {
+				citationID := stringValue(citation, "citation_id", "")
+				if _, ok := seen[citationID]; !ok {
+					citations = append(citations, citation)
+				}
+			}
+		}
+	}
+	return citations
+}
+
+func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsByID map[string]map[string]any, deliveryResult map[string]any) map[string]any {
+	artifactID := stringValue(seed, "artifact_id", "")
+	artifactType := stringValue(seed, "artifact_type", "")
+	evidenceRole := stringValue(seed, "evidence_role", "")
+	ocrExcerpt := stringValue(seed, "ocr_excerpt", "")
+	sourceRef := firstNonEmptyString(artifactID, stringValue(seed, "screen_session_id", ""))
+	if strings.TrimSpace(sourceRef) == "" {
+		sourceRef = stringValue(mapValue(deliveryResult, "payload"), "task_id", task.TaskID)
+	}
+	labelParts := make([]string, 0, 3)
+	if strings.TrimSpace(evidenceRole) != "" {
+		labelParts = append(labelParts, evidenceRole)
+	}
+	if strings.TrimSpace(artifactType) != "" {
+		labelParts = append(labelParts, artifactType)
+	}
+	if strings.TrimSpace(ocrExcerpt) != "" {
+		labelParts = append(labelParts, truncateText(ocrExcerpt, 64))
+	}
+	label := strings.Join(labelParts, " | ")
+	if strings.TrimSpace(label) == "" {
+		label = "screen evidence"
+	}
+	sourceType := "context"
+	if _, ok := artifactsByID[artifactID]; ok {
+		sourceType = "file"
+	}
+	identity := stableCitationIdentity(task.TaskID, sourceType, sourceRef, seed)
+	return map[string]any{
+		"citation_id": fmt.Sprintf("cit_%s_%s", task.TaskID, identity),
+		"task_id":     task.TaskID,
+		"run_id":      task.RunID,
+		"source_type": sourceType,
+		"source_ref":  sourceRef,
+		"label":       label,
+	}
+}
+
+// stableCitationIdentity derives a deterministic citation fingerprint from the
+// full formal seed so identical seeds collapse while distinct references on the
+// same artifact remain separately addressable.
+func stableCitationIdentity(taskID, sourceType, sourceRef string, seed map[string]any) string {
+	normalized := map[string]any{
+		"task_id":           taskID,
+		"source_type":       strings.TrimSpace(sourceType),
+		"source_ref":        strings.TrimSpace(sourceRef),
+		"artifact_id":       strings.TrimSpace(stringValue(seed, "artifact_id", "")),
+		"artifact_type":     strings.TrimSpace(stringValue(seed, "artifact_type", "")),
+		"evidence_role":     strings.TrimSpace(stringValue(seed, "evidence_role", "")),
+		"ocr_excerpt":       strings.TrimSpace(stringValue(seed, "ocr_excerpt", "")),
+		"screen_session_id": strings.TrimSpace(stringValue(seed, "screen_session_id", "")),
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return "evidence"
+	}
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:8])
 }
 
 func executionAttemptIndex(previousTask, processingTask runengine.TaskRecord) int {
@@ -5754,6 +6205,7 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	auditAction := "execute_task"
 	auditTarget := impactScopeTarget(impactScope, targetPathFromIntent(taskIntent))
 	auditResult := "failed"
+	failureCode, failureCategory := classifyScreenFailure(task, err)
 	if errors.Is(err, execution.ErrRecoveryPointPrepareFailed) {
 		securityStatus = "execution_error"
 		stepName = "recovery_prepare_failed"
@@ -5766,10 +6218,56 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	if !ok {
 		return task, bubble
 	}
+	updatedTask = s.attachFormalCitations(task, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionResult.Artifacts)
 	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, auditType, auditAction, bubbleText, auditTarget, auditResult)
+	if len(auditRecord) > 0 {
+		metadata := cloneMap(mapValue(auditRecord, "metadata"))
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		if failureCode != "" {
+			metadata["failure_code"] = failureCode
+		}
+		if failureCategory != "" {
+			metadata["failure_category"] = failureCategory
+		}
+		if len(metadata) > 0 {
+			auditRecord["metadata"] = metadata
+		}
+	}
 	budgetFailureAudit := s.buildBudgetFailureAudit(updatedTask, err)
 	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord, budgetFailureAudit), nil)
 	return updatedTask, bubble
+}
+
+// classifyScreenFailure keeps screen-task runtime summaries and governance
+// metadata aligned with the formal protocol error names while still exposing a
+// task-facing failure category for UI grouping.
+func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string) {
+	if stringValue(task.Intent, "name", "") != "screen_analyze" && task.SourceType != "screen_capture" {
+		return "", ""
+	}
+	lowerError := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, tools.ErrApprovalRequired), errors.Is(err, tools.ErrScreenCaptureUnauthorized):
+		return "APPROVAL_REQUIRED", "screen_authorization"
+	case errors.Is(err, tools.ErrScreenCaptureNotSupported):
+		return "PLATFORM_NOT_SUPPORTED", "screen_capability"
+	case errors.Is(err, tools.ErrOCRWorkerFailed):
+		return "OCR_WORKER_FAILED", "screen_ocr"
+	case errors.Is(err, tools.ErrPlaywrightSidecarFailed), errors.Is(err, tools.ErrScreenCaptureFailed), errors.Is(err, tools.ErrScreenKeyframeSamplingFailed):
+		return "PLAYWRIGHT_SIDECAR_FAILED", "screen_capture"
+	case errors.Is(err, tools.ErrCapabilityDenied):
+		return "CAPABILITY_DENIED", "screen_capability"
+	case errors.Is(err, tools.ErrToolOutputInvalid):
+		return "TOOL_OUTPUT_INVALID", "screen_observation"
+	case errors.Is(err, tools.ErrScreenCaptureSessionExpired), strings.Contains(lowerError, "session"):
+		return "TOOL_EXECUTION_FAILED", "screen_session"
+	case strings.Contains(lowerError, "incomplete") || strings.Contains(lowerError, "empty") || strings.Contains(lowerError, "未识别"):
+		return "TOOL_OUTPUT_INVALID", "screen_observation"
+	default:
+		return "TOOL_EXECUTION_FAILED", "screen_analysis"
+	}
 }
 
 func executionFailureBubble(err error) string {

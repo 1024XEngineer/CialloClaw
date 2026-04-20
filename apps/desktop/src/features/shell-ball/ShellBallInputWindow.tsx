@@ -339,6 +339,7 @@ export function ShellBallInputWindow({
     <div
       ref={rootRef}
       className="shell-ball-window shell-ball-window--input"
+      data-shell-ball-input-window="true"
       onPointerDown={handlePointerDown}
       onPointerEnter={() => {
         void emitShellBallInputHover(true);

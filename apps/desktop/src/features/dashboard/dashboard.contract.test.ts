@@ -551,13 +551,20 @@ function createRecoveryPoint(overrides: Partial<RecoveryPoint> = {}): RecoveryPo
 function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentTaskDetailGetResult {
   return {
     approval_request: createApprovalRequest(),
+    audit_record: null,
     artifacts: [],
+    authorization_record: null,
+    citations: [],
     mirror_references: [],
     runtime_summary: {
       active_steering_count: 0,
       events_count: 0,
+      latest_failure_code: null,
+      latest_failure_category: null,
+      latest_failure_summary: null,
       latest_event_type: null,
       loop_stop_reason: null,
+      observation_signals: [],
     },
     security_summary: {
       latest_restore_point: createRecoveryPoint(),
@@ -957,6 +964,11 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(securityAppSource, /disabled=\{rpcAuditRequiresTaskContext\}/);
   assert.match(securityAppSource, /当前后端仅支持按 task 查看审计记录/);
   assert.match(securityAppSource, /loadSecurityAuditRecords\(moduleData\.source, auditFilterTaskId/);
+  assert.match(securityAppSource, /loadSecurityFocusedTaskDetail\(focusedTaskId, moduleData\?\.source \?\? "rpc"\)/);
+  assert.match(securityAppSource, /当前屏幕任务治理链/);
+  assert.match(securityAppSource, /正式授权锚点/);
+  assert.match(securityAppSource, /正式引用/);
+  assert.match(securityAppSource, /latest_failure_category/);
   assert.match(securityAppSource, /title: "审计记录"/);
   assert.doesNotMatch(securityAppSource, /decisionHistory/);
   assert.doesNotMatch(securityAppSource, /loadDashboardSettingsSnapshot/);
@@ -1984,15 +1996,19 @@ test("task detail normalization rejects string restore points in rpc mode and ke
     assert.deepEqual(fallback.detail.runtime_summary, {
       active_steering_count: 0,
       events_count: 0,
+      latest_failure_code: null,
+      latest_failure_category: null,
+      latest_failure_summary: null,
       latest_event_type: null,
       loop_stop_reason: null,
+      observation_signals: [],
     });
     assert.equal(fallback.detail.security_summary.pending_authorizations, 0);
     assert.equal(fallback.detail.security_summary.security_status, "normal");
   });
 });
 
-test("task detail normalization recovers invalid artifacts but still rejects broken mirrors and timeline steps", () => {
+test("task detail normalization recovers invalid artifacts and citations but still rejects broken mirrors and timeline steps", () => {
   withDesktopAliasRuntime((requireFn) => {
     const service = requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.service.js")) as {
       normalizeTaskDetailData: (detail: AgentTaskDetailGetResult) => { detailWarningMessage: string | null; detail: AgentTaskDetailGetResult };
@@ -2051,6 +2067,15 @@ test("task detail normalization recovers invalid artifacts but still rejects bro
     assert.equal(recovered.detail.artifacts.length, 0);
     assert.match(recovered.detailWarningMessage ?? "", /成果信息暂时无法完整展示/);
 
+    const recoveredCitation = service.normalizeTaskDetailData(
+      createDetail({
+        citations: [{ citation_id: "citation_1" } as never],
+      }),
+    );
+
+    assert.equal(recoveredCitation.detail.citations.length, 0);
+    assert.match(recoveredCitation.detailWarningMessage ?? "", /任务引用信息暂时无法完整展示/);
+
     const recoveredMirror = service.normalizeTaskDetailData(
       createDetail({
         mirror_references: [{ memory_id: "memory_1" } as never],
@@ -2063,13 +2088,16 @@ test("task detail normalization recovers invalid artifacts but still rejects bro
     const recoveredBoth = service.normalizeTaskDetailData(
       createDetail({
         artifacts: null as never,
+        citations: null as never,
         mirror_references: null as never,
       }),
     );
 
     assert.equal(recoveredBoth.detail.artifacts.length, 0);
+    assert.equal(recoveredBoth.detail.citations.length, 0);
     assert.equal(recoveredBoth.detail.mirror_references.length, 0);
     assert.match(recoveredBoth.detailWarningMessage ?? "", /成果信息暂时无法完整展示/);
+    assert.match(recoveredBoth.detailWarningMessage ?? "", /任务引用信息暂时无法完整展示/);
     assert.match(recoveredBoth.detailWarningMessage ?? "", /镜子命中信息暂时无法完整展示/);
 
     const recoveredRuntimeSummary = service.normalizeTaskDetailResult({
@@ -2079,6 +2107,7 @@ test("task detail normalization recovers invalid artifacts but still rejects bro
 
     assert.equal(recoveredRuntimeSummary.runtime_summary.events_count, 0);
     assert.equal(recoveredRuntimeSummary.runtime_summary.active_steering_count, 0);
+    assert.equal(recoveredRuntimeSummary.runtime_summary.latest_failure_category, null);
     assert.equal(recoveredRuntimeSummary.runtime_summary.latest_event_type, null);
     assert.equal(recoveredRuntimeSummary.runtime_summary.loop_stop_reason, null);
 
@@ -2269,6 +2298,34 @@ test("TaskDetailPanel renders runtime summary fields from the formal detail payl
   assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前还没有 runtime event"/);
   assert.match(panelSource, /runtimeSummary\.events_count/);
   assert.match(panelSource, /runtimeSummary\.active_steering_count/);
+});
+
+test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /const evidenceArtifactRefs = new Set\(evidenceItems\.map\(\(citation\) => citation\.source_ref\)\)/);
+  assert.match(panelSource, /const evidenceArtifacts = artifactItems\.filter\(\(artifact\) => evidenceArtifactRefs\.has\(artifact\.artifact_id\) \|\| evidenceArtifactRefs\.has\(artifact\.path\)\)/);
+  assert.match(panelSource, /const outputArtifacts = artifactItems\.filter\(\(artifact\) => !evidenceArtifactRefs\.has\(artifact\.artifact_id\) && !evidenceArtifactRefs\.has\(artifact\.path\)\)/);
+  assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
+  assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
+  assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+});
+
+test("TaskDetailPanel renders a formal screen governance section only for screen tasks with synced detail", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /const isScreenTask = task\.source_type === "screen_capture" \|\| detail\.task\.intent\?\.name === "screen_analyze"/);
+  assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary\) \{/);
+  assert.match(panelSource, /Screen Governance/);
+  assert.match(panelSource, /屏幕授权、恢复与失败收口/);
+  assert.match(panelSource, /该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段/);
+  assert.match(panelSource, /runtimeSummary\.latest_failure_category/);
+  assert.match(panelSource, /detail\.approval_request/);
+  assert.match(panelSource, /detail\.authorization_record/);
+  assert.match(panelSource, /detail\.audit_record/);
+  assert.match(panelSource, /detail\.security_summary\.latest_restore_point/);
+  assert.match(panelSource, /formalEvidenceCount/);
+  assert.doesNotMatch(panelSource, /evidenceItems\.length \+ evidenceArtifacts\.length/);
 });
 
 test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserves steering draft until success", () => {

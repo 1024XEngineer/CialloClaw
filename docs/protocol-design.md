@@ -1504,17 +1504,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入任务详情页时
-- **系统处理**：返回任务头部、时间线、成果、记忆引用、安全摘要与单个正式安全锚点
+- **系统处理**：返回任务头部、时间线、成果、正式引用、记忆引用、安全摘要与单个正式安全锚点
 - **入参**：任务 ID
 - **出参**：任务详情对象
 
 补充约束：
 
 - `approval_request` 是任务详情里的单个安全锚点，只在当前任务处于 `waiting_auth` 且仍持有活跃正式授权对象时返回；否则返回 `null`。
+- `authorization_record` 返回当前任务最近一条正式授权记录；若任务还没有进入授权决策阶段则返回 `null`。
+- `audit_record` 返回当前任务最近一条正式审计记录；若当前任务还没有正式审计记录则返回 `null`。
 - 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
 - `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
 - 对屏幕感知类任务，任务详情应通过正式 `artifact`、事件和交付对象回看截图证据、OCR 摘要和授权过程，而不是直接渲染平台采样结果或裸 worker 输出。
+- 若任务存在正式视觉或上下文引用，`citations` 应返回稳定 `citation` 对象列表，用于区分截图证据、OCR 摘要等正式引用，而不是把引用信息混进 artifact 扩展字段或裸 tool output。
 
 ### agent.task.detail.get 入参说明
 
@@ -1546,9 +1549,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.task`              | 任务基础信息   |
 | `data.timeline`          | 步骤时间线     |
 | `data.artifacts`         | 产出物列表     |
+| `data.citations`         | 正式引用列表   |
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.approval_request`  | 当前任务的正式安全锚点 |
+| `data.authorization_record` | 当前任务最近一条正式授权记录 |
+| `data.audit_record`      | 当前任务最近一条正式审计记录 |
 | `data.security_summary`  | 安全摘要       |
+| `data.runtime_summary`   | 运行态摘要，包含最新 runtime event、停止原因、最近失败错误码 / 分类 / 摘要与 observation signals |
 
 其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
 
@@ -1599,6 +1606,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "mime_type": "text/markdown"
         }
       ],
+      "citations": [
+        {
+          "citation_id": "cit_001",
+          "task_id": "task_201",
+          "run_id": "run_201",
+          "source_type": "file",
+          "source_ref": "art_001",
+          "label": "summary_input | generated_doc | Q3复盘提纲"
+        }
+      ],
       "mirror_references": [
         {
           "memory_id": "pref_001",
@@ -1607,6 +1624,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         }
       ],
       "approval_request": null,
+      "authorization_record": {
+        "authorization_record_id": "auth_001",
+        "task_id": "task_201",
+        "approval_id": "appr_001",
+        "decision": "allow_once",
+        "remember_rule": false,
+        "operator": "user",
+        "created_at": "2026-04-07T10:39:40+08:00"
+      },
+      "audit_record": {
+        "audit_id": "audit_001",
+        "task_id": "task_201",
+        "type": "execution",
+        "action": "execute_task",
+        "summary": "已根据正式授权完成摘要生成。",
+        "target": "workspace/Q3复盘.md",
+        "result": "success",
+        "created_at": "2026-04-07T10:40:10+08:00"
+      },
       "security_summary": {
         "security_status": "normal",
         "risk_level": "green",
@@ -1618,6 +1654,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "created_at": "2026-04-07T10:39:58+08:00",
           "objects": ["workspace/Q3复盘.md"]
         }
+      },
+      "runtime_summary": {
+        "events_count": 4,
+        "latest_event_type": "loop.round.completed",
+        "active_steering_count": 0,
+        "latest_failure_code": null,
+        "latest_failure_category": null,
+        "latest_failure_summary": null,
+        "loop_stop_reason": null,
+        "observation_signals": ["page_title", "visible_text"]
       }
     },
     "meta": {

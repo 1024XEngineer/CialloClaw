@@ -356,6 +356,7 @@ func cloneTaskRunRecord(record TaskRunRecord) TaskRunRecord {
 	clone.BubbleMessage = cloneMap(record.BubbleMessage)
 	clone.DeliveryResult = cloneMap(record.DeliveryResult)
 	clone.Artifacts = cloneMapSlice(record.Artifacts)
+	clone.Citations = cloneMapSlice(record.Citations)
 	clone.AuditRecords = cloneMapSlice(record.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(record.MirrorReferences)
 	clone.Snapshot = cloneContextSnapshot(record.Snapshot)

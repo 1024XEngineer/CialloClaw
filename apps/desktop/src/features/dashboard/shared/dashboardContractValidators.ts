@@ -1,5 +1,5 @@
 import { APPROVAL_STATUSES, RISK_LEVELS, TASK_SOURCE_TYPES, TASK_STATUSES } from "@cialloclaw/protocol";
-import type { ApprovalRequest, Artifact, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
+import type { ApprovalRequest, Artifact, AuditRecord, AuthorizationRecord, Citation, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
 
 type Guard<T> = (value: unknown) => value is T;
 const approvalStatuses = new Set<string>(APPROVAL_STATUSES);
@@ -33,6 +33,41 @@ export function isApprovalRequest(value: unknown): value is ApprovalRequest {
 
 export function isActiveApprovalRequest(value: ApprovalRequest): boolean {
   return value.status === "pending";
+}
+
+export function isAuthorizationRecord(value: unknown): value is AuthorizationRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AuthorizationRecord>;
+  return (
+    typeof candidate.authorization_record_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.approval_id === "string" &&
+    (candidate.decision === "allow_once" || candidate.decision === "deny_once") &&
+    typeof candidate.remember_rule === "boolean" &&
+    typeof candidate.operator === "string" &&
+    typeof candidate.created_at === "string"
+  );
+}
+
+export function isAuditRecord(value: unknown): value is AuditRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AuditRecord>;
+  return (
+    typeof candidate.audit_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.type === "string" &&
+    typeof candidate.action === "string" &&
+    typeof candidate.summary === "string" &&
+    typeof candidate.target === "string" &&
+    typeof candidate.result === "string" &&
+    typeof candidate.created_at === "string"
+  );
 }
 
 export function isRecoveryPoint(value: unknown): value is RecoveryPoint {
@@ -87,6 +122,22 @@ export function isArtifact(value: unknown): value is Artifact {
     typeof candidate.title === "string" &&
     typeof candidate.path === "string" &&
     typeof candidate.mime_type === "string"
+  );
+}
+
+export function isCitation(value: unknown): value is Citation {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Citation>;
+  return (
+    typeof candidate.citation_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.run_id === "string" &&
+    (candidate.source_type === "file" || candidate.source_type === "web" || candidate.source_type === "context") &&
+    typeof candidate.source_ref === "string" &&
+    typeof candidate.label === "string"
   );
 }
 

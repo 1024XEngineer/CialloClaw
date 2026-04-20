@@ -48,6 +48,7 @@ type TaskRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	Citations         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	Snapshot          contextsvc.TaskContextSnapshot
@@ -103,6 +104,7 @@ type CreateTaskInput struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	Citations         []map[string]any
 	MirrorReferences  []map[string]any
 	Snapshot          contextsvc.TaskContextSnapshot
 }
@@ -254,6 +256,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		BubbleMessage:     cloneMap(input.BubbleMessage),
 		DeliveryResult:    cloneMap(input.DeliveryResult),
 		Artifacts:         cloneMapSlice(input.Artifacts),
+		Citations:         cloneMapSlice(input.Citations),
 		MirrorReferences:  cloneMapSlice(input.MirrorReferences),
 		Snapshot:          cloneContextSnapshot(input.Snapshot),
 		SecuritySummary:   buildSecuritySummary(input.RiskLevel, nil),
@@ -566,6 +569,25 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 			"delivery_result": cloneMap(record.DeliveryResult),
 		})
 	}
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// SetCitations stores protocol-facing citation objects separately from delivery
+// and artifacts so task detail can expose evidence chains without overloading
+// either delivery_result or artifact snapshots.
+func (e *Engine) SetCitations(taskID string, citations []map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.Citations = cloneMapSlice(citations)
 	e.persistTaskLocked(record)
 
 	return record.clone(), true
@@ -1925,6 +1947,7 @@ func (r TaskRecord) clone() TaskRecord {
 	clone.BubbleMessage = cloneMap(r.BubbleMessage)
 	clone.DeliveryResult = cloneMap(r.DeliveryResult)
 	clone.Artifacts = cloneMapSlice(r.Artifacts)
+	clone.Citations = cloneMapSlice(r.Citations)
 	clone.AuditRecords = cloneMapSlice(r.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(r.MirrorReferences)
 	clone.SecuritySummary = cloneMap(r.SecuritySummary)
@@ -2654,6 +2677,7 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		Citations:         cloneMapSlice(record.Citations),
 		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		Snapshot:          cloneContextSnapshot(record.Snapshot),
@@ -2697,6 +2721,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		Citations:         cloneMapSlice(record.Citations),
 		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		Snapshot:          cloneContextSnapshot(record.Snapshot),

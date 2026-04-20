@@ -82,6 +82,20 @@ export function TaskDetailPanel({
   const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
   const canSteerTask = !ended && task.status !== "cancelled";
   const runtimeSummary = detail.runtime_summary;
+  const evidenceItems = detail.citations;
+  // Evidence artifacts stay task-centric by following the formal citation links
+  // instead of treating every task artifact as screen evidence.
+  const evidenceArtifactRefs = new Set(evidenceItems.map((citation) => citation.source_ref));
+  const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
+  const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
+  const formalEvidenceCount = new Set(
+    evidenceItems.map((citation) => {
+      const sourceRef = citation.source_ref.trim();
+
+      return sourceRef.length > 0 ? sourceRef : citation.citation_id;
+    }),
+  ).size;
+  const isScreenTask = task.source_type === "screen_capture" || detail.task.intent?.name === "screen_analyze";
 
   useEffect(() => {
     if (steeringPending) {
@@ -217,7 +231,137 @@ export function TaskDetailPanel({
               <p className="task-detail-current-card__text">{runtimeSummary.active_steering_count}</p>
             </div>
           </article>
+          <article className="task-detail-current-card">
+            <AlertTriangle className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Latest failure</p>
+              <p className="task-detail-current-card__text">{runtimeSummary.latest_failure_summary ?? "当前没有失败摘要"}</p>
+            </div>
+          </article>
         </div>
+        {runtimeSummary.observation_signals.length > 0 ? <p className="task-detail-card__hint">Observation: {runtimeSummary.observation_signals.join(" / ")}</p> : null}
+      </section>
+    );
+  }
+
+  function renderEvidenceSection() {
+    return (
+      <section className="task-detail-card">
+        <div className="task-detail-card__header">
+          <div>
+            <p className="task-detail-card__eyebrow">Evidence Chain</p>
+            <h3 className="task-detail-card__title">截图证据与正式引用</h3>
+          </div>
+        </div>
+        <p className="task-detail-card__hint">该区域只消费正式 `artifact` 与 `citation`，用于回看屏幕截图、OCR 摘要和引用标记。</p>
+        <div className="task-detail-output-list">
+          {evidenceItems.length > 0
+            ? evidenceItems.map((citation) => (
+                <article key={citation.citation_id} className="task-detail-output-item">
+                  <AlertTriangle className="h-4 w-4" />
+                  <div>
+                    <p className="task-detail-output-item__title">{citation.label}</p>
+                    <p className="task-detail-output-item__path">{citation.source_ref}</p>
+                  </div>
+                </article>
+              ))
+            : null}
+          {evidenceArtifacts.length > 0
+            ? evidenceArtifacts.map((artifact) => (
+                <article key={`evidence_${artifact.artifact_id}`} className="task-detail-output-item">
+                  <FolderOutput className="h-4 w-4" />
+                  <div>
+                    <p className="task-detail-output-item__title">{artifact.title}</p>
+                    <p className="task-detail-output-item__path">{artifact.path}</p>
+                  </div>
+                  <button
+                    className="task-detail-card__action"
+                    disabled={artifactActionPendingId === artifact.artifact_id}
+                    onClick={() => onOpenArtifact(artifact.artifact_id)}
+                    type="button"
+                  >
+                    <ArrowUpRight className="h-4 w-4" />
+                    {artifactActionPendingId === artifact.artifact_id ? "打开中..." : "打开证据"}
+                  </button>
+                </article>
+              ))
+            : null}
+          {evidenceItems.length === 0 && evidenceArtifacts.length === 0 ? <p className="task-detail-card__empty">当前没有可展示的正式证据链。</p> : null}
+        </div>
+      </section>
+    );
+  }
+
+  function renderScreenGovernanceSection() {
+    if (!isScreenTask || shouldDeferSecuritySummary) {
+      return null;
+    }
+
+    const latestFailureLabel =
+      [runtimeSummary.latest_failure_category, runtimeSummary.latest_failure_code].filter((value): value is string => Boolean(value && value.trim().length > 0)).join(" · ") ||
+      "当前没有失败记录";
+    const latestFailureSummary = runtimeSummary.latest_failure_summary ?? "当前没有失败摘要";
+    const approvalAnchor = detail.approval_request;
+    const authorizationRecord = detail.authorization_record;
+    const auditRecord = detail.audit_record;
+    const restorePoint = detail.security_summary.latest_restore_point;
+
+    return (
+      <section className="task-detail-card">
+        <div className="task-detail-card__header">
+          <div>
+            <p className="task-detail-card__eyebrow">Screen Governance</p>
+            <h3 className="task-detail-card__title">屏幕授权、恢复与失败收口</h3>
+          </div>
+        </div>
+        <p className="task-detail-card__hint">该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段，不读取裸 worker 输出。</p>
+        <div className="task-detail-current-grid">
+          <article className="task-detail-current-card">
+            <ShieldAlert className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Approval anchor</p>
+              <p className="task-detail-current-card__text">{approvalAnchor?.operation_name ?? "当前没有活跃授权"}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <SendHorizonal className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Authorization record</p>
+              <p className="task-detail-current-card__text">
+                {authorizationRecord ? `${authorizationRecord.decision} · ${authorizationRecord.operator}` : "当前没有授权记录"}
+              </p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <Clock3 className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Latest restore point</p>
+              <p className="task-detail-current-card__text">{restorePoint?.summary ?? "当前没有恢复点"}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <AlertTriangle className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Latest failure category</p>
+              <p className="task-detail-current-card__text">{latestFailureLabel}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <FolderOutput className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Audit record</p>
+              <p className="task-detail-current-card__text">{auditRecord ? `${auditRecord.action} · ${auditRecord.result}` : "当前没有审计记录"}</p>
+            </div>
+          </article>
+          <article className="task-detail-current-card">
+            <FolderOutput className="h-4 w-4" />
+            <div>
+              <p className="task-detail-current-card__label">Formal evidence count</p>
+              <p className="task-detail-current-card__text">{formalEvidenceCount}</p>
+            </div>
+          </article>
+        </div>
+        <p className="task-detail-card__hint">{latestFailureSummary}</p>
       </section>
     );
   }
@@ -367,6 +511,10 @@ export function TaskDetailPanel({
 
               {renderRuntimeSummarySection()}
 
+              {renderEvidenceSection()}
+
+              {renderScreenGovernanceSection()}
+
               <TaskContextBlock detailData={detailData} />
 
               <section className="task-detail-card">
@@ -408,9 +556,9 @@ export function TaskDetailPanel({
                 </div>
                 <div className="task-detail-output-list">
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
-                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
-                  {artifactItems.length > 0 ? (
-                    artifactItems.map((artifact) => (
+                  {artifactLoading && outputArtifacts.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {outputArtifacts.length > 0 ? (
+                    outputArtifacts.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
                         <FolderOutput className="h-4 w-4" />
                         <div>
@@ -501,6 +649,10 @@ export function TaskDetailPanel({
 
               {renderRuntimeSummarySection()}
 
+              {renderEvidenceSection()}
+
+              {renderScreenGovernanceSection()}
+
               {renderRuntimeEventsSection()}
 
               <section className="task-detail-card">
@@ -515,9 +667,9 @@ export function TaskDetailPanel({
                 </div>
                 <div className="task-detail-output-list">
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
-                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
-                  {artifactItems.length > 0 ? (
-                    artifactItems.map((artifact) => (
+                  {artifactLoading && outputArtifacts.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {outputArtifacts.length > 0 ? (
+                    outputArtifacts.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
                         <FolderOutput className="h-4 w-4" />
                         <div>

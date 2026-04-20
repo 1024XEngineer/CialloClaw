@@ -307,6 +307,7 @@ type TaskRunRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	Citations         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	Snapshot          contextsvc.TaskContextSnapshot
