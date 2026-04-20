@@ -14,8 +14,8 @@
       {
         "label": "shell-ball",
         "title": "CialloClaw Shell Ball",
-        "width": 800,
-        "height": 800,
+        "width": 144,
+        "height": 156,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -23,6 +23,20 @@
         "skipTaskbar": true,
         "shadow": false,
         "url": "shell-ball.html"
+      },
+      {
+        "label": "shell-ball-bubble",
+        "title": "CialloClaw Shell Ball Bubble",
+        "width": 270,
+        "height": 105,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false,
+        "url": "shell-ball-bubble.html"
       },
       {
         "label": "dashboard",
