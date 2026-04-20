@@ -1458,7 +1458,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		return map[string]any{
 			"type":         firstNonEmptyString(stringValue(artifact, "delivery_type", ""), inferArtifactDeliveryType(artifact)),
 			"title":        stringValue(artifact, "title", ""),
-			"payload":      payload,
+			"payload":      normalizeFormalDeliveryPayload(payload, taskID),
 			"preview_text": stringValue(artifact, "title", ""),
 		}
 	}
@@ -1467,10 +1467,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if payload["task_id"] == nil {
-		payload["task_id"] = taskID
-	}
-	resolved["payload"] = payload
+	resolved["payload"] = normalizeFormalDeliveryPayload(payload, taskID)
 	if stringValue(resolved, "type", "") == "" {
 		resolved["type"] = "task_detail"
 	}
@@ -1481,6 +1478,29 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		resolved["preview_text"] = stringValue(resolved, "title", "")
 	}
 	return resolved
+}
+
+// normalizeFormalDeliveryPayload keeps formal delivery payload keys stable for
+// protocol consumers even when historical storage records omitted sparse fields.
+func normalizeFormalDeliveryPayload(payload map[string]any, taskID string) map[string]any {
+	normalized := cloneMap(payload)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	if normalized["path"] == nil {
+		normalized["path"] = nil
+	}
+	if normalized["url"] == nil {
+		normalized["url"] = nil
+	}
+	if normalized["task_id"] == nil {
+		if strings.TrimSpace(taskID) == "" {
+			normalized["task_id"] = nil
+		} else {
+			normalized["task_id"] = taskID
+		}
+	}
+	return normalized
 }
 
 // normalizeTaskDetailDeliveryResult keeps task detail aligned with the formal

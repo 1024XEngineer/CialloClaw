@@ -7930,6 +7930,83 @@ func TestServiceTaskDetailGetStructuredFallbackReadsFormalDeliveryFromLoopStore(
 	if payload["path"] != "workspace/structured-delivery.md" || payload["task_id"] != taskID {
 		t.Fatalf("expected loop-store delivery payload to stay intact, got %+v", payload)
 	}
+	if _, ok := payload["url"]; !ok || payload["url"] != nil {
+		t.Fatalf("expected loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKeys(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail sparse delivery fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_delivery_sparse"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_delivery_sparse",
+		RunID:             "run_structured_delivery_sparse",
+		Title:             "structured sparse delivery task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		IntentName:        "screen_analyze",
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		CurrentStepStatus: "completed",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:         time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:        time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:      "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write sparse structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_delivery_sparse",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace sparse structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "结构化稀疏交付结果",
+		PayloadJSON:      `{}`,
+		PreviewText:      "sparse formal delivery from loop store",
+		CreatedAt:        "2026-04-15T14:06:00Z",
+	}); err != nil {
+		t.Fatalf("save sparse loop runtime delivery result failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete sparse runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback to read sparse delivery_result from loop store, got %+v", detailResult["delivery_result"])
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if _, ok := payload["path"]; !ok || payload["path"] != nil {
+		t.Fatalf("expected sparse loop-store delivery payload to expose missing path as null, got %+v", payload)
+	}
+	if _, ok := payload["url"]; !ok || payload["url"] != nil {
+		t.Fatalf("expected sparse loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+	if payload["task_id"] != taskID {
+		t.Fatalf("expected sparse loop-store delivery payload to backfill task_id, got %+v", payload)
+	}
 }
 
 func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *testing.T) {
