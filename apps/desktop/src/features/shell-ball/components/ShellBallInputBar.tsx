@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
 import styled from "styled-components";
 import { ArrowUp, Paperclip } from "lucide-react";
@@ -45,9 +45,7 @@ export function ShellBallInputBar({
 }: ShellBallInputBarProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const compositionActiveRef = useRef(false);
-  const focusHighlightTimerRef = useRef<number | null>(null);
   const trimmedValue = value.trim();
-  const [delayedHighlightVisible, setDelayedHighlightVisible] = useState(false);
   const isHidden = mode === "hidden";
   const isInteractive = mode === "interactive";
   const isReadonly = mode === "readonly";
@@ -61,20 +59,25 @@ export function ShellBallInputBar({
       return;
     }
 
+    // Keep the decorative highlight layer aligned with the real textarea height
+    // so multiline growth and shrink stay visually locked together.
     field.style.height = "auto";
+    const computedStyle = window.getComputedStyle(field);
     const maxHeight = Number.parseFloat(window.getComputedStyle(field).maxHeight) || Number.POSITIVE_INFINITY;
     const nextHeight = Math.min(Math.max(44, field.scrollHeight), maxHeight);
+    const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 0;
+    const verticalPadding = Number.parseFloat(computedStyle.paddingTop) + Number.parseFloat(computedStyle.paddingBottom);
+    const multilineThreshold = lineHeight > 0 ? 44 + lineHeight * 0.5 : 52;
+    const isMultiline = nextHeight > multilineThreshold && nextHeight > verticalPadding + lineHeight;
+    const inputShell = field.parentElement;
 
     field.style.height = `${nextHeight}px`;
-  }, [value]);
 
-  useEffect(() => {
-    return () => {
-      if (focusHighlightTimerRef.current !== null) {
-        window.clearTimeout(focusHighlightTimerRef.current);
-      }
-    };
-  }, []);
+    if (inputShell !== null) {
+      inputShell.style.setProperty("--shell-ball-input-height", `${Math.max(46, nextHeight)}px`);
+      inputShell.dataset.multiline = isMultiline ? "true" : "false";
+    }
+  }, [value]);
 
   useEffect(() => {
     if (inputRef.current === null) {
@@ -126,27 +129,6 @@ export function ShellBallInputBar({
     onCompositionStateChange(false);
   }
 
-  function clearDelayedHighlightTimer() {
-    if (focusHighlightTimerRef.current === null) {
-      return;
-    }
-
-    window.clearTimeout(focusHighlightTimerRef.current);
-    focusHighlightTimerRef.current = null;
-  }
-
-  function armDelayedHighlight() {
-    clearDelayedHighlightTimer();
-    setDelayedHighlightVisible(false);
-
-    // Delay the textarea fill so the shell-ball keeps its lighter idle look
-    // until the user intentionally stays in the field.
-    focusHighlightTimerRef.current = window.setTimeout(() => {
-      setDelayedHighlightVisible(true);
-      focusHighlightTimerRef.current = null;
-    }, 1000);
-  }
-
   const hiddenState = isHidden || isVoice;
 
   return (
@@ -154,7 +136,6 @@ export function ShellBallInputBar({
       data-filled={trimmedValue !== "" ? "true" : "false"}
       data-hidden={hiddenState ? "true" : "false"}
       data-mode={mode}
-      data-delayed-highlight={delayedHighlightVisible ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
     >
       <div className="shell-ball-uiverse-inputbox">
@@ -167,14 +148,8 @@ export function ShellBallInputBar({
           onCompositionStart={handleCompositionStart}
           onCompositionEnd={handleCompositionEnd}
           onKeyDown={handleKeyDown}
-          onFocus={() => {
-            onFocusChange(true);
-            armDelayedHighlight();
-          }}
+          onFocus={() => onFocusChange(true)}
           onBlur={() => {
-            clearDelayedHighlightTimer();
-            setDelayedHighlightVisible(false);
-
             if (compositionActiveRef.current) {
               return;
             }
@@ -231,6 +206,7 @@ const StyledInputBar = styled.div`
   }
 
   .shell-ball-uiverse-inputbox {
+    --shell-ball-input-height: 46px;
     position: relative;
     width: 196px;
   }
@@ -258,11 +234,6 @@ const StyledInputBar = styled.div`
     z-index: 10;
   }
 
-  &[data-delayed-highlight="true"] .shell-ball-uiverse-inputbox textarea {
-    background: rgb(128, 128, 128);
-    border-radius: 4px;
-  }
-
   .shell-ball-uiverse-inputbox textarea::-webkit-scrollbar {
     display: none;
   }
@@ -270,19 +241,25 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox span {
     position: absolute;
     left: 0;
-    padding: 10px;
+    top: 0;
+    padding: 0 10px;
     font-size: 1em;
     color: rgba(143, 143, 143, 0.74);
     letter-spacing: 0.05em;
+    transform: translateY(calc(var(--shell-ball-input-height) - 24px));
     transition: 0.5s;
     pointer-events: none;
+  }
+
+  .shell-ball-uiverse-inputbox[data-multiline="true"] span {
+    transition: none;
   }
 
   .shell-ball-uiverse-inputbox textarea:valid ~ span,
   .shell-ball-uiverse-inputbox textarea:focus ~ span,
   &[data-filled="true"] .shell-ball-uiverse-inputbox span {
     color: rgba(128, 128, 128, 0.82);
-    transform: translateX(-10px) translateY(-26px);
+    transform: translateX(-10px) translateY(-10px);
     font-size: 0.75em;
   }
 
@@ -299,11 +276,15 @@ const StyledInputBar = styled.div`
     z-index: 9;
   }
 
+  .shell-ball-uiverse-inputbox[data-multiline="true"] i {
+    transition: none;
+  }
+
   .shell-ball-uiverse-inputbox textarea:valid ~ i,
   .shell-ball-uiverse-inputbox textarea:focus ~ i,
   &[data-filled="true"] .shell-ball-uiverse-inputbox i {
-    height: 44px;
-    background: rgb(128, 128, 128);
+    height: var(--shell-ball-input-height);
+    background: rgba(128, 128, 128, 0.24);
   }
 
   .shell-ball-uiverse-actions {
