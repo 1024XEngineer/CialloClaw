@@ -80,16 +80,22 @@ type DashboardTaskRuntimeSummary = {
   focusRuntimeSummary: {
     active_steering_count: number;
     events_count: number;
+    latest_failure_code: string | null;
+    latest_failure_summary: string | null;
     latest_event_type: string | null;
     loop_stop_reason: string | null;
+    observation_signals: string[];
   };
 };
 
 const emptyFocusRuntimeSummary: DashboardTaskRuntimeSummary["focusRuntimeSummary"] = {
   active_steering_count: 0,
   events_count: 0,
+  latest_failure_code: null,
+  latest_failure_summary: null,
   latest_event_type: null,
   loop_stop_reason: null,
+  observation_signals: [],
 };
 
 function createRequestMeta(scope: string): RequestMeta {
@@ -252,8 +258,13 @@ function getTaskModuleRuntimeSummary(
           active_steering_count:
             typeof focusRuntimeSummary?.active_steering_count === "number" ? focusRuntimeSummary.active_steering_count : 0,
           events_count: typeof focusRuntimeSummary?.events_count === "number" ? focusRuntimeSummary.events_count : 0,
+          latest_failure_code: typeof focusRuntimeSummary?.latest_failure_code === "string" ? focusRuntimeSummary.latest_failure_code : null,
+          latest_failure_summary: typeof focusRuntimeSummary?.latest_failure_summary === "string" ? focusRuntimeSummary.latest_failure_summary : null,
           latest_event_type: typeof focusRuntimeSummary?.latest_event_type === "string" ? focusRuntimeSummary.latest_event_type : null,
           loop_stop_reason: typeof focusRuntimeSummary?.loop_stop_reason === "string" ? focusRuntimeSummary.loop_stop_reason : null,
+          observation_signals: Array.isArray(focusRuntimeSummary?.observation_signals)
+            ? focusRuntimeSummary.observation_signals.filter((item): item is string => typeof item === "string")
+            : [],
         }
       : emptyFocusRuntimeSummary,
   };

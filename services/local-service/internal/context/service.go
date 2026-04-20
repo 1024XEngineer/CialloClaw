@@ -53,10 +53,8 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 	if len(selection) == 0 {
 		selection = mapValue(input, "selection")
 	}
-	page := mapValue(input, "page_context")
-	if len(page) == 0 {
-		page = mapValue(contextValue, "page")
-	}
+	pageContext := mapValue(input, "page_context")
+	pageFallback := mapValue(contextValue, "page")
 	errorValue := mapValue(contextValue, "error")
 	clipboard := mapValue(contextValue, "clipboard")
 	screen := mapValue(contextValue, "screen")
@@ -100,14 +98,14 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 		SelectionText:  selectionText,
 		ErrorText:      errorText,
 		Files:          files,
-		PageTitle:      stringValue(page, "title"),
-		PageURL:        stringValue(page, "url"),
-		AppName:        stringValue(page, "app_name"),
-		WindowTitle:    firstNonEmpty(stringValue(page, "window_title"), stringValue(screen, "window_title")),
-		VisibleText:    firstNonEmpty(stringValue(page, "visible_text"), stringValue(screen, "visible_text")),
+		PageTitle:      firstNonEmpty(stringValue(pageContext, "title"), stringValue(pageFallback, "title")),
+		PageURL:        firstNonEmpty(stringValue(pageContext, "url"), stringValue(pageFallback, "url")),
+		AppName:        firstNonEmpty(stringValue(pageContext, "app_name"), stringValue(pageFallback, "app_name")),
+		WindowTitle:    firstNonEmpty(stringValue(pageContext, "window_title"), stringValue(pageFallback, "window_title"), stringValue(screen, "window_title")),
+		VisibleText:    firstNonEmpty(stringValue(pageContext, "visible_text"), stringValue(pageFallback, "visible_text"), stringValue(screen, "visible_text")),
 		ScreenSummary:  firstNonEmpty(stringValue(contextValue, "screen_summary"), stringValue(screen, "summary"), stringValue(screen, "screen_summary")),
 		ClipboardText:  firstNonEmpty(stringValue(contextValue, "clipboard_text"), stringValue(clipboard, "text")),
-		HoverTarget:    firstNonEmpty(stringValue(contextValue, "hover_target"), stringValue(page, "hover_target"), stringValue(screen, "hover_target")),
+		HoverTarget:    firstNonEmpty(stringValue(contextValue, "hover_target"), stringValue(pageContext, "hover_target"), stringValue(pageFallback, "hover_target"), stringValue(screen, "hover_target")),
 		LastAction:     firstNonEmpty(stringValue(contextValue, "last_action"), stringValue(behavior, "last_action")),
 		DwellMillis:    intValue(contextValue, "dwell_millis", intValue(behavior, "dwell_millis", 0)),
 		CopyCount:      intValue(contextValue, "copy_count", intValue(behavior, "copy_count", 0)),

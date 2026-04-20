@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import type {
   AgentSecurityApprovalRespondResult,
+  AgentTaskDetailGetResult,
   AuditRecord,
   ApprovalDecision,
   ApprovalPendingNotification,
@@ -48,6 +49,7 @@ import {
   isSecurityApprovalRespondResult,
   isSecurityRestoreRespondResult,
   loadSecurityAuditRecords,
+  loadSecurityFocusedTaskDetail,
   loadSecurityModuleData,
   loadSecurityModuleRpcData,
   loadSecurityRestorePoints,
@@ -231,6 +233,34 @@ function formatPageWindow(page: { offset: number; total: number }, itemCount: nu
   const start = page.offset + 1;
   const end = Math.min(page.offset + itemCount, page.total);
   return `${start}-${end} / ${page.total}`;
+}
+
+function isFocusedScreenTask(detail: AgentTaskDetailGetResult | null) {
+  return detail?.task.source_type === "screen_capture" || detail?.task.intent?.name === "screen_analyze";
+}
+
+function formatFocusedTaskFailure(detail: AgentTaskDetailGetResult | null) {
+  if (!detail) {
+    return "当前 task 还没有失败记录。";
+  }
+
+  const parts = [
+    detail.runtime_summary.latest_failure_category,
+    detail.runtime_summary.latest_failure_code,
+    detail.runtime_summary.latest_failure_summary,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  return parts.length > 0 ? parts.join(" · ") : "当前 task 还没有失败记录。";
+}
+
+function formatCitationEvidence(citation: AgentTaskDetailGetResult["citations"][number]) {
+  return [citation.label, citation.source_type, citation.source_ref].filter((value) => value.trim().length > 0).join(" · ");
+}
+
+function formatArtifactEvidence(artifact: AgentTaskDetailGetResult["artifacts"][number]) {
+  const headline = artifact.title.trim() || artifact.artifact_type;
+  const location = artifact.path.trim() || artifact.artifact_id;
+  return [headline, location].filter((value) => value.trim().length > 0).join(" · ");
 }
 
 function resolveSecurityDetailTaskId(args: {
@@ -600,6 +630,8 @@ export function SecurityApp() {
   const [auditRecordsData, setAuditRecordsData] = useState<SecurityAuditRecordListData | null>(null);
   const [auditRecordsError, setAuditRecordsError] = useState<string | null>(null);
   const [auditRecordsLoading, setAuditRecordsLoading] = useState(false);
+  const [focusedTaskDetail, setFocusedTaskDetail] = useState<AgentTaskDetailGetResult | null>(null);
+  const [focusedTaskDetailError, setFocusedTaskDetailError] = useState<string | null>(null);
   const [auditScope, setAuditScope] = useState<SecurityAuditScope>("focused_task");
   const [auditOffset, setAuditOffset] = useState(0);
   const [auditTypeFilter, setAuditTypeFilter] = useState<string>(ALL_AUDIT_TYPES);
@@ -873,6 +905,35 @@ export function SecurityApp() {
       queueRpcRefresh();
     });
   }, [dataMode, queueRpcRefresh, subscribedTaskId]);
+
+  useEffect(() => {
+    if (!focusedTaskId) {
+      setFocusedTaskDetail(null);
+      setFocusedTaskDetailError(null);
+      return;
+    }
+
+    let disposed = false;
+    setFocusedTaskDetail(null);
+    setFocusedTaskDetailError(null);
+    void loadSecurityFocusedTaskDetail(focusedTaskId, moduleData?.source ?? "rpc")
+      .then((detail) => {
+        if (!disposed) {
+          setFocusedTaskDetail(detail);
+          setFocusedTaskDetailError(null);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setFocusedTaskDetail(null);
+          setFocusedTaskDetailError(formatRpcError(error));
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [focusedTaskId, moduleData?.source]);
 
   useEffect(() => {
     if (!moduleData || activeDetailKey !== "status") {
@@ -1629,6 +1690,11 @@ export function SecurityApp() {
     const auditGroups = groupAuditRecordsByType(filteredAuditRecords);
     const auditPageWindow = activeAuditRecordsData ? formatPageWindow(activeAuditRecordsData.page, activeAuditRecordsData.items.length) : null;
     const auditPageStep = activeAuditRecordsData?.page.limit ?? SECURITY_DETAIL_PAGE_SIZE;
+    const focusedTaskApproval = focusedTaskDetail?.approval_request ?? null;
+    const focusedTaskRestorePoint = focusedTaskDetail?.security_summary.latest_restore_point ?? null;
+    const focusedTaskIsScreenTask = isFocusedScreenTask(focusedTaskDetail);
+    const focusedTaskEvidence = focusedTaskDetail?.citations.map(formatCitationEvidence) ?? [];
+    const focusedTaskArtifacts = focusedTaskDetail?.artifacts.map(formatArtifactEvidence) ?? [];
 
     return (
       <div className="security-page__detail-stack">
@@ -1649,6 +1715,72 @@ export function SecurityApp() {
             <p className="security-page__detail-copy">{latestRestorePoint?.summary ?? "当前没有恢复点"}</p>
           </article>
         </div>
+
+        {focusedTaskId ? (
+          <div className="security-page__detail-section">
+            <div className="security-page__detail-toolbar">
+              <p className="security-page__detail-label">{focusedTaskIsScreenTask ? "当前屏幕任务治理链" : "当前 task 治理链"}</p>
+              <Button variant="soft" color="gray" onClick={() => openTaskDetail(focusedTaskId)}>
+                查看关联任务
+                <ArrowUpRight className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {focusedTaskDetailError ? <div className="security-page__detail-callout">任务详情同步失败：{focusedTaskDetailError}</div> : null}
+            {!focusedTaskDetail && !focusedTaskDetailError ? <div className="security-page__detail-note">正在同步当前 task 的正式治理对象…</div> : null}
+
+            {focusedTaskDetail ? (
+              <>
+                <div className="security-page__detail-grid">
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">当前 task</p>
+                    <p className="security-page__detail-value">{focusedTaskDetail.task.title}</p>
+                    <p className="security-page__detail-copy">
+                      task {focusedTaskDetail.task.task_id} · {focusedTaskDetail.task.intent?.name ?? focusedTaskDetail.task.source_type} · {focusedTaskDetail.task.status}
+                    </p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">正式授权锚点</p>
+                    <p className="security-page__detail-value">{focusedTaskApproval ? focusedTaskApproval.operation_name : "无活跃授权"}</p>
+                    <p className="security-page__detail-copy">
+                      {focusedTaskApproval
+                        ? `${focusedTaskApproval.risk_level} · ${focusedTaskApproval.status} · ${focusedTaskApproval.target_object}`
+                        : "当前 task 没有活跃 approval_request。"}
+                    </p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">最近失败</p>
+                    <p className="security-page__detail-value">
+                      {focusedTaskDetail.runtime_summary.latest_failure_category ?? focusedTaskDetail.runtime_summary.latest_failure_code ?? "暂无"}
+                    </p>
+                    <p className="security-page__detail-copy">{formatFocusedTaskFailure(focusedTaskDetail)}</p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">恢复锚点</p>
+                    <p className="security-page__detail-value">
+                      {focusedTaskRestorePoint ? formatDateTime(focusedTaskRestorePoint.created_at) : "暂无"}
+                    </p>
+                    <p className="security-page__detail-copy">{focusedTaskRestorePoint?.summary ?? "当前 task 没有 recovery_point。"}</p>
+                  </article>
+                </div>
+
+                <article className="security-page__detail-list-item">
+                  <p className="security-page__detail-label">正式引用</p>
+                  {renderDetailEntryList(
+                    focusedTaskEvidence,
+                    focusedTaskIsScreenTask ? "当前屏幕任务还没有 formal citation。" : "当前 task 还没有 formal citation。",
+                    "focused-task-citation",
+                  )}
+                </article>
+
+                <article className="security-page__detail-list-item">
+                  <p className="security-page__detail-label">正式产物</p>
+                  {renderDetailEntryList(focusedTaskArtifacts, "当前 task 还没有可回看的正式产物。", "focused-task-artifact")}
+                </article>
+              </>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="security-page__detail-section">
           <div className="security-page__detail-toolbar">

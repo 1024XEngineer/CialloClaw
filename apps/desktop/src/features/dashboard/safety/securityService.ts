@@ -19,6 +19,7 @@ import type {
   JsonRpcPage,
   RecoveryPoint,
   RequestMeta,
+  AgentTaskDetailGetResult,
 } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import {
@@ -29,6 +30,7 @@ import {
   listSecurityRestorePointsDetailed,
   respondSecurityDetailed,
 } from "@/rpc/methods";
+import { loadTaskDetailData } from "../tasks/taskPage.service";
 import {
   buildMockRespondResult,
   buildMockRestoreApplyResult,
@@ -84,6 +86,15 @@ export type SecurityRestoreApplyOutcome = {
   response: AgentSecurityRestoreApplyResult;
   rpcContext: SecurityRpcContext;
 };
+
+export async function loadSecurityFocusedTaskDetail(taskId: string, source: SecurityModuleSource): Promise<AgentTaskDetailGetResult | null> {
+  const normalizedTaskId = taskId.trim();
+  if (!normalizedTaskId) {
+    return null;
+  }
+  const detail = await loadTaskDetailData(normalizedTaskId, source === "mock" ? "mock" : "rpc");
+  return detail.detail;
+}
 
 export function isSecurityApprovalRespondResult(
   response: AgentSecurityRespondResult,

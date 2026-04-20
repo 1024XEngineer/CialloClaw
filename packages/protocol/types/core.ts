@@ -538,6 +538,13 @@ export interface Citation {
   source_type: "file" | "web" | "context";
   source_ref: string;
   label: string;
+  // Optional structured evidence metadata helps task detail distinguish
+  // screenshots, OCR excerpts, and other formal references.
+  artifact_id?: string | null;
+  artifact_type?: string | null;
+  evidence_role?: string | null;
+  excerpt_text?: string | null;
+  screen_session_id?: string | null;
 }
 
 // MemorySummary 定义当前模块的接口约束。

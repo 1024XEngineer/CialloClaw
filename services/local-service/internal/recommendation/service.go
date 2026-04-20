@@ -48,6 +48,7 @@ type GenerateInput struct {
 	WindowSwitches  int
 	PageSwitches    int
 	CopyCount       int
+	Observations    []string
 	Signals         perception.SignalSnapshot
 	UnfinishedTasks []runengine.TaskRecord
 	FinishedTasks   []runengine.TaskRecord
@@ -283,6 +284,7 @@ func recommendationFingerprint(input GenerateInput) string {
 		strings.TrimSpace(input.PageTitle),
 		strings.TrimSpace(input.AppName),
 		strings.TrimSpace(input.SelectionText),
+		observationFingerprint(input.Observations),
 		perception.SignalFingerprint(input.perceptionSignals()),
 		taskContextFingerprint(input.UnfinishedTasks),
 		notepadContextFingerprint(input.NotepadItems),
@@ -313,6 +315,25 @@ func (input GenerateInput) perceptionSignals() perception.SignalSnapshot {
 		PageSwitchCount:   input.PageSwitches,
 		CopyCount:         input.CopyCount,
 	}
+}
+
+func observationFingerprint(observations []string) string {
+	trimmed := make([]string, 0, len(observations))
+	for _, observation := range observations {
+		value := strings.TrimSpace(observation)
+		if value == "" {
+			continue
+		}
+		trimmed = append(trimmed, strings.ToLower(value))
+	}
+	if len(trimmed) == 0 {
+		return ""
+	}
+	sort.Strings(trimmed)
+	if len(trimmed) > 4 {
+		trimmed = trimmed[:4]
+	}
+	return strings.Join(trimmed, ",")
 }
 
 func taskContextFingerprint(tasks []runengine.TaskRecord) string {
