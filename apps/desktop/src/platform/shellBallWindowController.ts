@@ -228,19 +228,3 @@ export function createShellBallLogicalSize(width: number, height: number) {
 export function createShellBallLogicalPosition(x: number, y: number) {
   return new LogicalPosition(x, y);
 }
-
-export async function applyShellBallCurrentWindowFrame(input: {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}) {
-  const { invoke } = await import("@tauri-apps/api/core");
-
-  await invoke("shell_ball_apply_window_frame", {
-    x: input.x,
-    y: input.y,
-    width: input.width,
-    height: input.height,
-  });
-}

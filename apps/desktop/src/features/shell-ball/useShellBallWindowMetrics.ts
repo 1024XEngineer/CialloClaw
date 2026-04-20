@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow, monitorFromPoint, type Monitor } from "@tauri-apps/api/window";
 import {
-  applyShellBallCurrentWindowFrame,
   createShellBallLogicalPosition,
   createShellBallLogicalSize,
   hideShellBallWindow,
@@ -49,16 +48,6 @@ type ShellBallMeasurableElement = {
 type ShellBallWindowSize = {
   width: number;
   height: number;
-};
-
-type ShellBallAnchorOffset = {
-  x: number;
-  y: number;
-};
-
-type ShellBallGlobalAnchor = {
-  x: number;
-  y: number;
 };
 
 type ShellBallWindowFrame = ShellBallWindowSize & {
@@ -468,9 +457,6 @@ export function useShellBallWindowMetrics({
   const helperWindowShouldBeVisibleRef = useRef(visible);
   const helperWindowFrameRef = useRef<ShellBallResolvedHelperFrame | null>(null);
   const appliedWindowSizeRef = useRef<ShellBallWindowSize | null>(null);
-  const measuredAnchorOffsetRef = useRef<ShellBallAnchorOffset | null>(null);
-  const appliedAnchorOffsetRef = useRef<ShellBallAnchorOffset | null>(null);
-  const globalAnchorRef = useRef<ShellBallGlobalAnchor | null>(null);
   const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
   const helperWindowMoveAnimationTokenRef = useRef(0);
@@ -609,14 +595,6 @@ export function useShellBallWindowMetrics({
     });
 
     geometryRef.current = geometry;
-    const currentAnchorOffset = appliedAnchorOffsetRef.current;
-
-    if (currentAnchorOffset !== null) {
-      globalAnchorRef.current = {
-        x: geometry.ballFrame.x + currentAnchorOffset.x,
-        y: geometry.ballFrame.y + currentAnchorOffset.y,
-      };
-    }
 
     if (input?.snapToBounds && (geometry.ballFrame.x !== logicalPosition.x || geometry.ballFrame.y !== logicalPosition.y)) {
       await currentWindow.setPosition(createShellBallLogicalPosition(geometry.ballFrame.x, geometry.ballFrame.y));
@@ -909,7 +887,7 @@ export function useShellBallWindowMetrics({
     };
   }, [role]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (windowFrame === null) {
       return;
     }
@@ -917,53 +895,12 @@ export function useShellBallWindowMetrics({
     if (
       appliedWindowSizeRef.current?.width === windowFrame.width
       && appliedWindowSizeRef.current?.height === windowFrame.height
-      && (role !== "ball"
-        || measuredAnchorOffsetRef.current === null
-        || (
-          appliedAnchorOffsetRef.current?.x === measuredAnchorOffsetRef.current.x
-          && appliedAnchorOffsetRef.current?.y === measuredAnchorOffsetRef.current.y
-        ))
     ) {
       return;
     }
 
-    const nextAnchorOffset = measuredAnchorOffsetRef.current;
-
     void (async () => {
-      if (role === "ball") {
-        const currentWindow = getCurrentWindow();
-
-        if (currentWindow.label === shellBallWindowLabels.ball) {
-          const outerPosition = await currentWindow.outerPosition();
-          const scaleFactor = await currentWindow.scaleFactor();
-          const logicalPosition = outerPosition.toLogical(scaleFactor);
-
-          if (nextAnchorOffset !== null) {
-            const stableGlobalAnchor = globalAnchorRef.current ?? {
-              x: logicalPosition.x + nextAnchorOffset.x,
-              y: logicalPosition.y + nextAnchorOffset.y,
-            };
-
-            globalAnchorRef.current = stableGlobalAnchor;
-
-            await applyShellBallCurrentWindowFrame({
-              x: stableGlobalAnchor.x - nextAnchorOffset.x,
-              y: stableGlobalAnchor.y - nextAnchorOffset.y,
-              width: windowFrame.width,
-              height: windowFrame.height,
-            });
-          } else {
-            await applyShellBallCurrentWindowFrame({
-              x: logicalPosition.x,
-              y: logicalPosition.y,
-              width: windowFrame.width,
-              height: windowFrame.height,
-            });
-          }
-        } else {
-          await setShellBallWindowSize(role, createShellBallLogicalSize(windowFrame.width, windowFrame.height));
-        }
-      } else {
+      if (role !== "ball") {
         await setShellBallWindowSize(role, createShellBallLogicalSize(windowFrame.width, windowFrame.height));
       }
 
@@ -971,7 +908,6 @@ export function useShellBallWindowMetrics({
         width: windowFrame.width,
         height: windowFrame.height,
       };
-      appliedAnchorOffsetRef.current = nextAnchorOffset;
     })();
   }, [role, windowFrame]);
 
@@ -1048,9 +984,6 @@ export function useShellBallWindowMetrics({
       cancelBallGeometryPublishAnimation();
       cancelBallWindowDragAnimation();
       appliedWindowSizeRef.current = null;
-      appliedAnchorOffsetRef.current = null;
-      globalAnchorRef.current = null;
-      measuredAnchorOffsetRef.current = null;
       ballDragSessionRef.current = null;
       pendingBallDragFrameRef.current = null;
       ballDragPositionQueueRef.current = null;

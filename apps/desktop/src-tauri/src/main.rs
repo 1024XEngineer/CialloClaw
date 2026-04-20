@@ -733,37 +733,6 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn shell_ball_apply_window_frame(
-    window: tauri::Window,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    let scale_factor = window
-        .scale_factor()
-        .map_err(|error| format!("failed to read shell-ball scale factor: {error}"))?;
-    let physical_x = (x * scale_factor).round();
-    let physical_y = (y * scale_factor).round();
-    let physical_width = (width * scale_factor).round().max(1.0);
-    let physical_height = (height * scale_factor).round().max(1.0);
-
-    window
-        .set_size(tauri::PhysicalSize::new(
-            physical_width as u32,
-            physical_height as u32,
-        ))
-        .map_err(|error| format!("failed to set shell-ball window size: {error}"))?;
-
-    window
-        .set_position(tauri::PhysicalPosition::new(
-            physical_x as i32,
-            physical_y as i32,
-        ))
-        .map_err(|error| format!("failed to set shell-ball window position: {error}"))
-}
-
-#[tauri::command]
 async fn shell_ball_read_selection_snapshot(
     app: tauri::AppHandle,
 ) -> Result<Option<selection::SelectionSnapshotPayload>, String> {
@@ -796,7 +765,6 @@ fn main() {
             desktop_capture_screenshot,
             desktop_get_active_window_context,
             pick_shell_ball_files,
-            shell_ball_apply_window_frame,
             shell_ball_read_selection_snapshot
         ])
         .run(tauri::generate_context!())
