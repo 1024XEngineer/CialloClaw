@@ -87,6 +87,8 @@ body[data-app-window="shell-ball"],
   --shell-ball-helper-width: min(28rem, calc(100vw - 0.75rem));
   --shell-ball-scale: 1;
   --shell-ball-mascot-scale: 0.5;
+  --shell-ball-file-drop-overlay-height: calc(var(--shell-ball-mascot-shell-height) + 8px);
+  --shell-ball-file-drop-overlay-width: calc(var(--shell-ball-mascot-shell-width) + 8px);
   --shell-ball-mascot-shell-height: calc((clamp(16.2rem, 30.6vw, 21.6rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-mascot-shell-width: calc((clamp(14.86rem, 27.9vw, 17.1rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-stage-anchor-x: 50%;
@@ -602,19 +604,19 @@ body[data-app-window="shell-ball"],
   border: 2px dashed rgba(120, 128, 138, 0.64);
   border-radius: 999px;
   display: grid;
-  height: 14.8rem;
+  height: var(--shell-ball-file-drop-overlay-height);
   justify-items: center;
   left: 50%;
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  top: calc(50% - 2px);
+  top: var(--shell-ball-stage-anchor-y);
   transform: translate(-50%, -50%) scale(0.96);
   transition:
     opacity 180ms ease,
     transform 180ms ease,
     box-shadow 180ms ease;
-  width: 14.8rem;
+  width: var(--shell-ball-file-drop-overlay-width);
   z-index: 9;
 }
 
@@ -629,12 +631,12 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-surface__file-drop-plus--horizontal {
   border-top-width: 2px;
-  width: 3rem;
+  width: 1.8rem;
 }
 
 .shell-ball-surface__file-drop-plus--vertical {
   border-left-width: 2px;
-  height: 3rem;
+  height: 1.8rem;
 }
 
 .shell-ball-surface__text-drop-target {

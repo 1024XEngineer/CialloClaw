@@ -23,6 +23,7 @@ type ShellBallSurfaceProps = {
   onDragMove: (event: PointerEvent<HTMLButtonElement>) => void;
   onDragEnd: (event: PointerEvent<HTMLButtonElement>) => void;
   onDragCancel: (event: PointerEvent<HTMLButtonElement>) => void;
+  onDragGestureChange?: (active: boolean) => void;
   onPrimaryClick: () => void;
   onDoubleClick: () => void;
   onRegionEnter: () => void;
@@ -97,6 +98,7 @@ export function ShellBallSurface({
   onDragMove,
   onDragEnd,
   onDragCancel,
+  onDragGestureChange = () => {},
   onPrimaryClick,
   onDoubleClick,
   onRegionEnter,
@@ -191,6 +193,7 @@ export function ShellBallSurface({
                     onHotspotDragMove={onDragMove}
                     onHotspotDragEnd={onDragEnd}
                     onHotspotDragCancel={onDragCancel}
+                    onHotspotDragGestureChange={onDragGestureChange}
                     onPressStart={onPressStart}
                     onPressMove={onPressMove}
                     onPressEnd={onPressEnd}

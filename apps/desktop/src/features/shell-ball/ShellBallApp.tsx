@@ -244,6 +244,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
+  const [dragGestureActive, setDragGestureActive] = useState(false);
   const [fileDropActive, setFileDropActive] = useState(false);
   const [inputFocusToken, setInputFocusToken] = useState(0);
   const [textDragActive, setTextDragActive] = useState(false);
@@ -564,6 +565,14 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, [fileDropActive, visualState]);
 
   useEffect(() => {
+    if (!fileDropActive) {
+      return;
+    }
+
+    setDragGestureActive(false);
+  }, [fileDropActive]);
+
+  useEffect(() => {
     if (visualState !== "idle" && visualState !== "hover_input") {
       if (selectionPromptClearTimeoutRef.current !== null) {
         window.clearTimeout(selectionPromptClearTimeoutRef.current);
@@ -721,7 +730,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       dashboardTransitionPhase={dashboardTransitionPhase}
       mascotRef={mascotRef}
       fileDropActive={shouldShowShellBallFileDropOverlay({
-        fileDropActive,
+        fileDropActive: fileDropActive || dragGestureActive,
       })}
       overlayContent={snapshot.visibility.voice ? <div className="shell-ball-voice-window"><ShellBallVoiceHints hintMode={snapshot.voiceHintMode} voicePreview={snapshot.voicePreview} /></div> : null}
       bottomContent={shouldRenderInlineInput ? (
@@ -777,13 +786,16 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           y: event.screenY,
         });
       }}
+      onDragGestureChange={setDragGestureActive}
       onDragEnd={(event) => {
+        setDragGestureActive(false);
         void endBallWindowPointerDrag({
           x: event.screenX,
           y: event.screenY,
         });
       }}
       onDragCancel={(event) => {
+        setDragGestureActive(false);
         void endBallWindowPointerDrag({
           x: event.screenX,
           y: event.screenY,
