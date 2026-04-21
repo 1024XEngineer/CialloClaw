@@ -44,6 +44,10 @@ type ShellBallInteractionConsumedEvent =
 
 type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
 
+function canStartShellBallVoiceEntry(state: ShellBallVisualState | undefined) {
+  return state !== "confirming_intent" && state !== "voice_listening" && state !== "voice_locked";
+}
+
 const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
   "audio-capture",
   "language-not-supported",
@@ -883,7 +887,7 @@ export function useShellBallInteraction() {
       return;
     }
 
-    if (currentState !== "idle" && currentState !== "hover_input") {
+    if (!canStartShellBallVoiceEntry(currentState)) {
       return;
     }
 

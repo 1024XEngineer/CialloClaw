@@ -36,6 +36,10 @@ type ShellBallMascotPointerPhase = "pointer_down" | "pointer_up" | "pointer_canc
 
 type ShellBallMascotPointerPhaseAction = "noop" | "start_press" | "finish_press" | "suppress_gestures" | "cleanup_only";
 
+function canTriggerShellBallMascotSecondaryGestures(visualState: ShellBallVisualState) {
+  return visualState !== "voice_listening" && visualState !== "voice_locked";
+}
+
 export function getShellBallMascotHotspotGestureAction(input: {
   visualState: ShellBallVisualState;
   gesture: ShellBallMascotHotspotGesture;
@@ -50,7 +54,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
     return input.selectionIndicatorVisible ? "primary_click" : "noop";
   }
 
-  if (input.visualState === "idle" || input.visualState === "hover_input") {
+  if (canTriggerShellBallMascotSecondaryGestures(input.visualState)) {
     return "double_click";
   }
 
