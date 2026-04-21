@@ -147,6 +147,29 @@ export function createShellBallWindowFrame(
   };
 }
 
+function clampShellBallHostPositionToMascotBounds(input: {
+  hostPosition: { x: number; y: number };
+  mascotFrame: ShellBallRelativeFrame | null;
+  bounds: ShellBallWindowBounds;
+}) {
+  if (input.mascotFrame === null) {
+    return {
+      x: input.hostPosition.x,
+      y: input.hostPosition.y,
+    };
+  }
+
+  const mascotMinX = input.bounds.minX - input.mascotFrame.x;
+  const mascotMinY = input.bounds.minY - input.mascotFrame.y;
+  const mascotMaxX = input.bounds.maxX - (input.mascotFrame.x + input.mascotFrame.width);
+  const mascotMaxY = input.bounds.maxY - (input.mascotFrame.y + input.mascotFrame.height);
+
+  return {
+    x: clampShellBallAxisPosition(input.hostPosition.x, mascotMinX, mascotMaxX),
+    y: clampShellBallAxisPosition(input.hostPosition.y, mascotMinY, mascotMaxY),
+  };
+}
+
 export function measureShellBallContentSize(element: ShellBallMeasurableElement, includeScrollBounds = true): ShellBallContentSize {
   const rect = element.getBoundingClientRect();
 
@@ -154,6 +177,7 @@ export function measureShellBallContentSize(element: ShellBallMeasurableElement,
     // The merged ball window measures only stable anchor wrappers so visual
     // nudges inside those wrappers never feed back into the native frame.
     const measuredRegions = [
+      element.querySelector<HTMLElement>(".shell-ball-surface__slot--top"),
       element.querySelector<HTMLElement>(".shell-ball-surface__mascot-shell"),
       element.querySelector<HTMLElement>(".shell-ball-surface__slot--bottom"),
       element.querySelector<HTMLElement>(".shell-ball-surface__voice-anchor"),
@@ -617,10 +641,18 @@ export function useShellBallWindowMetrics({
       Math.round(physicalPosition.y + physicalSize.height / 2),
     );
     const logicalPosition = physicalPosition.toLogical(scaleFactor);
-    const geometry = createShellBallWindowGeometry({
-      position: {
+    const clampedHostPosition = clampShellBallHostPositionToMascotBounds({
+      hostPosition: {
         x: logicalPosition.x,
         y: logicalPosition.y,
+      },
+      mascotFrame: measuredMascotFrameRef.current,
+      bounds: getShellBallBoundsFromMonitor(monitor, geometryRef.current),
+    });
+    const geometry = createShellBallWindowGeometry({
+      position: {
+        x: clampedHostPosition.x,
+        y: clampedHostPosition.y,
       },
       size: {
         width: windowFrame.width,
