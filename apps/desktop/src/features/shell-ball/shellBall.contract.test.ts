@@ -1358,7 +1358,7 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelAppSource, /requestCurrentDesktopWindowClose/);
   assert.match(desktopWindowFrameSource, /export function installDesktopEscapeClose\(windowHandle\?: DesktopCloseHandle \| null\)/);
   assert.match(desktopWindowFrameSource, /const currentWindow = windowHandle \?\? getDesktopFrameWindow\(\)/);
-  assert.match(controlPanelAppSource, /control-panel-page__topbar/);
+  assert.match(controlPanelAppSource, /control-panel-shell__titlebar/);
   assert.match(controlPanelAppSource, /拖动控制面板窗口/);
   assert.match(controlPanelAppSource, /关闭控制面板/);
 });

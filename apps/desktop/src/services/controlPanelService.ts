@@ -39,8 +39,41 @@ export type ControlPanelSaveResult = {
   updatedKeys: string[];
   effectiveSettings: Partial<DesktopSettingsData>;
   effectiveInspector: AgentTaskInspectorConfigGetResult;
+  savedInspector: boolean;
+  savedSettings: boolean;
   source: ControlPanelSource;
 };
+
+export type ControlPanelSaveOptions = {
+  saveInspector?: boolean;
+  saveSettings?: boolean;
+  timeoutMs?: number;
+};
+
+const CONTROL_PANEL_RPC_TIMEOUT_MS = 10_000;
+
+const CONTROL_PANEL_INSPECTOR_UPDATED_KEYS = [
+  "task_automation.task_sources",
+  "task_automation.inspection_interval",
+  "task_automation.inspect_on_file_change",
+  "task_automation.inspect_on_startup",
+  "task_automation.remind_before_deadline",
+  "task_automation.remind_when_stale",
+];
+
+/**
+ * ControlPanelSaveError reports a save failure while optionally carrying the
+ * already-applied subset so the UI can preserve successful groups.
+ */
+export class ControlPanelSaveError extends Error {
+  readonly partialResult: ControlPanelSaveResult | null;
+
+  constructor(message: string, partialResult: ControlPanelSaveResult | null = null) {
+    super(message);
+    this.name = "ControlPanelSaveError";
+    this.partialResult = partialResult;
+  }
+}
 
 function buildEditableFloatingBallUpdate(
   floatingBall: DesktopSettingsData["floating_ball"],
@@ -178,6 +211,73 @@ function buildDataLogUpdatePayload(input: ControlPanelData) {
   };
 }
 
+function buildSettingsUpdatePayload(input: ControlPanelData) {
+  return {
+    request_meta: createRequestMeta(),
+    general: input.settings.general,
+    floating_ball: buildEditableFloatingBallUpdate(input.settings.floating_ball),
+    memory: input.settings.memory,
+    data_log: buildDataLogUpdatePayload(input),
+  };
+}
+
+function buildInspectorUpdatePayload(input: ControlPanelData) {
+  return {
+    request_meta: createRequestMeta(),
+    task_sources: input.inspector.task_sources,
+    inspection_interval: input.inspector.inspection_interval,
+    inspect_on_file_change: input.inspector.inspect_on_file_change,
+    inspect_on_startup: input.inspector.inspect_on_startup,
+    remind_before_deadline: input.inspector.remind_before_deadline,
+    remind_when_stale: input.inspector.remind_when_stale,
+  };
+}
+
+// The desktop bridge currently has no abort channel, so timeout only releases
+// the UI from waiting forever and lets the user retry instead of hanging.
+function withRpcTimeout<T>(promise: Promise<T>, timeoutMs: number, actionLabel: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${actionLabel}请求超时，请重试。`));
+    }, timeoutMs);
+
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function buildControlPanelSaveResult(
+  settings: DesktopSettingsData,
+  inspector: AgentTaskInspectorConfigGetResult,
+  source: ControlPanelSource,
+  options: {
+    applyMode: ApplyMode;
+    needRestart: boolean;
+    savedInspector: boolean;
+    savedSettings: boolean;
+    updatedKeys: string[];
+  },
+): ControlPanelSaveResult {
+  return {
+    applyMode: options.applyMode,
+    needRestart: options.needRestart,
+    updatedKeys: options.updatedKeys,
+    effectiveSettings: settings,
+    effectiveInspector: inspector,
+    savedInspector: options.savedInspector,
+    savedSettings: options.savedSettings,
+    source,
+  };
+}
+
 function createRequestMeta(): RequestMeta {
   return {
     trace_id: `trace_control_panel_${Date.now()}`,
@@ -232,6 +332,10 @@ function getInitialControlPanelData(): ControlPanelData {
   };
 }
 
+/**
+ * loadControlPanelData hydrates the control panel from the formal RPC boundary
+ * and falls back to the local snapshot only when the channel is unavailable.
+ */
 export async function loadControlPanelData(): Promise<ControlPanelData> {
   try {
     const requestMeta = createRequestMeta();
@@ -261,8 +365,28 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
   }
 }
 
-export async function saveControlPanelData(data: ControlPanelData): Promise<ControlPanelSaveResult> {
+/**
+ * saveControlPanelData persists only the dirty settings groups requested by
+ * the caller so unrelated RPC writes do not block the entire settings surface.
+ */
+export async function saveControlPanelData(
+  data: ControlPanelData,
+  options: ControlPanelSaveOptions = {},
+): Promise<ControlPanelSaveResult> {
+  const saveSettingsRequested = options.saveSettings ?? true;
+  const saveInspectorRequested = options.saveInspector ?? true;
+  const timeoutMs = options.timeoutMs ?? CONTROL_PANEL_RPC_TIMEOUT_MS;
   const persistedSettings = loadSettings().settings;
+
+  if (!saveSettingsRequested && !saveInspectorRequested) {
+    return buildControlPanelSaveResult(data.settings, data.inspector, data.source, {
+      applyMode: "immediate",
+      needRestart: false,
+      savedInspector: false,
+      savedSettings: false,
+      updatedKeys: [],
+    });
+  }
 
   if (data.source === "mock") {
     const nextSettingsSnapshot = preserveDetachedFloatingBallFields(
@@ -276,81 +400,93 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       settings: nextSettingsSnapshot,
     };
     saveSettings(nextDesktopSettings);
-    return {
+    return buildControlPanelSaveResult(nextDesktopSettings.settings, data.inspector, "mock", {
       applyMode: "immediate",
       needRestart: false,
-      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "models"],
-      effectiveSettings: nextDesktopSettings.settings,
-      effectiveInspector: data.inspector,
-      source: "mock",
-    };
+      savedInspector: saveInspectorRequested,
+      savedSettings: saveSettingsRequested,
+      updatedKeys: [
+        ...(saveSettingsRequested ? ["general", "floating_ball", "memory", "models"] : []),
+        ...(saveInspectorRequested ? CONTROL_PANEL_INSPECTOR_UPDATED_KEYS : []),
+      ],
+    });
   }
 
+  let applyMode: ApplyMode = "immediate";
+  let effectiveInspector = data.inspector;
+  let effectiveSettings = data.settings;
+  let needRestart = false;
+  let savedInspector = false;
+  let savedSettings = false;
+  const updatedKeys: string[] = [];
+
   try {
-    const [settingsResult, inspectorResult] = await Promise.all([
-      updateSettings({
-        request_meta: createRequestMeta(),
-        general: data.settings.general,
-        floating_ball: buildEditableFloatingBallUpdate(data.settings.floating_ball),
-        memory: data.settings.memory,
-        data_log: buildDataLogUpdatePayload(data),
-      }),
-      updateTaskInspectorConfig({
-        request_meta: createRequestMeta(),
-        task_sources: data.inspector.task_sources,
-        inspection_interval: data.inspector.inspection_interval,
-        inspect_on_file_change: data.inspector.inspect_on_file_change,
-        inspect_on_startup: data.inspector.inspect_on_startup,
-        remind_before_deadline: data.inspector.remind_before_deadline,
-        remind_when_stale: data.inspector.remind_when_stale,
-      }),
-    ]);
+    if (saveSettingsRequested) {
+      const settingsResult = await withRpcTimeout(updateSettings(buildSettingsUpdatePayload(data)), timeoutMs, "设置保存");
+      effectiveSettings = mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>);
+      effectiveSettings = preserveDetachedFloatingBallFields(effectiveSettings, persistedSettings);
+      effectiveSettings = projectInspectorToTaskAutomation(effectiveSettings, effectiveInspector);
+      applyMode = settingsResult.apply_mode;
+      needRestart = settingsResult.need_restart;
+      savedSettings = true;
+      updatedKeys.push(...settingsResult.updated_keys);
+      saveSettings({ settings: effectiveSettings });
+    }
 
-    const effectiveSettings = preserveDetachedFloatingBallFields(
-      projectInspectorToTaskAutomation(
-        mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>),
-        inspectorResult.effective_config,
-      ),
-      persistedSettings,
-    );
-    saveSettings({ settings: effectiveSettings });
+    if (saveInspectorRequested) {
+      try {
+        const inspectorResult = await withRpcTimeout(
+          updateTaskInspectorConfig(buildInspectorUpdatePayload(data)),
+          timeoutMs,
+          "巡检设置保存",
+        );
+        effectiveInspector = inspectorResult.effective_config;
+        effectiveSettings = projectInspectorToTaskAutomation(effectiveSettings, effectiveInspector);
+        savedInspector = true;
+        updatedKeys.push(...CONTROL_PANEL_INSPECTOR_UPDATED_KEYS);
+        saveSettings({ settings: effectiveSettings });
+      } catch (error) {
+        if (savedSettings) {
+          throw new ControlPanelSaveError(
+            `通用设置已保存，但巡检设置保存失败：${error instanceof Error ? error.message : "请重试。"}`,
+            buildControlPanelSaveResult(effectiveSettings, effectiveInspector, "rpc", {
+              applyMode,
+              needRestart,
+              savedInspector: false,
+              savedSettings: true,
+              updatedKeys,
+            }),
+          );
+        }
 
-    return {
-      applyMode: settingsResult.apply_mode,
-      needRestart: settingsResult.need_restart,
-      updatedKeys: settingsResult.updated_keys,
-      effectiveSettings,
-      effectiveInspector: inspectorResult.effective_config,
-      source: "rpc",
-    };
+        throw error;
+      }
+    }
+
+    return buildControlPanelSaveResult(effectiveSettings, effectiveInspector, "rpc", {
+      applyMode,
+      needRestart,
+      savedInspector,
+      savedSettings,
+      updatedKeys,
+    });
   } catch (error) {
-    if (!isRpcChannelUnavailable(error)) {
+    if (error instanceof ControlPanelSaveError) {
       throw error;
     }
 
-    logRpcMockFallback("control panel save", error);
-    const nextSettingsSnapshot = preserveDetachedFloatingBallFields(
-      buildSettingsWithProviderApiKeyConfigured(
-        projectInspectorToTaskAutomation(data.settings, data.inspector),
-        data.settings.models.provider_api_key_configured,
-      ),
-      persistedSettings,
-    );
-    const nextDesktopSettings: DesktopSettings = {
-      settings: nextSettingsSnapshot,
-    };
-    saveSettings(nextDesktopSettings);
-    return {
-      applyMode: "immediate",
-      needRestart: false,
-      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "models"],
-      effectiveSettings: nextDesktopSettings.settings,
-      effectiveInspector: data.inspector,
-      source: "mock",
-    };
+    if (isRpcChannelUnavailable(error)) {
+      throw new ControlPanelSaveError("设置服务暂时不可用，请稍后重试。");
+    }
+
+    throw error;
   }
 }
 
+/**
+ * runControlPanelInspection triggers one manual inspection pass from the
+ * current control-panel state.
+ */
 export async function runControlPanelInspection(data: ControlPanelData): Promise<AgentTaskInspectorRunResult> {
   if (data.source === "mock") {
     return {
@@ -370,11 +506,15 @@ export async function runControlPanelInspection(data: ControlPanelData): Promise
   }
 
   try {
-    return await runTaskInspector({
-      request_meta: createRequestMeta(),
-      reason: "control_panel_manual_run",
-      target_sources: data.inspector.task_sources,
-    });
+    return await withRpcTimeout(
+      runTaskInspector({
+        request_meta: createRequestMeta(),
+        reason: "control_panel_manual_run",
+        target_sources: data.inspector.task_sources,
+      }),
+      CONTROL_PANEL_RPC_TIMEOUT_MS,
+      "巡检执行",
+    );
   } catch (error) {
     if (!isRpcChannelUnavailable(error)) {
       throw error;
