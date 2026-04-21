@@ -3,6 +3,7 @@
  * inline bubble/input/voice affordances, drag/drop handling, and dashboard
  * transitions.
  */
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEventListener } from "ahooks";
 import { invoke } from "@tauri-apps/api/core";
@@ -258,6 +259,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [clipboardPrompt, setClipboardPrompt] = useState<ShellBallClipboardPrompt | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const interactivePassthroughRef = useRef(true);
+  const pressCaptureLockRef = useRef(false);
   const mascotRef = useRef<HTMLDivElement>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
@@ -351,7 +353,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     const hitInteractiveZone = resolveShellBallInteractiveHit(clientX, clientY);
-    const nextIgnoreCursorEvents = !hitInteractiveZone;
+    const nextIgnoreCursorEvents = pressCaptureLockRef.current ? false : !hitInteractiveZone;
 
     if (interactivePassthroughRef.current === nextIgnoreCursorEvents) {
       return;
@@ -385,6 +387,28 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }
     })();
   }, [focusInlineInputField, handleCoordinatorDroppedFiles, handleCoordinatorPrimaryAction]);
+
+  const handleLockedPressStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    pressCaptureLockRef.current = true;
+    void setShellBallIgnoreCursorEvents(false, false);
+    handlePressStart(event);
+  }, [handlePressStart]);
+
+  const handleLockedPressEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    try {
+      return handlePressEnd(event);
+    } finally {
+      pressCaptureLockRef.current = false;
+    }
+  }, [handlePressEnd]);
+
+  const handleLockedPressCancel = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    try {
+      handlePressCancel(event);
+    } finally {
+      pressCaptureLockRef.current = false;
+    }
+  }, [handlePressCancel]);
 
   useEffect(() => {
     const wasVoiceActive =
@@ -903,10 +927,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onRegionLeave={handleCoordinatorRegionLeave}
       onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
-      onPressStart={handlePressStart}
+      onPressStart={handleLockedPressStart}
       onPressMove={handlePressMove}
-      onPressEnd={handlePressEnd}
-      onPressCancel={handlePressCancel}
+      onPressEnd={handleLockedPressEnd}
+      onPressCancel={handleLockedPressCancel}
     />
   );
 }
