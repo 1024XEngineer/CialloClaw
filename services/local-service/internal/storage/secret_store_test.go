@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -145,6 +146,16 @@ func TestStrongholdSQLiteProviderLifecycle(t *testing.T) {
 		t.Fatalf("expected unopened formal provider descriptor to advertise formal stronghold only, got %+v", descriptor)
 	}
 	store, err := provider.Open(context.Background())
+	if runtime.GOOS != "windows" {
+		if err == nil || !errors.Is(err, ErrStrongholdUnavailable) {
+			t.Fatalf("expected unsupported platform to report ErrStrongholdUnavailable, got %v", err)
+		}
+		descriptor = provider.Descriptor()
+		if descriptor.Available || descriptor.Initialized {
+			t.Fatalf("expected unsupported platform descriptor to remain unavailable, got %+v", descriptor)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("Open returned error: %v", err)
 	}

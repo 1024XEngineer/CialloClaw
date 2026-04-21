@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -164,13 +165,24 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 		t.Fatalf("expected retrieval and search skeleton capabilities to be enabled: %+v", capabilities)
 	}
 	if capabilities.MemoryStoreBackend != memoryStoreBackendSQLite || capabilities.FallbackActive {
-		t.Fatalf("unexpected backend state: %+v", capabilities)
+		if runtime.GOOS == "windows" {
+			t.Fatalf("unexpected backend state: %+v", capabilities)
+		}
+		if !capabilities.FallbackActive {
+			t.Fatalf("expected unsupported platforms to report fallback activity, got %+v", capabilities)
+		}
 	}
 	if capabilities.MemoryRetrievalBackend != memoryRetrievalBackendSQLite {
 		t.Fatalf("unexpected retrieval backend: %+v", capabilities)
 	}
-	if capabilities.SecretStoreBackend != "stronghold" {
-		t.Fatalf("unexpected secret backend: %+v", capabilities)
+	if runtime.GOOS == "windows" {
+		if capabilities.SecretStoreBackend != "stronghold" {
+			t.Fatalf("unexpected secret backend: %+v", capabilities)
+		}
+	} else {
+		if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
+			t.Fatalf("expected fallback secret backend on unsupported platforms, got %+v", capabilities)
+		}
 	}
 	if service.SkillManifestStore() == nil || service.BlueprintDefinitionStore() == nil || service.PromptTemplateVersionStore() == nil || service.PluginManifestStore() == nil {
 		t.Fatalf("expected config asset stores to be wired: %+v", capabilities)

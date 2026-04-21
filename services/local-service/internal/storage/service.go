@@ -274,10 +274,14 @@ func NewService(adapter platform.StorageAdapter) *Service {
 					secretStoreName = formalStrongholdProvider.Descriptor().Backend
 				}
 				if err != nil {
-					storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize formal stronghold secret store: %w", err))
+					formalStrongholdErr := fmt.Errorf("initialize formal stronghold secret store: %w", err)
 					fallbackProvider := NewStrongholdSQLiteFallbackProvider(secretPath)
 					fallbackStore, fallbackErr := fallbackProvider.Open(context.Background())
 					if fallbackErr == nil {
+						// A working fallback keeps the overall storage service healthy in
+						// CI and unsupported environments. The formal backend failure is
+						// still exposed through fallbackActive/descriptor state instead
+						// of poisoning Validate() for the entire structured store.
 						strongholdProvider = fallbackProvider
 						secretStore = fallbackStore
 						secretStoreName = fallbackProvider.Descriptor().Backend
@@ -285,6 +289,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 					} else {
 						secretStore = SecretStore(UnavailableSecretStore{})
 						secretStoreName = formalStrongholdProvider.Descriptor().Backend
+						storeInitErrors = append(storeInitErrors, formalStrongholdErr)
 						storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize fallback stronghold secret store: %w", fallbackErr))
 						fallbackActive = true
 					}
