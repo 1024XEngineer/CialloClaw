@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
+import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
@@ -19,6 +20,7 @@ import type { ShellBallVisualState } from "./shellBall.types";
 import { useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import {
+  getShellBallVisibleBubbleItems,
   shellBallWindowSyncEvents,
   type ShellBallClipboardSnapshotPayload,
   type ShellBallSelectionSnapshotPayload,
@@ -53,6 +55,8 @@ const SHELL_BALL_INTERACTIVE_SELECTOR = [
   ".shell-ball-uiverse-inputbox textarea",
   ".shell-ball-uiverse-action",
   ".shell-ball-mascot__voice-hint",
+  ".shell-ball-bubble-zone",
+  ".shell-ball-bubble-message__control",
 ].join(", ");
 
 type ShellBallClipboardPrompt = {
@@ -277,6 +281,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
     handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
     handlePrimaryAction: handleCoordinatorPrimaryAction,
+    handleBubbleAction: handleCoordinatorBubbleAction,
+    handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,
     handleRegionEnter: handleCoordinatorRegionEnter,
@@ -307,6 +313,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   });
   const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
   const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
+  const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const {
     beginBallWindowPointerDrag,
     endBallWindowPointerDrag,
@@ -317,7 +324,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   } = useShellBallWindowMetrics({
     role: "ball",
     helperVisibility: {
-      bubble: true,
+      bubble: false,
       input: false,
       voice: false,
     },
@@ -855,6 +862,36 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
+      topContent={(
+        <div className="shell-ball-surface__bubble-reserve" data-visible={snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? "true" : "false"}>
+          <div className="shell-ball-surface__bubble-reserve-content">
+            {snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? (
+              <div
+                className="shell-ball-window shell-ball-window--bubble"
+                data-shell-ball-interactive="true"
+                data-visibility-phase={snapshot.bubbleRegion.visibilityPhase}
+                onPointerEnter={() => {
+                  handleCoordinatorBubbleHoverChange(true);
+                }}
+                onPointerLeave={() => {
+                  handleCoordinatorBubbleHoverChange(false);
+                }}
+              >
+                <ShellBallBubbleZone
+                  visualState={snapshot.visualState}
+                  bubbleItems={visibleBubbleItems}
+                  onDeleteBubble={(bubbleId) => {
+                    handleCoordinatorBubbleAction({ action: "delete", bubbleId, source: "bubble" });
+                  }}
+                  onPinBubble={(bubbleId) => {
+                    handleCoordinatorBubbleAction({ action: "pin", bubbleId, source: "bubble" });
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
       overlayContent={snapshot.visibility.voice ? <div className="shell-ball-voice-window"><ShellBallVoiceHints hintMode={snapshot.voiceHintMode} voicePreview={snapshot.voicePreview} /></div> : null}
       bottomContent={shouldRenderInlineInput ? (
         <div
