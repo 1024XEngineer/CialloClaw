@@ -47,8 +47,12 @@ type ShellBallWindowAnchor = {
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
-const SHELL_BALL_INTERACTIVE_SELECTOR = '[data-shell-ball-interactive="true"]';
-const SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX = 6;
+const SHELL_BALL_INTERACTIVE_SELECTOR = [
+  ".shell-ball-mascot__hotspot",
+  ".shell-ball-uiverse-inputbox textarea",
+  ".shell-ball-uiverse-action",
+  ".shell-ball-mascot__voice-hint",
+].join(", ");
 
 type ShellBallClipboardPrompt = {
   text: string;
@@ -321,32 +325,16 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   };
 
   const resolveShellBallInteractiveHit = useCallback((clientX: number, clientY: number) => {
-    // Window-level passthrough should only flip off for real interactive nodes.
-    // Keep a small hysteresis band once interactive so edge jitter does not
-    // thrash native ignore-cursor-events toggles while the pointer grazes a
-    // hotspot boundary.
-    const directHit = document
-      .elementsFromPoint(clientX, clientY)
-      .find((element) => element instanceof HTMLElement && element.closest(SHELL_BALL_INTERACTIVE_SELECTOR) !== null);
-
-    if (directHit !== undefined) {
-      return true;
-    }
-
-    if (interactivePassthroughRef.current) {
-      return false;
-    }
-
     const interactiveElements = rootRef.current?.querySelectorAll<HTMLElement>(SHELL_BALL_INTERACTIVE_SELECTOR) ?? [];
 
     for (const element of interactiveElements) {
       const rect = element.getBoundingClientRect();
 
       if (
-        clientX >= rect.left - SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
-        && clientX <= rect.right + SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
-        && clientY >= rect.top - SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
-        && clientY <= rect.bottom + SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
+        clientX >= rect.left
+        && clientX <= rect.right
+        && clientY >= rect.top
+        && clientY <= rect.bottom
       ) {
         return true;
       }
@@ -571,6 +559,26 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       void syncShellBallCursorPassthrough(event.clientX, event.clientY);
     };
 
+    const pollNativeCursor = window.setInterval(() => {
+      void (async () => {
+        if (!interactivePassthroughRef.current) {
+          return;
+        }
+
+        const mousePosition = await getShellBallMousePosition();
+        if (disposed || mousePosition === null) {
+          return;
+        }
+
+        const outerPosition = await currentWindow.outerPosition();
+        const scaleFactor = await currentWindow.scaleFactor();
+        const clientX = (mousePosition.client_x - outerPosition.x) / scaleFactor;
+        const clientY = (mousePosition.client_y - outerPosition.y) / scaleFactor;
+
+        await syncShellBallCursorPassthrough(clientX, clientY);
+      })();
+    }, 50);
+
     void (async () => {
       // Start in click-through mode and immediately reconcile the current native
       // cursor position so the shell-ball window does not block the desktop when
@@ -595,6 +603,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     return () => {
       disposed = true;
+      window.clearInterval(pollNativeCursor);
       window.removeEventListener("mousemove", handleMouseMove);
       void setShellBallIgnoreCursorEvents(false, false);
     };
