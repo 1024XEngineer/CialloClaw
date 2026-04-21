@@ -436,7 +436,7 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
     };
   }
 
-  if (resource.path) {
+  if (resource.openAction === "open_file" && resource.path) {
     return {
       feedback: `已打开 ${resource.label}。`,
       mode: "open_local_path",

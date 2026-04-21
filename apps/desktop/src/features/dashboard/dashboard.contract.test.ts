@@ -1561,7 +1561,7 @@ test("task output service exposes artifact list and open flows in mock mode", as
   assert.equal(outputService.isAllowedTaskOpenUrl("file:///tmp/out.txt"), false);
 });
 
-test("note resource open helpers normalize task, url, and copy flows", () => {
+test("note resource open helpers normalize task, url, local open, and copy flows", () => {
   const noteService = loadNotePageServiceModule();
 
   const taskPlan = noteService.resolveNoteResourceOpenExecutionPlan({
@@ -1588,8 +1588,20 @@ test("note resource open helpers normalize task, url, and copy flows", () => {
   assert.equal(urlPlan.mode, "open_url");
   assert.equal(urlPlan.url, "https://example.test/spec");
 
-  const copyPlan = noteService.resolveNoteResourceOpenExecutionPlan({
+  const openFilePlan = noteService.resolveNoteResourceOpenExecutionPlan({
     id: "note_resource_003",
+    label: "Draft",
+    openAction: "open_file",
+    path: "workspace/drafts/spec.md",
+    taskId: null,
+    type: "draft",
+    url: null,
+  });
+  assert.equal(openFilePlan.mode, "open_local_path");
+  assert.equal(openFilePlan.path, "workspace/drafts/spec.md");
+
+  const copyPlan = noteService.resolveNoteResourceOpenExecutionPlan({
+    id: "note_resource_003_copy",
     label: "Draft",
     openAction: "copy_path",
     path: "workspace/drafts/spec.md",
@@ -1597,7 +1609,7 @@ test("note resource open helpers normalize task, url, and copy flows", () => {
     type: "draft",
     url: null,
   });
-  assert.equal(copyPlan.mode, "open_local_path");
+  assert.equal(copyPlan.mode, "copy_path");
   assert.equal(copyPlan.path, "workspace/drafts/spec.md");
 
   const revealPlan = noteService.resolveNoteResourceOpenExecutionPlan({

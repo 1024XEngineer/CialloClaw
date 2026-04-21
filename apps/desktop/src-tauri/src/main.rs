@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::ipc::Channel;
@@ -58,6 +59,8 @@ const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
+const LOCAL_PATH_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
+static LOCAL_PATH_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 
 #[cfg(windows)]
 macro_rules! makelparam {
@@ -287,13 +290,82 @@ async fn desktop_get_active_window_context(
 }
 
 #[tauri::command]
-fn desktop_open_local_path(path: String) -> Result<(), String> {
-    local_path::open_local_path(&path)
+async fn desktop_open_local_path(
+    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    path: String,
+) -> Result<(), String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = build_local_path_roots(&state);
+        local_path::open_local_path(&path, &roots)
+    })
+    .await
+    .map_err(|error| format!("desktop local open task failed: {error}"))?
 }
 
 #[tauri::command]
-fn desktop_reveal_local_path(path: String) -> Result<(), String> {
-    local_path::reveal_local_path(&path)
+async fn desktop_reveal_local_path(
+    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    path: String,
+) -> Result<(), String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = build_local_path_roots(&state);
+        local_path::reveal_local_path(&path, &roots)
+    })
+    .await
+    .map_err(|error| format!("desktop local reveal task failed: {error}"))?
+}
+
+fn build_local_path_roots(state: &Arc<NamedPipeBridgeState>) -> local_path::LocalPathRoots {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .ok();
+    let workspace_root = fetch_workspace_root(state)
+        .ok()
+        .flatten()
+        .and_then(|workspace_root| {
+            if workspace_root.is_absolute() {
+                Some(workspace_root)
+            } else {
+                repo_root.as_ref().map(|root| root.join(workspace_root))
+            }
+        })
+        .or_else(|| repo_root.as_ref().map(|root| root.join("workspace")));
+
+    local_path::LocalPathRoots::new(workspace_root, repo_root)
+}
+
+fn fetch_workspace_root(state: &Arc<NamedPipeBridgeState>) -> Result<Option<PathBuf>, String> {
+    let request_id = format!(
+        "desktop_local_path_settings_{}",
+        LOCAL_PATH_SETTINGS_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let response = state.request(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "agent.settings.get",
+        "params": {
+            "scope": "general",
+            "request_meta": {
+                "trace_id": "trace_desktop_local_path_settings",
+                "client_time": LOCAL_PATH_SETTINGS_CLIENT_TIME,
+            }
+        }
+    }))?;
+
+    Ok(response
+        .get("result")
+        .and_then(|result| result.get("data"))
+        .and_then(|data| data.get("settings"))
+        .and_then(|settings| settings.get("general"))
+        .and_then(|general| general.get("download"))
+        .and_then(|download| download.get("workspace_path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from))
 }
 
 fn writer_loop(
