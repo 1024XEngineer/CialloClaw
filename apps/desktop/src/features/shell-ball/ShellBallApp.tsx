@@ -415,6 +415,16 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     })();
   }, [focusInlineInputField, handleCoordinatorDroppedFiles, handleCoordinatorPrimaryAction]);
 
+  const handleInlineInputFocusChange = useCallback((focused: boolean) => {
+    if (!focused) {
+      // Blur should fully retire any outstanding focus request so later orb
+      // interactions cannot accidentally replay a stale textarea focus token.
+      setInputFocusToken(0);
+    }
+
+    handleCoordinatorInputFocusChange(focused);
+  }, [handleCoordinatorInputFocusChange]);
+
   const handleLockedPressStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     pressCaptureLockRef.current = true;
     void setShellBallIgnoreCursorEvents(false, false);
@@ -936,7 +946,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
             onSubmit={() => {
               void handleCoordinatorPrimaryAction("submit");
             }}
-            onFocusChange={handleCoordinatorInputFocusChange}
+            onFocusChange={handleInlineInputFocusChange}
           />
         </div>
       ) : null}
