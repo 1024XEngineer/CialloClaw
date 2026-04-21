@@ -1,0 +1,40 @@
+.control-panel-page[data-appearance="dark"] {
+  --cp-ink: #f6efe8;
+  --cp-copy: #d4c9bf;
+  --cp-muted: #b6a89c;
+  --cp-charcoal-rgb: 35, 29, 29;
+  --cp-orange-rgb: 228, 149, 80;
+  --cp-accent-rgb: 151, 112, 102;
+  --cp-surface: rgba(33, 26, 25, 0.84);
+  --cp-surface-strong: rgba(40, 31, 30, 0.94);
+  --cp-region-base: rgba(37, 29, 28, 0.84);
+  --cp-region-shell: rgba(49, 39, 38, 0.76);
+  --cp-panel-shadow:
+    0 34px 68px -52px rgba(10, 8, 8, 0.62),
+    0 16px 24px -22px rgba(12, 10, 10, 0.34),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  --cp-control-shadow:
+    0 24px 34px -32px rgba(7, 6, 6, 0.5),
+    0 10px 18px -18px rgba(6, 5, 5, 0.28);
+  background:
+    radial-gradient(circle at 12% 10%, rgba(255, 231, 215, 0.08), transparent 24%),
+    radial-gradient(circle at 82% 9%, rgba(228, 149, 80, 0.16), transparent 18%),
+    radial-gradient(circle at 20% 82%, rgba(156, 117, 106, 0.14), transparent 20%),
+    radial-gradient(circle at 88% 72%, rgba(88, 67, 63, 0.18), transparent 22%),
+    linear-gradient(180deg, #181210 0%, #130e0d 48%, #0f0a09 100%);
+  color-scheme: dark;
+}
+
+.control-panel-page__surface--disabled,
+.control-panel-page__surface--disabled:hover {
+  opacity: 0.72;
+  transform: none;
+}
+
+.control-panel-page__surface--disabled::before {
+  opacity: 0.58;
+}
+
+.control-panel-page__surface--disabled :where(.rt-SwitchRoot, .rt-SliderTrack, .rt-SliderThumb) {
+  filter: saturate(0.72);
+}

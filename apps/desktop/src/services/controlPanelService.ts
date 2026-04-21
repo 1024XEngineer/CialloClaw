@@ -42,6 +42,38 @@ export type ControlPanelSaveResult = {
   source: ControlPanelSource;
 };
 
+function buildEditableFloatingBallUpdate(
+  floatingBall: DesktopSettingsData["floating_ball"],
+): Partial<SettingsSnapshot["settings"]["floating_ball"]> {
+  return {
+    idle_translucent: floatingBall.idle_translucent,
+    position_mode: floatingBall.position_mode,
+  };
+}
+
+/**
+ * Floating-ball size and edge snapping are still owned by the shell-ball work.
+ * Preserve the last persisted values so control-panel saves only update the
+ * fields that are already safe to edit from this window.
+ *
+ * @param nextSettings Draft settings produced by the control panel flow.
+ * @param persistedSettings Last persisted desktop snapshot.
+ * @returns Settings with detached floating-ball fields restored.
+ */
+function preserveDetachedFloatingBallFields(
+  nextSettings: DesktopSettingsData,
+  persistedSettings: DesktopSettingsData,
+): DesktopSettingsData {
+  return hydrateDesktopSettings({
+    ...nextSettings,
+    floating_ball: {
+      ...nextSettings.floating_ball,
+      auto_snap: persistedSettings.floating_ball.auto_snap,
+      size: persistedSettings.floating_ball.size,
+    },
+  });
+}
+
 function projectInspectorToTaskAutomation(
   settings: DesktopSettingsData,
   inspector: AgentTaskInspectorConfigGetResult,
@@ -230,10 +262,15 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
 }
 
 export async function saveControlPanelData(data: ControlPanelData): Promise<ControlPanelSaveResult> {
+  const persistedSettings = loadSettings().settings;
+
   if (data.source === "mock") {
-    const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
-      projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.models.provider_api_key_configured,
+    const nextSettingsSnapshot = preserveDetachedFloatingBallFields(
+      buildSettingsWithProviderApiKeyConfigured(
+        projectInspectorToTaskAutomation(data.settings, data.inspector),
+        data.settings.models.provider_api_key_configured,
+      ),
+      persistedSettings,
     );
     const nextDesktopSettings: DesktopSettings = {
       settings: nextSettingsSnapshot,
@@ -254,7 +291,7 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       updateSettings({
         request_meta: createRequestMeta(),
         general: data.settings.general,
-        floating_ball: data.settings.floating_ball,
+        floating_ball: buildEditableFloatingBallUpdate(data.settings.floating_ball),
         memory: data.settings.memory,
         data_log: buildDataLogUpdatePayload(data),
       }),
@@ -269,9 +306,12 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
       }),
     ]);
 
-    const effectiveSettings = projectInspectorToTaskAutomation(
-      mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>),
-      inspectorResult.effective_config,
+    const effectiveSettings = preserveDetachedFloatingBallFields(
+      projectInspectorToTaskAutomation(
+        mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>),
+        inspectorResult.effective_config,
+      ),
+      persistedSettings,
     );
     saveSettings({ settings: effectiveSettings });
 
@@ -289,9 +329,12 @@ export async function saveControlPanelData(data: ControlPanelData): Promise<Cont
     }
 
     logRpcMockFallback("control panel save", error);
-    const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
-      projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.models.provider_api_key_configured,
+    const nextSettingsSnapshot = preserveDetachedFloatingBallFields(
+      buildSettingsWithProviderApiKeyConfigured(
+        projectInspectorToTaskAutomation(data.settings, data.inspector),
+        data.settings.models.provider_api_key_configured,
+      ),
+      persistedSettings,
     );
     const nextDesktopSettings: DesktopSettings = {
       settings: nextSettingsSnapshot,

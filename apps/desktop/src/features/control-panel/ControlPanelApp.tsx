@@ -2,6 +2,7 @@
  * Control panel editing flow keeps a local draft so desktop settings can be
  * reviewed and persisted without mutating the last loaded snapshot in place.
  */
+import "./controlPanel.css";
 import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { GripHorizontal, X } from "lucide-react";
 import { Button, Heading, SegmentedControl, Slider, Switch, Text, TextArea, TextField } from "@radix-ui/themes";
@@ -15,6 +16,7 @@ import {
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
 
 type PanelTone = "blush" | "warm" | "mist" | "leaf";
+type ControlPanelAppearance = "light" | "dark";
 
 type SectionHeaderProps = {
   titleId: string;
@@ -27,6 +29,7 @@ type ControlLineProps = {
   children: ReactNode;
   tone?: PanelTone;
   className?: string;
+  disabled?: boolean;
 };
 
 type ToggleLineProps = {
@@ -36,6 +39,7 @@ type ToggleLineProps = {
   onCheckedChange: (checked: boolean) => void;
   tone?: PanelTone;
   className?: string;
+  disabled?: boolean;
 };
 
 type InfoRowProps = {
@@ -89,6 +93,21 @@ function getApplyModeCopy(applyMode: string, needRestart: boolean, source: Contr
   return `设置已即时生效。${localSnapshotSuffix}`;
 }
 
+function resolveControlPanelAppearance(
+  themeMode: ControlPanelData["settings"]["general"]["theme_mode"],
+  systemAppearance: ControlPanelAppearance,
+): ControlPanelAppearance {
+  if (themeMode === "dark") {
+    return "dark";
+  }
+
+  if (themeMode === "light") {
+    return "light";
+  }
+
+  return systemAppearance;
+}
+
 /**
  * Renders the visual section header used by control panel setting groups.
  *
@@ -111,13 +130,18 @@ function SectionHeader({ titleId, title }: SectionHeaderProps) {
   );
 }
 
-function ControlLine({ label, hint, children, tone = "blush", className }: ControlLineProps) {
-  const classes = ["control-panel-page__control-line", `control-panel-page__tone-surface--${tone}`, className]
+function ControlLine({ label, hint, children, tone = "blush", className, disabled = false }: ControlLineProps) {
+  const classes = [
+    "control-panel-page__control-line",
+    `control-panel-page__tone-surface--${tone}`,
+    disabled ? "control-panel-page__surface--disabled" : null,
+    className,
+  ]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <div className={classes}>
+    <div className={classes} aria-disabled={disabled}>
       <div className="control-panel-page__control-copy">
         <Text as="p" size="2" weight="medium" className="control-panel-page__field-label">
           {label}
@@ -133,13 +157,18 @@ function ControlLine({ label, hint, children, tone = "blush", className }: Contr
   );
 }
 
-function ToggleLine({ label, description, checked, onCheckedChange, tone = "warm", className }: ToggleLineProps) {
-  const classes = ["control-panel-page__toggle-line", `control-panel-page__tone-surface--${tone}`, className]
+function ToggleLine({ label, description, checked, onCheckedChange, tone = "warm", className, disabled = false }: ToggleLineProps) {
+  const classes = [
+    "control-panel-page__toggle-line",
+    `control-panel-page__tone-surface--${tone}`,
+    disabled ? "control-panel-page__surface--disabled" : null,
+    className,
+  ]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <div className={classes}>
+    <div className={classes} aria-disabled={disabled}>
       <div className="control-panel-page__control-copy">
         <Text as="p" size="2" weight="medium" className="control-panel-page__field-label">
           {label}
@@ -150,7 +179,7 @@ function ToggleLine({ label, description, checked, onCheckedChange, tone = "warm
           </Text>
         ) : null}
       </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} />
     </div>
   );
 }
@@ -179,6 +208,34 @@ export function ControlPanelApp() {
   const [inspectionSummary, setInspectionSummary] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
+  const [systemAppearance, setSystemAppearance] = useState<ControlPanelAppearance>(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateSystemAppearance = (event?: MediaQueryListEvent) => {
+      setSystemAppearance((event?.matches ?? mediaQuery.matches) ? "dark" : "light");
+    };
+
+    updateSystemAppearance();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", updateSystemAppearance);
+      return () => mediaQuery.removeEventListener("change", updateSystemAppearance);
+    }
+
+    mediaQuery.addListener(updateSystemAppearance);
+    return () => mediaQuery.removeListener(updateSystemAppearance);
+  }, []);
 
   useEffect(() => {
     void loadControlPanelData().then((nextData) => {
@@ -190,10 +247,11 @@ export function ControlPanelApp() {
   const sourceCopy = useMemo(() => (draft ? getSourceCopy(draft.source) : null), [draft]);
 
   const hasChanges = !isEqual(draft, panelData);
+  const pendingFloatingBallHint = "悬浮球联调中：当前仅展示快照，不从控制面板写回。";
 
   if (!draft || !panelData || !sourceCopy) {
     return (
-      <main className="app-shell control-panel-page">
+      <main className="app-shell control-panel-page" data-appearance={systemAppearance}>
         <div className="control-panel-page__loading">
           <Text size="2" className="control-panel-page__loading-copy">
             正在载入控制面板…
@@ -208,6 +266,7 @@ export function ControlPanelApp() {
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
   const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
+  const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint =
     draft.source === "rpc"
       ? "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
@@ -309,7 +368,7 @@ export function ControlPanelApp() {
   };
 
   return (
-    <main className="app-shell control-panel-page">
+    <main className="app-shell control-panel-page" data-appearance={resolvedAppearance}>
       <div className="control-panel-page__frame">
         <section
           className="control-panel-page__topbar control-panel-page__tone-surface--warm"
@@ -518,17 +577,11 @@ export function ControlPanelApp() {
               <div className="control-panel-page__stack">
                 <ToggleLine
                   label="自动贴边"
+                  description={pendingFloatingBallHint}
                   checked={draft.settings.floating_ball.auto_snap}
                   tone="warm"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        floating_ball: { ...current.settings.floating_ball, auto_snap: checked },
-                      },
-                    }))
-                  }
+                  disabled
+                  onCheckedChange={() => {}}
                 />
 
                 <ToggleLine
@@ -548,23 +601,16 @@ export function ControlPanelApp() {
 
                 <ControlLine label="尺寸" tone="warm">
                   <div className="control-panel-page__slider-stack">
+                    <Text as="p" size="1" className="control-panel-page__field-hint">
+                      {pendingFloatingBallHint}
+                    </Text>
                     <Slider
                       min={0}
                       max={2}
                       step={1}
+                      disabled
                       value={[draft.settings.floating_ball.size === "small" ? 0 : draft.settings.floating_ball.size === "medium" ? 1 : 2]}
-                      onValueChange={([value]) =>
-                        updateSettings((current) => ({
-                          ...current,
-                          settings: {
-                            ...current.settings,
-                            floating_ball: {
-                              ...current.settings.floating_ball,
-                              size: value === 0 ? "small" : value === 1 ? "medium" : "large",
-                            },
-                          },
-                        }))
-                      }
+                      onValueChange={() => {}}
                     />
 
                     <div className="control-panel-page__slider-legend">
