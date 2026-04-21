@@ -30,6 +30,7 @@ import {
   shellBallWindowLabels,
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
+import { getShellBallMousePosition, setShellBallIgnoreCursorEvents } from "../../platform/shellBallWindow";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 
 type ShellBallAppProps = {
@@ -46,6 +47,8 @@ type ShellBallWindowAnchor = {
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
+const SHELL_BALL_INTERACTIVE_SELECTOR = '[data-shell-ball-interactive="true"]';
+const SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX = 6;
 
 type ShellBallClipboardPrompt = {
   text: string;
@@ -68,14 +71,6 @@ export function shouldShowShellBallFileDropOverlay(input: {
   fileDropActive: boolean;
 }) {
   return input.fileDropActive;
-}
-
-function shouldPreviewShellBallWindowDrag(dataTransfer: DataTransfer | null) {
-  if (dataTransfer === null) {
-    return false;
-  }
-
-  return dataTransfer.files.length > 0 || dataTransfer.types.length > 0;
 }
 
 /**
@@ -252,13 +247,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
-  const [dragPreviewActive, setDragPreviewActive] = useState(false);
   const [fileDropActive, setFileDropActive] = useState(false);
   const [inputFocusToken, setInputFocusToken] = useState(0);
   const [textDragActive, setTextDragActive] = useState(false);
   const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
   const [clipboardPrompt, setClipboardPrompt] = useState<ShellBallClipboardPrompt | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
+  const interactivePassthroughRef = useRef(true);
   const mascotRef = useRef<HTMLDivElement>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
@@ -324,6 +319,59 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   dragDropHandlersRef.current = {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
   };
+
+  const resolveShellBallInteractiveHit = useCallback((clientX: number, clientY: number) => {
+    // Window-level passthrough should only flip off for real interactive nodes.
+    // Keep a small hysteresis band once interactive so edge jitter does not
+    // thrash native ignore-cursor-events toggles while the pointer grazes a
+    // hotspot boundary.
+    const directHit = document
+      .elementsFromPoint(clientX, clientY)
+      .find((element) => element instanceof HTMLElement && element.closest(SHELL_BALL_INTERACTIVE_SELECTOR) !== null);
+
+    if (directHit !== undefined) {
+      return true;
+    }
+
+    if (interactivePassthroughRef.current) {
+      return false;
+    }
+
+    const interactiveElements = rootRef.current?.querySelectorAll<HTMLElement>(SHELL_BALL_INTERACTIVE_SELECTOR) ?? [];
+
+    for (const element of interactiveElements) {
+      const rect = element.getBoundingClientRect();
+
+      if (
+        clientX >= rect.left - SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
+        && clientX <= rect.right + SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
+        && clientY >= rect.top - SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
+        && clientY <= rect.bottom + SHELL_BALL_PASSTHROUGH_EDGE_TOLERANCE_PX
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }, [rootRef]);
+
+  const syncShellBallCursorPassthrough = useCallback(async (clientX: number, clientY: number) => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    const hitInteractiveZone = resolveShellBallInteractiveHit(clientX, clientY);
+    const nextIgnoreCursorEvents = !hitInteractiveZone;
+
+    if (interactivePassthroughRef.current === nextIgnoreCursorEvents) {
+      return;
+    }
+
+    interactivePassthroughRef.current = nextIgnoreCursorEvents;
+    await setShellBallIgnoreCursorEvents(nextIgnoreCursorEvents, true);
+  }, [resolveShellBallInteractiveHit]);
 
   const focusInlineInputField = useCallback((syncInteraction = true) => {
     if (syncInteraction) {
@@ -510,6 +558,48 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    let disposed = false;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      void syncShellBallCursorPassthrough(event.clientX, event.clientY);
+    };
+
+    void (async () => {
+      // Start in click-through mode and immediately reconcile the current native
+      // cursor position so the shell-ball window does not block the desktop when
+      // the pointer is outside its true hotspots.
+      interactivePassthroughRef.current = true;
+      await setShellBallIgnoreCursorEvents(true, true);
+
+      const mousePosition = await getShellBallMousePosition();
+      if (disposed || mousePosition === null) {
+        return;
+      }
+
+      const outerPosition = await currentWindow.outerPosition();
+      const scaleFactor = await currentWindow.scaleFactor();
+      const clientX = (mousePosition.client_x - outerPosition.x) / scaleFactor;
+      const clientY = (mousePosition.client_y - outerPosition.y) / scaleFactor;
+
+      await syncShellBallCursorPassthrough(clientX, clientY);
+    })();
+
+    window.addEventListener("mousemove", handleMouseMove);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("mousemove", handleMouseMove);
+      void setShellBallIgnoreCursorEvents(false, false);
+    };
+  }, [syncShellBallCursorPassthrough]);
+
   function handleDoubleClick() {
     if (!shouldOpenDashboardFromDoubleClick) {
       return;
@@ -527,10 +617,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
   const clearTextDragState = useCallback(() => {
     setTextDragActive(false);
-  }, []);
-
-  const clearWindowDragPreviewState = useCallback(() => {
-    setDragPreviewActive(false);
   }, []);
 
   const handleWindowTextDrag = useCallback((event: DragEvent) => {
@@ -551,24 +637,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     setTextDragActive(true);
   }, [clearTextDragState, fileDropActive, visualState]);
 
-  const handleWindowDragPreview = useCallback((event: DragEvent) => {
-    if (!shouldPreviewShellBallWindowDrag(event.dataTransfer)) {
-      clearWindowDragPreviewState();
-      return;
-    }
-
-    setDragPreviewActive(true);
-  }, [clearWindowDragPreviewState]);
-
-  useEventListener("dragenter", handleWindowDragPreview, {
-    target: shellBallWindowTarget,
-    enable: shellBallWindowTarget !== undefined,
-  });
-  useEventListener("dragover", handleWindowDragPreview, {
-    target: shellBallWindowTarget,
-    enable: shellBallWindowTarget !== undefined,
-  });
-
   useEventListener("dragenter", handleWindowTextDrag, {
     target: shellBallWindowTarget,
     enable: shellBallWindowTarget !== undefined,
@@ -585,14 +653,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     target: shellBallWindowTarget,
     enable: shellBallWindowTarget !== undefined,
   });
-  useEventListener("dragleave", clearWindowDragPreviewState, {
-    target: shellBallWindowTarget,
-    enable: shellBallWindowTarget !== undefined,
-  });
-  useEventListener("drop", clearWindowDragPreviewState, {
-    target: shellBallWindowTarget,
-    enable: shellBallWindowTarget !== undefined,
-  });
 
   useEffect(() => {
     if (!fileDropActive && visualState !== "voice_listening" && visualState !== "voice_locked") {
@@ -601,14 +661,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     setTextDragActive(false);
   }, [fileDropActive, visualState]);
-
-  useEffect(() => {
-    if (!fileDropActive) {
-      return;
-    }
-
-    setDragPreviewActive(false);
-  }, [fileDropActive]);
 
   useEffect(() => {
     if (visualState !== "idle" && visualState !== "hover_input") {
@@ -768,7 +820,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       dashboardTransitionPhase={dashboardTransitionPhase}
       mascotRef={mascotRef}
       fileDropActive={shouldShowShellBallFileDropOverlay({
-        fileDropActive: fileDropActive || dragPreviewActive,
+        fileDropActive,
       })}
       overlayContent={snapshot.visibility.voice ? <div className="shell-ball-voice-window"><ShellBallVoiceHints hintMode={snapshot.voiceHintMode} voicePreview={snapshot.voicePreview} /></div> : null}
       bottomContent={shouldRenderInlineInput ? (

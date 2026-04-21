@@ -21,8 +21,12 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use once_cell::sync::Lazy;
 
 #[cfg(windows)]
+use std::collections::HashSet;
+
+#[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HGLOBAL, LPARAM, LRESULT, WPARAM},
+    Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Graphics::Gdi::{PtInRect, ScreenToClient},
     System::{
         DataExchange::{
             CloseClipboard, GetClipboardData, GetClipboardSequenceNumber,
@@ -51,6 +55,13 @@ const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
+
+#[cfg(windows)]
+macro_rules! makelparam {
+    ($low:expr, $high:expr) => {
+        (((($low) & 0xffff) as u32) | (((($high) & 0xffff) as u32) << 16)) as _
+    };
+}
 
 enum BridgeCommand {
     Request { payload: Value },
@@ -774,6 +785,167 @@ fn open_or_focus_dashboard_window(app: &tauri::AppHandle) {
     });
 }
 
+#[derive(Clone, serde::Serialize)]
+struct CursorPosition {
+    client_x: i32,
+    client_y: i32,
+}
+
+#[cfg(windows)]
+static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[cfg(windows)]
+unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
+    let browser_hwnd = {
+        let host = match GetWindow(hwnd, GW_CHILD) {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+
+        match GetWindow(host, GW_CHILD) {
+            Ok(value) => value,
+            Err(_) => return,
+        }
+    };
+
+    let mut forwarding_windows = match FORWARDING_WINDOWS.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+
+    let mut mouse_hook = match SHELL_BALL_MOUSE_HOOK.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+
+    if forward {
+        forwarding_windows.insert(browser_hwnd.0 as isize);
+
+        if mouse_hook.is_none() {
+            *mouse_hook = Some(
+                SetWindowsHookExW(WH_MOUSE_LL, Some(mousemove_forward), None, 0)
+                    .expect("failed to install shell-ball mouse hook")
+                    .0 as isize,
+            );
+        }
+    } else {
+        forwarding_windows.remove(&(browser_hwnd.0 as isize));
+
+        if forwarding_windows.is_empty() {
+            if let Some(hook) = mouse_hook.take() {
+                let _ = UnhookWindowsHookEx(HHOOK(hook as _));
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn mousemove_forward(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code < 0 {
+        return CallNextHookEx(None, n_code, w_param, l_param);
+    }
+
+    if w_param.0 as u32 == WM_MOUSEMOVE {
+        let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+
+        let forwarding_windows = match FORWARDING_WINDOWS.lock() {
+            Ok(guard) => guard,
+            Err(_) => return CallNextHookEx(None, n_code, w_param, l_param),
+        };
+
+        for &hwnd in forwarding_windows.iter() {
+            let hwnd = HWND(hwnd as _);
+            let mut client_rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+
+            if GetClientRect(hwnd, &mut client_rect).is_err() {
+                continue;
+            }
+
+            let mut client_point = point;
+            if !ScreenToClient(hwnd, &mut client_point).as_bool() {
+                continue;
+            }
+
+            if PtInRect(&client_rect, client_point).as_bool() {
+                let w = Some(WPARAM(1));
+                let l = Some(LPARAM(makelparam!(client_point.x, client_point.y)));
+                SendMessageW(hwnd, WM_MOUSEMOVE, w, l);
+            }
+        }
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn shell_ball_set_ignore_cursor_events(
+    window: tauri::Window,
+    ignore: bool,
+    forward: bool,
+) -> Result<(), String> {
+    window
+        .set_ignore_cursor_events(ignore)
+        .map_err(|error| format!("failed to update shell-ball ignore cursor events: {error}"))?;
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get shell-ball hwnd: {error}"))?;
+
+    let should_forward = if ignore { forward } else { false };
+    unsafe {
+        set_forward_mouse_messages(hwnd, should_forward);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shell_ball_set_ignore_cursor_events(
+    window: tauri::Window,
+    ignore: bool,
+    _forward: bool,
+) -> Result<(), String> {
+    window
+        .set_ignore_cursor_events(ignore)
+        .map_err(|error| format!("failed to update shell-ball ignore cursor events: {error}"))
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe {
+        if GetCursorPos(&mut point).is_ok() {
+            Some(CursorPosition {
+                client_x: point.x,
+                client_y: point.y,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
+    None
+}
+
 #[tauri::command]
 fn shell_ball_apply_window_frame(
     window: tauri::Window,
@@ -834,6 +1006,8 @@ fn main() {
             named_pipe_request,
             named_pipe_subscribe,
             named_pipe_unsubscribe,
+            shell_ball_set_ignore_cursor_events,
+            shell_ball_get_mouse_position,
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,

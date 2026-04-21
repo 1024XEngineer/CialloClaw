@@ -1,5 +1,11 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import type { ShellBallSelectionSnapshot } from "@/features/shell-ball/selection/selection.types";
+
+export type ShellBallMousePosition = {
+  client_x: number;
+  client_y: number;
+};
 
 export type ShellBallWindowBounds = {
   height: number;
@@ -34,6 +40,41 @@ export async function setShellBallShadow(enabled: boolean) {
   }
 
   await currentWindow.setShadow(enabled);
+}
+
+/**
+ * Toggles shell-ball window click-through at the native host level.
+ *
+ * On Windows we optionally forward native mouse move messages while the window
+ * is ignoring cursor events so the React layer can restore interactivity as
+ * soon as the pointer re-enters a true hotspot.
+ */
+export async function setShellBallIgnoreCursorEvents(ignore: boolean, forward = true) {
+  const currentWindow = getShellBallWindow();
+  if (!currentWindow) {
+    return;
+  }
+
+  try {
+    await invoke("shell_ball_set_ignore_cursor_events", {
+      forward,
+      ignore,
+    });
+  } catch {
+    await currentWindow.setIgnoreCursorEvents(ignore);
+  }
+}
+
+/**
+ * Reads the current native cursor position once so shell-ball can sync its
+ * initial click-through state before the first forwarded mousemove arrives.
+ */
+export async function getShellBallMousePosition() {
+  if (!isTauriWindowEnvironment()) {
+    return null;
+  }
+
+  return invoke<ShellBallMousePosition | null>("shell_ball_get_mouse_position");
 }
 
 /**
