@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activity;
+mod local_path;
 mod screen_capture;
 mod selection;
 mod window_context;
@@ -283,6 +284,16 @@ async fn desktop_get_active_window_context(
     tauri::async_runtime::spawn_blocking(window_context::read_active_window_context)
         .await
         .map_err(|error| format!("desktop window-context task failed: {error}"))?
+}
+
+#[tauri::command]
+fn desktop_open_local_path(path: String) -> Result<(), String> {
+    local_path::open_local_path(&path)
+}
+
+#[tauri::command]
+fn desktop_reveal_local_path(path: String) -> Result<(), String> {
+    local_path::reveal_local_path(&path)
 }
 
 fn writer_loop(
@@ -946,6 +957,8 @@ fn main() {
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,
+            desktop_open_local_path,
+            desktop_reveal_local_path,
             pick_shell_ball_files,
             shell_ball_read_selection_snapshot
         ])

@@ -9,6 +9,7 @@ import type {
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
+import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
 import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, runMockUpdateNote } from "./notePage.mock";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome } from "./notePage.types";
@@ -18,7 +19,7 @@ const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 export type NotePageDataMode = "rpc" | "mock";
 
 export type NoteResourceOpenExecutionPlan = {
-  mode: "task_detail" | "open_url" | "copy_path";
+  mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
   feedback: string;
   path: string | null;
   taskId: string | null;
@@ -193,6 +194,14 @@ function normalizeResourceOpenAction(action: DeliveryType | null, payload: Deliv
 
   if (action === "result_page" && payload?.url) {
     return "open_url";
+  }
+
+  if (action === "reveal_in_folder" && payload?.path) {
+    return "reveal_in_folder";
+  }
+
+  if ((action === "open_file" || action === "workspace_document") && payload?.path) {
+    return "open_file";
   }
 
   return "copy_path";
@@ -389,6 +398,13 @@ export async function updateNote(itemId: string, action: NotepadAction, source: 
   };
 }
 
+/**
+ * Converts a note resource reference into a renderer-side execution plan that
+ * stays aligned with the formal task/detail open semantics.
+ *
+ * @param resource Note resource reference prepared for the dashboard view.
+ * @returns The renderer execution plan for the selected resource.
+ */
 export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): NoteResourceOpenExecutionPlan {
   if (resource.openAction === "task_detail" && resource.taskId) {
     return {
@@ -410,6 +426,26 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
     };
   }
 
+  if (resource.openAction === "reveal_in_folder" && resource.path) {
+    return {
+      feedback: `已在文件夹中定位 ${resource.label}。`,
+      mode: "reveal_local_path",
+      path: resource.path || null,
+      taskId: resource.taskId ?? null,
+      url: resource.url ?? null,
+    };
+  }
+
+  if (resource.path) {
+    return {
+      feedback: `已打开 ${resource.label}。`,
+      mode: "open_local_path",
+      path: resource.path || null,
+      taskId: resource.taskId ?? null,
+      url: resource.url ?? null,
+    };
+  }
+
   return {
     feedback: resource.path || resource.url ? `已准备 ${resource.label} 的地址。` : `当前资源 ${resource.label} 缺少可打开地址。`,
     mode: "copy_path",
@@ -419,6 +455,39 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
   };
 }
 
+async function copyPreparedPath(feedback: string, path: string | null) {
+  if (!path) {
+    return feedback;
+  }
+
+  if (globalThis.navigator?.clipboard?.writeText) {
+    try {
+      await globalThis.navigator.clipboard.writeText(path);
+      return `${feedback} 已复制路径。`;
+    } catch {
+      return `${feedback} 路径：${path}`;
+    }
+  }
+
+  return `${feedback} 路径：${path}`;
+}
+
+function localPathExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
+/**
+ * Executes a note resource open plan while preserving copy-path as the final
+ * fallback when the local desktop shell cannot complete the request.
+ *
+ * @param plan Renderer-side execution plan for the selected note resource.
+ * @returns User-facing feedback describing the completed action or fallback.
+ */
 export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExecutionPlan): Promise<string> {
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedNoteOpenUrl(plan.url)) {
@@ -429,17 +498,26 @@ export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExe
     return plan.feedback;
   }
 
-  if (plan.mode === "copy_path" && plan.path) {
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(plan.path);
-        return `${plan.feedback} 已复制路径。`;
-      } catch {
-        return `${plan.feedback} 路径：${plan.path}`;
-      }
+  if (plan.mode === "open_local_path" && plan.path) {
+    try {
+      await openDesktopLocalPath(plan.path);
+      return plan.feedback;
+    } catch (error) {
+      return copyPreparedPath(localPathExecutionFailure("无法直接打开本地资源，已准备复制路径", error), plan.path);
     }
+  }
 
-    return `${plan.feedback} 路径：${plan.path}`;
+  if (plan.mode === "reveal_local_path" && plan.path) {
+    try {
+      await revealDesktopLocalPath(plan.path);
+      return plan.feedback;
+    } catch (error) {
+      return copyPreparedPath(localPathExecutionFailure("无法在文件夹中定位资源，已准备复制路径", error), plan.path);
+    }
+  }
+
+  if (plan.mode === "copy_path" && plan.path) {
+    return copyPreparedPath(plan.feedback, plan.path);
   }
 
   return plan.feedback;

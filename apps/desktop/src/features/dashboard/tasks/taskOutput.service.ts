@@ -9,13 +9,14 @@ import type {
   DeliveryPayload,
   RequestMeta,
 } from "@cialloclaw/protocol";
+import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { listTaskArtifacts, openDelivery, openTaskArtifact } from "@/rpc/methods";
 import { getMockTaskDetail } from "./taskPage.mock";
 
 export type TaskOutputDataMode = "rpc" | "mock";
 
 export type TaskOpenExecutionPlan = {
-  mode: "task_detail" | "open_url" | "copy_path";
+  mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
   taskId: string | null;
   path: string | null;
   url: string | null;
@@ -105,6 +106,14 @@ function resolveTaskId(payload: DeliveryPayload, result: AgentTaskArtifactOpenRe
   return payload.task_id ?? result.artifact?.task_id ?? null;
 }
 
+/**
+ * Normalizes the formal task open payload into one renderer-side execution
+ * plan so task detail routing, browser opens, and local desktop opens share the
+ * same decision surface.
+ *
+ * @param result Formal artifact or delivery open payload returned by RPC.
+ * @returns The renderer execution plan for the requested output action.
+ */
 export function resolveTaskOpenExecutionPlan(result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult): TaskOpenExecutionPlan {
   const payload = result.resolved_payload;
   const taskId = resolveTaskId(payload, result);
@@ -115,6 +124,26 @@ export function resolveTaskOpenExecutionPlan(result: AgentTaskArtifactOpenResult
     return {
       feedback: "已定位到任务详情。",
       mode: "task_detail",
+      path,
+      taskId,
+      url,
+    };
+  }
+
+  if (result.open_action === "reveal_in_folder" && path) {
+    return {
+      feedback: "已在文件夹中定位结果。",
+      mode: "reveal_local_path",
+      path,
+      taskId,
+      url,
+    };
+  }
+
+  if ((result.open_action === "open_file" || result.open_action === "workspace_document") && path) {
+    return {
+      feedback: "已打开本地文件。",
+      mode: "open_local_path",
       path,
       taskId,
       url,
@@ -140,6 +169,39 @@ export function resolveTaskOpenExecutionPlan(result: AgentTaskArtifactOpenResult
   };
 }
 
+async function copyPreparedPath(feedback: string, path: string | null) {
+  if (!path) {
+    return feedback;
+  }
+
+  if (globalThis.navigator?.clipboard?.writeText) {
+    try {
+      await globalThis.navigator.clipboard.writeText(path);
+      return `${feedback} 已复制路径。`;
+    } catch {
+      return `${feedback} 路径：${path}`;
+    }
+  }
+
+  return `${feedback} 路径：${path}`;
+}
+
+function localPathExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
+/**
+ * Executes a renderer-side open plan while keeping copy-path as the last
+ * fallback when the local desktop shell cannot complete the requested action.
+ *
+ * @param plan Renderer-side execution plan derived from the formal open payload.
+ * @returns User-facing feedback describing the completed action or fallback.
+ */
 export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan): Promise<string> {
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedTaskOpenUrl(plan.url)) {
@@ -150,17 +212,26 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan): Pro
     return plan.feedback;
   }
 
-  if (plan.mode === "copy_path" && plan.path) {
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(plan.path);
-        return `${plan.feedback} 已复制路径。`;
-      } catch {
-        return `${plan.feedback} 路径：${plan.path}`;
-      }
+  if (plan.mode === "open_local_path" && plan.path) {
+    try {
+      await openDesktopLocalPath(plan.path);
+      return plan.feedback;
+    } catch (error) {
+      return copyPreparedPath(localPathExecutionFailure("无法直接打开本地文件，已准备复制路径", error), plan.path);
     }
+  }
 
-    return `${plan.feedback} 路径：${plan.path}`;
+  if (plan.mode === "reveal_local_path" && plan.path) {
+    try {
+      await revealDesktopLocalPath(plan.path);
+      return plan.feedback;
+    } catch (error) {
+      return copyPreparedPath(localPathExecutionFailure("无法在文件夹中定位结果，已准备复制路径", error), plan.path);
+    }
+  }
+
+  if (plan.mode === "copy_path" && plan.path) {
+    return copyPreparedPath(plan.feedback, plan.path);
   }
 
   return plan.feedback;

@@ -106,46 +106,71 @@ function loadNotePageQueryModule() {
   );
 }
 
-function loadNotePageServiceModule() {
-  return withDesktopAliasRuntime((requireFn) =>
-    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/notes/notePage.service.js")) as {
+type DashboardContractDesktopLocalPathOverrides = {
+  openDesktopLocalPath?: (path: string) => Promise<void>;
+  revealDesktopLocalPath?: (path: string) => Promise<void>;
+};
+
+function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/notes/notePage.service.js");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
       isAllowedNoteOpenUrl: (url: string) => boolean;
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
         label: string;
-        openAction?: "task_detail" | "open_url" | "copy_path" | null;
+        openAction?: "task_detail" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
         path: string;
         taskId?: string | null;
         type: string;
         url?: string | null;
       }) => {
-        mode: "task_detail" | "open_url" | "copy_path";
+        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
         feedback: string;
       };
-    },
-  );
+      performNoteResourceOpenExecution: (plan: {
+        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        feedback: string;
+        path: string | null;
+        taskId: string | null;
+        url: string | null;
+      }) => Promise<string>;
+    };
+  }, undefined, desktopLocalPath);
 }
 
-function loadTaskOutputServiceModule() {
-  return withDesktopAliasRuntime((requireFn) =>
-    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js")) as {
+function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
       describeTaskOpenResultForCurrentTask: (plan: { mode: string; taskId: string | null }, currentTaskId: string | null) => string | null;
       isAllowedTaskOpenUrl: (url: string) => boolean;
       loadTaskArtifactPage: (taskId: string, source: "rpc" | "mock") => Promise<AgentTaskArtifactListResult>;
       openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc" | "mock") => Promise<AgentTaskArtifactOpenResult>;
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc" | "mock") => Promise<AgentDeliveryOpenResult>;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
-        mode: "task_detail" | "open_url" | "copy_path";
+        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
         feedback: string;
       };
-    },
-  );
+      performTaskOpenExecution: (plan: {
+        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        taskId: string | null;
+        path: string | null;
+        url: string | null;
+        feedback: string;
+      }) => Promise<string>;
+    };
+  }, undefined, desktopLocalPath);
 }
 
 function loadTaskPageMapperModule() {
@@ -246,10 +271,12 @@ type DashboardContractRpcMethodOverrides = {
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
 ): Promise<T>;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T,
   rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
 ): T;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T | Promise<T>,
@@ -263,6 +290,7 @@ function withDesktopAliasRuntime<T>(
     listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
     updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
   },
+  desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
 ): T | Promise<T> {
   const NodeModule = require("node:module") as {
     _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -360,6 +388,17 @@ function withDesktopAliasRuntime<T>(
           }),
         getSettingsDetailed: rpcMethods?.getSettingsDetailed ?? (() => Promise.reject(new Error("getSettingsDetailed should not run in dashboard contract tests"))),
         updateSettings: rpcMethods?.updateSettings ?? (() => Promise.reject(new Error("updateSettings should not run in dashboard contract tests"))),
+      };
+    }
+
+    if (request === "@/platform/desktopLocalPath") {
+      return {
+        openDesktopLocalPath:
+          desktopLocalPath?.openDesktopLocalPath ??
+          (() => Promise.resolve()),
+        revealDesktopLocalPath:
+          desktopLocalPath?.revealDesktopLocalPath ??
+          (() => Promise.resolve()),
       };
     }
 
@@ -1455,11 +1494,39 @@ test("task output helpers normalize open actions from existing rpc contracts", a
       },
     }),
     {
-      mode: "copy_path",
+      mode: "open_local_path",
       taskId: "task_dashboard_001",
       path: "apps/desktop/src/features/dashboard/tasks/TaskPage.tsx",
       url: null,
-      feedback: "当前环境暂不支持直接打开，已准备复制路径。",
+      feedback: "已打开本地文件。",
+    },
+  );
+
+  assert.deepEqual(
+    outputService.resolveTaskOpenExecutionPlan({
+      artifact: {
+        artifact_id: "artifact_dashboard_002",
+        artifact_type: "generated_file",
+        mime_type: "application/pdf",
+        path: "workspace/reports/q3-review.pdf",
+        task_id: "task_dashboard_001",
+        title: "q3-review.pdf",
+      },
+      open_action: "reveal_in_folder",
+      resolved_payload: { path: "workspace/reports/q3-review.pdf", url: null, task_id: "task_dashboard_001" },
+      delivery_result: {
+        type: "reveal_in_folder",
+        title: "q3-review.pdf",
+        preview_text: "定位文件",
+        payload: { path: "workspace/reports/q3-review.pdf", url: null, task_id: "task_dashboard_001" },
+      },
+    }),
+    {
+      mode: "reveal_local_path",
+      taskId: "task_dashboard_001",
+      path: "workspace/reports/q3-review.pdf",
+      url: null,
+      feedback: "已在文件夹中定位结果。",
     },
   );
 });
@@ -1530,13 +1597,106 @@ test("note resource open helpers normalize task, url, and copy flows", () => {
     type: "draft",
     url: null,
   });
-  assert.equal(copyPlan.mode, "copy_path");
+  assert.equal(copyPlan.mode, "open_local_path");
   assert.equal(copyPlan.path, "workspace/drafts/spec.md");
+
+  const revealPlan = noteService.resolveNoteResourceOpenExecutionPlan({
+    id: "note_resource_004",
+    label: "Exports",
+    openAction: "reveal_in_folder",
+    path: "workspace/exports/q3-review.pdf",
+    taskId: null,
+    type: "artifact",
+    url: null,
+  });
+  assert.equal(revealPlan.mode, "reveal_local_path");
+  assert.equal(revealPlan.path, "workspace/exports/q3-review.pdf");
+
+  const missingPlan = noteService.resolveNoteResourceOpenExecutionPlan({
+    id: "note_resource_005",
+    label: "Missing",
+    openAction: "copy_path",
+    path: "",
+    taskId: null,
+    type: "artifact",
+    url: null,
+  });
+  assert.equal(missingPlan.mode, "copy_path");
 
   assert.equal(noteService.isAllowedNoteOpenUrl("https://example.test/spec"), true);
   assert.equal(noteService.isAllowedNoteOpenUrl("http://example.test/spec"), true);
   assert.equal(noteService.isAllowedNoteOpenUrl("javascript:alert(1)"), false);
   assert.equal(noteService.isAllowedNoteOpenUrl("file:///tmp/spec.md"), false);
+});
+
+test("task output execution uses desktop local open handlers and falls back to copying paths on failure", async () => {
+  let openedPath: string | null = null;
+  const successService = loadTaskOutputServiceModule({
+    openDesktopLocalPath: async (path) => {
+      openedPath = path;
+    },
+  });
+
+  const successMessage = await successService.performTaskOpenExecution({
+    mode: "open_local_path",
+    taskId: "task_dashboard_001",
+    path: "workspace/reports/q3-review.pdf",
+    url: null,
+    feedback: "已打开本地文件。",
+  });
+  assert.equal(openedPath, "workspace/reports/q3-review.pdf");
+  assert.equal(successMessage, "已打开本地文件。");
+
+  const failingService = loadTaskOutputServiceModule({
+    revealDesktopLocalPath: async () => {
+      throw new Error("target missing");
+    },
+  });
+  const fallbackMessage = await failingService.performTaskOpenExecution({
+    mode: "reveal_local_path",
+    taskId: "task_dashboard_001",
+    path: "workspace/reports/q3-review.pdf",
+    url: null,
+    feedback: "已在文件夹中定位结果。",
+  });
+
+  assert.match(fallbackMessage, /无法在文件夹中定位结果/);
+  assert.match(fallbackMessage, /workspace\/reports\/q3-review\.pdf/);
+});
+
+test("note resource execution uses desktop local open handlers and keeps copy-path fallback", async () => {
+  let revealedPath: string | null = null;
+  const successService = loadNotePageServiceModule({
+    revealDesktopLocalPath: async (path) => {
+      revealedPath = path;
+    },
+  });
+
+  const revealMessage = await successService.performNoteResourceOpenExecution({
+    mode: "reveal_local_path",
+    feedback: "已在文件夹中定位 Exports。",
+    path: "workspace/exports/q3-review.pdf",
+    taskId: null,
+    url: null,
+  });
+  assert.equal(revealedPath, "workspace/exports/q3-review.pdf");
+  assert.equal(revealMessage, "已在文件夹中定位 Exports。");
+
+  const failingService = loadNotePageServiceModule({
+    openDesktopLocalPath: async () => {
+      throw new Error("target missing");
+    },
+  });
+  const fallbackMessage = await failingService.performNoteResourceOpenExecution({
+    mode: "open_local_path",
+    feedback: "已打开 Draft。",
+    path: "workspace/drafts/spec.md",
+    taskId: null,
+    url: null,
+  });
+
+  assert.match(fallbackMessage, /无法直接打开本地资源/);
+  assert.match(fallbackMessage, /workspace\/drafts\/spec\.md/);
 });
 
 test("task page adopts rpc output helpers directly in the task detail panel", () => {
