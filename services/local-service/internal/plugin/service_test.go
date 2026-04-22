@@ -140,6 +140,49 @@ func TestNilServiceCatalogSnapshotsStillExposeBuiltinStaticView(t *testing.T) {
 	}
 }
 
+func TestCatalogEntriesIncludeNonBuiltinPluginRuntimeSources(t *testing.T) {
+	service := NewService()
+	extraManifest := Manifest{
+		PluginID:     "community_skill_runtime",
+		Name:         "Community Skill Runtime",
+		Summary:      "Loads verified community skills through a managed runtime.",
+		Version:      "github-v1",
+		Entry:        "github://community-skill/runtime",
+		Source:       "github",
+		Capabilities: []string{"community_skill_run"},
+		Permissions:  []string{"workspace_read"},
+	}
+	service.declareRuntime(RuntimeState{
+		Name:         "community_skill_worker",
+		Kind:         RuntimeKindWorker,
+		Status:       RuntimeStatusDeclared,
+		Transport:    "named_pipe",
+		Health:       RuntimeHealthUnknown,
+		Manifest:     &extraManifest,
+		Capabilities: []string{"community_skill_run"},
+	})
+	service.MarkRuntimeHealthy(RuntimeKindWorker, "community_skill_worker")
+
+	entries := service.CatalogEntries()
+	if len(entries) != 4 {
+		t.Fatalf("expected dynamic plugin runtime to extend catalog entries, got %+v", entries)
+	}
+	extraEntry := entries[3]
+	if extraEntry.PluginID != "community_skill_runtime" || extraEntry.DisplayName != "Community Skill Runtime" || len(extraEntry.RuntimeRefs) != 1 {
+		t.Fatalf("expected dynamic plugin runtime entry to be visible in catalog, got %+v", extraEntry)
+	}
+	snapshot, ok := service.CatalogSnapshot("community_skill_runtime")
+	if !ok {
+		t.Fatal("expected dynamic plugin runtime snapshot to resolve")
+	}
+	if snapshot.Manifest.PluginID != "community_skill_runtime" || len(snapshot.Runtimes) != 1 || len(snapshot.Metrics) != 1 {
+		t.Fatalf("expected dynamic plugin runtime snapshot to join runtime state, got %+v", snapshot)
+	}
+	if len(snapshot.RecentEvents) == 0 || snapshot.RecentEvents[0].Name != "community_skill_worker" {
+		t.Fatalf("expected dynamic plugin runtime snapshot to include runtime events, got %+v", snapshot)
+	}
+}
+
 func assertError(message string) error { return testError(message) }
 
 type testError string

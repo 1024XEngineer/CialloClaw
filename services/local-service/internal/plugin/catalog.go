@@ -54,6 +54,10 @@ func (s *Service) CatalogEntries() []CatalogEntry {
 	if s == nil {
 		return entries
 	}
+	entryIndex := make(map[string]int, len(entries))
+	for index := range entries {
+		entryIndex[strings.TrimSpace(entries[index].PluginID)] = index
+	}
 	manifestIndex := make(map[string]Manifest)
 	for _, manifest := range s.Manifests() {
 		manifestIndex[strings.TrimSpace(manifest.PluginID)] = manifest
@@ -84,6 +88,11 @@ func (s *Service) CatalogEntries() []CatalogEntry {
 			entries[index].RuntimeRefs = cloneRuntimeRefs(refs)
 			entries[index].Enabled = len(refs) > 0
 		}
+	}
+	for _, pluginID := range appendMissingCatalogPluginIDs(s, entryIndex, manifestIndex, runtimeRefsByPluginID) {
+		entry := catalogEntryFromDynamicSources(pluginID, manifestIndex[pluginID], runtimeRefsByPluginID[pluginID])
+		entries = append(entries, entry)
+		entryIndex[pluginID] = len(entries) - 1
 	}
 	return entries
 }
@@ -201,6 +210,67 @@ func builtinCatalogEntries() []CatalogEntry {
 			},
 		},
 	}
+}
+
+func appendMissingCatalogPluginIDs(service *Service, entryIndex map[string]int, manifestIndex map[string]Manifest, runtimeRefsByPluginID map[string][]RuntimeRef) []string {
+	if service == nil {
+		return nil
+	}
+	ordered := make([]string, 0)
+	appendIfMissing := func(pluginID string) {
+		trimmed := strings.TrimSpace(pluginID)
+		if trimmed == "" {
+			return
+		}
+		if _, exists := entryIndex[trimmed]; exists {
+			return
+		}
+		for _, existing := range ordered {
+			if existing == trimmed {
+				return
+			}
+		}
+		ordered = append(ordered, trimmed)
+	}
+	for _, manifest := range service.Manifests() {
+		appendIfMissing(manifest.PluginID)
+	}
+	for _, runtime := range service.RuntimeStates() {
+		if runtime.Manifest != nil {
+			appendIfMissing(runtime.Manifest.PluginID)
+		}
+	}
+	for pluginID := range manifestIndex {
+		appendIfMissing(pluginID)
+	}
+	for pluginID := range runtimeRefsByPluginID {
+		appendIfMissing(pluginID)
+	}
+	return ordered
+}
+
+func catalogEntryFromDynamicSources(pluginID string, manifest Manifest, runtimeRefs []RuntimeRef) CatalogEntry {
+	trimmedPluginID := strings.TrimSpace(pluginID)
+	entry := CatalogEntry{
+		PluginID:     trimmedPluginID,
+		Name:         firstNonEmptyCatalog(strings.TrimSpace(manifest.PluginID), trimmedPluginID),
+		DisplayName:  firstNonEmptyCatalog(strings.TrimSpace(manifest.Name), trimmedPluginID),
+		Summary:      strings.TrimSpace(manifest.Summary),
+		Version:      firstNonEmptyCatalog(strings.TrimSpace(manifest.Version), "runtime-unversioned"),
+		Source:       firstNonEmptyCatalog(strings.TrimSpace(manifest.Source), "runtime"),
+		Entry:        strings.TrimSpace(manifest.Entry),
+		Enabled:      len(runtimeRefs) > 0,
+		Capabilities: append([]string(nil), manifest.Capabilities...),
+		Permissions:  append([]string(nil), manifest.Permissions...),
+		RuntimeRefs:  cloneRuntimeRefs(runtimeRefs),
+	}
+	if entry.Name == "" {
+		entry.Name = trimmedPluginID
+	}
+	if entry.DisplayName == "" {
+		entry.DisplayName = trimmedPluginID
+	}
+	return entry
 }
 
 func manifestFromCatalogEntry(entry CatalogEntry) Manifest {

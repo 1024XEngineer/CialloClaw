@@ -9169,6 +9169,90 @@ func TestServiceTaskDetailGetStructuredScreenFallbackPrefersFormalEvidenceObject
 	}
 }
 
+func TestServiceTaskDetailGetScreenAuditPrefersNewerTerminalGovernanceRecord(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "screen terminal governance audit precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_terminal_governance"
+	finishedAt := time.Date(2026, 4, 16, 12, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_terminal_governance",
+		RunID:             "run_structured_screen_terminal_governance",
+		Title:             "structured screen terminal governance task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 12, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Artifacts:         []map[string]any{{"artifact_id": "art_terminal_screen", "task_id": taskID, "artifact_type": "screen_capture", "path": "artifacts/screen/terminal.png"}},
+		Citations:         []map[string]any{{"citation_id": "cit_terminal_screen", "task_id": taskID, "artifact_id": "art_terminal_screen", "artifact_type": "screen_capture", "screen_session_id": "screen_terminal"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_terminal_governance",
+		RunID:               "run_structured_screen_terminal_governance",
+		Title:               "structured screen terminal governance task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_screen_success_terminal",
+		TaskID:    taskID,
+		Type:      "screen_capture",
+		Action:    "screen.capture.screenshot_analyze",
+		Summary:   "screen analysis completed",
+		Target:    "artifacts/screen/terminal.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T12:05:00Z",
+	}); err != nil {
+		t.Fatalf("write screen success audit record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_restore_terminal",
+		TaskID:    taskID,
+		Type:      "recovery",
+		Action:    "restore_apply",
+		Summary:   "restore apply failed after screen analysis",
+		Target:    "artifacts/screen/terminal.png",
+		Result:    "failed",
+		CreatedAt: "2026-04-16T12:06:00Z",
+	}); err != nil {
+		t.Fatalf("write recovery audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_restore_terminal" || auditRecord["action"] != "restore_apply" || auditRecord["result"] != "failed" {
+		t.Fatalf("expected newer terminal governance audit to override stale screen success audit, got %+v", auditRecord)
+	}
+}
+
 func TestServiceTaskDetailGetStructuredScreenApprovalPrefersFormalApprovalRequest(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured screen detail approval precedence")
 	if service.storage == nil {

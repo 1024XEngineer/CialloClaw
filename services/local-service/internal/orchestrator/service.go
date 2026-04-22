@@ -3863,12 +3863,37 @@ func selectTaskDetailAuthorizationRecord(taskID string, runtimeRecord map[string
 // audit chain even when newer generic delivery/runtime audits exist later in the
 // same task. Non-screen tasks still use the latest normalized audit record.
 func selectTaskDetailAuditRecord(task runengine.TaskRecord, runtimeAuditRecords []map[string]any, storageAuditRecords []map[string]any) map[string]any {
-	if isScreenTaskDetail(task) {
-		if screenAudit := latestScreenTaskAuditRecord(task.TaskID, runtimeAuditRecords, storageAuditRecords); screenAudit != nil {
-			return screenAudit
-		}
+	latestOverall := latestNormalizedTaskAuditRecord(task.TaskID, runtimeAuditRecords, storageAuditRecords)
+	if !isScreenTaskDetail(task) {
+		return latestOverall
 	}
-	return latestNormalizedTaskAuditRecord(task.TaskID, runtimeAuditRecords, storageAuditRecords)
+	latestScreen := latestScreenTaskAuditRecord(task.TaskID, runtimeAuditRecords, storageAuditRecords)
+	if latestScreen == nil {
+		return latestOverall
+	}
+	if shouldPreferLatestTaskAuditOverScreenAudit(latestOverall, latestScreen) {
+		return latestOverall
+	}
+	return latestScreen
+}
+
+// shouldPreferLatestTaskAuditOverScreenAudit keeps screen tasks anchored to
+// screen evidence by default, but lets newer terminal governance records such as
+// failures or restore_apply outcomes override stale screen-capture success logs.
+func shouldPreferLatestTaskAuditOverScreenAudit(latestOverall map[string]any, latestScreen map[string]any) bool {
+	if len(latestOverall) == 0 {
+		return false
+	}
+	if len(latestScreen) == 0 {
+		return true
+	}
+	if !parseTaskDetailRecordTime(stringValue(latestOverall, "created_at", "")).After(parseTaskDetailRecordTime(stringValue(latestScreen, "created_at", ""))) {
+		return false
+	}
+	if isScreenTaskAuditRecord(latestOverall) {
+		return true
+	}
+	return isTerminalGovernanceAuditRecord(latestOverall)
 }
 
 func latestNormalizedTaskAuditRecord(taskID string, auditGroups ...[]map[string]any) map[string]any {
@@ -3911,6 +3936,21 @@ func isScreenTaskAuditRecord(auditRecord map[string]any) bool {
 	}
 	target := strings.ToLower(strings.TrimSpace(stringValue(auditRecord, "target", "")))
 	return strings.Contains(target, "screen")
+}
+
+func isTerminalGovernanceAuditRecord(auditRecord map[string]any) bool {
+	if len(auditRecord) == 0 {
+		return false
+	}
+	result := strings.TrimSpace(stringValue(auditRecord, "result", ""))
+	if result != "" && result != "success" {
+		return true
+	}
+	action := strings.TrimSpace(stringValue(auditRecord, "action", ""))
+	if strings.HasPrefix(action, "restore_") || strings.HasPrefix(action, "authorization_") {
+		return true
+	}
+	return strings.TrimSpace(stringValue(auditRecord, "type", "")) == "recovery"
 }
 
 func isScreenTaskDetail(task runengine.TaskRecord) bool {
