@@ -37,14 +37,9 @@ func (s *inMemoryToolCallStore) SaveToolCall(_ context.Context, record tools.Too
 }
 
 func normalizeStoredToolCallRecord(record tools.ToolCallRecord) tools.ToolCallRecord {
-	switch record.Status {
-	case tools.ToolCallStatusTimeout:
-		record.Status = tools.ToolCallStatusFailed
-	case tools.ToolCallStatusStarted, tools.ToolCallStatusSucceeded, tools.ToolCallStatusFailed:
-		return record
-	default:
-		record.Status = tools.ToolCallStatusStarted
-	}
+	// Keep the in-memory fallback backend aligned with SQLite by round-tripping the
+	// same normalize/denormalize helpers that the persistent backend uses.
+	record.Status = denormalizeToolCallStatus(normalizeToolCallStatus(record.Status))
 	return record
 }
 

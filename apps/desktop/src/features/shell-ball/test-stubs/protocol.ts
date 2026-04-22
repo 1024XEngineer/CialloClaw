@@ -14,6 +14,7 @@ export const TASK_STATUSES = [
 export const TASK_LIST_GROUPS = ["unfinished", "finished"] as const;
 export const TODO_BUCKETS = ["upcoming", "later", "recurring_rule", "closed"] as const;
 export const TASK_STEP_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
+export const TOOL_CALL_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
 export const SECURITY_STATUSES = [
   "normal",
@@ -60,6 +61,7 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskListGroup = (typeof TASK_LIST_GROUPS)[number];
 export type TodoBucket = (typeof TODO_BUCKETS)[number];
 export type TaskStepStatus = (typeof TASK_STEP_STATUSES)[number];
+export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number];
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 export type SecurityStatus = (typeof SECURITY_STATUSES)[number];
 export type DeliveryType = (typeof DELIVERY_TYPES)[number];
@@ -270,6 +272,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_LIST: "agent.task.list",
   AGENT_TASK_DETAIL_GET: "agent.task.detail.get",
   AGENT_TASK_EVENTS_LIST: "agent.task.events.list",
+  AGENT_TASK_TOOL_CALLS_LIST: "agent.task.tool_calls.list",
   AGENT_TASK_STEER: "agent.task.steer",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
@@ -551,6 +554,32 @@ export interface AgentTaskEventsListParams {
 
 export interface AgentTaskEventsListResult {
 	 items: TaskEvent[];
+	 page: JsonRpcPage;
+}
+
+export interface ToolCall {
+	 tool_call_id: string;
+	 run_id: string;
+	 task_id: string;
+	 step_id: string | null;
+	 tool_name: string;
+	 status: ToolCallStatus;
+	 input: Record<string, unknown>;
+	 output: Record<string, unknown>;
+	 error_code: number | null;
+	 duration_ms: number;
+}
+
+export interface AgentTaskToolCallsListParams {
+	 request_meta: RequestMeta;
+	 task_id: string;
+	 run_id?: string;
+	 limit?: number;
+	 offset?: number;
+}
+
+export interface AgentTaskToolCallsListResult {
+	 items: ToolCall[];
 	 page: JsonRpcPage;
 }
 

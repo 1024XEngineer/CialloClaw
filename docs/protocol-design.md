@@ -2048,7 +2048,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 }
 ```
 
-### 8.2.6 Agent Loop 运行时通知
+### 8.2.7 Agent Loop 运行时通知
 
 当前阶段，以下通知方法已进入正式调试/流式通道，可用于前端或调试观察运行时进展：
 
@@ -2068,7 +2068,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.7 `agent.task_inspector.config.get`
+### 8.2.8 `agent.task_inspector.config.get`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入巡检配置页时
@@ -2131,7 +2131,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.8 `agent.task_inspector.config.update`
+### 8.2.9 `agent.task_inspector.config.update`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改巡检配置并保存时
@@ -2213,7 +2213,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.9 `agent.task_inspector.run`
+### 8.2.10 `agent.task_inspector.run`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户手动点击“立即巡检”时
@@ -2285,7 +2285,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.10 `agent.notepad.list`
+### 8.2.11 `agent.notepad.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户查看近期要做、后续安排、重复事项、已结束时
@@ -2403,7 +2403,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.11 `agent.notepad.update`
+### 8.2.12 `agent.notepad.update`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在 notes 详情页对事项执行状态变更动作时
@@ -2481,7 +2481,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.12 `agent.notepad.convert_to_task`
+### 8.2.13 `agent.notepad.convert_to_task`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
