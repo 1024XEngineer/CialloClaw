@@ -429,6 +429,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
+  const revealBubbleRegionRef = useRef<() => void>(() => {});
+  const syncPinnedBubbleWindowAnchorRef = useRef<(bubbleId: string) => Promise<void>>(() => Promise.resolve());
+  const syncAnchoredPinnedBubbleWindowsRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const handleBubbleActionRef = useRef<(payload: ShellBallBubbleActionPayload) => void>(() => {});
   const helperWindowsVisibleRef = useRef(input.helperWindowsVisible ?? true);
   const getBallClientRect = input.getBallClientRect;
   const regionActiveRef = useRef(false);
@@ -899,6 +903,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     );
   }, [syncPinnedBubbleWindowAnchor]);
 
+  revealBubbleRegionRef.current = revealBubbleRegion;
+  syncPinnedBubbleWindowAnchorRef.current = syncPinnedBubbleWindowAnchor;
+  syncAnchoredPinnedBubbleWindowsRef.current = syncAnchoredPinnedBubbleWindows;
+
   const handleCoordinatorInputFocusChange = useCallback((focused: boolean) => {
     inputFocusedRef.current = focused;
 
@@ -983,6 +991,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     detachedPinnedBubbleIdsRef.current.delete(payload.bubbleId);
     void closeShellBallPinnedBubbleWindow(payload.bubbleId);
   }, [syncPinnedBubbleWindowAnchor]);
+
+  handleBubbleActionRef.current = handleBubbleAction;
 
   useEffect(() => {
     const finalizedSpeechPayload = input.finalizedSpeechPayload;
@@ -1146,7 +1156,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             }),
           ]),
         );
-        revealBubbleRegion();
+        revealBubbleRegionRef.current();
       } catch (error) {
         console.warn("shell-ball intent decision failed", error);
         setBubbleItems((currentItems) =>
@@ -1161,7 +1171,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             }),
           ]),
         );
-        revealBubbleRegion();
+        revealBubbleRegionRef.current();
       }
     }
 
@@ -1170,7 +1180,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         shellBallWindowSyncEvents.pinnedWindowReady,
         ({ payload }) => {
           void emitToShellBallWindowLabel(payload.windowLabel, shellBallWindowSyncEvents.snapshot, snapshotRef.current);
-          void syncPinnedBubbleWindowAnchor(payload.bubbleId);
+          void syncPinnedBubbleWindowAnchorRef.current(payload.bubbleId);
         },
       ),
       currentWindow.listen<ShellBallPinnedWindowDetachedPayload>(
@@ -1186,13 +1196,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         void handleIntentDecision(payload);
       }),
       currentWindow.listen<ShellBallBubbleActionPayload>(shellBallWindowSyncEvents.bubbleAction, ({ payload }) => {
-        handleBubbleAction(payload);
+        handleBubbleActionRef.current(payload);
       }),
       currentWindow.onMoved(() => {
-        void syncAnchoredPinnedBubbleWindows();
+        void syncAnchoredPinnedBubbleWindowsRef.current();
       }),
       currentWindow.onResized(() => {
-        void syncAnchoredPinnedBubbleWindows();
+        void syncAnchoredPinnedBubbleWindowsRef.current();
       }),
     ]).then((unlisteners) => {
       if (disposed) {
@@ -1211,7 +1221,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         cleanup();
       }
     };
-  }, [handleBubbleAction, revealBubbleRegion, syncAnchoredPinnedBubbleWindows, syncPinnedBubbleWindowAnchor]);
+  }, []);
 
   const handlePrimaryAction = useCallback(async (action: ShellBallPrimaryAction) => {
     switch (action) {
