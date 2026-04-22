@@ -73,6 +73,7 @@ export function NotePage() {
   const [drawerDragPreview, setDrawerDragPreview] = useState<NoteDrawerDragPreview | null>(null);
   const [draggingBoardItemId, setDraggingBoardItemId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [boardLayerSize, setBoardLayerSize] = useState<{ height: number; width: number } | null>(null);
   const [dataMode, setDataMode] = useState<NotePageDataMode>(() => loadDashboardDataMode("notes") as NotePageDataMode);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const dragStateRef = useRef<{
@@ -429,8 +430,30 @@ export function NotePage() {
   );
 
   useEffect(() => {
-    const boardBounds = getBoardLayerBounds();
-    if (boardSeeded || defaultBoardItemIds.length === 0 || !boardBounds) {
+    const layer = boardLayerRef.current;
+    if (!layer) {
+      return;
+    }
+
+    const updateBoardLayerSize = () => {
+      const { height, width } = layer.getBoundingClientRect();
+      setBoardLayerSize((current) => (current && current.height === height && current.width === width ? current : { height, width }));
+    };
+
+    updateBoardLayerSize();
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => updateBoardLayerSize()) : null;
+    resizeObserver?.observe(layer);
+    window.addEventListener("resize", updateBoardLayerSize);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateBoardLayerSize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerSize) {
       return;
     }
 
@@ -442,27 +465,70 @@ export function NotePage() {
             x: NOTE_CANVAS_SEED_POSITIONS[index]?.x ?? 120 + index * 36,
             y: NOTE_CANVAS_SEED_POSITIONS[index]?.y ?? 120 + index * 28,
           },
-          { height: boardBounds.height, width: boardBounds.width },
+          boardLayerSize,
         ),
         zIndex: index + 1,
       })),
     );
     setBoardSeeded(true);
-  }, [boardSeeded, defaultBoardItemIds]);
+  }, [boardLayerSize, boardSeeded, defaultBoardItemIds]);
 
   useEffect(() => {
     // Keep the canvas purely local to this page. Once a card is placed, detail
     // toggles and bucket changes must not reshuffle the board order.
+    const boardBounds = getBoardLayerBounds();
     setCanvasCards((current) => {
       const next = current.filter((entry) => noteItemsById.has(entry.itemId));
-      return next.length === current.length ? current : next;
+      if (next.length !== current.length) {
+        if (next.length === 0 && current.length > 0 && defaultBoardItemIds.length > 0 && boardBounds) {
+          return defaultBoardItemIds.map((itemId, index) => ({
+            itemId,
+            ...clampCanvasPlacement(
+              {
+                x: NOTE_CANVAS_SEED_POSITIONS[index]?.x ?? 120 + index * 36,
+                y: NOTE_CANVAS_SEED_POSITIONS[index]?.y ?? 120 + index * 28,
+              },
+              { height: boardBounds.height, width: boardBounds.width },
+            ),
+            zIndex: index + 1,
+          }));
+        }
+
+        return next;
+      }
+
+      return current;
     });
 
     if (draggingBoardItemId && !noteItemsById.has(draggingBoardItemId)) {
       setDraggingBoardItemId(null);
       dragStateRef.current = null;
     }
-  }, [draggingBoardItemId, noteItemsById]);
+  }, [defaultBoardItemIds, draggingBoardItemId, noteItemsById]);
+
+  useEffect(() => {
+    if (!boardLayerSize) {
+      return;
+    }
+
+    // Drawer collapse and responsive breakpoints shrink the board after cards
+    // were already placed. Re-clamp local card positions so none become
+    // unreachable outside the visible canvas.
+    setCanvasCards((current) => {
+      let changed = false;
+      const next = current.map((entry) => {
+        const placement = clampCanvasPlacement({ x: entry.x, y: entry.y }, boardLayerSize);
+        if (placement.x === entry.x && placement.y === entry.y) {
+          return entry;
+        }
+
+        changed = true;
+        return { ...entry, x: placement.x, y: placement.y };
+      });
+
+      return changed ? next : current;
+    });
+  }, [boardLayerSize]);
 
   function openNoteDetail(itemId: string) {
     setSelectedItemId(itemId);
@@ -879,11 +945,18 @@ export function NotePage() {
                             ))
                           ) : closedQuery.isPending && !closedQuery.data ? (
                             <div className="note-preview-shell__empty">加载中</div>
+                          ) : !showMoreClosed && hasOlderClosedItems ? (
+                            <div className="note-preview-shell__empty-stack">
+                              <div className="note-preview-shell__empty">当前只有更早时间的已结束记录。</div>
+                              <button className="note-preview-shell__toggle" onClick={() => setShowMoreClosed(true)} type="button">
+                                加载更早记录
+                              </button>
+                            </div>
                           ) : (
                             <div className="note-preview-shell__empty">无</div>
                           )}
 
-                          {!showMoreClosed && hasOlderClosedItems ? <div className="note-preview-finished-groups__sentinel" aria-hidden="true" /> : null}
+                          {!showMoreClosed && hasOlderClosedItems && closedGroups.length > 0 ? <div className="note-preview-finished-groups__sentinel" aria-hidden="true" /> : null}
                         </div>
                       </div>
                     ) : null}

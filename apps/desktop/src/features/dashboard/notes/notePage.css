@@ -558,6 +558,14 @@
   padding-inline: 1rem;
 }
 
+.note-preview-shell__empty-stack {
+  align-items: center;
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  min-height: 8rem;
+}
+
 .note-preview-finished-group {
   display: grid;
   gap: 0.7rem;
