@@ -387,7 +387,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：数据库、Artifact、恢复点、Stronghold、RAG 等落盘能力异常。
 - `1006xxx`：worker / sidecar / plugin 进程不可用或输出非法。
 - `1007xxx`：平台和执行环境问题。
-- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常，当前为预留段。
+- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常；其中 `1008001`、`1008002`、`1008007` 已登记，其余仍为预留段。
 - `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常，当前为预留段。
 
 ### 6.3 推荐错误码表
@@ -440,6 +440,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1006003` `OCR_WORKER_FAILED`
 - `1006004` `MEDIA_WORKER_FAILED`
 
+#### 模型与前馈配置
+
+- `1008001` `MODEL_PROVIDER_NOT_FOUND`
+- `1008002` `MODEL_NOT_ALLOWED`
+- `1008007` `MODEL_RUNTIME_UNAVAILABLE`
+
 #### 预留错误码（尚未登记到错误码真源）
 
 以下错误码常量保留给后续功能使用。在它们正式写入 `packages/protocol/errors/codes.ts` 前，只能作为规划预留，不得被文档误解为当前仓库已经实现：
@@ -460,8 +466,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ##### 模型与前馈配置预留
 
-- `1008001` `MODEL_PROVIDER_NOT_FOUND`
-- `1008002` `MODEL_NOT_ALLOWED`
 - `1008003` `SKILL_NOT_FOUND`
 - `1008004` `BLUEPRINT_NOT_FOUND`
 - `1008005` `PROMPT_TEMPLATE_NOT_FOUND`
@@ -3489,7 +3493,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改设置并点击保存时
-- **系统处理**：写入设置并返回生效结果；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文
+- **系统处理**：写入设置并返回当前生效快照与生效方式；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文。当前 `models.provider / models.api_key / models.base_url / models.model` 仍需重启后才会重建 active model service。
 - **入参**：要更新的设置项
 - **出参**：已更新字段、生效设置、生效方式、是否需重启
 
@@ -3603,8 +3607,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "model": "gpt-3.5-turbo"
         }
       },
-      "apply_mode": "immediate",
-      "need_restart": false
+      "apply_mode": "restart_required",
+      "need_restart": true
     },
     "meta": {
       "server_time": "2026-04-07T11:06:01+08:00"
