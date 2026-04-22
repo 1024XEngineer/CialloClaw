@@ -24,8 +24,28 @@ func newInMemoryToolCallStore() *inMemoryToolCallStore {
 func (s *inMemoryToolCallStore) SaveToolCall(_ context.Context, record tools.ToolCallRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record = normalizeStoredToolCallRecord(record)
+	for index, existing := range s.records {
+		if existing.ToolCallID != record.ToolCallID {
+			continue
+		}
+		s.records = append(append(append([]tools.ToolCallRecord{}, s.records[:index]...), s.records[index+1:]...), record)
+		return nil
+	}
 	s.records = append(s.records, record)
 	return nil
+}
+
+func normalizeStoredToolCallRecord(record tools.ToolCallRecord) tools.ToolCallRecord {
+	switch record.Status {
+	case tools.ToolCallStatusTimeout:
+		record.Status = tools.ToolCallStatusFailed
+	case tools.ToolCallStatusStarted, tools.ToolCallStatusSucceeded, tools.ToolCallStatusFailed:
+		return record
+	default:
+		record.Status = tools.ToolCallStatusStarted
+	}
+	return record
 }
 
 func (s *inMemoryToolCallStore) ListToolCalls(_ context.Context, taskID, runID string, limit, offset int) ([]tools.ToolCallRecord, int, error) {

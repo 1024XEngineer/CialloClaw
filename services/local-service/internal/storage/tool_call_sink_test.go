@@ -28,9 +28,20 @@ func TestToolCallStoresListAndDecodeRecords(t *testing.T) {
 	if err := inMemory.SaveToolCall(context.Background(), record); err != nil {
 		t.Fatalf("in-memory SaveToolCall returned error: %v", err)
 	}
+	updatedRecord := record
+	updatedRecord.Status = tools.ToolCallStatusTimeout
+	updatedRecord.DurationMS = 84
+	updatedRecord.Output = map[string]any{"ok": true, "summary_output": map[string]any{"path": "README.md"}}
+	if err := inMemory.SaveToolCall(context.Background(), updatedRecord); err != nil {
+		t.Fatalf("in-memory SaveToolCall update returned error: %v", err)
+	}
 	items, total, err := inMemory.ListToolCalls(context.Background(), "task_001", "run_001", 10, 0)
 	if err != nil || total != 1 || len(items) != 1 || items[0].ToolName != "read_file" {
 		t.Fatalf("in-memory ListToolCalls returned total=%d items=%+v err=%v", total, items, err)
+	}
+	summaryOutput, ok := items[0].Output["summary_output"].(map[string]any)
+	if items[0].DurationMS != 84 || items[0].Status != tools.ToolCallStatusFailed || !ok || summaryOutput["path"] != "README.md" {
+		t.Fatalf("expected in-memory tool call store to upsert latest record, got %+v", items[0])
 	}
 
 	sqliteStore, err := NewSQLiteToolCallStore(filepath.Join(t.TempDir(), "tool-calls.db"))

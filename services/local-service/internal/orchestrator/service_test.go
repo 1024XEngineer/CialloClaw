@@ -10321,6 +10321,60 @@ func TestServiceTaskToolCallsListSupportsRunFilter(t *testing.T) {
 	}
 }
 
+func TestServiceTaskToolCallsListNormalizesProtocolStatuses(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list statuses")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_status_001",
+		RunID:      "run_tool_call_status_001",
+		TaskID:     "task_tool_call_status_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusStarted,
+		DurationMS: 3,
+	}); err != nil {
+		t.Fatalf("save tool call status failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_status_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["status"] != "running" {
+		t.Fatalf("expected outward running status, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListFallsBackToCompatibilityLatestToolCall(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat",
+		Title:             "compat tool call",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	if _, ok := service.runEngine.RecordToolCallLifecycle(task.TaskID, "read_file", "succeeded", map[string]any{"path": "notes/source.txt"}, map[string]any{"path": "notes/source.txt", "content_preview": "compat preview"}, 14, nil); !ok {
+		t.Fatal("expected compatibility tool call to be recorded")
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" || mapValue(items[0], "output")["content_preview"] != "compat preview" {
+		t.Fatalf("expected compatibility fallback tool call, got %+v", items)
+	}
+}
+
 func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task steer")
 	startResult, err := service.StartTask(map[string]any{

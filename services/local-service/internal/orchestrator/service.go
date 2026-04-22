@@ -1272,39 +1272,120 @@ func (s *Service) TaskToolCallsList(params map[string]any) (map[string]any, erro
 		return nil, errors.New("task_id is required")
 	}
 	if s.storage == nil || s.storage.ToolCallStore() == nil {
-		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
+		return map[string]any{"items": paginateTaskToolCallItems(compatibilityItems, limit, offset), "page": pageMap(limit, offset, len(compatibilityItems))}, nil
 	}
 	items, total, err := s.storage.ToolCallStore().ListToolCalls(context.Background(), taskID, runID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 	}
+	if total == 0 {
+		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
+		return map[string]any{"items": paginateTaskToolCallItems(compatibilityItems, limit, offset), "page": pageMap(limit, offset, len(compatibilityItems))}, nil
+	}
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		stepID := any(nil)
-		if strings.TrimSpace(item.StepID) != "" {
-			stepID = item.StepID
-		}
-		errorCode := any(nil)
-		if item.ErrorCode != nil {
-			errorCode = *item.ErrorCode
-		}
-		result = append(result, map[string]any{
-			"tool_call_id": item.ToolCallID,
-			"run_id":       item.RunID,
-			"task_id":      item.TaskID,
-			"step_id":      stepID,
-			"tool_name":    item.ToolName,
-			"status":       string(item.Status),
-			"input":        cloneMap(item.Input),
-			"output":       cloneMap(item.Output),
-			"error_code":   errorCode,
-			"duration_ms":  item.DurationMS,
-		})
+		result = append(result, taskToolCallMap(item))
 	}
 	return map[string]any{
 		"items": result,
 		"page":  pageMap(limit, offset, total),
 	}, nil
+}
+
+func compatibilityTaskToolCalls(s *Service, taskID, runID string) []map[string]any {
+	if s == nil {
+		return nil
+	}
+	task, ok := s.taskDetailFromStorage(taskID)
+	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
+		if ok {
+			task = mergeRuntimeTaskDetail(task, runtimeTask)
+		} else {
+			task = runtimeTask
+			ok = true
+		}
+	}
+	if !ok || len(task.LatestToolCall) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(runID) != "" && stringValue(task.LatestToolCall, "run_id", "") != runID {
+		return nil
+	}
+	return []map[string]any{normalizeTaskToolCallMap(task.LatestToolCall)}
+}
+
+func paginateTaskToolCallItems(items []map[string]any, limit, offset int) []map[string]any {
+	if len(items) == 0 || offset >= len(items) {
+		return []map[string]any{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return cloneMapSlice(items[offset:end])
+}
+
+func normalizeTaskToolCallMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	stepID := any(nil)
+	if candidate := stringValue(value, "step_id", ""); strings.TrimSpace(candidate) != "" {
+		stepID = candidate
+	}
+	errorCode := value["error_code"]
+	if errorCode == nil {
+		errorCode = nil
+	}
+	return map[string]any{
+		"tool_call_id": stringValue(value, "tool_call_id", ""),
+		"run_id":       stringValue(value, "run_id", ""),
+		"task_id":      stringValue(value, "task_id", ""),
+		"step_id":      stepID,
+		"tool_name":    stringValue(value, "tool_name", ""),
+		"status":       outwardToolCallStatus(stringValue(value, "status", "pending")),
+		"input":        cloneMap(mapValue(value, "input")),
+		"output":       cloneMap(mapValue(value, "output")),
+		"error_code":   errorCode,
+		"duration_ms":  intValue(value, "duration_ms", 0),
+	}
+}
+
+func taskToolCallMap(record tools.ToolCallRecord) map[string]any {
+	stepID := any(nil)
+	if strings.TrimSpace(record.StepID) != "" {
+		stepID = record.StepID
+	}
+	errorCode := any(nil)
+	if record.ErrorCode != nil {
+		errorCode = *record.ErrorCode
+	}
+	return map[string]any{
+		"tool_call_id": record.ToolCallID,
+		"run_id":       record.RunID,
+		"task_id":      record.TaskID,
+		"step_id":      stepID,
+		"tool_name":    record.ToolName,
+		"status":       outwardToolCallStatus(string(record.Status)),
+		"input":        cloneMap(record.Input),
+		"output":       cloneMap(record.Output),
+		"error_code":   errorCode,
+		"duration_ms":  record.DurationMS,
+	}
+}
+
+func outwardToolCallStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "started":
+		return "running"
+	case "succeeded":
+		return "succeeded"
+	case "failed", "timeout":
+		return "failed"
+	default:
+		return "pending"
+	}
 }
 
 func normalizeEventTimeFilter(value string) (string, error) {
