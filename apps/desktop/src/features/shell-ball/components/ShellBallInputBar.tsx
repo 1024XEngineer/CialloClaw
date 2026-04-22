@@ -236,7 +236,7 @@ const StyledInputBar = styled.div`
     box-shadow:
       0 10px 20px -20px rgba(122, 106, 79, 0.22),
       0 1px 0 rgba(255, 255, 255, 0.34) inset;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 1rem;
     caret-color: rgba(106, 145, 200, 0.94);
     color: var(--shell-ball-input-ink);
@@ -251,10 +251,10 @@ const StyledInputBar = styled.div`
     scrollbar-width: none;
     resize: none;
     transition:
-      background 220ms ease,
-      border-color 220ms ease,
-      box-shadow 220ms ease,
-      transform 220ms ease;
+      background 340ms ease,
+      border-color 340ms ease,
+      box-shadow 340ms ease,
+      transform 340ms ease;
     z-index: 10;
   }
 
@@ -277,9 +277,9 @@ const StyledInputBar = styled.div`
     letter-spacing: 0.05em;
     transform: translateY(calc(var(--shell-ball-input-height) - 24px));
     transition:
-      color 220ms ease,
-      transform 220ms ease,
-      font-size 220ms ease;
+      color 360ms ease,
+      transform 360ms ease,
+      font-size 360ms ease;
     pointer-events: none;
     z-index: 11;
   }
@@ -310,10 +310,10 @@ const StyledInputBar = styled.div`
       0 8px 18px -18px rgba(122, 106, 79, 0.22);
     transform: none;
     transition:
-      height 220ms ease,
-      background 220ms ease,
-      box-shadow 220ms ease,
-      border-color 220ms ease;
+      height 340ms ease,
+      background 340ms ease,
+      box-shadow 340ms ease,
+      border-color 340ms ease;
     pointer-events: none;
     z-index: 9;
   }
@@ -341,7 +341,7 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox textarea:focus,
   &[data-filled="true"] .shell-ball-uiverse-inputbox textarea {
     background: rgba(255, 253, 249, 0.98);
-    border-color: var(--shell-ball-input-line-strong);
+    border-color: rgba(171, 196, 229, 0.88);
     box-shadow:
       0 18px 30px -24px rgba(106, 145, 200, 0.24),
       0 12px 24px -22px rgba(122, 106, 79, 0.32),

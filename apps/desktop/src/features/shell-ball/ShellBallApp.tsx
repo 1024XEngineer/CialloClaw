@@ -50,38 +50,11 @@ type ShellBallWindowAnchor = {
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
-const SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX = 24;
-const SHELL_BALL_EDGE_HOVER_COLLAPSE_DELAY_MS = 140;
 
 type ShellBallClipboardPrompt = {
   text: string;
   expiresAt: number;
 };
-
-function resolveShellBallEdgeHoverCorridorRect(input: {
-  edgeDockSide: "left" | "right" | null;
-  hotspotRect: DOMRect | null;
-}) {
-  if (input.edgeDockSide === null || input.hotspotRect === null) {
-    return null;
-  }
-
-  if (input.edgeDockSide === "left") {
-    return {
-      left: input.hotspotRect.left - input.hotspotRect.width / 2 - SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-      right: input.hotspotRect.right + SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-      top: input.hotspotRect.top - SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-      bottom: input.hotspotRect.bottom + SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-    };
-  }
-
-  return {
-    left: input.hotspotRect.left - SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-    right: input.hotspotRect.right + input.hotspotRect.width / 2 + SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-    top: input.hotspotRect.top - SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-    bottom: input.hotspotRect.bottom + SHELL_BALL_EDGE_HOVER_CORRIDOR_BUFFER_PX,
-  };
-}
 
 async function pickShellBallFiles(): Promise<string[]> {
   const result = await invoke<string[]>("pick_shell_ball_files");
@@ -284,7 +257,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const pressCaptureLockRef = useRef(false);
   const mascotRef = useRef<HTMLDivElement>(null);
   const lastReportedInteractiveRegionsRef = useRef<string>("");
-  const edgeHoverCollapseTimeoutRef = useRef<number | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
@@ -366,9 +338,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     const scaleFactor = await currentWindow.scaleFactor();
-    const mascotHotspot = mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot") ?? null;
     const regionElements = [
-      mascotHotspot,
+      mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot") ?? null,
       rootRef.current?.querySelector<HTMLElement>(".shell-ball-window--input textarea") ?? null,
       ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-window--input .shell-ball-uiverse-action") ?? []),
       ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-attachment-tray__item") ?? []),
@@ -392,22 +363,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         height: Math.max(1, Math.round(rect.height * scaleFactor)),
       };
     });
-
-    if (edgeDockState.side !== null && mascotHotspot !== null) {
-      const corridorRect = resolveShellBallEdgeHoverCorridorRect({
-        edgeDockSide: edgeDockState.side,
-        hotspotRect: mascotHotspot.getBoundingClientRect(),
-      });
-
-      if (corridorRect !== null) {
-        regions.push({
-          x: Math.round(corridorRect.left * scaleFactor),
-          y: Math.round(corridorRect.top * scaleFactor),
-          width: Math.max(1, Math.round((corridorRect.right - corridorRect.left) * scaleFactor)),
-          height: Math.max(1, Math.round((corridorRect.bottom - corridorRect.top) * scaleFactor)),
-        });
-      }
-    }
     const signature = JSON.stringify(regions);
 
     if (signature === lastReportedInteractiveRegionsRef.current) {
@@ -416,7 +371,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     lastReportedInteractiveRegionsRef.current = signature;
     await setShellBallInteractiveRegions(regions);
-  }, [edgeDockState.side, rootRef]);
+  }, [rootRef]);
 
   const focusInlineInputField = useCallback((syncInteraction = true) => {
     if (syncInteraction) {
@@ -768,15 +723,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, [clipboardPrompt]);
 
   useEffect(() => {
-    return () => {
-      if (edgeHoverCollapseTimeoutRef.current !== null) {
-        window.clearTimeout(edgeHoverCollapseTimeoutRef.current);
-        edgeHoverCollapseTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     const currentWindow = getCurrentWindow();
 
     if (currentWindow.label !== shellBallWindowLabels.ball) {
@@ -890,84 +836,15 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePrimaryClick();
   }, [clipboardPrompt, focusInlineInputField, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
 
-  const clearEdgeHoverCollapseTimeout = useCallback(() => {
-    if (edgeHoverCollapseTimeoutRef.current !== null) {
-      window.clearTimeout(edgeHoverCollapseTimeoutRef.current);
-      edgeHoverCollapseTimeoutRef.current = null;
-    }
-  }, []);
-
-  const isPointerWithinEdgeHoverCorridor = useCallback((clientX: number, clientY: number) => {
-    const hotspot = mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot") ?? null;
-    const corridorRect = resolveShellBallEdgeHoverCorridorRect({
-      edgeDockSide: edgeDockState.side,
-      hotspotRect: hotspot?.getBoundingClientRect() ?? null,
-    });
-
-    if (corridorRect === null) {
-      return false;
-    }
-
-    return (
-      clientX >= corridorRect.left
-      && clientX <= corridorRect.right
-      && clientY >= corridorRect.top
-      && clientY <= corridorRect.bottom
-    );
-  }, [edgeDockState.side]);
-
-  const scheduleEdgeHoverCollapseCheck = useCallback(() => {
-    if (!edgeDockState.revealed) {
-      return;
-    }
-
-    clearEdgeHoverCollapseTimeout();
-    edgeHoverCollapseTimeoutRef.current = window.setTimeout(() => {
-      edgeHoverCollapseTimeoutRef.current = null;
-      setEdgeDockRevealed(false);
-    }, SHELL_BALL_EDGE_HOVER_COLLAPSE_DELAY_MS);
-  }, [clearEdgeHoverCollapseTimeout, edgeDockState.revealed, setEdgeDockRevealed]);
-
   const handleDockAwareRegionEnter = useCallback(() => {
-    clearEdgeHoverCollapseTimeout();
     setEdgeDockRevealed(true);
     handleCoordinatorRegionEnter();
-  }, [clearEdgeHoverCollapseTimeout, handleCoordinatorRegionEnter, setEdgeDockRevealed]);
+  }, [handleCoordinatorRegionEnter, setEdgeDockRevealed]);
 
   const handleDockAwareRegionLeave = useCallback(() => {
-    scheduleEdgeHoverCollapseCheck();
+    setEdgeDockRevealed(false);
     handleCoordinatorRegionLeave();
-  }, [handleCoordinatorRegionLeave, scheduleEdgeHoverCollapseCheck]);
-
-  const handleEdgeDockMouseMove = useCallback((event: MouseEvent) => {
-    if (edgeDockState.side === null || !edgeDockState.revealed) {
-      return;
-    }
-
-    if (isPointerWithinEdgeHoverCorridor(event.clientX, event.clientY)) {
-      clearEdgeHoverCollapseTimeout();
-      return;
-    }
-
-    scheduleEdgeHoverCollapseCheck();
-  }, [clearEdgeHoverCollapseTimeout, edgeDockState.revealed, edgeDockState.side, isPointerWithinEdgeHoverCorridor, scheduleEdgeHoverCollapseCheck]);
-
-  const handleEdgeDockWindowLeave = useCallback(() => {
-    if (edgeDockState.side === null || !edgeDockState.revealed) {
-      return;
-    }
-
-    scheduleEdgeHoverCollapseCheck();
-  }, [edgeDockState.revealed, edgeDockState.side, scheduleEdgeHoverCollapseCheck]);
-
-  useEventListener("mousemove", handleEdgeDockMouseMove, {
-    target: shellBallWindowTarget,
-    enable: shellBallWindowTarget !== undefined && edgeDockState.side !== null && edgeDockState.revealed,
-  });
-  useEventListener("mouseleave", handleEdgeDockWindowLeave, {
-    target: shellBallWindowTarget,
-    enable: shellBallWindowTarget !== undefined && edgeDockState.side !== null && edgeDockState.revealed,
-  });
+  }, [handleCoordinatorRegionLeave, setEdgeDockRevealed]);
 
   return (
     <ShellBallSurface
