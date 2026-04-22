@@ -2949,10 +2949,6 @@ func mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks []runeng
 	if len(taskRunTasks) == 0 {
 		return structuredTasks
 	}
-	taskRunByID := make(map[string]runengine.TaskRecord, len(taskRunTasks))
-	for _, task := range taskRunTasks {
-		taskRunByID[task.TaskID] = task
-	}
 	merged := make([]runengine.TaskRecord, 0, len(structuredTasks)+len(taskRunTasks))
 	seen := make(map[string]struct{}, len(structuredTasks)+len(taskRunTasks))
 	for _, task := range structuredTasks {
@@ -3139,6 +3135,9 @@ func (s *Service) taskDetailFromTaskRunStorage(taskID string) (runengine.TaskRec
 	return taskRecordFromStorage(record), true
 }
 
+// structuredTaskNeedsTaskRunFallback keeps task-run reads as a narrow recovery
+// path for malformed or missing snapshot_json rows while first-class stores are
+// still being phased in for legacy detail-only fields.
 func structuredTaskNeedsTaskRunFallback(record storage.TaskRecord, task runengine.TaskRecord) bool {
 	if strings.TrimSpace(record.SnapshotJSON) != "" {
 		if _, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON); err == nil {
