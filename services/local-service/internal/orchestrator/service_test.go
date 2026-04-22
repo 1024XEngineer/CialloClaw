@@ -89,6 +89,7 @@ type recordingScreenCaptureClient struct {
 	stopCalls    []screenSessionAction
 	expireCalls  []screenSessionAction
 	cleanupCalls []tools.ScreenCleanupInput
+	captureErr   error
 }
 
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
@@ -169,6 +170,9 @@ func (c *recordingScreenCaptureClient) ExpireSession(ctx context.Context, screen
 }
 
 func (c *recordingScreenCaptureClient) CaptureScreenshot(ctx context.Context, input tools.ScreenCaptureInput) (tools.ScreenFrameCandidate, error) {
+	if c.captureErr != nil {
+		return tools.ScreenFrameCandidate{}, c.captureErr
+	}
 	return c.base.CaptureScreenshot(ctx, input)
 }
 
@@ -5827,6 +5831,49 @@ func TestServiceScreenAnalyzeFailureExpiresAndCleansSession(t *testing.T) {
 	}
 	if _, err := screenClient.GetSession(context.Background(), screenClient.expireCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
 		t.Fatalf("expected expired session to become terminal, got err=%v", err)
+	}
+}
+
+func TestServiceScreenAnalyzeCaptureFailureExpiresAndCleansSession(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient(), captureErr: tools.ErrScreenCaptureFailed}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_capture_failure",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond should surface task-centric capture failure result, got %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected screen capture failure to end in failed status, got %+v", respondResult)
+	}
+	if len(screenClient.stopCalls) != 0 {
+		t.Fatalf("expected capture failure to avoid stop semantics, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expireCalls) != 1 || screenClient.expireCalls[0].reason != "capture_failed" {
+		t.Fatalf("expected capture failure to expire session, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "capture_failed" || screenClient.cleanupCalls[0].ScreenSessionID != screenClient.expireCalls[0].sessionID {
+		t.Fatalf("expected capture failure to cleanup the expired session, got %+v", screenClient.cleanupCalls)
 	}
 }
 
