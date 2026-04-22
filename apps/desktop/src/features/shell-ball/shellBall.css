@@ -42,7 +42,7 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-window--input {
   gap: 0.42rem;
-  justify-items: end;
+  justify-items: center;
   width: max-content;
 }
 
@@ -197,7 +197,7 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-surface__slot--top {
-  top: calc(var(--shell-ball-stage-anchor-y) - var(--shell-ball-bubble-reserve-height));
+  top: calc(var(--shell-ball-stage-anchor-y) - var(--shell-ball-bubble-reserve-height) - 70px);
   transform: translateX(-50%);
   transform-origin: bottom center;
 }
@@ -395,6 +395,7 @@ body[data-app-window="shell-ball"],
 .shell-ball-bubble-message__text {
   line-height: 1.45;
   margin: 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -436,12 +437,14 @@ body[data-app-window="shell-ball"],
   font-size: 0.66rem;
   letter-spacing: 0.01em;
   line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .shell-ball-bubble-message__markdown {
   display: grid;
   gap: 0.58rem;
   line-height: 1.55;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -472,6 +475,7 @@ body[data-app-window="shell-ball"],
 .shell-ball-bubble-message__markdown p,
 .shell-ball-bubble-message__markdown blockquote,
 .shell-ball-bubble-message__markdown li {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
@@ -498,6 +502,7 @@ body[data-app-window="shell-ball"],
   font-size: 0.63rem;
   margin: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 0.7rem 0.78rem;
   white-space: pre-wrap;
 }
