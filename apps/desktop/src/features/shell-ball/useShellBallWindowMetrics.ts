@@ -121,17 +121,17 @@ export function createShellBallWindowGeometry(input: {
     maxY: number;
   };
   scaleFactor: number;
+  clampToBounds?: boolean;
 }): ShellBallWindowGeometry {
+  const nextFrame = {
+    x: Math.round(input.position.x),
+    y: Math.round(input.position.y),
+    width: input.size.width,
+    height: input.size.height,
+  };
+
   return {
-    ballFrame: clampShellBallFrameToBounds(
-      {
-        x: Math.round(input.position.x),
-        y: Math.round(input.position.y),
-        width: input.size.width,
-        height: input.size.height,
-      },
-      input.bounds,
-    ),
+    ballFrame: input.clampToBounds === false ? nextFrame : clampShellBallFrameToBounds(nextFrame, input.bounds),
     bounds: input.bounds,
     scaleFactor: input.scaleFactor,
   };
@@ -144,29 +144,6 @@ export function createShellBallWindowFrame(
   return {
     width: Math.ceil(contentSize.width + safeMargin * 2),
     height: Math.ceil(contentSize.height + safeMargin * 2),
-  };
-}
-
-function clampShellBallHostPositionToMascotBounds(input: {
-  hostPosition: { x: number; y: number };
-  mascotFrame: ShellBallRelativeFrame | null;
-  bounds: ShellBallWindowBounds;
-}) {
-  if (input.mascotFrame === null) {
-    return {
-      x: input.hostPosition.x,
-      y: input.hostPosition.y,
-    };
-  }
-
-  const mascotMinX = input.bounds.minX - input.mascotFrame.x;
-  const mascotMinY = input.bounds.minY - input.mascotFrame.y;
-  const mascotMaxX = input.bounds.maxX - (input.mascotFrame.x + input.mascotFrame.width);
-  const mascotMaxY = input.bounds.maxY - (input.mascotFrame.y + input.mascotFrame.height);
-
-  return {
-    x: clampShellBallAxisPosition(input.hostPosition.x, mascotMinX, mascotMaxX),
-    y: clampShellBallAxisPosition(input.hostPosition.y, mascotMinY, mascotMaxY),
   };
 }
 
@@ -641,18 +618,14 @@ export function useShellBallWindowMetrics({
       Math.round(physicalPosition.y + physicalSize.height / 2),
     );
     const logicalPosition = physicalPosition.toLogical(scaleFactor);
-    const clampedHostPosition = clampShellBallHostPositionToMascotBounds({
-      hostPosition: {
-        x: logicalPosition.x,
-        y: logicalPosition.y,
-      },
-      mascotFrame: measuredMascotFrameRef.current,
-      bounds: getShellBallBoundsFromMonitor(monitor, geometryRef.current),
-    });
+    const hostPosition = {
+      x: logicalPosition.x,
+      y: logicalPosition.y,
+    };
     const geometry = createShellBallWindowGeometry({
       position: {
-        x: clampedHostPosition.x,
-        y: clampedHostPosition.y,
+        x: hostPosition.x,
+        y: hostPosition.y,
       },
       size: {
         width: windowFrame.width,
@@ -660,6 +633,7 @@ export function useShellBallWindowMetrics({
       },
       bounds: getShellBallBoundsFromMonitor(monitor, geometryRef.current),
       scaleFactor,
+      clampToBounds: false,
     });
 
     geometryRef.current = geometry;
