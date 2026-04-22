@@ -263,7 +263,9 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
   const [clipboardPrompt, setClipboardPrompt] = useState<ShellBallClipboardPrompt | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
+  const activeInteractiveRegionsRef = useRef(0);
   const interactivePassthroughRef = useRef(true);
+  const fallbackPollingHandleRef = useRef<number | null>(null);
   const pressCaptureLockRef = useRef(false);
   const mascotRef = useRef<HTMLDivElement>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
@@ -371,6 +373,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     await setShellBallIgnoreCursorEvents(nextIgnoreCursorEvents, true);
   }, [resolveShellBallInteractiveHit]);
 
+  const stopFallbackPolling = useCallback(() => {
+    if (fallbackPollingHandleRef.current !== null) {
+      window.clearInterval(fallbackPollingHandleRef.current);
+      fallbackPollingHandleRef.current = null;
+    }
+  }, []);
+
   const syncShellBallCursorPassthroughFromNativePointer = useCallback(async () => {
     const currentWindow = getCurrentWindow();
 
@@ -390,6 +399,43 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     await syncShellBallCursorPassthrough(clientX, clientY);
   }, [syncShellBallCursorPassthrough]);
+
+  const startFallbackPolling = useCallback(() => {
+    if (fallbackPollingHandleRef.current !== null) {
+      return;
+    }
+
+    fallbackPollingHandleRef.current = window.setInterval(() => {
+      if (!interactivePassthroughRef.current) {
+        stopFallbackPolling();
+        return;
+      }
+
+      void syncShellBallCursorPassthroughFromNativePointer();
+    }, SHELL_BALL_PASSTHROUGH_FALLBACK_POLL_MS);
+  }, [stopFallbackPolling, syncShellBallCursorPassthroughFromNativePointer]);
+
+  const setShellBallWindowInteractive = useCallback(async () => {
+    if (!interactivePassthroughRef.current) {
+      return;
+    }
+
+    interactivePassthroughRef.current = false;
+    await setShellBallIgnoreCursorEvents(false, true);
+  }, []);
+
+  const setShellBallWindowPassthrough = useCallback(async () => {
+    if (pressCaptureLockRef.current || activeInteractiveRegionsRef.current > 0 || interactivePassthroughRef.current) {
+      if (interactivePassthroughRef.current) {
+        startFallbackPolling();
+      }
+      return;
+    }
+
+    interactivePassthroughRef.current = true;
+    await setShellBallIgnoreCursorEvents(true, true);
+    startFallbackPolling();
+  }, [startFallbackPolling]);
 
   const focusInlineInputField = useCallback((syncInteraction = true) => {
     if (syncInteraction) {
@@ -416,6 +462,46 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     })();
   }, [focusInlineInputField, handleCoordinatorDroppedFiles, handleCoordinatorPrimaryAction]);
 
+  const enterInteractiveRegion = useCallback(() => {
+    activeInteractiveRegionsRef.current += 1;
+    void setShellBallWindowInteractive();
+  }, [setShellBallWindowInteractive]);
+
+  const leaveInteractiveRegion = useCallback(() => {
+    activeInteractiveRegionsRef.current = Math.max(0, activeInteractiveRegionsRef.current - 1);
+    void setShellBallWindowPassthrough();
+  }, [setShellBallWindowPassthrough]);
+
+  const handleInteractiveRegionEnter = useCallback(() => {
+    enterInteractiveRegion();
+    handleCoordinatorRegionEnter();
+  }, [enterInteractiveRegion, handleCoordinatorRegionEnter]);
+
+  const handleInteractiveRegionLeave = useCallback(() => {
+    leaveInteractiveRegion();
+    handleCoordinatorRegionLeave();
+  }, [handleCoordinatorRegionLeave, leaveInteractiveRegion]);
+
+  const handleInteractiveInputHoverChange = useCallback((active: boolean) => {
+    if (active) {
+      enterInteractiveRegion();
+    } else {
+      leaveInteractiveRegion();
+    }
+
+    handleCoordinatorInputHoverChange(active);
+  }, [enterInteractiveRegion, handleCoordinatorInputHoverChange, leaveInteractiveRegion]);
+
+  const handleInteractiveBubbleHoverChange = useCallback((active: boolean) => {
+    if (active) {
+      enterInteractiveRegion();
+    } else {
+      leaveInteractiveRegion();
+    }
+
+    handleCoordinatorBubbleHoverChange(active);
+  }, [enterInteractiveRegion, handleCoordinatorBubbleHoverChange, leaveInteractiveRegion]);
+
   const handleInlineInputFocusChange = useCallback((focused: boolean) => {
     if (!focused) {
       // Blur should fully retire any outstanding focus request so later orb
@@ -428,25 +514,27 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
   const handleLockedPressStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     pressCaptureLockRef.current = true;
-    void setShellBallIgnoreCursorEvents(false, false);
+    void setShellBallWindowInteractive();
     handlePressStart(event);
-  }, [handlePressStart]);
+  }, [handlePressStart, setShellBallWindowInteractive]);
 
   const handleLockedPressEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     try {
       return handlePressEnd(event);
     } finally {
       pressCaptureLockRef.current = false;
+      void setShellBallWindowPassthrough();
     }
-  }, [handlePressEnd]);
+  }, [handlePressEnd, setShellBallWindowPassthrough]);
 
   const handleLockedPressCancel = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     try {
       handlePressCancel(event);
     } finally {
       pressCaptureLockRef.current = false;
+      void setShellBallWindowPassthrough();
     }
-  }, [handlePressCancel]);
+  }, [handlePressCancel, setShellBallWindowPassthrough]);
 
   useEffect(() => {
     const wasVoiceActive =
@@ -616,37 +704,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     let disposed = false;
-    let pollHandle: number | null = null;
-
-    const stopFallbackPolling = () => {
-      if (pollHandle !== null) {
-        window.clearInterval(pollHandle);
-        pollHandle = null;
-      }
-    };
-
-    const startFallbackPolling = () => {
-      if (pollHandle !== null) {
-        return;
-      }
-
-      // Windows forwarded mousemove should be the primary recovery path. This
-      // fallback only runs while the shell-ball is click-through so hotspot
-      // recovery still works when the forwarded path is unreliable.
-      pollHandle = window.setInterval(() => {
-        if (!interactivePassthroughRef.current) {
-          stopFallbackPolling();
-          return;
-        }
-
-        if (disposed) {
-          stopFallbackPolling();
-          return;
-        }
-
-        void syncShellBallCursorPassthroughFromNativePointer();
-      }, SHELL_BALL_PASSTHROUGH_FALLBACK_POLL_MS);
-    };
 
     const handleMouseMove = (event: MouseEvent) => {
       void syncShellBallCursorPassthrough(event.clientX, event.clientY);
@@ -675,7 +732,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       window.removeEventListener("mousemove", handleMouseMove);
       void setShellBallIgnoreCursorEvents(false, false);
     };
-  }, [syncShellBallCursorPassthrough, syncShellBallCursorPassthroughFromNativePointer]);
+  }, [startFallbackPolling, stopFallbackPolling, syncShellBallCursorPassthrough, syncShellBallCursorPassthroughFromNativePointer]);
 
   useEffect(() => {
     if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
@@ -919,10 +976,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
                 data-shell-ball-interactive="true"
                 data-visibility-phase={snapshot.bubbleRegion.visibilityPhase}
                 onPointerEnter={() => {
-                  handleCoordinatorBubbleHoverChange(true);
+                  handleInteractiveBubbleHoverChange(true);
                 }}
                 onPointerLeave={() => {
-                  handleCoordinatorBubbleHoverChange(false);
+                  handleInteractiveBubbleHoverChange(false);
                 }}
               >
                 <ShellBallBubbleZone
@@ -947,10 +1004,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           data-shell-ball-input-window="true"
           data-shell-ball-interactive="true"
           onPointerEnter={() => {
-            handleCoordinatorInputHoverChange(true);
+            handleInteractiveInputHoverChange(true);
           }}
           onPointerLeave={() => {
-            handleCoordinatorInputHoverChange(false);
+            handleInteractiveInputHoverChange(false);
           }}
         >
           <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} />
@@ -1008,8 +1065,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }}
       onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}
-      onRegionEnter={handleCoordinatorRegionEnter}
-      onRegionLeave={handleCoordinatorRegionLeave}
+      onRegionEnter={handleInteractiveRegionEnter}
+      onRegionLeave={handleInteractiveRegionLeave}
       onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
       onPressStart={handleLockedPressStart}

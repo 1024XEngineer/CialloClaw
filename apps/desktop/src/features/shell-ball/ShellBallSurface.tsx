@@ -151,8 +151,6 @@ export function ShellBallSurface({
             aria-label="Shell-ball interaction zone"
             className="shell-ball-surface__interaction-zone"
             data-shell-ball-zone="interaction"
-            onPointerEnter={onRegionEnter}
-            onPointerLeave={onRegionLeave}
           >
               <div className="shell-ball-surface__body">
                 <div
@@ -174,8 +172,6 @@ export function ShellBallSurface({
                 <div
                   ref={mascotRef}
                   className="shell-ball-surface__mascot-shell"
-                  onPointerEnter={onRegionEnter}
-                  onPointerLeave={onRegionLeave}
                 >
                   <ShellBallMascot
                     visualState={visualState}
