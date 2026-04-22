@@ -872,6 +872,26 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(mirrorDetailSource, /reference\.summary \|\| reference\.reason/);
 });
 
+test("mirror cards use CJK-friendly display typography without clipped line clamps", () => {
+  const mirrorStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirror.css"), "utf8");
+
+  assert.match(mirrorStyleSource, /--mirror-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*line-height: 1\.28;/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*padding-bottom: 0\.12em;/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-line--memory \{[\s\S]*word-break: break-word;/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-detail \{[\s\S]*overflow-wrap: anywhere;/);
+});
+
+test("mirror floating cards reserve a slightly larger readable footprint", () => {
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+
+  assert.match(mirrorAppSource, /const MIN_COMPACT_CARD_WIDTH = 132;/);
+  assert.match(mirrorAppSource, /const MIN_COMPACT_CARD_HEIGHT = 132;/);
+  assert.match(mirrorAppSource, /const DEFAULT_CARD_SIZE: ModuleSize = \{ width: 376, height: 252 \};/);
+  assert.match(mirrorAppSource, /width: clampValue\(width, 1, DEFAULT_CARD_SIZE\.width\)/);
+  assert.match(mirrorAppSource, /height: clampValue\(height, 1, DEFAULT_CARD_SIZE\.height\)/);
+});
+
 test("task context links back into mirror detail state instead of plain text dead ends", () => {
   const taskContextSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskContextBlock.tsx"), "utf8");
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
