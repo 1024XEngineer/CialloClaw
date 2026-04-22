@@ -564,6 +564,7 @@ func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) stri
 func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (map[string]any, map[string]any, map[string]any, error) {
 	arguments := mapValue(task.Intent, "arguments")
 	sourcePath := stringValue(arguments, "path", "")
+	captureMode := screenCaptureModeForIntent(arguments)
 	targetObject := screenTargetObject(arguments)
 	approvalRequest := map[string]any{
 		"approval_id":    fmt.Sprintf("appr_%s", task.TaskID),
@@ -579,6 +580,7 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 		"kind":           "screen_analysis",
 		"operation_name": "screen_capture",
 		"source_path":    sourcePath,
+		"capture_mode":   string(captureMode),
 		"target_object":  targetObject,
 		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
 		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
@@ -606,6 +608,9 @@ func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnap
 	if strings.TrimSpace(stringValue(arguments, "language", "")) == "" {
 		arguments["language"] = "eng"
 	}
+	if strings.TrimSpace(stringValue(arguments, "capture_mode", "")) == "" {
+		arguments["capture_mode"] = string(screenCaptureModeForIntent(arguments))
+	}
 	if strings.TrimSpace(stringValue(arguments, "evidence_role", "")) == "" {
 		arguments["evidence_role"] = inferredScreenEvidenceRole(snapshot, arguments)
 	}
@@ -626,6 +631,31 @@ func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnap
 		updatedIntent["title"] = inferredScreenTaskTitle(snapshot)
 	}
 	return updatedIntent
+}
+
+func screenCaptureModeForIntent(arguments map[string]any) tools.ScreenCaptureMode {
+	switch strings.ToLower(strings.TrimSpace(stringValue(arguments, "capture_mode", ""))) {
+	case string(tools.ScreenCaptureModeClip):
+		return tools.ScreenCaptureModeClip
+	case string(tools.ScreenCaptureModeKeyframe):
+		return tools.ScreenCaptureModeKeyframe
+	case string(tools.ScreenCaptureModeScreenshot):
+		return tools.ScreenCaptureModeScreenshot
+	}
+	if isClipScreenSourcePath(stringValue(arguments, "path", "")) {
+		return tools.ScreenCaptureModeClip
+	}
+	return tools.ScreenCaptureModeScreenshot
+}
+
+func isClipScreenSourcePath(pathValue string) bool {
+	trimmedPath := strings.ToLower(strings.TrimSpace(pathValue))
+	switch path.Ext(trimmedPath) {
+	case ".mp4", ".webm", ".mov", ".mkv", ".avi":
+		return true
+	default:
+		return false
+	}
 }
 
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
@@ -2646,25 +2676,19 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 	}
 	screenClient := s.executor.ScreenClient()
 	cleanupExpiredScreenTemps(screenClient, "expired_session_scan", time.Now().UTC())
+	captureMode := tools.ScreenCaptureMode(stringValue(pendingExecution, "capture_mode", string(tools.ScreenCaptureModeScreenshot)))
 	screenSession, err := screenClient.StartSession(context.Background(), tools.ScreenSessionStartInput{
 		SessionID:   task.SessionID,
 		TaskID:      task.TaskID,
 		RunID:       task.RunID,
 		Source:      "screen_capture",
-		CaptureMode: tools.ScreenCaptureModeScreenshot,
+		CaptureMode: captureMode,
 	})
 	if err != nil {
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
-	candidate, err := screenClient.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
-		ScreenSessionID: screenSession.ScreenSessionID,
-		TaskID:          task.TaskID,
-		RunID:           task.RunID,
-		CaptureMode:     tools.ScreenCaptureModeScreenshot,
-		Source:          "screen_capture",
-		SourcePath:      stringValue(pendingExecution, "source_path", ""),
-	})
+	candidate, err := captureScreenCandidateAfterApproval(screenClient, screenSession.ScreenSessionID, task, pendingExecution, captureMode)
 	if err != nil {
 		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "capture_failed")
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
@@ -2701,6 +2725,30 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
 	}
 	return updatedTask, bubble, deliveryResult, nil
+}
+
+// captureScreenCandidateAfterApproval keeps the controlled screen entry on one
+// orchestrator path while still selecting the owner-5 capture primitive that
+// matches the approved screen analysis mode.
+func captureScreenCandidateAfterApproval(screenClient tools.ScreenCaptureClient, screenSessionID string, task runengine.TaskRecord, pendingExecution map[string]any, captureMode tools.ScreenCaptureMode) (tools.ScreenFrameCandidate, error) {
+	input := tools.ScreenCaptureInput{
+		ScreenSessionID: screenSessionID,
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		CaptureMode:     captureMode,
+		Source:          "screen_capture",
+		SourcePath:      stringValue(pendingExecution, "source_path", ""),
+	}
+	switch captureMode {
+	case tools.ScreenCaptureModeKeyframe:
+		result, err := screenClient.CaptureKeyframe(context.Background(), input)
+		if err != nil {
+			return tools.ScreenFrameCandidate{}, err
+		}
+		return result.Candidate, nil
+	default:
+		return screenClient.CaptureScreenshot(context.Background(), input)
+	}
 }
 
 func stopScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
@@ -6882,6 +6930,8 @@ func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string
 		return "PLATFORM_NOT_SUPPORTED", "screen_capability"
 	case errors.Is(err, tools.ErrOCRWorkerFailed):
 		return "OCR_WORKER_FAILED", "screen_ocr"
+	case errors.Is(err, tools.ErrMediaWorkerFailed):
+		return "MEDIA_WORKER_FAILED", "screen_media"
 	case errors.Is(err, tools.ErrPlaywrightSidecarFailed), errors.Is(err, tools.ErrScreenCaptureFailed), errors.Is(err, tools.ErrScreenKeyframeSamplingFailed):
 		return "PLAYWRIGHT_SIDECAR_FAILED", "screen_capture"
 	case errors.Is(err, tools.ErrCapabilityDenied):
