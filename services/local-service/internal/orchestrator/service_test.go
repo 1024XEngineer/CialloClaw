@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -480,6 +481,52 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	return service, workspaceRoot
 }
 
+func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (*Service, string, *storage.Service) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
+	auditService := audit.NewService(storageService.AuditWriter())
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		mustNewStoredEngine(t, storageService.TaskRunStore()),
+		deliveryService,
+		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		risk.NewService(),
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
+
+	return service, workspaceRoot, storageService
+}
+
 func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, pluginService *plugin.Service) {
 	t.Helper()
 	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
@@ -777,6 +824,77 @@ func TestServiceSubmitInputRoutesClearCommandToAgentLoopWithoutForcedConfirmatio
 	}
 	if deliveryResult["type"] != "bubble" {
 		t.Fatalf("expected short command to prefer bubble delivery, got %v", deliveryResult["type"])
+	}
+}
+
+func TestServiceSubmitInputUsesConfiguredOpenAIResponsesClient(t *testing.T) {
+	type capturedRequest struct {
+		Model      string        `json:"model"`
+		Input      string        `json:"input"`
+		Tools      []interface{} `json:"tools"`
+		ToolChoice string        `json:"tool_choice"`
+	}
+
+	var captured capturedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if got := r.Header.Get("Authorization"); got != "Bearer formal-mainline-key" {
+			t.Fatalf("authorization header mismatch: got %q", got)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("parse request body: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_formal_mainline","model":"gpt-5.4","output_text":"Configured Responses output.","usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}`))
+	}))
+	defer server.Close()
+
+	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+		ModelConfig: serviceconfig.ModelConfig{
+			Provider: model.OpenAIResponsesProvider,
+			ModelID:  "gpt-5.4",
+			Endpoint: server.URL,
+		},
+		APIKey: "formal-mainline-key",
+	})
+	if err != nil {
+		t.Fatalf("new model service from config: %v", err)
+	}
+
+	service, _, _ := newTestServiceWithModelService(t, modelService)
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_formal_mainline",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected configured model path to complete task, got %+v", task)
+	}
+	if captured.Model != "gpt-5.4" {
+		t.Fatalf("expected configured model id to reach responses client, got %+v", captured)
+	}
+	if captured.ToolChoice != "auto" || len(captured.Tools) == 0 {
+		t.Fatalf("expected configured responses request to include tool-calling metadata, got %+v", captured)
+	}
+	if !strings.Contains(captured.Input, "Translate this note into English") {
+		t.Fatalf("expected user request to reach responses client, got %+v", captured)
+	}
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected configured model path to return bubble delivery, got %+v", result["delivery_result"])
 	}
 }
 
@@ -4944,6 +5062,142 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 	citations := detailResult["citations"].([]map[string]any)
 	if len(citations) != 1 || citations[0]["source_ref"] != "art_screen_failure_detail" {
 		t.Fatalf("expected failed screen task to retain formal citations, got %+v", citations)
+	}
+}
+
+func TestServiceTaskDetailGetIncludesFailureSummaryForFailedModelTask(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_model_failure_detail",
+		Title:             "总结当前报错",
+		SourceType:        "hover_input",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:      "Provider failure should remain visible in runtime summary.",
+			InputType: "text",
+		},
+	})
+	updatedTask, _ := service.failExecutionTask(task, task.Intent, execution.Result{}, errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound))
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": updatedTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "STRONGHOLD_ACCESS_FAILED" {
+		t.Fatalf("expected failed model task to expose formal latest_failure_code, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_failure_category"] != "model_credentials" {
+		t.Fatalf("expected failed model task to expose latest_failure_category, got %+v", runtimeSummary)
+	}
+	summary, _ := runtimeSummary["latest_failure_summary"].(string)
+	if !strings.Contains(summary, "模型凭证") {
+		t.Fatalf("expected failed model task to expose credentials-focused summary, got %+v", runtimeSummary)
+	}
+}
+
+func TestClassifyModelFailureUsesFormalCodes(t *testing.T) {
+	testCases := []struct {
+		name     string
+		err      error
+		wantCode string
+		wantType string
+	}{
+		{
+			name:     "unsupported provider",
+			err:      model.ErrModelProviderUnsupported,
+			wantCode: "MODEL_PROVIDER_NOT_FOUND",
+			wantType: "model_provider",
+		},
+		{
+			name:     "missing provider config",
+			err:      model.ErrModelProviderRequired,
+			wantCode: "MODEL_PROVIDER_NOT_FOUND",
+			wantType: "model_provider",
+		},
+		{
+			name:     "tool calling unsupported",
+			err:      model.ErrToolCallingNotSupported,
+			wantCode: "MODEL_NOT_ALLOWED",
+			wantType: "model_capability",
+		},
+		{
+			name:     "endpoint missing",
+			err:      model.ErrOpenAIEndpointRequired,
+			wantCode: "MODEL_NOT_ALLOWED",
+			wantType: "model_configuration",
+		},
+		{
+			name:     "api key missing",
+			err:      model.ErrOpenAIAPIKeyRequired,
+			wantCode: "STRONGHOLD_ACCESS_FAILED",
+			wantType: "model_credentials",
+		},
+		{
+			name:     "provider timeout",
+			err:      model.ErrOpenAIRequestTimeout,
+			wantCode: "MODEL_RUNTIME_UNAVAILABLE",
+			wantType: "model_runtime",
+		},
+		{
+			name:     "provider rate limited",
+			err:      &model.OpenAIHTTPStatusError{StatusCode: 429, Message: "rate limited"},
+			wantCode: "MODEL_RUNTIME_UNAVAILABLE",
+			wantType: "model_runtime",
+		},
+		{
+			name:     "provider rejects request",
+			err:      &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"},
+			wantCode: "MODEL_NOT_ALLOWED",
+			wantType: "model_configuration",
+		},
+		{
+			name:     "output invalid",
+			err:      tools.ErrToolOutputInvalid,
+			wantCode: "TOOL_OUTPUT_INVALID",
+			wantType: "model_output",
+		},
+		{
+			name:     "secret resolution unavailable",
+			err:      errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound),
+			wantCode: "STRONGHOLD_ACCESS_FAILED",
+			wantType: "model_credentials",
+		},
+		{
+			name:     "missing client",
+			err:      model.ErrClientNotConfigured,
+			wantCode: "STRONGHOLD_ACCESS_FAILED",
+			wantType: "model_credentials",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			failureCode, failureCategory := classifyModelFailure(testCase.err)
+			if failureCode != testCase.wantCode || failureCategory != testCase.wantType {
+				t.Fatalf("expected %s/%s, got %s/%s", testCase.wantCode, testCase.wantType, failureCode, failureCategory)
+			}
+		})
+	}
+}
+
+func TestBuildBudgetFailureAuditTracksFormalModelFailures(t *testing.T) {
+	service := newTestService()
+	auditRecord := service.buildBudgetFailureAudit(runengine.TaskRecord{TaskID: "task_budget_failure_audit", RunID: "run_budget_failure_audit"}, errors.Join(model.ErrOpenAIEndpointRequired, model.ErrOpenAIRequestTimeout))
+	if auditRecord == nil {
+		t.Fatal("expected formal model failure to produce budget failure audit")
+	}
+	if stringValue(auditRecord, "action", "") != "budget_auto_downgrade.failure_signal" {
+		t.Fatalf("expected budget failure audit action, got %+v", auditRecord)
+	}
+	if !strings.Contains(stringValue(auditRecord, "reason", ""), model.ErrOpenAIEndpointRequired.Error()) {
+		t.Fatalf("expected budget failure audit reason to retain model config detail, got %+v", auditRecord)
 	}
 }
 

@@ -31,6 +31,18 @@ type ExtensionAssetCatalog interface {
 	PluginAssetsForCapabilities(ctx context.Context, capabilities []string) ([]ExtensionAssetReference, error)
 }
 
+type skillManifestSourceLookup interface {
+	latestSkillManifestBySource(ctx context.Context, source string) (SkillManifestRecord, bool, error)
+}
+
+type blueprintDefinitionSourceLookup interface {
+	latestBlueprintDefinitionBySource(ctx context.Context, source string) (BlueprintDefinitionRecord, bool, error)
+}
+
+type promptTemplateVersionSourceLookup interface {
+	latestPromptTemplateVersionBySource(ctx context.Context, source string) (PromptTemplateVersionRecord, bool, error)
+}
+
 // CurrentExecutionAssets returns the current built-in skill/blueprint/prompt
 // asset selection that the main execution path should attribute to one run.
 func (s *Service) CurrentExecutionAssets(ctx context.Context) ([]ExtensionAssetReference, error) {
@@ -53,7 +65,7 @@ func (s *Service) CurrentExecutionAssets(ctx context.Context) ([]ExtensionAssetR
 	} else if ok {
 		refs = append(refs, ref)
 	}
-	return refs, nil
+	return NormalizeExtensionAssetReferences(refs), nil
 }
 
 // PluginAssetsForCapabilities resolves plugin manifest references for the given
@@ -101,7 +113,7 @@ func (s *Service) PluginAssetsForCapabilities(ctx context.Context, capabilities 
 		}
 		return refs[i].Name < refs[j].Name
 	})
-	return refs, nil
+	return NormalizeExtensionAssetReferences(refs), nil
 }
 
 // EnsureBuiltinExecutionAssets keeps one minimal built-in asset selection in the
@@ -134,11 +146,109 @@ func latestSkillManifestRef(ctx context.Context, store SkillManifestStore) (Exte
 	if store == nil {
 		return ExtensionAssetReference{}, false, nil
 	}
-	items, _, err := store.ListSkillManifests(ctx, 1, 0)
-	if err != nil || len(items) == 0 {
-		return ExtensionAssetReference{}, false, err
+	if lookup, ok := store.(skillManifestSourceLookup); ok {
+		item, found, err := lookup.latestSkillManifestBySource(ctx, extensionAssetSourceBuiltin)
+		if err != nil || !found {
+			return ExtensionAssetReference{}, found, err
+		}
+		ref, ok := normalizeSingleExtensionAssetReference(skillManifestReference(item))
+		return ref, ok, nil
 	}
-	item := items[0]
+	return latestSkillManifestRefByPaging(ctx, store)
+}
+
+func latestBlueprintDefinitionRef(ctx context.Context, store BlueprintDefinitionStore) (ExtensionAssetReference, bool, error) {
+	if store == nil {
+		return ExtensionAssetReference{}, false, nil
+	}
+	if lookup, ok := store.(blueprintDefinitionSourceLookup); ok {
+		item, found, err := lookup.latestBlueprintDefinitionBySource(ctx, extensionAssetSourceBuiltin)
+		if err != nil || !found {
+			return ExtensionAssetReference{}, found, err
+		}
+		ref, ok := normalizeSingleExtensionAssetReference(blueprintDefinitionReference(item))
+		return ref, ok, nil
+	}
+	return latestBlueprintDefinitionRefByPaging(ctx, store)
+}
+
+func latestPromptTemplateVersionRef(ctx context.Context, store PromptTemplateVersionStore) (ExtensionAssetReference, bool, error) {
+	if store == nil {
+		return ExtensionAssetReference{}, false, nil
+	}
+	if lookup, ok := store.(promptTemplateVersionSourceLookup); ok {
+		item, found, err := lookup.latestPromptTemplateVersionBySource(ctx, extensionAssetSourceBuiltin)
+		if err != nil || !found {
+			return ExtensionAssetReference{}, found, err
+		}
+		ref, ok := normalizeSingleExtensionAssetReference(promptTemplateVersionReference(item))
+		return ref, ok, nil
+	}
+	return latestPromptTemplateVersionRefByPaging(ctx, store)
+}
+
+// The execution finalization path needs one current built-in config asset per
+// kind without pulling full history tables into memory. Concrete stores expose a
+// source-filtered lookup; this paged fallback keeps custom test doubles bounded
+// to one row per query while preserving the same boundary checks.
+func latestSkillManifestRefByPaging(ctx context.Context, store SkillManifestStore) (ExtensionAssetReference, bool, error) {
+	for offset := 0; ; {
+		items, total, err := store.ListSkillManifests(ctx, 1, offset)
+		if err != nil {
+			return ExtensionAssetReference{}, false, err
+		}
+		if len(items) == 0 {
+			return ExtensionAssetReference{}, false, nil
+		}
+		if ref, ok := normalizeSingleExtensionAssetReference(skillManifestReference(items[0])); ok {
+			return ref, true, nil
+		}
+		if total > 0 && offset+len(items) >= total {
+			return ExtensionAssetReference{}, false, nil
+		}
+		offset += len(items)
+	}
+}
+
+func latestBlueprintDefinitionRefByPaging(ctx context.Context, store BlueprintDefinitionStore) (ExtensionAssetReference, bool, error) {
+	for offset := 0; ; {
+		items, total, err := store.ListBlueprintDefinitions(ctx, 1, offset)
+		if err != nil {
+			return ExtensionAssetReference{}, false, err
+		}
+		if len(items) == 0 {
+			return ExtensionAssetReference{}, false, nil
+		}
+		if ref, ok := normalizeSingleExtensionAssetReference(blueprintDefinitionReference(items[0])); ok {
+			return ref, true, nil
+		}
+		if total > 0 && offset+len(items) >= total {
+			return ExtensionAssetReference{}, false, nil
+		}
+		offset += len(items)
+	}
+}
+
+func latestPromptTemplateVersionRefByPaging(ctx context.Context, store PromptTemplateVersionStore) (ExtensionAssetReference, bool, error) {
+	for offset := 0; ; {
+		items, total, err := store.ListPromptTemplateVersions(ctx, 1, offset)
+		if err != nil {
+			return ExtensionAssetReference{}, false, err
+		}
+		if len(items) == 0 {
+			return ExtensionAssetReference{}, false, nil
+		}
+		if ref, ok := normalizeSingleExtensionAssetReference(promptTemplateVersionReference(items[0])); ok {
+			return ref, true, nil
+		}
+		if total > 0 && offset+len(items) >= total {
+			return ExtensionAssetReference{}, false, nil
+		}
+		offset += len(items)
+	}
+}
+
+func skillManifestReference(item SkillManifestRecord) ExtensionAssetReference {
 	return ExtensionAssetReference{
 		AssetKind: ExtensionAssetKindSkillManifest,
 		AssetID:   item.SkillManifestID,
@@ -146,18 +256,10 @@ func latestSkillManifestRef(ctx context.Context, store SkillManifestStore) (Exte
 		Version:   item.Version,
 		Source:    item.Source,
 		Summary:   item.Summary,
-	}, true, nil
+	}
 }
 
-func latestBlueprintDefinitionRef(ctx context.Context, store BlueprintDefinitionStore) (ExtensionAssetReference, bool, error) {
-	if store == nil {
-		return ExtensionAssetReference{}, false, nil
-	}
-	items, _, err := store.ListBlueprintDefinitions(ctx, 1, 0)
-	if err != nil || len(items) == 0 {
-		return ExtensionAssetReference{}, false, err
-	}
-	item := items[0]
+func blueprintDefinitionReference(item BlueprintDefinitionRecord) ExtensionAssetReference {
 	return ExtensionAssetReference{
 		AssetKind: ExtensionAssetKindBlueprintDefinition,
 		AssetID:   item.BlueprintDefinitionID,
@@ -165,18 +267,10 @@ func latestBlueprintDefinitionRef(ctx context.Context, store BlueprintDefinition
 		Version:   item.Version,
 		Source:    item.Source,
 		Summary:   item.Summary,
-	}, true, nil
+	}
 }
 
-func latestPromptTemplateVersionRef(ctx context.Context, store PromptTemplateVersionStore) (ExtensionAssetReference, bool, error) {
-	if store == nil {
-		return ExtensionAssetReference{}, false, nil
-	}
-	items, _, err := store.ListPromptTemplateVersions(ctx, 1, 0)
-	if err != nil || len(items) == 0 {
-		return ExtensionAssetReference{}, false, err
-	}
-	item := items[0]
+func promptTemplateVersionReference(item PromptTemplateVersionRecord) ExtensionAssetReference {
 	return ExtensionAssetReference{
 		AssetKind: ExtensionAssetKindPromptTemplateVersion,
 		AssetID:   item.PromptTemplateVersionID,
@@ -184,7 +278,15 @@ func latestPromptTemplateVersionRef(ctx context.Context, store PromptTemplateVer
 		Version:   item.Version,
 		Source:    item.Source,
 		Summary:   item.Summary,
-	}, true, nil
+	}
+}
+
+func normalizeSingleExtensionAssetReference(ref ExtensionAssetReference) (ExtensionAssetReference, bool) {
+	refs := NormalizeExtensionAssetReferences([]ExtensionAssetReference{ref})
+	if len(refs) != 1 {
+		return ExtensionAssetReference{}, false
+	}
+	return refs[0], true
 }
 
 func pluginManifestReference(item PluginManifestRecord) ExtensionAssetReference {

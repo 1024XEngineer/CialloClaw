@@ -53,6 +53,25 @@ func (s *inMemorySkillManifestStore) ListSkillManifests(_ context.Context, limit
 	return pageSkillManifests(items, limit, offset), len(items), nil
 }
 
+func (s *inMemorySkillManifestStore) latestSkillManifestBySource(_ context.Context, source string) (SkillManifestRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	trimmedSource := strings.TrimSpace(source)
+	var latest SkillManifestRecord
+	found := false
+	for _, id := range s.order {
+		item := s.records[id]
+		if strings.TrimSpace(item.Source) != trimmedSource {
+			continue
+		}
+		if !found || configAssetMoreRecent(item.UpdatedAt, item.SkillManifestID, latest.UpdatedAt, latest.SkillManifestID) {
+			latest = item
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
 type inMemoryBlueprintDefinitionStore struct {
 	mu      sync.Mutex
 	records map[string]BlueprintDefinitionRecord
@@ -96,6 +115,25 @@ func (s *inMemoryBlueprintDefinitionStore) ListBlueprintDefinitions(_ context.Co
 	return pageBlueprintDefinitions(items, limit, offset), len(items), nil
 }
 
+func (s *inMemoryBlueprintDefinitionStore) latestBlueprintDefinitionBySource(_ context.Context, source string) (BlueprintDefinitionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	trimmedSource := strings.TrimSpace(source)
+	var latest BlueprintDefinitionRecord
+	found := false
+	for _, id := range s.order {
+		item := s.records[id]
+		if strings.TrimSpace(item.Source) != trimmedSource {
+			continue
+		}
+		if !found || configAssetMoreRecent(item.UpdatedAt, item.BlueprintDefinitionID, latest.UpdatedAt, latest.BlueprintDefinitionID) {
+			latest = item
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
 type inMemoryPromptTemplateVersionStore struct {
 	mu      sync.Mutex
 	records map[string]PromptTemplateVersionRecord
@@ -137,6 +175,25 @@ func (s *inMemoryPromptTemplateVersionStore) ListPromptTemplateVersions(_ contex
 		return items[i].UpdatedAt > items[j].UpdatedAt
 	})
 	return pagePromptTemplateVersions(items, limit, offset), len(items), nil
+}
+
+func (s *inMemoryPromptTemplateVersionStore) latestPromptTemplateVersionBySource(_ context.Context, source string) (PromptTemplateVersionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	trimmedSource := strings.TrimSpace(source)
+	var latest PromptTemplateVersionRecord
+	found := false
+	for _, id := range s.order {
+		item := s.records[id]
+		if strings.TrimSpace(item.Source) != trimmedSource {
+			continue
+		}
+		if !found || configAssetMoreRecent(item.UpdatedAt, item.PromptTemplateVersionID, latest.UpdatedAt, latest.PromptTemplateVersionID) {
+			latest = item
+			found = true
+		}
+	}
+	return latest, found, nil
 }
 
 type inMemoryPluginManifestStore struct {
@@ -221,6 +278,18 @@ func (s *SQLiteSkillManifestStore) ListSkillManifests(ctx context.Context, limit
 	return listSQLiteSkillManifests(ctx, s.db, limit, offset)
 }
 
+func (s *SQLiteSkillManifestStore) latestSkillManifestBySource(ctx context.Context, source string) (SkillManifestRecord, bool, error) {
+	var record SkillManifestRecord
+	err := s.db.QueryRowContext(ctx, `SELECT skill_manifest_id, name, version, source, summary, manifest_json, created_at, updated_at FROM skill_manifests WHERE source = ? ORDER BY updated_at DESC, skill_manifest_id DESC LIMIT 1`, strings.TrimSpace(source)).Scan(&record.SkillManifestID, &record.Name, &record.Version, &record.Source, &record.Summary, &record.ManifestJSON, &record.CreatedAt, &record.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SkillManifestRecord{}, false, nil
+	}
+	if err != nil {
+		return SkillManifestRecord{}, false, fmt.Errorf("list latest skill manifest by source: %w", err)
+	}
+	return record, true, nil
+}
+
 func (s *SQLiteSkillManifestStore) Close() error {
 	if s.db == nil {
 		return nil
@@ -277,6 +346,18 @@ func (s *SQLiteBlueprintDefinitionStore) ListBlueprintDefinitions(ctx context.Co
 	return listSQLiteBlueprintDefinitions(ctx, s.db, limit, offset)
 }
 
+func (s *SQLiteBlueprintDefinitionStore) latestBlueprintDefinitionBySource(ctx context.Context, source string) (BlueprintDefinitionRecord, bool, error) {
+	var record BlueprintDefinitionRecord
+	err := s.db.QueryRowContext(ctx, `SELECT blueprint_definition_id, name, version, source, summary, definition_json, created_at, updated_at FROM blueprint_definitions WHERE source = ? ORDER BY updated_at DESC, blueprint_definition_id DESC LIMIT 1`, strings.TrimSpace(source)).Scan(&record.BlueprintDefinitionID, &record.Name, &record.Version, &record.Source, &record.Summary, &record.DefinitionJSON, &record.CreatedAt, &record.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return BlueprintDefinitionRecord{}, false, nil
+	}
+	if err != nil {
+		return BlueprintDefinitionRecord{}, false, fmt.Errorf("list latest blueprint definition by source: %w", err)
+	}
+	return record, true, nil
+}
+
 func (s *SQLiteBlueprintDefinitionStore) Close() error {
 	if s.db == nil {
 		return nil
@@ -331,6 +412,18 @@ func (s *SQLitePromptTemplateVersionStore) GetPromptTemplateVersion(ctx context.
 
 func (s *SQLitePromptTemplateVersionStore) ListPromptTemplateVersions(ctx context.Context, limit, offset int) ([]PromptTemplateVersionRecord, int, error) {
 	return listSQLitePromptTemplateVersions(ctx, s.db, limit, offset)
+}
+
+func (s *SQLitePromptTemplateVersionStore) latestPromptTemplateVersionBySource(ctx context.Context, source string) (PromptTemplateVersionRecord, bool, error) {
+	var record PromptTemplateVersionRecord
+	err := s.db.QueryRowContext(ctx, `SELECT prompt_template_version_id, template_name, version, source, summary, template_body, variables_json, created_at, updated_at FROM prompt_template_versions WHERE source = ? ORDER BY updated_at DESC, prompt_template_version_id DESC LIMIT 1`, strings.TrimSpace(source)).Scan(&record.PromptTemplateVersionID, &record.TemplateName, &record.Version, &record.Source, &record.Summary, &record.TemplateBody, &record.VariablesJSON, &record.CreatedAt, &record.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PromptTemplateVersionRecord{}, false, nil
+	}
+	if err != nil {
+		return PromptTemplateVersionRecord{}, false, fmt.Errorf("list latest prompt template version by source: %w", err)
+	}
+	return record, true, nil
 }
 
 func (s *SQLitePromptTemplateVersionStore) Close() error {
@@ -434,6 +527,13 @@ func listSQLitePromptTemplateVersions(ctx context.Context, db *sql.DB, limit, of
 
 func listSQLitePluginManifests(ctx context.Context, db *sql.DB, limit, offset int) ([]PluginManifestRecord, int, error) {
 	return listSQLiteConfigAssets(ctx, db, `SELECT plugin_id, name, version, entry, source, summary, capabilities_json, permissions_json, runtime_names_json, created_at, updated_at FROM plugin_manifests ORDER BY updated_at DESC, plugin_id DESC`, `SELECT COUNT(1) FROM plugin_manifests`, limit, offset, scanPluginManifest)
+}
+
+func configAssetMoreRecent(updatedAt, recordID, currentUpdatedAt, currentRecordID string) bool {
+	if updatedAt == currentUpdatedAt {
+		return recordID > currentRecordID
+	}
+	return updatedAt > currentUpdatedAt
 }
 
 func listSQLiteConfigAssets[T any](ctx context.Context, db *sql.DB, query, countQuery string, limit, offset int, scan func(*sql.Rows) (T, error)) ([]T, int, error) {
