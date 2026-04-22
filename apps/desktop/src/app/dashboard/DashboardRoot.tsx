@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import "./dashboard.css";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
 import { getDashboardHomeFallbackData, loadDashboardHomeData, submitDashboardHomeRecommendationFeedback } from "@/features/dashboard/home/dashboardHome.service";
 import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
@@ -12,7 +13,6 @@ import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
-import "./dashboard.css";
 
 function useDashboardDomainExpansion() {
   const [isOpening, setIsOpening] = useState(true);
