@@ -321,9 +321,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       voice: false,
     },
   });
+  const windowFrameRef = useRef(windowFrame);
   dragDropHandlersRef.current = {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
   };
+  windowFrameRef.current = windowFrame;
 
   const reportMascotHotspotRegion = useCallback(async () => {
     const currentWindow = getCurrentWindow();
@@ -449,7 +451,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         return;
       }
 
-      const transitionFrame = await resolveShellBallDashboardTransitionFrame(windowFrame);
+      const transitionFrame = await resolveShellBallDashboardTransitionFrame(windowFrameRef.current);
       const transitionTarget = await resolveShellBallDashboardTransitionTarget(transitionFrame);
       anchorRef.current = transitionTarget.anchor;
       applyDashboardTransitionPhase("opening");
@@ -475,7 +477,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         return;
       }
 
-      const transitionFrame = await resolveShellBallDashboardTransitionFrame(windowFrame);
+      const transitionFrame = await resolveShellBallDashboardTransitionFrame(windowFrameRef.current);
       const transitionTarget = await resolveShellBallDashboardTransitionTarget(transitionFrame);
       const center = transitionTarget.center;
       const anchor = anchorRef.current ?? transitionTarget.anchor;
@@ -531,7 +533,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       disposed = true;
       cleanup?.();
     };
-  }, [windowFrame]);
+  }, []);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -586,13 +588,17 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     void (async () => {
       await reportMascotHotspotRegion();
     })();
+  }, [reportMascotHotspotRegion, windowFrame]);
 
+  useEffect(() => {
+    // Reset native mascot hotspot state only when the shell-ball host actually
+    // unmounts so ordinary frame updates do not churn IPC requests.
     return () => {
       void setShellBallInteractiveRegions([]);
       void setShellBallPressLock(false);
       lastReportedMascotRegionRef.current = "";
     };
-  }, [reportMascotHotspotRegion, windowFrame]);
+  }, []);
 
   useEffect(() => {
     if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
