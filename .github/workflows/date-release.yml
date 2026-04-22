@@ -259,6 +259,8 @@ jobs:
             echo "- Release candidate SHA: \`${{ needs.detect.outputs.release_sha }}\`"
             echo "- Triggered by: \`${{ github.event_name }}\`"
             echo "- Commit count on \`main\` in the release window: \`${{ needs.detect.outputs.commit_count }}\`"
+            echo "- Preferred Windows installer: NSIS \`.exe\`"
+            echo "- Secondary Windows installer: \`.msi\`"
             echo "- Beijing release window: \`${{ needs.detect.outputs.window_start_beijing }}\` -> \`${{ needs.detect.outputs.window_end_beijing }}\`"
             echo "- UTC release window: \`${{ needs.detect.outputs.window_start_utc }}\` -> \`${{ needs.detect.outputs.window_end_utc }}\`"
             if [ -n "${{ needs.detect.outputs.compare_url }}" ]; then
@@ -280,7 +282,7 @@ jobs:
           releaseCommitish: ${{ needs.detect.outputs.release_sha }}
           generateReleaseNotes: true
           retryAttempts: 2
-          args: --bundles msi,nsis
+          args: --bundles nsis,msi
 
       - name: Write release summary
         shell: bash
