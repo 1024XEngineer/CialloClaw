@@ -70,6 +70,8 @@ type ShellBallCoordinatorInput = {
   onInputHoverChange: (active: boolean) => void;
   onInputFocusChange: (focused: boolean) => void;
   onSubmitText: () => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null | void;
+  onSubmitVoiceText?: (text: string) => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null;
+  ensureConversationSessionId?: () => string;
   onAttachFile: () => void;
   onPrimaryClick: () => void;
 };
@@ -119,6 +121,8 @@ type ShellBallRpcMethodsModule = {
     task_id: string;
   }) => Promise<ShellBallInputSubmitResult>;
 };
+
+const defaultSubmitVoiceText: NonNullable<ShellBallCoordinatorInput["onSubmitVoiceText"]> = () => null;
 
 let shellBallTaskOutputServicePromise: Promise<ShellBallTaskOutputServiceModule> | null = null;
 let shellBallRpcMethodsPromise: Promise<ShellBallRpcMethodsModule> | null = null;
@@ -577,6 +581,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputHoverChange: input.onInputHoverChange,
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
+    onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
+    ensureConversationSessionId: input.ensureConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   });
@@ -594,6 +600,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputHoverChange: input.onInputHoverChange,
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
+    onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
+    ensureConversationSessionId: input.ensureConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   };
@@ -820,6 +828,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         source: "floating_ball",
         trigger: "hover_text_input",
         inputMode: "text",
+        sessionId: handlersRef.current.ensureConversationSessionId?.(),
         options: {
           confirm_required: false,
           preferred_delivery: "bubble",
@@ -1092,21 +1101,89 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handledFinalizedSpeechPayloadRef.current = finalizedSpeechPayload;
     appendedVoiceBubbleSequenceRef.current += 1;
     const turnIndex = allocateBubbleTurnIndex();
+    const userBubbleItem = createShellBallFinalizedSpeechBubbleItem({
+      text: finalizedSpeechPayload,
+      sequence: appendedVoiceBubbleSequenceRef.current,
+      createdAt: new Date().toISOString(),
+      turnIndex,
+      turnPhase: 0,
+    });
+    const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+      createdAt: new Date().toISOString(),
+      turnIndex,
+      turnPhase: 1,
+    });
 
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
-        createShellBallFinalizedSpeechBubbleItem({
-          text: finalizedSpeechPayload,
-          sequence: appendedVoiceBubbleSequenceRef.current,
-          createdAt: new Date().toISOString(),
-          turnIndex,
-          turnPhase: 0,
-        }),
+        userBubbleItem,
+        pendingAgentBubbleItem,
       ]),
     );
-    handlersRef.current.onFinalizedSpeechHandled();
-  }, [input.finalizedSpeechPayload]);
+    revealBubbleRegion();
+
+    /**
+     * Voice submissions should reuse the same task/bubble/delivery pipeline as
+     * hover-text submissions so the shell-ball can track task detail routing and
+     * formal delivery auto-open consistently.
+     */
+    void Promise.resolve(handlersRef.current.onSubmitVoiceText(finalizedSpeechPayload))
+      .then((result) => {
+        if (!isShellBallInputSubmitResult(result)) {
+          setBubbleItems((currentItems) =>
+            replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+          );
+          return;
+        }
+
+        shellBallTaskIdsRef.current.add(result.task.task_id);
+        bindTaskToBubbleTurn(result.task.task_id, turnIndex);
+        setBubbleItems((currentItems) => {
+          const nextItems = currentItems.map((item) =>
+            item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+              ? {
+                  ...item,
+                  bubble: {
+                    ...item.bubble,
+                    task_id: result.task.task_id,
+                  },
+                }
+              : item,
+          );
+
+          return replaceShellBallPendingBubble(
+            nextItems,
+            pendingAgentBubbleItem.bubble.bubble_id,
+            createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+              turnIndex,
+              turnPhase: 1,
+            }),
+          );
+        });
+        revealBubbleRegion();
+        void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+      })
+      .catch((error) => {
+        console.warn("shell-ball voice submit failed", error);
+        setBubbleItems((currentItems) =>
+          replaceShellBallPendingBubble(
+            currentItems,
+            pendingAgentBubbleItem.bubble.bubble_id,
+            createShellBallTaskErrorBubbleItem({
+              createdAt: new Date().toISOString(),
+              error,
+              turnIndex,
+              turnPhase: 1,
+            }),
+          ),
+        );
+        revealBubbleRegion();
+      })
+      .finally(() => {
+        handlersRef.current.onFinalizedSpeechHandled();
+      });
+  }, [autoOpenShellBallDeliveryResult, input.finalizedSpeechPayload, revealBubbleRegion]);
 
   useEffect(() => {
     return subscribeDeliveryReady((payload) => {

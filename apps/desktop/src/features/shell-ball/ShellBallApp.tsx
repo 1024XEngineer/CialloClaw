@@ -222,6 +222,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePressEnd,
     handlePressCancel,
     handleSubmitText,
+    handleSubmitVoiceText,
     handleAttachFile,
     handleDroppedFiles: handleAppendPendingFiles,
     handleDroppedText,
@@ -231,6 +232,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
+    ensureConversationSessionId,
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
@@ -277,6 +279,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onInputHoverChange: handleInputHoverChange,
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
+    onSubmitVoiceText: handleSubmitVoiceText,
+    ensureConversationSessionId: ensureConversationSessionId,
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });

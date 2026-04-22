@@ -71,6 +71,8 @@ type ShellBallPostSubmitReset = {
   nextFocused: false;
 };
 
+const SHELL_BALL_CONVERSATION_SESSION_PREFIX = "sess_shell_ball";
+
 function createShellBallRequestMeta(): RequestMeta {
   const now = new Date().toISOString();
   const traceId = typeof globalThis.crypto?.randomUUID === "function"
@@ -153,17 +155,32 @@ export function createShellBallInputSubmitParams(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
+  sessionId?: string;
 }): AgentInputSubmitParams | null {
   return createTextInputSubmitParams({
     text: input.text,
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    sessionId: input.sessionId,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
     },
   });
+}
+
+/**
+ * Builds a frontend-managed collaboration session id for shell-ball direct
+ * input. The backend already understands `session_id`; this helper only gives
+ * the near-field entry a stable local anchor to reuse across voice follow-ups.
+ */
+export function createShellBallConversationSessionId() {
+  const randomSuffix = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  return `${SHELL_BALL_CONVERSATION_SESSION_PREFIX}_${randomSuffix}`;
 }
 
 /**
@@ -203,12 +220,14 @@ async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
+  sessionId?: string;
 }): Promise<ShellBallInputSubmitResult | null> {
   return submitTextInput({
     text: input.text,
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    sessionId: input.sessionId,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
@@ -417,6 +436,7 @@ export function useShellBallInteraction() {
   const voiceBaseDraftRef = useRef("");
   const voiceTranscriptRef = useRef("");
   const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
+  const conversationSessionIdRef = useRef<string | null>(null);
 
   if (controllerRef.current === null) {
     controllerRef.current = createShellBallInteractionController({
@@ -441,6 +461,19 @@ export function useShellBallInteraction() {
       regionActive: regionActiveRef.current,
     });
     syncVisualState();
+  }
+
+  /**
+   * Shell-ball direct input does not receive a formal session handle back from
+   * task payloads yet, so the frontend keeps one local conversation id alive
+   * until the orb is explicitly reset.
+   */
+  function ensureConversationSessionId() {
+    if (conversationSessionIdRef.current === null) {
+      conversationSessionIdRef.current = createShellBallConversationSessionId();
+    }
+
+    return conversationSessionIdRef.current;
   }
 
   const clearLongPressTimer = useCallback(() => {
@@ -561,28 +594,7 @@ export function useShellBallInteraction() {
       return;
     }
 
-    try {
-      const result = await submitShellBallInput({
-        text: resolution.finalizedSpeechPayload,
-        trigger: "voice_commit",
-        inputMode: "voice",
-      });
-      setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
-      if (result !== null) {
-        syncVisualStateFromTaskStatus(result.task.status, resolution.nextVisualState);
-      }
-    } catch (error) {
-      console.warn("shell-ball voice submit failed", error);
-      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, resolution.finalizedSpeechPayload);
-      setInputValue(restoredDraft);
-      inputFocusedRef.current = true;
-      setInputFocused(true);
-      controllerRef.current?.forceState("hover_input", {
-        regionActive: regionActiveRef.current,
-        hoverRetained: true,
-      });
-      syncVisualState();
-    }
+    setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
   }
 
   function acknowledgeFinalizedSpeechPayload() {
@@ -800,6 +812,7 @@ export function useShellBallInteraction() {
               text: currentDraft,
               trigger: "hover_text_input",
               inputMode: "text",
+              sessionId: ensureConversationSessionId(),
             });
       dispatch("submit_text");
       setInputValue(reset.nextInputValue);
@@ -812,6 +825,47 @@ export function useShellBallInteraction() {
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Voice capture reuses the same formal `agent.input.submit` path as the hover
+   * input, but the coordinator owns the shell-ball bubble timeline. This helper
+   * keeps RPC submission and visual-state recovery inside interaction state
+   * while allowing the coordinator to render the corresponding task bubbles.
+   */
+  async function handleSubmitVoiceText(text: string) {
+    const normalizedText = text.trim();
+
+    if (normalizedText === "") {
+      return null;
+    }
+
+    try {
+      const result = await submitShellBallInput({
+        text: normalizedText,
+        trigger: "voice_commit",
+        inputMode: "voice",
+        sessionId: ensureConversationSessionId(),
+      });
+
+      if (result !== null) {
+        syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
+      }
+
+      return result;
+    } catch (error) {
+      console.warn("shell-ball voice submit failed", error);
+      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, normalizedText);
+      setInputValue(restoredDraft);
+      inputFocusedRef.current = true;
+      setInputFocused(true);
+      controllerRef.current?.forceState("hover_input", {
+        regionActive: regionActiveRef.current,
+        hoverRetained: true,
+      });
+      syncVisualState();
       throw error;
     }
   }
@@ -1073,6 +1127,9 @@ export function useShellBallInteraction() {
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
     disposeVoiceRecognition();
+    if (state === "idle") {
+      conversationSessionIdRef.current = null;
+    }
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("force_state_reset"));
     pressStartXRef.current = null;
     pressStartYRef.current = null;
@@ -1109,6 +1166,7 @@ export function useShellBallInteraction() {
   useUnmount(() => {
     clearLongPressTimer();
     disposeVoiceRecognition();
+    conversationSessionIdRef.current = null;
     pressStartXRef.current = null;
     pressStartYRef.current = null;
     voicePreviewRef.current = null;
@@ -1139,6 +1197,7 @@ export function useShellBallInteraction() {
     handleRegionEnter,
     handleRegionLeave,
     handleSubmitText,
+    handleSubmitVoiceText,
     handleAttachFile,
     handleDroppedFiles,
     handleRemovePendingFile,
@@ -1150,6 +1209,7 @@ export function useShellBallInteraction() {
     handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
+    ensureConversationSessionId,
     handleForceState,
   };
 }
