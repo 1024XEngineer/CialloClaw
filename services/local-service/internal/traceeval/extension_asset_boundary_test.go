@@ -35,6 +35,25 @@ func TestServiceCaptureNormalizesExtensionAssetBoundary(t *testing.T) {
 				Source:    "marketplace",
 			},
 			{
+				AssetKind:    storage.ExtensionAssetKindModelProviderRoute,
+				AssetID:      "openai_responses",
+				Name:         "OpenAI Responses",
+				Version:      "builtin-v1",
+				Source:       "builtin",
+				Entry:        "builtin://model-provider/openai_responses",
+				Capabilities: []string{"generate_text"},
+				Permissions:  []string{"secret:model_api_key"},
+			},
+			{
+				AssetKind:    storage.ExtensionAssetKindPerceptionPackage,
+				AssetID:      "desktop_context_core",
+				Name:         "Desktop Context Core",
+				Version:      "builtin-v1",
+				Source:       "builtin",
+				Capabilities: []string{"screen_context"},
+				Permissions:  []string{"screen:read"},
+			},
+			{
 				AssetKind: storage.ExtensionAssetKindPromptTemplateVersion,
 				AssetID:   "prompt_missing_version",
 				Source:    "builtin",
@@ -48,10 +67,10 @@ func TestServiceCaptureNormalizesExtensionAssetBoundary(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.TraceRecord.AssetRefsJSON), &refs); err != nil {
 		t.Fatalf("unmarshal trace asset refs: %v", err)
 	}
-	if len(refs) != 2 {
+	if len(refs) != 4 {
 		t.Fatalf("expected only supported extension asset refs to be recorded, got %+v", refs)
 	}
-	if result.Metrics["extension_asset_count"] != 2 {
+	if result.Metrics["extension_asset_count"] != 4 {
 		t.Fatalf("expected extension asset metrics to count normalized refs, got %+v", result.Metrics)
 	}
 	if result.Metrics[storage.ExtensionAssetKindSkillManifest+"_count"] != 1 {
@@ -59,5 +78,11 @@ func TestServiceCaptureNormalizesExtensionAssetBoundary(t *testing.T) {
 	}
 	if result.Metrics[storage.ExtensionAssetKindPluginManifest+"_count"] != 1 {
 		t.Fatalf("expected one plugin manifest ref after normalization, got %+v", result.Metrics)
+	}
+	if result.Metrics[storage.ExtensionAssetKindModelProviderRoute+"_count"] != 1 {
+		t.Fatalf("expected one model provider route ref after normalization, got %+v", result.Metrics)
+	}
+	if result.Metrics[storage.ExtensionAssetKindPerceptionPackage+"_count"] != 1 {
+		t.Fatalf("expected one perception package ref after normalization, got %+v", result.Metrics)
 	}
 }

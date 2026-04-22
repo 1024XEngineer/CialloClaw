@@ -213,7 +213,7 @@ func persistPluginManifests(ctx context.Context, storageService *storage.Service
 			Version:          manifest.Version,
 			Entry:            manifest.Entry,
 			Source:           manifest.Source,
-			Summary:          fmt.Sprintf("Built-in plugin manifest for %s.", manifest.Name),
+			Summary:          firstNonEmptyBootstrap(strings.TrimSpace(manifest.Summary), fmt.Sprintf("Built-in plugin manifest for %s.", manifest.Name)),
 			CapabilitiesJSON: string(capabilitiesJSON),
 			PermissionsJSON:  string(permissionsJSON),
 			RuntimeNamesJSON: string(runtimeNamesJSON),
@@ -225,6 +225,15 @@ func persistPluginManifests(ctx context.Context, storageService *storage.Service
 		}
 	}
 	return nil
+}
+
+func firstNonEmptyBootstrap(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // Start launches the RPC server and background runtimes.

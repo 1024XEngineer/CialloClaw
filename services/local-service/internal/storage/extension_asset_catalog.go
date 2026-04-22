@@ -18,6 +18,10 @@ const (
 	ExtensionAssetKindPromptTemplateVersion = "prompt_template_version"
 	// ExtensionAssetKindPluginManifest marks one plugin_manifests usage reference.
 	ExtensionAssetKindPluginManifest = "plugin_manifest"
+	// ExtensionAssetKindModelProviderRoute marks one attributed model-provider route.
+	ExtensionAssetKindModelProviderRoute = "model_provider_route"
+	// ExtensionAssetKindPerceptionPackage marks one attributed perception-package boundary.
+	ExtensionAssetKindPerceptionPackage = "perception_package"
 )
 
 // ExtensionAssetCatalog is the smallest owner-5 boundary that execution can use

@@ -16,6 +16,7 @@ type SidecarSpec struct {
 type Manifest struct {
 	PluginID     string
 	Name         string
+	Summary      string
 	Version      string
 	Entry        string
 	Source       string
@@ -116,13 +117,41 @@ func NewService() *Service {
 		metrics:   map[string]MetricSnapshot{},
 		events:    make([]RuntimeEvent, 0),
 	}
-	playwrightManifest := Manifest{PluginID: "playwright", Name: "Playwright Automation", Version: "builtin-v1", Entry: "builtin://plugin/playwright", Source: "builtin", Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}, Permissions: []string{"webpage_read", "webpage_interact"}}
-	ocrManifest := Manifest{PluginID: "ocr", Name: "OCR Worker", Version: "builtin-v1", Entry: "builtin://plugin/ocr", Source: "builtin", Capabilities: []string{"extract_text", "ocr_image", "ocr_pdf"}, Permissions: []string{"workspace_read", "artifact_read"}}
-	mediaManifest := Manifest{PluginID: "media", Name: "Media Worker", Version: "builtin-v1", Entry: "builtin://plugin/media", Source: "builtin", Capabilities: []string{"transcode_media", "normalize_recording", "extract_frames"}, Permissions: []string{"workspace_read", "workspace_write", "artifact_write"}}
-	service.declareRuntime(RuntimeState{Name: "playwright_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "worker_process", Health: RuntimeHealthUnknown, Manifest: &playwrightManifest, Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}})
-	service.declareRuntime(RuntimeState{Name: "ocr_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Manifest: &ocrManifest, Capabilities: []string{"extract_text", "ocr_image", "ocr_pdf"}})
-	service.declareRuntime(RuntimeState{Name: "media_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Manifest: &mediaManifest, Capabilities: []string{"transcode_media", "normalize_recording", "extract_frames"}})
-	service.declareRuntime(RuntimeState{Name: "playwright_sidecar", Kind: RuntimeKindSidecar, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Manifest: &playwrightManifest, Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}})
+	entries := BuiltinCatalogEntries()
+	for _, entry := range entries {
+		manifest := manifestFromCatalogEntry(entry)
+		for _, ref := range entry.RuntimeRefs {
+			if ref.Kind != RuntimeKindWorker {
+				continue
+			}
+			service.declareRuntime(RuntimeState{
+				Name:         ref.Name,
+				Kind:         ref.Kind,
+				Status:       RuntimeStatusDeclared,
+				Transport:    ref.Transport,
+				Health:       RuntimeHealthUnknown,
+				Manifest:     &manifest,
+				Capabilities: append([]string(nil), entry.Capabilities...),
+			})
+		}
+	}
+	for _, entry := range entries {
+		manifest := manifestFromCatalogEntry(entry)
+		for _, ref := range entry.RuntimeRefs {
+			if ref.Kind != RuntimeKindSidecar {
+				continue
+			}
+			service.declareRuntime(RuntimeState{
+				Name:         ref.Name,
+				Kind:         ref.Kind,
+				Status:       RuntimeStatusDeclared,
+				Transport:    ref.Transport,
+				Health:       RuntimeHealthUnknown,
+				Manifest:     &manifest,
+				Capabilities: append([]string(nil), entry.Capabilities...),
+			})
+		}
+	}
 	return service
 }
 
@@ -385,6 +414,7 @@ func cloneManifest(manifest *Manifest) Manifest {
 	return Manifest{
 		PluginID:     manifest.PluginID,
 		Name:         manifest.Name,
+		Summary:      manifest.Summary,
 		Version:      manifest.Version,
 		Entry:        manifest.Entry,
 		Source:       manifest.Source,

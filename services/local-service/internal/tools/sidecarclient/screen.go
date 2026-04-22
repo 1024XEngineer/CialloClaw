@@ -160,8 +160,23 @@ func (c *InMemoryScreenCaptureClient) CaptureKeyframe(_ context.Context, input t
 func (c *InMemoryScreenCaptureClient) CleanupSessionArtifacts(_ context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	deleted := append([]string(nil), c.tempPaths[input.ScreenSessionID]...)
-	delete(c.tempPaths, input.ScreenSessionID)
+	paths := screenCleanupPaths(c.tempPaths[input.ScreenSessionID], input.Paths)
+	deleted := append([]string(nil), paths...)
+	remaining := removeScreenPaths(c.tempPaths[input.ScreenSessionID], paths)
+	if len(remaining) == 0 {
+		delete(c.tempPaths, input.ScreenSessionID)
+		delete(c.frameCounts, input.ScreenSessionID)
+		delete(c.sessions, input.ScreenSessionID)
+	} else {
+		c.tempPaths[input.ScreenSessionID] = remaining
+		if state, ok := c.sessions[input.ScreenSessionID]; ok {
+			stoppedAt := c.now().UTC()
+			state.AuthorizationState = tools.ScreenAuthorizationEnded
+			state.EndedAt = &stoppedAt
+			state.TerminalReason = firstNonEmpty(input.Reason, "session_cleanup_pending_retry")
+			c.sessions[input.ScreenSessionID] = state
+		}
+	}
 	return tools.ScreenCleanupResult{
 		ScreenSessionID: input.ScreenSessionID,
 		Reason:          firstNonEmpty(input.Reason, "session_cleanup"),
@@ -178,6 +193,8 @@ func (c *InMemoryScreenCaptureClient) CleanupExpiredScreenTemps(_ context.Contex
 		if !state.ExpiresAt.IsZero() && !state.ExpiresAt.After(input.ExpiredBefore) {
 			deleted = append(deleted, c.tempPaths[sessionID]...)
 			delete(c.tempPaths, sessionID)
+			delete(c.frameCounts, sessionID)
+			delete(c.sessions, sessionID)
 		}
 	}
 	return tools.ScreenCleanupResult{
@@ -214,7 +231,13 @@ func (c *InMemoryScreenCaptureClient) captureFrame(input tools.ScreenCaptureInpu
 	}
 	now := c.now().UTC()
 	frameID := fmt.Sprintf("frame_%04d", frameNumber)
-	path := filepath.ToSlash(filepath.Join("temp", input.ScreenSessionID, fmt.Sprintf("%s.png", frameID)))
+	path := filepath.ToSlash(filepath.Join("temp", input.ScreenSessionID, fmt.Sprintf("%s%s", frameID, screenCaptureExtension(mode, input.SourcePath))))
+	retentionPolicy := tools.ScreenRetentionTemporary
+	cleanupRequired := true
+	if input.AllowPersist {
+		retentionPolicy = tools.ScreenRetentionArtifact
+		cleanupRequired = false
+	}
 	candidate := tools.ScreenFrameCandidate{
 		FrameID:           frameID,
 		ScreenSessionID:   input.ScreenSessionID,
@@ -225,11 +248,13 @@ func (c *InMemoryScreenCaptureClient) captureFrame(input tools.ScreenCaptureInpu
 		Path:              path,
 		CapturedAt:        now,
 		IsKeyframe:        keyframe,
-		DedupeFingerprint: fmt.Sprintf("%s:%s:%d", input.ScreenSessionID, mode, frameNumber),
-		RetentionPolicy:   tools.ScreenRetentionTemporary,
-		CleanupRequired:   true,
+		DedupeFingerprint: fmt.Sprintf("%s:%s:%s:%d", input.ScreenSessionID, mode, strings.TrimSpace(input.SourcePath), frameNumber),
+		RetentionPolicy:   retentionPolicy,
+		CleanupRequired:   cleanupRequired,
 	}
-	c.tempPaths[input.ScreenSessionID] = append(c.tempPaths[input.ScreenSessionID], path)
+	if cleanupRequired {
+		c.tempPaths[input.ScreenSessionID] = append(c.tempPaths[input.ScreenSessionID], path)
+	}
 	return candidate, nil
 }
 
@@ -259,4 +284,55 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func screenCleanupPaths(defaultPaths, explicitPaths []string) []string {
+	if len(explicitPaths) > 0 {
+		return append([]string(nil), explicitPaths...)
+	}
+	return append([]string(nil), defaultPaths...)
+}
+
+func removeScreenPaths(existingPaths, removedPaths []string) []string {
+	if len(existingPaths) == 0 || len(removedPaths) == 0 {
+		return append([]string(nil), existingPaths...)
+	}
+	removed := make(map[string]int, len(removedPaths))
+	for _, pathValue := range removedPaths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		removed[trimmed]++
+	}
+	remaining := make([]string, 0, len(existingPaths))
+	for _, pathValue := range existingPaths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		if removed[trimmed] > 0 {
+			removed[trimmed]--
+			continue
+		}
+		remaining = append(remaining, trimmed)
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	return remaining
+}
+
+func screenCaptureExtension(mode tools.ScreenCaptureMode, sourcePath string) string {
+	if ext := strings.TrimSpace(filepath.Ext(sourcePath)); ext != "" {
+		return ext
+	}
+	switch mode {
+	case tools.ScreenCaptureModeClip:
+		return ".webm"
+	case tools.ScreenCaptureModeKeyframe, tools.ScreenCaptureModeScreenshot:
+		return ".png"
+	default:
+		return ".png"
+	}
 }
