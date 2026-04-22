@@ -298,6 +298,9 @@ func (c *localScreenCaptureClient) cleanupOrphanTempPathsLocked(expiredBefore ti
 		if sessionID == "" {
 			continue
 		}
+		if !isLocalScreenSessionDir(sessionID) {
+			continue
+		}
 		if _, ok := trackedSessions[sessionID]; ok {
 			continue
 		}
@@ -307,6 +310,10 @@ func (c *localScreenCaptureClient) cleanupOrphanTempPathsLocked(expiredBefore ti
 		skipped = append(skipped, sessionSkipped...)
 	}
 	return deleted, skipped
+}
+
+func isLocalScreenSessionDir(name string) bool {
+	return strings.HasPrefix(strings.TrimSpace(name), "screen_local_")
 }
 
 // cleanupNestedOrphanTempPaths reclaims nested clip-frame directories after the

@@ -432,8 +432,9 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	analysis.CitationSeed["artifact_type"] = stringValue(analysis.Artifact, "artifact_type", "")
 	analysis.CitationSeed["screen_session_id"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "screen_session_id", "")
 	analysis.CitationSeed["evidence_role"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "evidence_role", "")
-	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, candidate, analysis.PreviewText)
-	auditCandidate := screenAnalysisAuditCandidate(candidate, analysis.PreviewText, "success")
+	auditTargetCandidate := screenAuditTargetCandidate(candidate, analysis.Artifact)
+	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, auditTargetCandidate, analysis.PreviewText)
+	auditCandidate := screenAnalysisAuditCandidate(auditTargetCandidate, analysis.PreviewText, "success")
 	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, analysis.CleanupPaths)
 	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
 	cleanupExecuted := pendingScreenCleanupExecution(cleanupPlan)
@@ -717,6 +718,19 @@ func screenAnalysisToolCall(request Request, output map[string]any, status tools
 		ErrorCode:  errorCode,
 		DurationMS: 0,
 	}
+}
+
+// screenAuditTargetCandidate rewrites the audit target to the promoted artifact
+// path when one exists so later task detail consumers do not point operators at
+// a temp capture file that was already moved out of the workspace temp area.
+func screenAuditTargetCandidate(candidate tools.ScreenFrameCandidate, artifact map[string]any) tools.ScreenFrameCandidate {
+	pathValue := strings.TrimSpace(stringValue(artifact, "path", ""))
+	if pathValue == "" {
+		return candidate
+	}
+	updated := candidate
+	updated.Path = pathValue
+	return updated
 }
 
 func screenAuditActionName(candidate tools.ScreenFrameCandidate) string {

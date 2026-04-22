@@ -2129,9 +2129,16 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if auditRecord["action"] != "screen.capture.screenshot_analyze" {
 		t.Fatalf("expected formalized screen audit action, got %+v", auditRecord)
 	}
+	if auditRecord["target"] != result.Artifacts[0]["path"] {
+		t.Fatalf("expected screen audit target to follow promoted artifact path, got audit=%+v artifacts=%+v", auditRecord, result.Artifacts)
+	}
 	auditMetadata := mapValue(auditRecord, "metadata")
 	if auditMetadata["screen_session_id"] == "" || auditMetadata["capture_mode"] != "screenshot" {
 		t.Fatalf("expected screen audit metadata, got %+v", auditRecord)
+	}
+	auditCandidateOutput := mapValue(result.ToolOutput, "audit_candidate")
+	if auditCandidateOutput["target"] != result.Artifacts[0]["path"] {
+		t.Fatalf("expected audit candidate target to follow promoted artifact path, got %+v", auditCandidateOutput)
 	}
 	cleanupSummary := mapValue(result.ToolOutput, "cleanup_summary")
 	if cleanupSummary["reason"] != "screen_artifact_promoted" || cleanupSummary["deleted_count"] != 1 {
@@ -2180,6 +2187,18 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	}
 	if records[0].Path != artifactPath || persisted["path"] != artifactPath {
 		t.Fatalf("expected persisted artifact path to follow promoted artifact, record=%+v persisted=%+v", records[0], persisted)
+	}
+}
+
+func TestScreenAuditTargetCandidatePrefersPromotedArtifactPath(t *testing.T) {
+	candidate := tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_target", CaptureMode: tools.ScreenCaptureModeScreenshot, Path: "temp/screen_sess_target/frame_001.png"}
+	updated := screenAuditTargetCandidate(candidate, map[string]any{"path": "artifacts/screen/task_demo/frame_001.png"})
+	if updated.Path != "artifacts/screen/task_demo/frame_001.png" {
+		t.Fatalf("expected promoted artifact path to replace temp audit target, got %+v", updated)
+	}
+	unchanged := screenAuditTargetCandidate(candidate, nil)
+	if unchanged.Path != candidate.Path {
+		t.Fatalf("expected missing artifact path to leave audit target unchanged, got %+v", unchanged)
 	}
 }
 

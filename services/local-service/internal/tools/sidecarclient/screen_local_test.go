@@ -181,20 +181,26 @@ func TestLocalScreenCaptureClientCleansOrphanTempFiles(t *testing.T) {
 		t.Fatalf("new local path policy failed: %v", err)
 	}
 	fileSystem := platform.NewLocalFileSystemAdapter(policy)
-	if err := fileSystem.MkdirAll("temp/orphan_session"); err != nil {
+	if err := fileSystem.MkdirAll("temp/screen_local_orphan_session"); err != nil {
 		t.Fatalf("mkdir orphan temp dir failed: %v", err)
 	}
-	if err := fileSystem.MkdirAll("temp/orphan_session/frame_0001_clip_frames"); err != nil {
+	if err := fileSystem.MkdirAll("temp/screen_local_orphan_session/frame_0001_clip_frames"); err != nil {
 		t.Fatalf("mkdir orphan nested temp dir failed: %v", err)
+	}
+	if err := fileSystem.MkdirAll("temp/tool_cache"); err != nil {
+		t.Fatalf("mkdir unrelated temp dir failed: %v", err)
 	}
 	if err := fileSystem.MkdirAll("inputs"); err != nil {
 		t.Fatalf("mkdir inputs failed: %v", err)
 	}
-	if err := fileSystem.WriteFile("temp/orphan_session/orphan.png", []byte("orphan")); err != nil {
+	if err := fileSystem.WriteFile("temp/screen_local_orphan_session/orphan.png", []byte("orphan")); err != nil {
 		t.Fatalf("write orphan temp file failed: %v", err)
 	}
-	if err := fileSystem.WriteFile("temp/orphan_session/frame_0001_clip_frames/frame-001.jpg", []byte("orphan-frame")); err != nil {
+	if err := fileSystem.WriteFile("temp/screen_local_orphan_session/frame_0001_clip_frames/frame-001.jpg", []byte("orphan-frame")); err != nil {
 		t.Fatalf("write orphan nested temp file failed: %v", err)
+	}
+	if err := fileSystem.WriteFile("temp/tool_cache/shared.tmp", []byte("shared-temp")); err != nil {
+		t.Fatalf("write unrelated temp file failed: %v", err)
 	}
 	if err := fileSystem.WriteFile("inputs/live.png", []byte("live")); err != nil {
 		t.Fatalf("write live source file failed: %v", err)
@@ -216,14 +222,17 @@ func TestLocalScreenCaptureClientCleansOrphanTempFiles(t *testing.T) {
 	if cleanup.DeletedCount != 2 {
 		t.Fatalf("expected orphan temp cleanup to remove only orphan file, got %+v", cleanup)
 	}
-	if !containsString(cleanup.DeletedPaths, "temp/orphan_session/orphan.png") || !containsString(cleanup.DeletedPaths, "temp/orphan_session/frame_0001_clip_frames/frame-001.jpg") {
+	if !containsString(cleanup.DeletedPaths, "temp/screen_local_orphan_session/orphan.png") || !containsString(cleanup.DeletedPaths, "temp/screen_local_orphan_session/frame_0001_clip_frames/frame-001.jpg") {
 		t.Fatalf("expected orphan temp cleanup to remove both top-level and nested orphan files, got %+v", cleanup)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/orphan_session/orphan.png"))); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/screen_local_orphan_session/orphan.png"))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected orphan temp file to be removed, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/orphan_session/frame_0001_clip_frames/frame-001.jpg"))); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/screen_local_orphan_session/frame_0001_clip_frames/frame-001.jpg"))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected orphan nested temp file to be removed, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/tool_cache/shared.tmp"))); err != nil {
+		t.Fatalf("expected unrelated temp file to remain, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(liveCandidate.Path))); err != nil {
 		t.Fatalf("expected tracked live temp file to remain, got %v", err)

@@ -212,6 +212,9 @@ func builtinCatalogEntries() []CatalogEntry {
 	}
 }
 
+// appendMissingCatalogPluginIDs extends the builtin catalog with manifests or
+// runtime owners discovered at runtime so query surfaces do not silently drop
+// valid non-builtin plugins that already exist in storage/runtime caches.
 func appendMissingCatalogPluginIDs(service *Service, entryIndex map[string]int, manifestIndex map[string]Manifest, runtimeRefsByPluginID map[string][]RuntimeRef) []string {
 	if service == nil {
 		return nil
@@ -249,6 +252,9 @@ func appendMissingCatalogPluginIDs(service *Service, entryIndex map[string]int, 
 	return ordered
 }
 
+// catalogEntryFromDynamicSources synthesizes one stable query row for plugins
+// that were not part of the builtin catalog but already have runtime or manifest
+// data inside the current backend process.
 func catalogEntryFromDynamicSources(pluginID string, manifest Manifest, runtimeRefs []RuntimeRef) CatalogEntry {
 	trimmedPluginID := strings.TrimSpace(pluginID)
 	entry := CatalogEntry{
