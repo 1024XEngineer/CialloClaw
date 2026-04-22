@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -841,6 +842,70 @@ func TestExecuteBudgetDowngradeFallsBackWhenModelClientUnavailable(t *testing.T)
 	}
 }
 
+func TestExecuteFailsWhenPromptGenerationFallsBackWithoutBudgetDowngrade(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, nil)
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_requires_formal_model",
+		RunID:        "run_prompt_requires_formal_model",
+		Title:        "Prompt requires formal model",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Formal prompt result",
+	})
+	if !errors.Is(err, model.ErrClientNotConfigured) {
+		t.Fatalf("expected ErrClientNotConfigured, got %v", err)
+	}
+}
+
+func TestExecutePreservesTypedSecretErrorsWhenPromptFallbackOccurs(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{err: errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound)})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_secret_error",
+		RunID:        "run_prompt_secret_error",
+		Title:        "Prompt secret error",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Secret error result",
+	})
+	if !errors.Is(err, model.ErrSecretSourceFailed) || !errors.Is(err, model.ErrSecretNotFound) {
+		t.Fatalf("expected joined secret resolution error, got %v", err)
+	}
+}
+
+func TestExecutePreservesModelConfigurationErrorsWhenPromptFallbackOccurs(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{err: errors.Join(model.ErrModelProviderRequired, model.ErrOpenAIEndpointRequired)})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_model_config_error",
+		RunID:        "run_prompt_model_config_error",
+		Title:        "Prompt model config error",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Model config error result",
+	})
+	if !errors.Is(err, model.ErrModelProviderRequired) || !errors.Is(err, model.ErrOpenAIEndpointRequired) {
+		t.Fatalf("expected joined provider/config error, got %v", err)
+	}
+}
+
+func TestExecuteFailsWhenModelReturnsEmptyPromptOutput(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{output: ""})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_empty_output",
+		RunID:        "run_prompt_empty_output",
+		Title:        "Prompt empty output",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Empty output result",
+	})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected ErrToolOutputInvalid, got %v", err)
+	}
+}
+
 func TestExecuteBudgetDowngradeAllowsReadOnlyAgentLoopTools(t *testing.T) {
 	modelClient := &stubModelClient{
 		toolCalls: []model.ToolCallResult{{
@@ -967,6 +1032,163 @@ func TestExecuteBudgetDowngradePreservesFallbackReason(t *testing.T) {
 	}
 	if result.BudgetFailure == nil || result.BudgetFailure["reason"] != model.ErrClientNotConfigured.Error() {
 		t.Fatalf("expected budget failure reason to preserve actual fallback reason, got %+v", result.BudgetFailure)
+	}
+}
+
+func TestExecuteBudgetDowngradeRecognizesJoinedSecretFallbackReason(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{err: errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound)})
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_secret_reason",
+		RunID:        "run_budget_secret_reason",
+		Title:        "Budget secret reason",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget secret reason result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "provider_unavailable",
+			"degrade_actions": []string{"lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.BudgetFailure == nil {
+		t.Fatalf("expected joined secret fallback to produce budget failure signal, got %+v", result)
+	}
+	reason, _ := result.BudgetFailure["reason"].(string)
+	if !strings.Contains(reason, model.ErrSecretSourceFailed.Error()) || !strings.Contains(reason, model.ErrSecretNotFound.Error()) {
+		t.Fatalf("expected joined secret fallback reason to be preserved, got %+v", result.BudgetFailure)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputDefaultsToClientNotConfigured(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{})
+	if !errors.Is(err, model.ErrClientNotConfigured) {
+		t.Fatalf("expected ErrClientNotConfigured, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRecognizesToolOutputInvalid(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": tools.ErrToolOutputInvalid.Error()})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected ErrToolOutputInvalid, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRecognizesProviderAndTransportErrors(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": errors.Join(model.ErrModelProviderRequired, model.ErrOpenAIEndpointRequired, model.ErrOpenAIRequestTimeout).Error()})
+	if !errors.Is(err, model.ErrModelProviderRequired) {
+		t.Fatalf("expected ErrModelProviderRequired, got %v", err)
+	}
+	if !errors.Is(err, model.ErrOpenAIEndpointRequired) {
+		t.Fatalf("expected ErrOpenAIEndpointRequired, got %v", err)
+	}
+	if !errors.Is(err, model.ErrOpenAIRequestTimeout) {
+		t.Fatalf("expected ErrOpenAIRequestTimeout, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrors(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": "openai responses returned http status 503: service unavailable"})
+	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
+		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
+	}
+	if !model.IsProviderRuntimeUnavailable(err) {
+		t.Fatalf("expected reconstructed 503 error to remain runtime-unavailable, got %v", err)
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
+	}
+	if statusErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", statusErr.StatusCode)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrorsWithoutMessage(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": "openai responses returned http status 401"})
+	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
+		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
+	}
+	if model.IsProviderRuntimeUnavailable(err) {
+		t.Fatalf("expected reconstructed 401 error to remain non-retryable, got %v", err)
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", statusErr.StatusCode)
+	}
+}
+
+func TestBudgetDowngradeGenerationFallbackBuildsStructuredFallback(t *testing.T) {
+	trace, ok := budgetDowngradeGenerationFallback(Request{
+		TaskID:          "task_budget_helper",
+		BudgetDowngrade: map[string]any{"applied": true, "trigger_reason": "provider_unavailable", "summary": "Budget downgrade fallback applied."},
+		DeliveryType:    "bubble",
+		ResultTitle:     "Budget helper result",
+		Snapshot:        contextsvc.TaskContextSnapshot{InputType: "text", Text: "Explain this content."},
+		Intent:          map[string]any{"name": "summarize", "arguments": map[string]any{}},
+	}, "Explain this content.", model.ErrClientNotConfigured)
+	if !ok {
+		t.Fatal("expected budget fallback to be generated")
+	}
+	if trace.ModelInvocation["provider"] != "budget_downgrade_fallback" {
+		t.Fatalf("expected budget fallback provider marker, got %+v", trace.ModelInvocation)
+	}
+	if trace.GenerationOutput["fallback"] != true {
+		t.Fatalf("expected fallback generation output marker, got %+v", trace.GenerationOutput)
+	}
+}
+
+func TestIsBudgetFailureReasonRecognizesFormalFailureStrings(t *testing.T) {
+	for _, reason := range []string{
+		model.ErrClientNotConfigured.Error(),
+		model.ErrToolCallingNotSupported.Error(),
+		model.ErrModelProviderRequired.Error(),
+		model.ErrModelProviderUnsupported.Error(),
+		model.ErrSecretNotFound.Error(),
+		model.ErrSecretSourceFailed.Error(),
+		model.ErrOpenAIAPIKeyRequired.Error(),
+		model.ErrOpenAIEndpointRequired.Error(),
+		model.ErrOpenAIModelIDRequired.Error(),
+		model.ErrOpenAIHTTPStatus.Error(),
+		model.ErrOpenAIRequestFailed.Error(),
+		model.ErrOpenAIRequestTimeout.Error(),
+		model.ErrOpenAIResponseInvalid.Error(),
+		tools.ErrToolOutputInvalid.Error(),
+	} {
+		if !isBudgetFailureReason(reason) {
+			t.Fatalf("expected budget failure reason %q to be recognized", reason)
+		}
+	}
+	if isBudgetFailureReason("some unrelated failure") {
+		t.Fatal("expected unrelated error string to be ignored")
+	}
+}
+
+func TestBudgetFailureSignalRecognizesToolOutputInvalid(t *testing.T) {
+	signal := budgetFailureSignal(Request{BudgetDowngrade: map[string]any{"applied": true}}, tools.ErrToolOutputInvalid)
+	if signal == nil {
+		t.Fatal("expected tool output invalid to produce budget failure signal")
+	}
+	if signal["reason"] != tools.ErrToolOutputInvalid.Error() {
+		t.Fatalf("expected tool output invalid reason to be preserved, got %+v", signal)
+	}
+}
+
+func TestBudgetFailureSignalRecognizesProviderRuntimeUnavailable(t *testing.T) {
+	signal := budgetFailureSignal(Request{BudgetDowngrade: map[string]any{"applied": true}}, &model.OpenAIHTTPStatusError{StatusCode: http.StatusServiceUnavailable, Message: "service unavailable"})
+	if signal == nil {
+		t.Fatal("expected provider runtime failure to produce budget failure signal")
+	}
+	reason, _ := signal["reason"].(string)
+	if !strings.Contains(reason, "http status 503") {
+		t.Fatalf("expected provider runtime reason to be preserved, got %+v", signal)
 	}
 }
 
@@ -1612,7 +1834,7 @@ func TestExecuteDirectSidecarPageReadFailureReturnsMappedToolTrace(t *testing.T)
 	}
 }
 
-func TestExecuteFallsBackWhenModelFails(t *testing.T) {
+func TestExecuteFailsWhenModelFailsWithoutBudgetDowngrade(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
 	if err != nil {
@@ -1640,7 +1862,7 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	result, err := service.Execute(context.Background(), Request{
+	_, err = service.Execute(context.Background(), Request{
 		TaskID:       "task_004",
 		RunID:        "run_004",
 		Title:        "解释内容",
@@ -1649,11 +1871,11 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		DeliveryType: "bubble",
 		ResultTitle:  "解释结果",
 	})
-	if err != nil {
-		t.Fatalf("execute failed: %v", err)
+	if err == nil {
+		t.Fatal("expected formal prompt path to fail when the model call falls back")
 	}
-	if !strings.Contains(result.BubbleText, "需要解释的文本") {
-		t.Fatalf("expected fallback bubble to include normalized input, got %s", result.BubbleText)
+	if !strings.Contains(err.Error(), "provider unavailable") {
+		t.Fatalf("expected model failure detail to be preserved, got %v", err)
 	}
 }
 
