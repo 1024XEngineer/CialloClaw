@@ -36,8 +36,10 @@ jobs:
       window_end_utc: ${{ steps.meta.outputs.end_utc }}
 
     steps:
-      - name: Check out workflow sources
+      - name: Check out repository history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve the latest Beijing 07:00 release window
         id: meta
@@ -66,14 +68,61 @@ jobs:
 
       - name: Detect main branch movement inside the release window
         id: check
-        uses: actions/github-script@v9
         env:
           START_UTC: ${{ steps.meta.outputs.start_utc }}
           END_UTC: ${{ steps.meta.outputs.end_utc }}
-        with:
-          script: |
-            const detectDailyRelease = require("./.github/scripts/detect-daily-release.cjs");
-            await detectDailyRelease({ github, context, core });
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --force origin main:refs/remotes/origin/main
+
+          start_epoch=$(date -u -d "$START_UTC" +%s)
+          end_epoch=$(date -u -d "$END_UTC" +%s)
+
+          if [ "$start_epoch" -ge "$end_epoch" ]; then
+            echo "Invalid release window boundaries: $START_UTC -> $END_UTC" >&2
+            exit 1
+          fi
+
+          start_sha=$(git rev-list -1 --before="$START_UTC" origin/main || true)
+          end_sha=$(git rev-list -1 --before="$END_UTC" origin/main || true)
+
+          if [ -z "$end_sha" ]; then
+            echo "No main branch commit was found at or before $END_UTC." >&2
+            exit 1
+          fi
+
+          release_sha="$end_sha"
+          commit_count=0
+          compare_url=""
+
+          if [ -z "$start_sha" ]; then
+            commit_count=$(git rev-list --count "$end_sha")
+            compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commits/${release_sha}"
+          elif [ "$start_sha" != "$end_sha" ]; then
+            commit_count=$(git rev-list --count "${start_sha}..${end_sha}")
+            compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${start_sha}...${end_sha}"
+          fi
+
+          if [ "$commit_count" -gt 0 ]; then
+            should_release=true
+          else
+            should_release=false
+          fi
+
+          {
+            echo "commit_count=$commit_count"
+            echo "compare_url=$compare_url"
+            echo "release_sha=$release_sha"
+            echo "should_release=$should_release"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Release window: $START_UTC -> $END_UTC"
+          echo "Window start snapshot: ${start_sha:-none}"
+          echo "Window end snapshot: $end_sha"
+          echo "Commits on main introduced in the release window: $commit_count"
+          echo "Release candidate SHA: $release_sha"
 
       - name: Write detection summary
         shell: bash
