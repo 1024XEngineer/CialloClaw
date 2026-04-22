@@ -57,6 +57,10 @@ func TestSupplementalExecutionBoundaryAssetsSkipsUnusedBoundaries(t *testing.T) 
 	if len(refs) != 0 {
 		t.Fatalf("expected no supplemental boundary assets when model and perception boundaries were unused, got %+v", refs)
 	}
+	refs = supplementalExecutionBoundaryAssets(Request{}, Result{ModelInvocation: map[string]any{"provider": "budget_downgrade_fallback"}}, modelService)
+	if len(refs) != 0 {
+		t.Fatalf("expected synthetic fallback provider markers not to resolve provider route assets, got %+v", refs)
+	}
 	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{}) {
 		t.Fatal("expected empty snapshot not to require perception package attribution")
 	}

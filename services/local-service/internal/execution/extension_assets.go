@@ -26,6 +26,10 @@ func modelProviderRouteRef(modelService *model.Service, result Result) (storage.
 	if modelService == nil || len(result.ModelInvocation) == 0 {
 		return storage.ExtensionAssetReference{}, false
 	}
+	invocationProvider := strings.TrimSpace(stringValue(result.ModelInvocation, "provider", ""))
+	if invocationProvider == "" || invocationProvider != strings.TrimSpace(modelService.Provider()) {
+		return storage.ExtensionAssetReference{}, false
+	}
 	descriptor, ok := model.LookupProviderDescriptor(modelService.Provider())
 	if !ok || strings.TrimSpace(descriptor.Name) == "" {
 		return storage.ExtensionAssetReference{}, false
