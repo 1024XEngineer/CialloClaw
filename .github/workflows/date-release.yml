@@ -73,58 +73,70 @@ jobs:
             const repo = context.repo.repo;
             const startUtc = process.env.START_UTC;
             const endUtc = process.env.END_UTC;
-            const listLatestCommitAtOrBefore = async (cutoffUtc) => {
-              const { data } = await github.rest.repos.listCommits({
-                owner,
-                repo,
-                sha: "main",
-                until: cutoffUtc,
-                per_page: 1,
-              });
-              return data[0] ?? null;
-            };
+            const startEpoch = Date.parse(startUtc);
+            const endEpoch = Date.parse(endUtc);
 
-            const startSnapshot = await listLatestCommitAtOrBefore(startUtc);
-            const endSnapshot = await listLatestCommitAtOrBefore(endUtc);
-
-            if (!endSnapshot) {
-              core.setFailed(`No main branch commit was found at or before ${endUtc}.`);
+            if (Number.isNaN(startEpoch) || Number.isNaN(endEpoch)) {
+              core.setFailed(`Invalid release window boundaries: ${startUtc} -> ${endUtc}`);
               return;
             }
 
-            const releaseSha = endSnapshot.sha;
+            const allEvents = await github.paginate(github.rest.activity.listRepoEvents, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            const windowPushes = allEvents
+              .filter((event) => event.type === "PushEvent")
+              .filter((event) => event.payload?.ref === "refs/heads/main")
+              .filter((event) => {
+                const createdAt = Date.parse(event.created_at);
+                return createdAt > startEpoch && createdAt <= endEpoch;
+              })
+              .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at));
+
+            const shouldRelease = windowPushes.length > 0;
+            const releaseSha = shouldRelease ? windowPushes[windowPushes.length - 1].payload.head : "";
             let commitCount = 0;
             let compareUrl = "";
+            let compareBase = "";
 
-            if (!startSnapshot) {
-              const historyUntilEnd = await github.paginate(github.rest.repos.listCommits, {
-                owner,
-                repo,
-                sha: "main",
-                until: endUtc,
-                per_page: 100,
-              });
+            if (shouldRelease) {
+              const firstPush = windowPushes[0];
+              compareBase = firstPush.payload.before ?? "";
+              const hasCompareBase =
+                compareBase &&
+                compareBase !== "0000000000000000000000000000000000000000" &&
+                compareBase !== releaseSha;
 
-              commitCount = historyUntilEnd.length;
-              compareUrl = `${context.serverUrl}/${owner}/${repo}/commits/${releaseSha}`;
-            } else if (startSnapshot.sha !== endSnapshot.sha) {
-              const compare = await github.rest.repos.compareCommitsWithBasehead({
-                owner,
-                repo,
-                basehead: `${startSnapshot.sha}...${endSnapshot.sha}`,
-              });
+              if (hasCompareBase) {
+                const compare = await github.rest.repos.compareCommitsWithBasehead({
+                  owner,
+                  repo,
+                  basehead: `${compareBase}...${releaseSha}`,
+                });
 
-              commitCount = compare.data.ahead_by;
-              compareUrl = compare.data.html_url;
+                commitCount = compare.data.ahead_by;
+                compareUrl = compare.data.html_url;
+              } else {
+                commitCount = windowPushes.reduce((total, event) => {
+                  const distinctSize = Number(event.payload?.distinct_size ?? event.payload?.size ?? 0);
+                  return total + distinctSize;
+                }, 0);
+                compareUrl = `${context.serverUrl}/${owner}/${repo}/commits/${releaseSha}`;
+              }
             }
 
-            const shouldRelease = commitCount > 0;
-
             core.info(`Release window: ${startUtc} -> ${endUtc}`);
-            core.info(`Window start snapshot: ${startSnapshot?.sha ?? "none"}`);
-            core.info(`Window end snapshot: ${endSnapshot.sha}`);
-            core.info(`Commits on main introduced in the release window: ${commitCount}`);
-            core.info(`Release candidate SHA: ${releaseSha}`);
+            core.info(`Pushes on main during the release window: ${windowPushes.length}`);
+            if (shouldRelease) {
+              core.info(`Window compare base: ${compareBase || "none"}`);
+              core.info(`Commits introduced on main in the release window: ${commitCount}`);
+              core.info(`Release candidate SHA: ${releaseSha}`);
+            } else {
+              core.info("No pushes on main were recorded in the release window.");
+            }
 
             core.setOutput("commit_count", String(commitCount));
             core.setOutput("compare_url", compareUrl);
