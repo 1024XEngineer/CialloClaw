@@ -578,6 +578,7 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 		RunID:      "run_loop_001",
 		TaskID:     "task_loop_001",
 		SessionID:  "sess_loop_001",
+		SourceType: "hover_input",
 		Status:     "completed",
 		IntentName: "agent_loop",
 		StartedAt:  "2026-04-17T10:00:00Z",
@@ -656,6 +657,13 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	assertTableCount(t, sqliteStore.db, "runs", 1)
 	assertTableCount(t, sqliteStore.db, "steps", 1)
+	var runSourceType string
+	if err := sqliteStore.db.QueryRow(`SELECT source_type FROM runs WHERE run_id = ?`, "run_loop_001").Scan(&runSourceType); err != nil {
+		t.Fatalf("query run source_type failed: %v", err)
+	}
+	if runSourceType != "hover_input" {
+		t.Fatalf("expected run source_type to persist, got %s", runSourceType)
+	}
 	var attemptIndex int
 	var segmentKind string
 	if err := sqliteStore.db.QueryRow(`SELECT attempt_index, segment_kind FROM steps WHERE step_id = ?`, "step_loop_001").Scan(&attemptIndex, &segmentKind); err != nil {

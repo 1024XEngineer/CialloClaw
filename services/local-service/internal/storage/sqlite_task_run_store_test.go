@@ -40,11 +40,15 @@ func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].TaskID != record.TaskID || records[0].RunID != record.RunID {
 		t.Fatalf("unexpected task run record: %+v", records[0])
 	}
+	loadedRecord, err := store.GetTaskRun(context.Background(), record.TaskID)
+	if err != nil || loadedRecord.RequestSource != "floating_ball" || loadedRecord.RequestTrigger != "hover_text_input" {
+		t.Fatalf("expected GetTaskRun to preserve request metadata, record=%+v err=%v", loadedRecord, err)
+	}
 	taskItems, taskTotal, err := store.taskStore.ListTasks(context.Background(), 10, 0)
 	if err != nil || taskTotal != 1 || len(taskItems) != 1 {
 		t.Fatalf("expected one first-class task record, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
 	}
-	if taskItems[0].TaskID != record.TaskID || taskItems[0].IntentName != "summarize" {
+	if taskItems[0].TaskID != record.TaskID || taskItems[0].IntentName != "summarize" || taskItems[0].PrimaryRunID != record.RunID || taskItems[0].RequestSource != "floating_ball" || taskItems[0].RequestTrigger != "hover_text_input" {
 		t.Fatalf("unexpected first-class task record: %+v", taskItems[0])
 	}
 	stepItems, stepTotal, err := store.stepStore.ListTaskSteps(context.Background(), record.TaskID, 10, 0)
@@ -129,6 +133,10 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].TaskID != taskID || records[0].RunID != runID {
 		t.Fatalf("unexpected loaded record: %+v", records[0])
 	}
+	loadedRecord, err := store.GetTaskRun(context.Background(), taskID)
+	if err != nil || loadedRecord.RequestSource != "floating_ball" || loadedRecord.RequestTrigger != "hover_text_input" {
+		t.Fatalf("expected sqlite GetTaskRun to preserve request metadata, record=%+v err=%v", loadedRecord, err)
+	}
 	if records[0].ExecutionAttempt != 1 {
 		t.Fatalf("expected execution attempt to default to 1, got %d", records[0].ExecutionAttempt)
 	}
@@ -195,6 +203,51 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	taskItems, taskTotal, err = store.taskStore.ListTasks(context.Background(), 10, 0)
 	if err != nil || taskTotal != 0 || len(taskItems) != 0 {
 		t.Fatalf("expected sqlite structured task record to be deleted, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
+	}
+}
+
+func TestTaskRunStoresLoadLegacyTaskRunsOnlyForMissingStructuredRows(t *testing.T) {
+	inMemory := NewInMemoryTaskRunStore()
+	first := sampleTaskRunRecord()
+	second := sampleTaskRunRecord()
+	second.TaskID = "task_legacy_only"
+	second.RunID = "run_legacy_only"
+	second.Timeline[0].StepID = "step_legacy_only"
+	second.Timeline[0].TaskID = second.TaskID
+	second.StartedAt = second.StartedAt.Add(5 * time.Minute)
+	second.UpdatedAt = second.UpdatedAt.Add(5 * time.Minute)
+	if err := inMemory.SaveTaskRun(context.Background(), first); err != nil {
+		t.Fatalf("in-memory SaveTaskRun first returned error: %v", err)
+	}
+	if err := inMemory.SaveTaskRun(context.Background(), second); err != nil {
+		t.Fatalf("in-memory SaveTaskRun second returned error: %v", err)
+	}
+	if err := inMemory.taskStore.DeleteTask(context.Background(), second.TaskID); err != nil {
+		t.Fatalf("in-memory DeleteTask returned error: %v", err)
+	}
+	legacyRecords, err := inMemory.LoadLegacyTaskRuns(context.Background(), []string{first.TaskID})
+	if err != nil || len(legacyRecords) != 1 || legacyRecords[0].TaskID != second.TaskID {
+		t.Fatalf("expected in-memory legacy task run filter to keep only missing structured rows, records=%+v err=%v", legacyRecords, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "task-runs-legacy.db")
+	sqliteStore, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = sqliteStore.Close() }()
+	if err := sqliteStore.SaveTaskRun(context.Background(), first); err != nil {
+		t.Fatalf("sqlite SaveTaskRun first returned error: %v", err)
+	}
+	if err := sqliteStore.SaveTaskRun(context.Background(), second); err != nil {
+		t.Fatalf("sqlite SaveTaskRun second returned error: %v", err)
+	}
+	if err := sqliteStore.taskStore.DeleteTask(context.Background(), second.TaskID); err != nil {
+		t.Fatalf("sqlite DeleteTask returned error: %v", err)
+	}
+	legacyRecords, err = sqliteStore.LoadLegacyTaskRuns(context.Background(), []string{first.TaskID})
+	if err != nil || len(legacyRecords) != 1 || legacyRecords[0].TaskID != second.TaskID {
+		t.Fatalf("expected sqlite legacy task run filter to keep only missing structured rows, records=%+v err=%v", legacyRecords, err)
 	}
 }
 
@@ -453,6 +506,8 @@ func sampleTaskRunRecord() TaskRunRecord {
 		TaskID:            "task_001",
 		SessionID:         "sess_001",
 		RunID:             "run_001",
+		RequestSource:     "floating_ball",
+		RequestTrigger:    "hover_text_input",
 		ExecutionAttempt:  1,
 		Title:             "sqlite task record",
 		SourceType:        "hover_input",
