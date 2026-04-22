@@ -79,7 +79,7 @@
 
 ### 3.3 关键对象说明
 
-- `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点。
+- `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点；当前允许后端写回隐藏协作会话的 `session_id`，用于延续同一轮桌面任务。
 - `run`：执行对象，是后端编排和工具链的运行实例。
 - `bubble_message`：轻量承接对象，用于状态反馈和短结果返回。
 - `delivery_result`：正式交付对象，统一描述结果以气泡、文档、结果页、打开文件或任务详情交付。
@@ -618,6 +618,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - 若客户端后续改为通过 `agent.task.start` 显式提交 `intent.name = screen_analyze`，后端应复用同一条主链路；`agent.input.submit` 不需要新增平行入口。
+- 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
 
 ### agent.input.submit 入参示例
 
@@ -672,6 +673,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
 | `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
 | `data.task.title`        | 任务标题                         |
 | `data.task.source_type`  | 任务来源类型                     |
 | `data.task.status`       | 当前任务状态                     |
@@ -690,6 +692,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_001",
+        "session_id": "sess_001",
         "title": "整理当前页面内容",
         "source_type": "hover_input",
         "status": "processing",
@@ -758,6 +761,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - 若客户端已显式提供 `intent.name = screen_analyze`，后端应复用同一条主链路；若客户端未显式提供 intent，也不应要求前端额外发明平行入口。
+- 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
 
 ### agent.task.start 入参示例
 
@@ -804,6 +808,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
 | `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
 | `data.task.title`        | 任务标题                         |
 | `data.task.source_type`  | 任务来源类型                     |
 | `data.task.status`       | 当前任务状态                     |
@@ -822,6 +827,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_101",
+        "session_id": "sess_001",
         "title": "解释选中文本",
         "source_type": "selected_text",
         "status": "processing",
@@ -1477,6 +1483,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------------- | -------- |
 | `data.items`                | 任务列表 |
 | `data.items[].task_id`      | 任务 ID  |
+| `data.items[].session_id`   | 任务归属的隐藏协作会话 ID |
 | `data.items[].title`        | 任务标题 |
 | `data.items[].status`       | 任务状态 |
 | `data.items[].current_step` | 当前步骤 |
@@ -1494,6 +1501,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "items": [
         {
           "task_id": "task_201",
+          "session_id": "sess_001",
           "title": "整理 Q3 复盘要点",
           "source_type": "hover_input",
           "status": "processing",
@@ -1569,6 +1577,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明       |
 | ------------------------ | -------------- |
 | `data.task`              | 任务基础信息   |
+| `data.task.session_id`   | 任务归属的隐藏协作会话 ID |
 | `data.timeline`          | 步骤时间线     |
 | `data.delivery_result`   | 最新正式交付结果；若当前任务尚未形成正式交付则返回 `null` |
 | `data.artifacts`         | 产出物列表     |
@@ -1592,6 +1601,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_201",
+        "session_id": "sess_001",
         "title": "整理 Q3 复盘要点",
         "status": "processing",
         "source_type": "hover_input",

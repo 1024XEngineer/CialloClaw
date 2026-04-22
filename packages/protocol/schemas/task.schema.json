@@ -16,6 +16,7 @@
   ],
   "properties": {
     "task_id": { "type": "string" },
+    "session_id": { "type": ["string", "null"] },
     "title": { "type": "string" },
     "source_type": {
       "enum": ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"]
