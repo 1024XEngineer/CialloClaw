@@ -52,6 +52,9 @@ func TestServiceRuntimeLifecycleAndSnapshots(t *testing.T) {
 	if len(manifests) != 3 {
 		t.Fatalf("expected one manifest per declared plugin, got %+v", manifests)
 	}
+	if manifests[0].Summary == "" || manifests[1].Summary == "" || manifests[2].Summary == "" {
+		t.Fatalf("expected built-in manifests to expose summaries, got %+v", manifests)
+	}
 	if metrics[0].Name != "playwright_worker" || metrics[1].Name != "ocr_worker" || metrics[2].Name != "media_worker" {
 		t.Fatalf("expected metric snapshots to follow declaration order, got %+v", metrics)
 	}
