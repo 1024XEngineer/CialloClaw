@@ -256,7 +256,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const pressCaptureLockRef = useRef(false);
   const mascotRef = useRef<HTMLDivElement>(null);
-  const lastReportedMascotRegionRef = useRef<string>("");
+  const lastReportedInteractiveRegionsRef = useRef<string>("");
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
@@ -327,37 +327,46 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   };
   windowFrameRef.current = windowFrame;
 
-  const reportMascotHotspotRegion = useCallback(async () => {
+  const reportInteractiveRegions = useCallback(async () => {
     const currentWindow = getCurrentWindow();
 
     if (currentWindow.label !== shellBallWindowLabels.ball) {
       return;
     }
 
-    const hotspot = mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot");
-    if (hotspot === null || hotspot === undefined) {
-      await setShellBallInteractiveRegions([]);
-      lastReportedMascotRegionRef.current = "";
-      return;
-    }
-
-    const rect = hotspot.getBoundingClientRect();
     const scaleFactor = await currentWindow.scaleFactor();
-    const region = {
-      x: Math.round(rect.left * scaleFactor),
-      y: Math.round(rect.top * scaleFactor),
-      width: Math.max(1, Math.round(rect.width * scaleFactor)),
-      height: Math.max(1, Math.round(rect.height * scaleFactor)),
-    };
-    const signature = JSON.stringify(region);
+    const regionElements = [
+      mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot") ?? null,
+      rootRef.current?.querySelector<HTMLElement>(".shell-ball-window--input textarea") ?? null,
+      ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-window--input .shell-ball-uiverse-action") ?? []),
+      rootRef.current?.querySelector<HTMLElement>(".shell-ball-bubble-zone__scroll") ?? null,
+    ].filter((element): element is HTMLElement => element !== null);
 
-    if (signature === lastReportedMascotRegionRef.current) {
+    if (regionElements.length === 0) {
+      await setShellBallInteractiveRegions([]);
+      lastReportedInteractiveRegionsRef.current = "";
       return;
     }
 
-    lastReportedMascotRegionRef.current = signature;
-    await setShellBallInteractiveRegions([region]);
-  }, []);
+    const regions = regionElements.map((element) => {
+      const rect = element.getBoundingClientRect();
+
+      return {
+        x: Math.round(rect.left * scaleFactor),
+        y: Math.round(rect.top * scaleFactor),
+        width: Math.max(1, Math.round(rect.width * scaleFactor)),
+        height: Math.max(1, Math.round(rect.height * scaleFactor)),
+      };
+    });
+    const signature = JSON.stringify(regions);
+
+    if (signature === lastReportedInteractiveRegionsRef.current) {
+      return;
+    }
+
+    lastReportedInteractiveRegionsRef.current = signature;
+    await setShellBallInteractiveRegions(regions);
+  }, [rootRef]);
 
   const focusInlineInputField = useCallback((syncInteraction = true) => {
     if (syncInteraction) {
@@ -586,9 +595,9 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     void (async () => {
-      await reportMascotHotspotRegion();
+      await reportInteractiveRegions();
     })();
-  }, [reportMascotHotspotRegion, windowFrame]);
+  }, [reportInteractiveRegions, shouldRenderInlineInput, snapshot.visibility.bubble, visibleBubbleItems, windowFrame]);
 
   useEffect(() => {
     // Reset native mascot hotspot state only when the shell-ball host actually
@@ -596,7 +605,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     return () => {
       void setShellBallInteractiveRegions([]);
       void setShellBallPressLock(false);
-      lastReportedMascotRegionRef.current = "";
+      lastReportedInteractiveRegionsRef.current = "";
     };
   }, []);
 
@@ -605,8 +614,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       return;
     }
 
-    void reportMascotHotspotRegion();
-  }, [snapshot.visibility.bubble, inputFocused, reportMascotHotspotRegion]);
+    void reportInteractiveRegions();
+  }, [inputFocused, reportInteractiveRegions]);
 
   function handleDoubleClick() {
     if (!shouldOpenDashboardFromDoubleClick) {
