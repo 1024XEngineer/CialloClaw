@@ -139,6 +139,9 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 	if len(continuationContext.Candidates) == 0 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "no unfinished candidate task"}
 	}
+	if decision, ok := deterministicTaskContinuationDecision(snapshot, continuationContext); ok {
+		return decision
+	}
 	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
@@ -188,17 +191,18 @@ func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, expli
 	parts := []string{
 		fmt.Sprintf("trigger=%s", snapshot.Trigger),
 		fmt.Sprintf("input_type=%s", snapshot.InputType),
+		fmt.Sprintf("input_shape=%s", taskContinuationInputShape(snapshot)),
 		fmt.Sprintf("has_text=%t", strings.TrimSpace(snapshot.Text) != ""),
 		fmt.Sprintf("has_selection=%t", strings.TrimSpace(snapshot.SelectionText) != ""),
 		fmt.Sprintf("has_error=%t", strings.TrimSpace(snapshot.ErrorText) != ""),
 		fmt.Sprintf("file_count=%d", len(snapshot.Files)),
-		fmt.Sprintf("has_page_context=%t", strings.TrimSpace(snapshot.PageTitle) != "" || strings.TrimSpace(snapshot.PageURL) != "" || strings.TrimSpace(snapshot.WindowTitle) != ""),
+		fmt.Sprintf("has_page_url=%t", strings.TrimSpace(snapshot.PageURL) != ""),
+		fmt.Sprintf("has_window_title=%t", strings.TrimSpace(snapshot.WindowTitle) != ""),
+		fmt.Sprintf("has_app_name=%t", strings.TrimSpace(snapshot.AppName) != ""),
+		fmt.Sprintf("has_hover_target=%t", strings.TrimSpace(snapshot.HoverTarget) != ""),
 		fmt.Sprintf("has_screen_context=%t", strings.TrimSpace(snapshot.ScreenSummary) != "" || strings.TrimSpace(snapshot.VisibleText) != ""),
-		fmt.Sprintf("continuation_markers=%s", continuationMarkerSummary(snapshot)),
 	}
-	if intentName := strings.TrimSpace(stringValue(explicitIntent, "name", "")); intentName != "" {
-		parts = append(parts, "explicit_intent_name="+intentName)
-	}
+	parts = append(parts, fmt.Sprintf("explicit_intent_present=%t", strings.TrimSpace(stringValue(explicitIntent, "name", "")) != ""))
 	return strings.Join(parts, " | ")
 }
 
@@ -209,13 +213,17 @@ func taskContinuationCandidateSummary(task runengine.TaskRecord) string {
 		fmt.Sprintf("current_step=%s", task.CurrentStep),
 		fmt.Sprintf("source_type=%s", task.SourceType),
 		fmt.Sprintf("age_seconds=%d", int(time.Since(task.UpdatedAt).Seconds())),
+		fmt.Sprintf("awaits_follow_up=%t", task.Status == "waiting_input" || task.Status == "confirming_intent"),
+		fmt.Sprintf("has_selection=%t", strings.TrimSpace(task.Snapshot.SelectionText) != ""),
+		fmt.Sprintf("has_error=%t", strings.TrimSpace(task.Snapshot.ErrorText) != ""),
 		fmt.Sprintf("has_files=%t", len(task.Snapshot.Files) > 0),
-		fmt.Sprintf("has_page_context=%t", strings.TrimSpace(task.Snapshot.PageTitle) != "" || strings.TrimSpace(task.Snapshot.PageURL) != "" || strings.TrimSpace(task.Snapshot.WindowTitle) != ""),
+		fmt.Sprintf("has_page_url=%t", strings.TrimSpace(task.Snapshot.PageURL) != ""),
+		fmt.Sprintf("has_window_title=%t", strings.TrimSpace(task.Snapshot.WindowTitle) != ""),
+		fmt.Sprintf("has_app_name=%t", strings.TrimSpace(task.Snapshot.AppName) != ""),
+		fmt.Sprintf("has_hover_target=%t", strings.TrimSpace(task.Snapshot.HoverTarget) != ""),
 		fmt.Sprintf("has_screen_context=%t", strings.TrimSpace(task.Snapshot.ScreenSummary) != "" || strings.TrimSpace(task.Snapshot.VisibleText) != ""),
 	}
-	if intentName := strings.TrimSpace(stringValue(task.Intent, "name", "")); intentName != "" {
-		parts = append(parts, "intent="+intentName)
-	}
+	parts = append(parts, fmt.Sprintf("has_intent=%t", strings.TrimSpace(stringValue(task.Intent, "name", "")) != ""))
 	return strings.Join(parts, " | ")
 }
 
@@ -244,64 +252,174 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 	return taskContinuationDecision{}, false
 }
 
+// deterministicTaskContinuationDecision handles the safe local decisions that
+// do not need model inference. The goal is to prefer formal waiting states and
+// strong context anchors over brittle free-text cue matching.
+func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
+	if len(continuationContext.Candidates) != 1 {
+		return taskContinuationDecision{}, false
+	}
+	candidate := continuationContext.Candidates[0]
+	evidence := buildTaskContinuationEvidence(snapshot, snapshotFromTask(candidate))
+	if evidence.HasConflictingAnchor {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "input context conflicts with the unfinished task anchors",
+		}, true
+	}
+
+	switch candidate.Status {
+	case "waiting_input", "confirming_intent":
+		if continuationContext.SessionMode == "explicit_active" {
+			return taskContinuationDecision{
+				Decision: "continue",
+				TaskID:   candidate.TaskID,
+				Reason:   "explicit session task is already waiting for follow-up input",
+			}, true
+		}
+		if evidence.HasStrongAnchor || evidence.StructuredSupplement || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor) {
+			return taskContinuationDecision{
+				Decision: "continue",
+				TaskID:   candidate.TaskID,
+				Reason:   "unfinished task is explicitly waiting for follow-up input",
+			}, true
+		}
+	case "processing":
+		if evidence.HasLineageMatch || (evidence.HasStrongAnchor && evidence.StructuredSupplement) {
+			return taskContinuationDecision{
+				Decision: "continue",
+				TaskID:   candidate.TaskID,
+				Reason:   "strong continuation anchors match the active processing task",
+			}, true
+		}
+	}
+	return taskContinuationDecision{}, false
+}
+
 func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, continuationContext taskContinuationContext) taskContinuationDecision {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "multiple unfinished candidates"}
 	}
-	candidate := continuationContext.Candidates[0]
-	if shouldHeuristicallyContinueTask(snapshot, candidate) {
-		return taskContinuationDecision{
-			Decision: "continue",
-			TaskID:   candidate.TaskID,
-			Reason:   "fallback follow-up heuristic matched the latest unfinished task",
-		}
+	if decision, ok := deterministicTaskContinuationDecision(snapshot, continuationContext); ok {
+		return decision
 	}
-	return taskContinuationDecision{Decision: "new_task", Reason: "fallback heuristic treated the input as a new top-level request"}
+	return taskContinuationDecision{
+		Decision: "new_task",
+		Reason:   "fallback heuristic opened a fresh task because structured continuation evidence was insufficient",
+	}
 }
 
-// shouldHeuristicallyContinueTask is intentionally conservative because it
-// only runs when the classifier model is unavailable. It should recover
-// obvious follow-up edits, but prefer a fresh task over silently grafting a
-// different request onto the wrong task.
-func shouldHeuristicallyContinueTask(snapshot contextsvc.TaskContextSnapshot, candidate runengine.TaskRecord) bool {
-	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.SelectionText, snapshot.ErrorText}, " "))
-	if !continuationContainsAny(combined,
-		"补充",
-		"继续",
-		"不要",
-		"改成",
-		"改为",
-		"follow-up",
-		"continue",
-		"instead",
-		"also include",
-		"attach this",
-	) {
-		return false
-	}
-	if sameContinuationContext(snapshot, snapshotFromTask(candidate)) {
-		return true
-	}
-	// Pending clarification tasks are the only safe context-less fallback case:
-	// the backend already asked the user for more input and has not entered an
-	// approval gate or autonomous execution segment yet.
-	return candidate.Status == "waiting_input" || candidate.Status == "confirming_intent"
+type taskContinuationEvidence struct {
+	HasStrongAnchor          bool
+	HasLineageMatch          bool
+	HasConflictingAnchor     bool
+	StructuredSupplement     bool
+	CurrentHasContextAnchor  bool
+	PreviousHasContextAnchor bool
 }
 
-func sameContinuationContext(current, previous contextsvc.TaskContextSnapshot) bool {
-	if strings.TrimSpace(current.PageURL) != "" && current.PageURL == previous.PageURL {
+func buildTaskContinuationEvidence(current, previous contextsvc.TaskContextSnapshot) taskContinuationEvidence {
+	samePageURL := sameNonEmpty(current.PageURL, previous.PageURL)
+	sameHoverTarget := sameNonEmpty(current.HoverTarget, previous.HoverTarget)
+	sameSelectionText := sameNonEmpty(current.SelectionText, previous.SelectionText)
+	sameErrorText := sameNonEmpty(current.ErrorText, previous.ErrorText)
+	sharedFiles := sharedContinuationFiles(current.Files, previous.Files)
+	sameWindowAnchor := sameNonEmpty(current.WindowTitle, previous.WindowTitle) && sameNonEmpty(current.AppName, previous.AppName)
+	samePageAnchor := sameNonEmpty(current.PageTitle, previous.PageTitle) && sameNonEmpty(current.AppName, previous.AppName)
+
+	return taskContinuationEvidence{
+		HasStrongAnchor:          samePageURL || sameHoverTarget || sameWindowAnchor || samePageAnchor || sameSelectionText || sameErrorText || sharedFiles,
+		HasLineageMatch:          sameSelectionText || sameErrorText || sharedFiles,
+		HasConflictingAnchor:     hasConflictingContextAnchor(current, previous),
+		StructuredSupplement:     isStructuredSupplementInput(current),
+		CurrentHasContextAnchor:  hasSnapshotContextAnchor(current),
+		PreviousHasContextAnchor: hasSnapshotContextAnchor(previous),
+	}
+}
+
+func taskContinuationInputShape(snapshot contextsvc.TaskContextSnapshot) string {
+	switch {
+	case isStructuredSupplementInput(snapshot) && strings.TrimSpace(snapshot.Text) != "" && snapshot.InputType == "text":
+		return "mixed"
+	case len(snapshot.Files) > 0 && strings.TrimSpace(snapshot.SelectionText) == "" && strings.TrimSpace(snapshot.ErrorText) == "":
+		return "attachment_only"
+	case strings.TrimSpace(snapshot.ErrorText) != "" && len(snapshot.Files) == 0 && strings.TrimSpace(snapshot.SelectionText) == "":
+		return "error_only"
+	case strings.TrimSpace(snapshot.SelectionText) != "" && len(snapshot.Files) == 0 && strings.TrimSpace(snapshot.ErrorText) == "":
+		return "selection_only"
+	case strings.TrimSpace(snapshot.Text) != "":
+		return "plain_text"
+	default:
+		return "empty"
+	}
+}
+
+func isStructuredSupplementInput(snapshot contextsvc.TaskContextSnapshot) bool {
+	return snapshot.InputType == "file" ||
+		snapshot.InputType == "text_selection" ||
+		snapshot.InputType == "error" ||
+		len(snapshot.Files) > 0 ||
+		strings.TrimSpace(snapshot.SelectionText) != "" ||
+		strings.TrimSpace(snapshot.ErrorText) != ""
+}
+
+func hasSnapshotContextAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
+	return strings.TrimSpace(snapshot.PageURL) != "" ||
+		strings.TrimSpace(snapshot.WindowTitle) != "" ||
+		strings.TrimSpace(snapshot.AppName) != "" ||
+		strings.TrimSpace(snapshot.PageTitle) != "" ||
+		strings.TrimSpace(snapshot.HoverTarget) != ""
+}
+
+func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapshot) bool {
+	if nonEmptyAndDifferent(current.PageURL, previous.PageURL) {
 		return true
 	}
-	if strings.TrimSpace(current.PageTitle) != "" && current.PageTitle == previous.PageTitle {
+	if nonEmptyAndDifferent(current.AppName, previous.AppName) {
 		return true
 	}
-	if strings.TrimSpace(current.WindowTitle) != "" && current.WindowTitle == previous.WindowTitle {
-		return true
-	}
-	if strings.TrimSpace(current.AppName) != "" && current.AppName == previous.AppName {
+	if strings.TrimSpace(current.PageURL) == "" && strings.TrimSpace(previous.PageURL) == "" &&
+		sameNonEmpty(current.AppName, previous.AppName) &&
+		nonEmptyAndDifferent(current.WindowTitle, previous.WindowTitle) {
 		return true
 	}
 	return false
+}
+
+func sharedContinuationFiles(current, previous []string) bool {
+	if len(current) == 0 || len(previous) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(previous))
+	for _, value := range previous {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+	}
+	for _, value := range current {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func sameNonEmpty(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	return left != "" && left == right
+}
+
+func nonEmptyAndDifferent(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	return left != "" && right != "" && left != right
 }
 
 func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision) (map[string]any, error) {
@@ -489,20 +607,6 @@ func buildTaskContinuationInstruction(snapshot contextsvc.TaskContextSnapshot, e
 	return strings.Join(parts, "\n\n")
 }
 
-func continuationMarkerSummary(snapshot contextsvc.TaskContextSnapshot) string {
-	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.SelectionText, snapshot.ErrorText}, " "))
-	markers := make([]string, 0, 6)
-	for _, marker := range []string{"补充", "继续", "不要", "改成", "改为", "follow-up", "continue", "instead", "also include", "attach this"} {
-		if marker != "" && strings.Contains(combined, strings.ToLower(marker)) {
-			markers = append(markers, marker)
-		}
-	}
-	if len(markers) == 0 {
-		return "none"
-	}
-	return strings.Join(markers, ",")
-}
-
 func (s *Service) sessionIsFresh(sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -608,13 +712,4 @@ func dedupeContinuationFiles(base, update []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
-}
-
-func continuationContainsAny(text string, markers ...string) bool {
-	for _, marker := range markers {
-		if marker != "" && strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
 }

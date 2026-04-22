@@ -10318,9 +10318,6 @@ func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 	if task["session_id"] != activeSessionID {
 		t.Fatalf("expected follow-up to keep session %s, got %+v", activeSessionID, task)
 	}
-	if followUpResult["delivery_result"] != nil {
-		t.Fatalf("expected continued task not to emit immediate delivery result, got %+v", followUpResult["delivery_result"])
-	}
 	record, ok := service.runEngine.GetTask(activeTaskID)
 	if !ok {
 		t.Fatal("expected continued task to remain in runtime")

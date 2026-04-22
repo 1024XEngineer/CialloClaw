@@ -121,9 +121,120 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	if !strings.Contains(prompt, "task_id=task_001") {
 		t.Fatalf("expected prompt to retain stable task identifiers, got %s", prompt)
 	}
+	if strings.Contains(prompt, "continuation_markers=") {
+		t.Fatalf("expected prompt to stop relying on continuation markers, got %s", prompt)
+	}
 }
 
-func TestHeuristicTaskContinuationDecisionDoesNotAutoMergeBareFileDrop(t *testing.T) {
+func TestCanContinueTaskOnlyAllowsExplicitFollowUpAndProcessingStates(t *testing.T) {
+	for _, status := range []string{"waiting_input", "confirming_intent", "processing"} {
+		if !canContinueTask(runengine.TaskRecord{Status: status}) {
+			t.Fatalf("expected %s to remain continuation-eligible", status)
+		}
+	}
+	for _, status := range []string{"waiting_auth", "paused", "blocked", "failed", "completed"} {
+		if canContinueTask(runengine.TaskRecord{Status: status}) {
+			t.Fatalf("expected %s to be excluded from continuation eligibility", status)
+		}
+	}
+}
+
+func TestClassifyTaskContinuationContinuesExplicitWaitingTaskWithoutSignalWords(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "hover_text_input",
+			InputType: "text",
+			Text:      "把输出换成表格格式。",
+		},
+		nil,
+		taskContinuationContext{
+			SessionID:   "sess_active",
+			SessionMode: "explicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				SessionID:   "sess_active",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+			}},
+		},
+	)
+
+	if decision.Decision != "continue" || decision.TaskID != "task_001" {
+		t.Fatalf("expected explicit waiting task to continue without signal words, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "hover_text_input",
+			InputType: "text",
+			Text:      "检查新的报错。",
+			PageURL:   "https://example.com/build-b",
+			AppName:   "Chrome",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+				Snapshot: contextsvc.TaskContextSnapshot{
+					PageURL: "https://example.com/build-a",
+					AppName: "Chrome",
+				},
+			}},
+		},
+	)
+
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected conflicting anchors to force a new task, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEvidence(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "file_drop",
+			InputType: "file",
+			Files:     []string{"logs/network.log"},
+			PageURL:   "https://example.com/build",
+			AppName:   "Chrome",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "processing",
+				CurrentStep: "agent_loop",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+				Snapshot: contextsvc.TaskContextSnapshot{
+					PageURL: "https://example.com/build",
+					AppName: "Chrome",
+				},
+			}},
+		},
+	)
+
+	if decision.Decision != "continue" || decision.TaskID != "task_001" {
+		t.Fatalf("expected strong context plus attachment evidence to continue the processing task, got %+v", decision)
+	}
+}
+
+func TestHeuristicTaskContinuationDecisionDoesNotAutoMergeBareFileDropWithoutAnchors(t *testing.T) {
 	decision := heuristicTaskContinuationDecision(
 		contextsvc.TaskContextSnapshot{
 			Trigger:   "file_drop",
