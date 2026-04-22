@@ -335,7 +335,7 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_stronghold_access_failed",
 		}
 	}
-	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) || errors.Is(err, storage.ErrSecretNotFound) || errors.Is(err, model.ErrSecretSourceFailed) || errors.Is(err, model.ErrSecretNotFound) {
+	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) || errors.Is(err, storage.ErrSecretNotFound) || errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrSecretSourceFailed) || errors.Is(err, model.ErrSecretNotFound) {
 		return nil, &rpcError{
 			Code:    1005004,
 			Message: "STRONGHOLD_ACCESS_FAILED",
@@ -359,7 +359,7 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_model_provider_not_found",
 		}
 	}
-	if errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) || errors.Is(err, model.ErrOpenAIRequestFailed) || errors.Is(err, model.ErrOpenAIRequestTimeout) || errors.Is(err, model.ErrOpenAIResponseInvalid) || errors.Is(err, model.ErrSecretSourceFailed) {
+	if errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) || errors.Is(err, model.ErrOpenAIRequestFailed) || errors.Is(err, model.ErrOpenAIRequestTimeout) || errors.Is(err, model.ErrOpenAIResponseInvalid) {
 		return nil, &rpcError{
 			Code:    1008002,
 			Message: "MODEL_NOT_ALLOWED",
