@@ -25,48 +25,6 @@
         "url": "shell-ball.html"
       },
       {
-        "label": "shell-ball-bubble",
-        "title": "CialloClaw Shell Ball Bubble",
-        "width": 270,
-        "height": 105,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "url": "shell-ball-bubble.html"
-      },
-      {
-        "label": "shell-ball-input",
-        "title": "CialloClaw Shell Ball Input",
-        "width": 315,
-        "height": 90,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "url": "shell-ball-input.html"
-      },
-      {
-        "label": "shell-ball-voice",
-        "title": "CialloClaw Shell Ball Voice",
-        "width": 280,
-        "height": 320,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "url": "shell-ball-voice.html"
-      },
-      {
         "label": "dashboard",
         "title": "CialloClaw Dashboard",
         "width": 1280,

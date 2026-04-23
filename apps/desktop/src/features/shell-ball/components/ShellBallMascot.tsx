@@ -6,6 +6,8 @@ import { SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX, type ShellBallVoicePreview } from 
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
 
 type ShellBallMascotProps = {
+  edgeDockRevealed?: boolean;
+  edgeDockSide?: "left" | "right" | null;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -14,6 +16,8 @@ type ShellBallMascotProps = {
   motionConfig: ShellBallMotionConfig;
   onPrimaryClick?: () => void;
   onDoubleClick?: () => void;
+  onHotspotEnter?: () => void;
+  onHotspotLeave?: () => void;
   onHotspotDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragMove?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragEnd?: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -34,6 +38,10 @@ type ShellBallMascotPointerPhase = "pointer_down" | "pointer_up" | "pointer_canc
 
 type ShellBallMascotPointerPhaseAction = "noop" | "start_press" | "finish_press" | "suppress_gestures" | "cleanup_only";
 
+function canTriggerShellBallMascotSecondaryGestures(visualState: ShellBallVisualState) {
+  return visualState !== "voice_listening" && visualState !== "voice_locked";
+}
+
 export function getShellBallMascotHotspotGestureAction(input: {
   visualState: ShellBallVisualState;
   gesture: ShellBallMascotHotspotGesture;
@@ -48,7 +56,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
     return input.selectionIndicatorVisible ? "primary_click" : "noop";
   }
 
-  if (input.visualState === "idle" || input.visualState === "hover_input") {
+  if (canTriggerShellBallMascotSecondaryGestures(input.visualState)) {
     return "double_click";
   }
 
@@ -92,6 +100,8 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
 }
 
 export function ShellBallMascot({
+  edgeDockRevealed = false,
+  edgeDockSide = null,
   visualState,
   voicePreview = null,
   showVoiceHints = true,
@@ -100,6 +110,8 @@ export function ShellBallMascot({
   motionConfig,
   onPrimaryClick = () => {},
   onDoubleClick = () => {},
+  onHotspotEnter = () => {},
+  onHotspotLeave = () => {},
   onHotspotDragStart = () => {},
   onHotspotDragMove = () => {},
   onHotspotDragEnd = () => {},
@@ -123,8 +135,10 @@ export function ShellBallMascot({
     "--shell-ball-breathe-scale": String(motionConfig.breatheScale),
     "--shell-ball-breathe-duration": `${motionConfig.breatheDurationMs}ms`,
   };
+  const dockTiltDeg = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 4 : 12) : (edgeDockRevealed ? -4 : -12);
+  const dockShiftPx = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 2 : 6) : (edgeDockRevealed ? -2 : -6);
   const attitudeStyle: CSSProperties = {
-    transform: `rotate(${motionConfig.bodyTiltDeg}deg) scale(${motionConfig.bodyScale})`,
+    transform: `translateX(${dockShiftPx}px) rotate(${motionConfig.bodyTiltDeg + dockTiltDeg}deg) scale(${motionConfig.bodyScale})`,
   };
   const wingStyle: MotionStyle = {
     "--shell-ball-wing-lift": `${motionConfig.wingLiftDeg}deg`,
@@ -308,6 +322,8 @@ export function ShellBallMascot({
     <div
       className={cn("shell-ball-mascot", voicePreview !== null && `shell-ball-mascot--preview-${voicePreview}`)}
       data-state={visualState}
+      data-edge-dock-revealed={edgeDockRevealed ? "true" : "false"}
+      data-edge-dock-side={edgeDockSide ?? "none"}
       data-tone={motionConfig.accentTone}
       data-voice-hints={shouldRenderVoiceHints ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
@@ -403,9 +419,12 @@ export function ShellBallMascot({
         type="button"
         className="shell-ball-mascot__hotspot"
         aria-label="Shell-ball mascot"
+        data-shell-ball-interactive="true"
         data-shell-ball-zone="voice-hotspot"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onPointerEnter={onHotspotEnter}
+        onPointerLeave={onHotspotLeave}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}

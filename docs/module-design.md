@@ -75,7 +75,7 @@
 
 在 owner-5 的当前后端实现中，`budget_auto_downgrade` 已进入 Harness 主链路：编排层在执行前依据 token/cost、provider 可用性和 failure signal window 评估预算策略，执行层在模型或 provider 失败后转入 lightweight delivery fallback，并对高成本工具类别执行阻断；命中结果统一回流到 audit / event / trace 链路，而不只是停留在设置项展示。
 
-插件运行态与任务详情 runtime 观察仍属于持续收口中的可见层能力：当前代码侧已经具备最小运行态对象和事件回流基础，但后续仍应以正式任务详情、仪表盘和安全摘要的承接体验为主，不在模块文档里提前冻结超出当前协议稿范围的附加正式方法语义。
+插件运行态、插件目录查询与任务详情 runtime 观察已进入正式可见层能力：当前代码侧已经具备 `agent.plugin.runtime.list / agent.plugin.list / agent.plugin.detail.get` 的查询装配，以及 task detail / dashboard 对运行态摘要与正式事件流的消费基础；后续仍应以正式任务详情、仪表盘和安全摘要的承接体验为主，不在模块文档里提前冻结超出当前协议稿范围的附加执行接口语义。
 
 5. **平台层必须抽象，不得反向污染业务层**  
    文件、路径、通知、快捷键、执行后端等能力必须经抽象层暴露，业务层不能依赖具体平台实现名和平台路径。
@@ -680,7 +680,7 @@ flowchart TB
 
 - 插件与技能不直接面向前端开放调用，必须通过 `/services/local-service` 统一编排。
 - 模型切换不改变 `task / run / delivery_result` 等核心协议对象。
-- 插件、技能、模型配置都必须有版本、来源与权限描述，以便进入审计和 Trace。
+- 插件、技能、模型配置都必须有版本、来源与权限描述，以便进入审计和 Trace；当前 owner-5 后端已把 built-in skill / blueprint / prompt、model provider route 与 plugin manifest 统一归到 extension asset attribution 边界。
 
 ### 3.7.8 上下文感知与主动协助域
 
@@ -702,7 +702,7 @@ flowchart TB
 
 当前 owner-5 底座实现约束：
 
-- 后端可先维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
+- 后端可先维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），并可把当前内建 perception package 的 version/source/permissions 通过 execution attribution 回流到 Trace/Eval，但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
 - recommendation 与 dashboard 可消费这些 richer signals 做机会识别和高价值信号增强，但正式推荐触发边界仍需由 4 号统一冻结；
 - 屏幕 / 页面 / 复制 / 停留 / 切换信号属于上下文候选输入，不得直接替代 `task` 创建、授权或正式交付链路；
 - 感知能力增强应优先服务主动推荐、Context Manager 和 memory query，而不是先扩散到新的前端页面状态模型。
@@ -2037,8 +2037,8 @@ sequenceDiagram
 
 **链路目标**：把插件运行态、指标和产物纳入统一事件流和仪表盘。  
 **主要模块参与**：插件系统与插件管理器、事件流、接口接入层、仪表盘模块。  
-**关键结果**：插件运行不直接暴露给前端，而是通过 `plugin.updated` 等事件与查询结果统一展示。  
-**实现说明**：插件视图不能成为独立协议体系，仍必须通过标准事件和标准对象链回流。
+**关键结果**：插件运行不直接暴露给前端，而是通过 `plugin.updated` 等事件与 `agent.plugin.runtime.list / agent.plugin.list / agent.plugin.detail.get` 查询结果统一展示。  
+**实现说明**：插件视图不能成为独立协议体系，仍必须通过标准事件和标准对象链回流；详情页和列表页消费的是后端聚合后的正式读模型，而不是裸 worker / sidecar 缓存。
 
 ```mermaid
 sequenceDiagram
@@ -2057,8 +2057,8 @@ sequenceDiagram
         EVT-->>RPC: 事件订阅推送
         RPC-->>UI: 插件状态与指标更新
     end
-    UI->>RPC: agent.dashboard.module.get
-    RPC->>PM: 获取运行态与最近产物
+    UI->>RPC: agent.dashboard.module.get / agent.plugin.list / agent.plugin.detail.get
+    RPC->>PM: 获取运行态、插件目录与最近产物
     PM-->>RPC: 返回聚合数据
     RPC-->>UI: 展示插件面板
 ```

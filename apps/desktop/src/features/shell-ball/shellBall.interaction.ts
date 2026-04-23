@@ -89,7 +89,10 @@ export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBall
 }
 
 export function shouldRetainShellBallHoverInput(input: ShellBallHoverRetentionInput): boolean {
-  return !input.regionActive && (input.inputFocused || input.inputHovered === true || input.hasDraft);
+  // Draft content should not keep the shell-ball trapped in an input-dominant
+  // state after blur. Only an active focus/hover relationship may retain the
+  // hover input state once the pointer leaves the mascot hotspot.
+  return !input.regionActive && (input.inputFocused || input.inputHovered === true);
 }
 
 export function getShellBallGestureAxisIntent(input: {

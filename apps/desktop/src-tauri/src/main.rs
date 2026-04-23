@@ -48,8 +48,6 @@ const CONTROL_PANEL_WINDOW_LABEL: &str = "control-panel";
 const DASHBOARD_WINDOW_LABEL: &str = "dashboard";
 const SHELL_BALL_WINDOW_LABEL: &str = "shell-ball";
 const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
-const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";
-const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
@@ -486,12 +484,7 @@ fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Resul
 }
 
 fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
-    let shell_ball_labels = [
-        SHELL_BALL_WINDOW_LABEL,
-        SHELL_BALL_BUBBLE_WINDOW_LABEL,
-        SHELL_BALL_INPUT_WINDOW_LABEL,
-        SHELL_BALL_VOICE_WINDOW_LABEL,
-    ];
+    let shell_ball_labels = [SHELL_BALL_WINDOW_LABEL, SHELL_BALL_BUBBLE_WINDOW_LABEL];
 
     for label in shell_ball_labels {
         if let Some(window) = app.get_webview_window(label) {
@@ -516,6 +509,12 @@ fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn show_shell_ball(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(SHELL_BALL_BUBBLE_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("failed to hide {SHELL_BALL_BUBBLE_WINDOW_LABEL}: {error}"))?;
+    }
+
     let window = app
         .get_webview_window(SHELL_BALL_WINDOW_LABEL)
         .ok_or_else(|| format!("webview window not found: {SHELL_BALL_WINDOW_LABEL}"))?;
@@ -768,16 +767,13 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
+                open_or_focus_dashboard_window(tray.app_handle());
+
                 if let Err(error) = request_shell_ball_dashboard_open_transition(tray.app_handle())
                 {
                     eprintln!(
                         "failed to trigger shell-ball dashboard transition from tray: {error}"
                     );
-                }
-
-                if let Err(error) = focus_webview_window(tray.app_handle(), DASHBOARD_WINDOW_LABEL)
-                {
-                    eprintln!("failed to open dashboard from tray: {error}");
                 }
             }
         });
@@ -791,18 +787,6 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let _ = tray_builder.build(app)?;
     Ok(())
 }
-
-#[derive(Clone, serde::Serialize)]
-struct CursorPosition {
-    client_x: i32,
-    client_y: i32,
-}
-
-#[cfg(windows)]
-static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
-
-#[cfg(windows)]
-static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(windows)]
 static SHELL_BALL_CLIPBOARD_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
@@ -828,6 +812,94 @@ const SHELL_BALL_CLIPBOARD_RIGHT_CLICK_DELAY_MS: u64 = 3_000;
 struct ClipboardMonitorState {
     last_sequence_number: u32,
 }
+
+#[tauri::command]
+fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
+    if window.label() != SHELL_BALL_WINDOW_LABEL {
+        return Err("pick_shell_ball_files is only available to the shell-ball window".into());
+    }
+
+    let selected_files = rfd::FileDialog::new()
+        .set_title("Select files")
+        .pick_files()
+        .unwrap_or_default();
+
+    Ok(selected_files
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect())
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct ShellBallInteractiveRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Default)]
+struct ShellBallInteractiveState {
+    hwnd: Option<isize>,
+    regions: Vec<ShellBallInteractiveRect>,
+    press_lock: bool,
+    current_ignore: Option<bool>,
+}
+
+#[cfg(windows)]
+static SHELL_BALL_INTERACTIVE_STATE: Lazy<Mutex<ShellBallInteractiveState>> =
+    Lazy::new(|| Mutex::new(ShellBallInteractiveState::default()));
+
+fn open_or_focus_dashboard_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW_LABEL) {
+        if let Err(error) = window.unminimize() {
+            eprintln!("failed to unminimize dashboard from tray: {error}");
+        }
+        if let Err(error) = window.set_fullscreen(true) {
+            eprintln!("failed to set dashboard fullscreen from tray: {error}");
+        }
+        if let Err(error) = window.show() {
+            eprintln!("failed to show dashboard from tray: {error}");
+        }
+        if let Err(error) = window.set_focus() {
+            eprintln!("failed to focus dashboard from tray: {error}");
+        }
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let create_result = WebviewWindowBuilder::new(
+            &handle,
+            DASHBOARD_WINDOW_LABEL,
+            WebviewUrl::App("dashboard.html".into()),
+        )
+        .title("CialloClaw Dashboard")
+        .inner_size(1280.0, 860.0)
+        .decorations(false)
+        .visible(true)
+        .focused(true)
+        .fullscreen(true)
+        .build();
+
+        if let Err(error) = create_result {
+            eprintln!("failed to create dashboard from tray: {error}");
+        }
+    });
+}
+
+#[derive(Clone, serde::Serialize)]
+struct CursorPosition {
+    client_x: i32,
+    client_y: i32,
+}
+
+#[cfg(windows)]
+static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(windows)]
 unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
@@ -875,6 +947,96 @@ unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
 }
 
 #[cfg(windows)]
+unsafe fn set_window_ignore_cursor_events(hwnd: HWND, ignore: bool) {
+    let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+    let layered_style = current_style | WS_EX_LAYERED.0 as u32;
+    let next_style = if ignore {
+        layered_style | WS_EX_TRANSPARENT.0 as u32
+    } else {
+        layered_style & !(WS_EX_TRANSPARENT.0 as u32)
+    };
+
+    if next_style == current_style {
+        return;
+    }
+
+    let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_style as isize);
+    let _ = SetWindowPos(
+        hwnd,
+        Some(HWND(std::ptr::null_mut())),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+    );
+}
+
+#[cfg(windows)]
+unsafe fn sync_shell_ball_native_hit_testing(screen_point: POINT) {
+    let snapshot = match SHELL_BALL_INTERACTIVE_STATE.lock() {
+        Ok(state) => state.clone(),
+        Err(_) => return,
+    };
+
+    let Some(hwnd_value) = snapshot.hwnd else {
+        return;
+    };
+
+    let hwnd = HWND(hwnd_value as _);
+    let mut client_point = screen_point;
+    if !ScreenToClient(hwnd, &mut client_point).as_bool() {
+        return;
+    }
+
+    let hit_interactive_region = snapshot.press_lock
+        || snapshot.regions.iter().any(|region| {
+            client_point.x >= region.x
+                && client_point.x <= region.x + region.width
+                && client_point.y >= region.y
+                && client_point.y <= region.y + region.height
+        });
+    let next_ignore = !hit_interactive_region;
+
+    if snapshot.current_ignore == Some(next_ignore) {
+        return;
+    }
+
+    set_window_ignore_cursor_events(hwnd, next_ignore);
+
+    if let Ok(mut state) = SHELL_BALL_INTERACTIVE_STATE.lock() {
+        if state.hwnd == Some(hwnd_value) {
+            state.current_ignore = Some(next_ignore);
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe fn update_shell_ball_native_tracking() {
+    let snapshot = match SHELL_BALL_INTERACTIVE_STATE.lock() {
+        Ok(state) => state.clone(),
+        Err(_) => return,
+    };
+
+    let Some(hwnd_value) = snapshot.hwnd else {
+        return;
+    };
+
+    let hwnd = HWND(hwnd_value as _);
+    let should_track = snapshot.press_lock || !snapshot.regions.is_empty();
+    set_forward_mouse_messages(hwnd, should_track);
+
+    if !should_track {
+        set_window_ignore_cursor_events(hwnd, false);
+        if let Ok(mut state) = SHELL_BALL_INTERACTIVE_STATE.lock() {
+            if state.hwnd == Some(hwnd_value) {
+                state.current_ignore = Some(false);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn mousemove_forward(
     n_code: i32,
     w_param: WPARAM,
@@ -886,6 +1048,8 @@ unsafe extern "system" fn mousemove_forward(
 
     if w_param.0 as u32 == WM_MOUSEMOVE {
         let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+
+        sync_shell_ball_native_hit_testing(point);
 
         let forwarding_windows = match FORWARDING_WINDOWS.lock() {
             Ok(guard) => guard,
@@ -978,21 +1142,107 @@ fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
     None
 }
 
+#[cfg(windows)]
 #[tauri::command]
-fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
-    if window.label() != SHELL_BALL_INPUT_WINDOW_LABEL {
-        return Err("pick_shell_ball_files is only available to shell-ball input window".into());
+fn shell_ball_set_interactive_regions(
+    window: tauri::Window,
+    regions: Vec<ShellBallInteractiveRect>,
+) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get shell-ball hwnd: {error}"))?;
+
+    {
+        let mut state = SHELL_BALL_INTERACTIVE_STATE
+            .lock()
+            .map_err(|_| "shell-ball interactive state lock poisoned".to_string())?;
+        state.hwnd = Some(hwnd.0 as isize);
+        state.regions = regions;
+        state.current_ignore = None;
     }
 
-    let selected_files = rfd::FileDialog::new()
-        .set_title("Select files")
-        .pick_files()
-        .unwrap_or_default();
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe {
+        update_shell_ball_native_tracking();
+        if GetCursorPos(&mut point).is_ok() {
+            sync_shell_ball_native_hit_testing(point);
+        }
+    }
 
-    Ok(selected_files
-        .into_iter()
-        .map(|path| path.display().to_string())
-        .collect())
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shell_ball_set_interactive_regions(
+    _window: tauri::Window,
+    _regions: Vec<ShellBallInteractiveRect>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn shell_ball_set_press_lock(window: tauri::Window, locked: bool) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get shell-ball hwnd: {error}"))?;
+
+    {
+        let mut state = SHELL_BALL_INTERACTIVE_STATE
+            .lock()
+            .map_err(|_| "shell-ball interactive state lock poisoned".to_string())?;
+        state.hwnd = Some(hwnd.0 as isize);
+        state.press_lock = locked;
+        state.current_ignore = None;
+    }
+
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe {
+        update_shell_ball_native_tracking();
+        if GetCursorPos(&mut point).is_ok() {
+            sync_shell_ball_native_hit_testing(point);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shell_ball_set_press_lock(_window: tauri::Window, _locked: bool) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+fn shell_ball_apply_window_frame(
+    window: tauri::Window,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|error| format!("failed to read shell-ball scale factor: {error}"))?;
+    let physical_x = (x * scale_factor).round();
+    let physical_y = (y * scale_factor).round();
+    let physical_width = (width * scale_factor).round().max(1.0);
+    let physical_height = (height * scale_factor).round().max(1.0);
+
+    window
+        .set_size(tauri::PhysicalSize::new(
+            physical_width as u32,
+            physical_height as u32,
+        ))
+        .map_err(|error| format!("failed to set shell-ball window size: {error}"))?;
+
+    window
+        .set_position(tauri::PhysicalPosition::new(
+            physical_x as i32,
+            physical_y as i32,
+        ))
+        .map_err(|error| format!("failed to set shell-ball window position: {error}"))
 }
 
 #[tauri::command]
@@ -1026,12 +1276,15 @@ fn main() {
             named_pipe_unsubscribe,
             shell_ball_set_ignore_cursor_events,
             shell_ball_get_mouse_position,
+            shell_ball_set_interactive_regions,
+            shell_ball_set_press_lock,
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,
             desktop_open_local_path,
             desktop_reveal_local_path,
             pick_shell_ball_files,
+            shell_ball_apply_window_frame,
             shell_ball_read_selection_snapshot
         ])
         .run(tauri::generate_context!())

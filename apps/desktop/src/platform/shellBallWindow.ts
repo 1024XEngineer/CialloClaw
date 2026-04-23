@@ -7,6 +7,13 @@ export type ShellBallMousePosition = {
   client_y: number;
 };
 
+export type ShellBallInteractiveRect = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
 export type ShellBallWindowBounds = {
   height: number;
   width: number;
@@ -42,6 +49,13 @@ export async function setShellBallShadow(enabled: boolean) {
   await currentWindow.setShadow(enabled);
 }
 
+/**
+ * Toggles shell-ball window click-through at the native host level.
+ *
+ * On Windows we optionally forward native mouse move messages while the window
+ * is ignoring cursor events so the React layer can restore interactivity as
+ * soon as the pointer re-enters a true hotspot.
+ */
 export async function setShellBallIgnoreCursorEvents(ignore: boolean, forward = true) {
   const currentWindow = getShellBallWindow();
   if (!currentWindow) {
@@ -58,12 +72,44 @@ export async function setShellBallIgnoreCursorEvents(ignore: boolean, forward = 
   }
 }
 
+/**
+ * Reads the current native cursor position once so shell-ball can sync its
+ * initial click-through state before the first forwarded mousemove arrives.
+ */
 export async function getShellBallMousePosition() {
   if (!isTauriWindowEnvironment()) {
     return null;
   }
 
   return invoke<ShellBallMousePosition | null>("shell_ball_get_mouse_position");
+}
+
+/**
+ * Reports the current shell-ball interactive hotspot rectangles to the native
+ * host using physical client coordinates relative to the shell-ball window.
+ */
+export async function setShellBallInteractiveRegions(regions: ShellBallInteractiveRect[]) {
+  if (!isTauriWindowEnvironment()) {
+    return;
+  }
+
+  await invoke("shell_ball_set_interactive_regions", {
+    regions,
+  });
+}
+
+/**
+ * Locks native shell-ball hit-testing to stay interactive while a mascot press
+ * sequence is active.
+ */
+export async function setShellBallPressLock(locked: boolean) {
+  if (!isTauriWindowEnvironment()) {
+    return;
+  }
+
+  await invoke("shell_ball_set_press_lock", {
+    locked,
+  });
 }
 
 /**
@@ -78,6 +124,7 @@ export async function readShellBallSelectionSnapshot() {
     return null;
   }
 
+  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ShellBallSelectionSnapshot | null>("shell_ball_read_selection_snapshot");
 }
 

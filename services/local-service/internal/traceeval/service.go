@@ -94,11 +94,12 @@ func (s *Service) Capture(input CaptureInput) (CaptureResult, error) {
 		evalStatus = "passed"
 	}
 	ruleHits := buildRuleHits(input, doomLoop, reviewResult)
+	normalizedAssets := storage.NormalizeExtensionAssetReferences(input.ExtensionAssets)
 	ruleHitsJSON, err := json.Marshal(ruleHits)
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("marshal trace rule hits: %w", err)
 	}
-	assetRefsJSON, err := json.Marshal(input.ExtensionAssets)
+	assetRefsJSON, err := json.Marshal(normalizedAssets)
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("marshal extension asset refs: %w", err)
 	}
@@ -114,9 +115,9 @@ func (s *Service) Capture(input CaptureInput) (CaptureResult, error) {
 		"human_in_loop":         doomLoop.Triggered,
 		"delivery_type":         stringValue(input.DeliveryResult, "type"),
 		"error_present":         input.ExecutionError != nil,
-		"extension_asset_count": len(input.ExtensionAssets),
+		"extension_asset_count": len(normalizedAssets),
 	}
-	mergeExtensionAssetMetrics(metrics, input.ExtensionAssets)
+	mergeExtensionAssetMetrics(metrics, normalizedAssets)
 	mergeTokenMetrics(metrics, input.TokenUsage, input.ModelInvocation)
 	metricsJSON, err := json.Marshal(metrics)
 	if err != nil {

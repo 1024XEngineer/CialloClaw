@@ -140,6 +140,116 @@ func TestSQLiteConfigAssetStoresPersistRecords(t *testing.T) {
 	assertSQLiteConfigAssetPragmas(t, pluginStore.db)
 }
 
+func TestInMemoryConfigAssetSourceLookupsPreferLatestMatchingSource(t *testing.T) {
+	skillStore := newInMemorySkillManifestStore()
+	if err := skillStore.WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_builtin_old", Name: "builtin_old", Version: "v1", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write old builtin skill manifest failed: %v", err)
+	}
+	if err := skillStore.WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_community_latest", Name: "community", Version: "v2", Source: "github", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T12:00:00Z", UpdatedAt: "2026-04-19T12:00:00Z"}); err != nil {
+		t.Fatalf("write latest community skill manifest failed: %v", err)
+	}
+	if err := skillStore.WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_builtin_new", Name: "builtin_new", Version: "v3", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T11:00:00Z", UpdatedAt: "2026-04-19T11:00:00Z"}); err != nil {
+		t.Fatalf("write newest builtin skill manifest failed: %v", err)
+	}
+	record, found, err := skillStore.latestSkillManifestBySource(context.Background(), " builtin ")
+	if err != nil || !found || record.SkillManifestID != "skill_builtin_new" {
+		t.Fatalf("expected latest builtin skill manifest, record=%+v found=%v err=%v", record, found, err)
+	}
+
+	blueprintStore := newInMemoryBlueprintDefinitionStore()
+	if err := blueprintStore.WriteBlueprintDefinition(context.Background(), BlueprintDefinitionRecord{BlueprintDefinitionID: "blueprint_community", Name: "community", Version: "v1", Source: "github", Summary: "summary", DefinitionJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write community blueprint failed: %v", err)
+	}
+	if _, found, err := blueprintStore.latestBlueprintDefinitionBySource(context.Background(), "builtin"); err != nil || found {
+		t.Fatalf("expected no builtin blueprint match, found=%v err=%v", found, err)
+	}
+
+	promptStore := newInMemoryPromptTemplateVersionStore()
+	if err := promptStore.WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_builtin_a", TemplateName: "default", Version: "v1", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write builtin prompt v1 failed: %v", err)
+	}
+	if err := promptStore.WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_builtin_b", TemplateName: "default", Version: "v2", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T11:00:00Z", UpdatedAt: "2026-04-19T11:00:00Z"}); err != nil {
+		t.Fatalf("write builtin prompt v2 failed: %v", err)
+	}
+	recordPrompt, found, err := promptStore.latestPromptTemplateVersionBySource(context.Background(), "builtin")
+	if err != nil || !found || recordPrompt.PromptTemplateVersionID != "prompt_builtin_b" {
+		t.Fatalf("expected newest builtin prompt template version, record=%+v found=%v err=%v", recordPrompt, found, err)
+	}
+}
+
+func TestSQLiteConfigAssetSourceLookupsPreferLatestMatchingSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config-assets-latest.db")
+	skillStore, err := NewSQLiteSkillManifestStore(path)
+	if err != nil {
+		t.Fatalf("new sqlite skill manifest store failed: %v", err)
+	}
+	defer func() { _ = skillStore.Close() }()
+	blueprintStore, err := NewSQLiteBlueprintDefinitionStore(path)
+	if err != nil {
+		t.Fatalf("new sqlite blueprint store failed: %v", err)
+	}
+	defer func() { _ = blueprintStore.Close() }()
+	promptStore, err := NewSQLitePromptTemplateVersionStore(path)
+	if err != nil {
+		t.Fatalf("new sqlite prompt store failed: %v", err)
+	}
+	defer func() { _ = promptStore.Close() }()
+
+	if err := skillStore.WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_builtin_old", Name: "builtin_old", Version: "v1", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write builtin skill manifest failed: %v", err)
+	}
+	if err := skillStore.WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_community_latest", Name: "community", Version: "v2", Source: "github", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T12:00:00Z", UpdatedAt: "2026-04-19T12:00:00Z"}); err != nil {
+		t.Fatalf("write community skill manifest failed: %v", err)
+	}
+	if err := skillStore.WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_builtin_new", Name: "builtin_new", Version: "v3", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T11:00:00Z", UpdatedAt: "2026-04-19T11:00:00Z"}); err != nil {
+		t.Fatalf("write second builtin skill manifest failed: %v", err)
+	}
+	record, found, err := skillStore.latestSkillManifestBySource(context.Background(), "builtin")
+	if err != nil || !found || record.SkillManifestID != "skill_builtin_new" {
+		t.Fatalf("expected latest builtin sqlite skill manifest, record=%+v found=%v err=%v", record, found, err)
+	}
+	if _, found, err := skillStore.latestSkillManifestBySource(context.Background(), "marketplace"); err != nil || found {
+		t.Fatalf("expected no sqlite skill manifest for marketplace source, found=%v err=%v", found, err)
+	}
+
+	if err := blueprintStore.WriteBlueprintDefinition(context.Background(), BlueprintDefinitionRecord{BlueprintDefinitionID: "blueprint_builtin", Name: "builtin", Version: "v1", Source: "builtin", Summary: "summary", DefinitionJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write builtin blueprint failed: %v", err)
+	}
+	recordBlueprint, found, err := blueprintStore.latestBlueprintDefinitionBySource(context.Background(), "builtin")
+	if err != nil || !found || recordBlueprint.BlueprintDefinitionID != "blueprint_builtin" {
+		t.Fatalf("expected builtin sqlite blueprint match, record=%+v found=%v err=%v", recordBlueprint, found, err)
+	}
+	if err := blueprintStore.Close(); err != nil {
+		t.Fatalf("close sqlite blueprint store failed: %v", err)
+	}
+	if _, found, err := blueprintStore.latestBlueprintDefinitionBySource(context.Background(), "builtin"); err == nil || found {
+		t.Fatalf("expected closed sqlite blueprint store to return error, found=%v err=%v", found, err)
+	}
+
+	if _, found, err := promptStore.latestPromptTemplateVersionBySource(context.Background(), "builtin"); err != nil || found {
+		t.Fatalf("expected no builtin sqlite prompt match before inserts, found=%v err=%v", found, err)
+	}
+	if err := promptStore.WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_builtin", TemplateName: "default", Version: "v1", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write builtin prompt failed: %v", err)
+	}
+	recordPrompt, found, err := promptStore.latestPromptTemplateVersionBySource(context.Background(), "builtin")
+	if err != nil || !found || recordPrompt.PromptTemplateVersionID != "prompt_builtin" {
+		t.Fatalf("expected builtin sqlite prompt match, record=%+v found=%v err=%v", recordPrompt, found, err)
+	}
+}
+
+func TestConfigAssetMoreRecentCoversOrderingBranches(t *testing.T) {
+	if !configAssetMoreRecent("2026-04-19T11:00:00Z", "b", "2026-04-19T10:00:00Z", "a") {
+		t.Fatal("expected newer timestamp to win")
+	}
+	if !configAssetMoreRecent("2026-04-19T11:00:00Z", "b", "2026-04-19T11:00:00Z", "a") {
+		t.Fatal("expected lexicographically larger id to win ties")
+	}
+	if configAssetMoreRecent("2026-04-19T11:00:00Z", "a", "2026-04-19T11:00:00Z", "b") {
+		t.Fatal("expected smaller id to lose timestamp ties")
+	}
+}
+
 func TestConfigureConfigAssetSQLiteDatabaseSetsBusyTimeoutAndWAL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config-asset-pragmas.db")
 	db, err := openSQLiteDatabase(path)

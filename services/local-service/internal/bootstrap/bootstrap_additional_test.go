@@ -59,6 +59,9 @@ func TestPersistPluginManifestsHandlesNilAndSuccessPaths(t *testing.T) {
 	if err := json.Unmarshal([]byte(items[0].RuntimeNamesJSON), &runtimeNames); err != nil || len(runtimeNames) == 0 {
 		t.Fatalf("expected persisted plugin manifests to include runtime names, names=%+v err=%v", runtimeNames, err)
 	}
+	if items[0].Summary == "" {
+		t.Fatalf("expected persisted plugin manifests to keep manifest summaries, item=%+v", items[0])
+	}
 	if err := persistPluginManifests(context.Background(), service, &plugin.Service{}); err != nil {
 		t.Fatalf("expected empty plugin registry to be ignored, got %v", err)
 	}

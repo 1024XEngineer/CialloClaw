@@ -25,6 +25,7 @@ export function ShellBallVoiceHints({
             "shell-ball-mascot__voice-hint--lock",
             voicePreview === "lock" && "is-active",
           )}
+          data-shell-ball-interactive="true"
         >
           <ArrowUp className="shell-ball-mascot__voice-arrow" />
           <Lock className="shell-ball-mascot__voice-icon" />
@@ -38,6 +39,7 @@ export function ShellBallVoiceHints({
             "shell-ball-mascot__voice-hint--cancel",
             voicePreview === "cancel" && "is-active",
           )}
+          data-shell-ball-interactive="true"
         >
           <ArrowDown className="shell-ball-mascot__voice-arrow" />
           <X className="shell-ball-mascot__voice-icon" />

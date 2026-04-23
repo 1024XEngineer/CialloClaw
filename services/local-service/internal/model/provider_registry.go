@@ -7,11 +7,30 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
+const (
+	// ProviderRoadmapStageStable marks a provider that is allowed on the current
+	// owner-5 mainline.
+	ProviderRoadmapStageStable = "stable"
+	// ProviderExposureSettingsOnly keeps provider selection behind the existing
+	// settings surface until the roadmap explicitly promotes dedicated model APIs.
+	ProviderExposureSettingsOnly = "settings_only"
+)
+
 // ProviderDescriptor reserves the future multi-provider contract without
 // enabling additional providers before the roadmap says the mainline is ready.
 type ProviderDescriptor struct {
+	DisplayName         string
 	Name                string
+	Version             string
+	Source              string
+	Entry               string
+	Summary             string
 	SupportsToolCalling bool
+	SupportsStreaming   bool
+	Capabilities        []string
+	Permissions         []string
+	RoadmapStage        string
+	Exposure            string
 }
 
 type providerAdapter struct {
@@ -21,7 +40,20 @@ type providerAdapter struct {
 }
 
 var defaultProviderRegistry = newProviderRegistry([]providerAdapter{{
-	descriptor: ProviderDescriptor{Name: OpenAIResponsesProvider, SupportsToolCalling: true},
+	descriptor: ProviderDescriptor{
+		DisplayName:         "OpenAI Responses",
+		Name:                OpenAIResponsesProvider,
+		Version:             "builtin-v1",
+		Source:              "builtin",
+		Entry:               "builtin://model-provider/openai_responses",
+		Summary:             "Built-in model provider route for OpenAI Responses text generation and tool-calling.",
+		SupportsToolCalling: true,
+		SupportsStreaming:   false,
+		Capabilities:        []string{"generate_text", "generate_tool_calls"},
+		Permissions:         []string{"secret:model_api_key", "network:model_api"},
+		RoadmapStage:        ProviderRoadmapStageStable,
+		Exposure:            ProviderExposureSettingsOnly,
+	},
 	validate: func(cfg config.ModelConfig) error {
 		if strings.TrimSpace(cfg.Endpoint) == "" {
 			return ErrOpenAIEndpointRequired
@@ -63,7 +95,7 @@ func (r providerRegistry) descriptor(provider string) (ProviderDescriptor, bool)
 	if !ok {
 		return ProviderDescriptor{}, false
 	}
-	return item.descriptor, true
+	return cloneProviderDescriptor(item.descriptor), true
 }
 
 func (r providerRegistry) adapter(provider string) (providerAdapter, bool) {
@@ -74,7 +106,7 @@ func (r providerRegistry) adapter(provider string) (providerAdapter, bool) {
 func (r providerRegistry) descriptors() []ProviderDescriptor {
 	result := make([]ProviderDescriptor, 0, len(r.order))
 	for _, name := range r.order {
-		result = append(result, r.items[name].descriptor)
+		result = append(result, cloneProviderDescriptor(r.items[name].descriptor))
 	}
 	return result
 }
@@ -83,6 +115,17 @@ func (r providerRegistry) descriptors() []ProviderDescriptor {
 // a stable order so future expansion does not require rewiring current callers.
 func RegisteredProviderDescriptors() []ProviderDescriptor {
 	return defaultProviderRegistry.descriptors()
+}
+
+// LookupProviderDescriptor resolves one provider route descriptor by provider name.
+func LookupProviderDescriptor(provider string) (ProviderDescriptor, bool) {
+	return defaultProviderRegistry.descriptor(provider)
+}
+
+func cloneProviderDescriptor(item ProviderDescriptor) ProviderDescriptor {
+	item.Capabilities = append([]string(nil), item.Capabilities...)
+	item.Permissions = append([]string(nil), item.Permissions...)
+	return item
 }
 
 func validateProviderConfig(cfg config.ModelConfig) error {
