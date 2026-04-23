@@ -202,6 +202,7 @@ export interface StrongholdStatus {
 // Task 定义当前模块的接口约束。
 export interface Task {
   task_id: string;
+  session_id: string | null;
   title: string;
   source_type: TaskSourceType;
   status: TaskStatus;

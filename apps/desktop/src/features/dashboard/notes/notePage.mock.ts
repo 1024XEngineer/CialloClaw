@@ -375,6 +375,7 @@ export function runMockConvertNoteToTask(itemId: string): NoteConvertOutcome {
         finished_at: null,
         intent: { name: "converted_note", arguments: { item_id: item.item_id } },
         risk_level: "green",
+        session_id: null,
         source_type: "todo",
         started_at: new Date().toISOString(),
         status: "processing",

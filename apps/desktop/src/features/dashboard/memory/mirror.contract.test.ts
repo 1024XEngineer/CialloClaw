@@ -82,6 +82,7 @@ function createSubmitParams(traceId: string): AgentInputSubmitParams {
 function createTask(taskId: string, status: Task["status"], input: Partial<Task> = {}): Task {
   return {
     task_id: taskId,
+    session_id: input.session_id ?? null,
     title: input.title ?? `task ${taskId}`,
     source_type: input.source_type ?? "hover_input",
     status,

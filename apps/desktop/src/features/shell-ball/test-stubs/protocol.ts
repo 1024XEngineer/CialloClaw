@@ -103,6 +103,7 @@ export interface StrongholdStatus {
 
 export interface Task {
   task_id: string;
+  session_id: string | null;
   title: string;
   source_type: TaskSourceType;
   status: TaskStatus;

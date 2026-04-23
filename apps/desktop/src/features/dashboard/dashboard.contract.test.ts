@@ -432,6 +432,7 @@ function withDesktopAliasRuntime<T>(
 function createTask(overrides: Partial<Task> = {}): Task {
   return {
     task_id: "task_dashboard_001",
+    session_id: null,
     title: "Review dashboard safety state",
     status: "waiting_auth",
     source_type: "hover_input",
