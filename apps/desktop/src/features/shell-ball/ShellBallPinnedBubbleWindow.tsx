@@ -7,13 +7,13 @@ import {
 import {
   emitShellBallBubbleAction,
   emitShellBallPinnedWindowDetached,
-  useShellBallHelperWindowSnapshot,
+  useShellBallPinnedBubbleSnapshot,
 } from "./useShellBallCoordinator";
 
 export function ShellBallPinnedBubbleWindow() {
   const windowLabel = getShellBallCurrentWindow().label;
   const bubbleId = getShellBallPinnedBubbleIdFromLabel(windowLabel);
-  const snapshot = useShellBallHelperWindowSnapshot({ role: "pinned" });
+  const snapshot = useShellBallPinnedBubbleSnapshot();
   const [followsShellBallGeometry, setFollowsShellBallGeometry] = useState(true);
   const pinnedItem = useMemo(
     () => snapshot.bubbleItems.find((item) => item.bubble.bubble_id === bubbleId && item.bubble.pinned),

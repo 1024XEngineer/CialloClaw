@@ -32,8 +32,6 @@ import {
   type ShellBallBubbleVisibilityPhase,
   type ShellBallIntentDecisionPayload,
   shellBallWindowSyncEvents,
-  type ShellBallHelperWindowRole,
-  type ShellBallPendingFileActionPayload,
   type ShellBallPinnedWindowDetachedPayload,
   type ShellBallPinnedWindowReadyPayload,
   type ShellBallPrimaryAction,
@@ -64,11 +62,6 @@ type ShellBallCoordinatorInput = {
   onSubmitText: () => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null | void;
   onAttachFile: () => void;
   onPrimaryClick: () => void;
-};
-
-type ShellBallHelperSnapshotInput = {
-  role: ShellBallHelperWindowRole;
-  windowLabel?: string;
 };
 
 type ShellBallTaskOutputServiceModule = {
@@ -1348,9 +1341,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           detachedPinnedBubbleIdsRef.current.add(payload.bubbleId);
         },
       ),
-      currentWindow.listen<{ active: boolean }>(shellBallWindowSyncEvents.bubbleHover, ({ payload }) => {
-        handleCoordinatorBubbleHoverChange(payload.active);
-      }),
       currentWindow.listen<ShellBallIntentDecisionPayload>(shellBallWindowSyncEvents.intentDecision, ({ payload }) => {
         void handleIntentDecision(payload);
       }),
@@ -1579,19 +1569,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   };
 }
 
-export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {
+export function useShellBallPinnedBubbleSnapshot() {
   const [snapshot, setSnapshot] = useState(createDefaultShellBallWindowSnapshot);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
 
-    const targetLabel = role === "pinned" ? currentWindow.label : shellBallWindowLabels[role];
+    const targetLabel = currentWindow.label;
 
-    if (role === "pinned" && getShellBallPinnedBubbleIdFromLabel(targetLabel) === null) {
-      return;
-    }
-
-    if (role !== "pinned" && currentWindow.label !== targetLabel) {
+    if (getShellBallPinnedBubbleIdFromLabel(targetLabel) === null) {
       return;
     }
 
@@ -1610,76 +1596,23 @@ export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapsh
 
         cleanup = unlisten;
 
-        if (role === "pinned") {
-          const bubbleId = getShellBallPinnedBubbleIdFromLabel(targetLabel);
+        const bubbleId = getShellBallPinnedBubbleIdFromLabel(targetLabel);
 
-          if (bubbleId !== null) {
-            void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pinnedWindowReady, {
-              windowLabel: targetLabel,
-              bubbleId,
-            });
-          }
-
-          return;
+        if (bubbleId !== null) {
+          void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pinnedWindowReady, {
+            windowLabel: targetLabel,
+            bubbleId,
+          });
         }
-
-        void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.helperReady, { role });
       });
 
     return () => {
       disposed = true;
       cleanup?.();
     };
-  }, [role]);
+  }, []);
 
   return snapshot;
-}
-
-export async function emitShellBallInputHover(active: boolean) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputHover, { active });
-}
-
-export async function emitShellBallBubbleHover(active: boolean) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.bubbleHover, { active });
-}
-
-export async function emitShellBallInputFocus(focused: boolean) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputFocus, {
-    focused,
-  });
-}
-
-export async function emitShellBallInputDraft(value: string) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputDraft, { value });
-}
-
-export async function emitShellBallInputRequestFocus(token: number) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.inputRequestFocus, { token });
-}
-
-export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction, source: ShellBallHelperWindowRole) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.primaryAction, {
-    action,
-    source,
-  });
-}
-
-export async function emitShellBallPendingFileAction(payload: ShellBallPendingFileActionPayload) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pendingFileAction, payload);
-}
-
-export async function emitShellBallIntentDecision(
-  decision: ShellBallIntentDecisionPayload["decision"],
-  taskId: string,
-  source: ShellBallIntentDecisionPayload["source"],
-  correctedIntent?: ShellBallIntentDecisionPayload["correctedIntent"],
-) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.intentDecision, {
-    correctedIntent,
-    decision,
-    source,
-    taskId,
-  });
 }
 
 export async function emitShellBallBubbleAction(

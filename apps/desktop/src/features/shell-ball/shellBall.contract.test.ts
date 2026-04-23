@@ -37,10 +37,7 @@ import {
   shouldShowShellBallFileDropOverlay,
   shouldShowShellBallSelectionIndicator,
 } from "./ShellBallApp";
-import { ShellBallBubbleWindow } from "./ShellBallBubbleWindow";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
-import { ShellBallInputWindow } from "./ShellBallInputWindow";
-import { ShellBallVoiceWindow } from "./ShellBallVoiceWindow";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
@@ -3265,17 +3262,6 @@ test("shell-ball app drops page-shell copy while preserving the floating shell s
   assert.doesNotMatch(markup, /Shell-ball demo switcher/);
 });
 
-test("shell-ball bubble window owns the bubble zone rendering", () => {
-  const markup = renderToStaticMarkup(
-    createElement(ShellBallBubbleWindow, {
-      visualState: "hover_input",
-    }),
-  );
-
-  assert.match(markup, /shell-ball-bubble-zone/);
-  assert.doesNotMatch(markup, /shell-ball-input-bar/);
-});
-
 test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", () => {
   const { useShellBallCoordinator } = withShellBallModuleRuntime("useShellBallCoordinator.ts", {
     react: {
@@ -3381,126 +3367,6 @@ test("shell-ball bubble zone keeps the latest message visible on feed updates", 
   assert.equal(effects.length, 1);
   effects[0]?.();
   assert.equal(scrollElement.scrollTop, scrollElement.scrollHeight);
-});
-
-test("shell-ball bubble window resolves bubble items from the helper-window snapshot", () => {
-  const helperSnapshot = createShellBallWindowSnapshot({
-    visualState: "processing",
-    inputValue: "",
-    voicePreview: null,
-    bubbleItems: [
-      {
-        bubble: {
-          bubble_id: "msg-helper-1",
-          task_id: "task-helper-1",
-          type: "status",
-          text: "Drafting your update.",
-          pinned: false,
-          hidden: false,
-          created_at: "2026-04-11T10:04:00.000Z",
-        },
-        role: "agent",
-        desktop: {
-          lifecycleState: "visible",
-        },
-      },
-    ],
-  });
-  helperSnapshot.bubbleRegion = getShellBallBubbleRegionState(helperSnapshot.bubbleItems);
-  let capturedProps: Record<string, unknown> | null = null;
-
-  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
-    react: require("react"),
-    "./useShellBallCoordinator": {
-      useShellBallHelperWindowSnapshot() {
-        return helperSnapshot;
-      },
-    },
-    "./useShellBallWindowMetrics": {
-      useShellBallWindowMetrics() {
-        return { rootRef: { current: null } as { current: HTMLDivElement | null } };
-      },
-    },
-    "./components/ShellBallBubbleZone": {
-      ShellBallBubbleZone(props: Record<string, unknown>) {
-        capturedProps = { ...(capturedProps ?? {}), ...props };
-        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
-      },
-    },
-  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
-
-  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
-
-  assert.notEqual(capturedProps, null);
-  const resolvedProps = capturedProps as unknown as Record<string, unknown>;
-
-  assert.deepEqual(resolvedProps.visualState, "processing");
-  assert.deepEqual(resolvedProps.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
-  assert.equal(typeof resolvedProps.onDeleteBubble, "function");
-  assert.equal(typeof resolvedProps.onPinBubble, "function");
-});
-
-test("shell-ball bubble window does not depend on only visualState to render its body", () => {
-  const helperSnapshot = createShellBallWindowSnapshot({
-    visualState: "idle",
-    inputValue: "",
-    voicePreview: null,
-    bubbleItems: [
-      {
-        bubble: {
-          bubble_id: "msg-helper-2",
-          task_id: "task-helper-2",
-          type: "result",
-          text: "Open the dashboard.",
-          pinned: false,
-          hidden: false,
-          created_at: "2026-04-11T10:05:00.000Z",
-        },
-        role: "user",
-        desktop: {
-          lifecycleState: "visible",
-        },
-      },
-    ],
-  });
-  helperSnapshot.bubbleRegion = getShellBallBubbleRegionState(helperSnapshot.bubbleItems);
-  let capturedProps: Record<string, unknown> | null = null;
-
-  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
-    react: require("react"),
-    "./useShellBallCoordinator": {
-      useShellBallHelperWindowSnapshot() {
-        return helperSnapshot;
-      },
-    },
-    "./useShellBallWindowMetrics": {
-      useShellBallWindowMetrics(input: Record<string, unknown>) {
-        capturedProps = { ...(capturedProps ?? {}), metricsInput: input };
-        return { rootRef: { current: null } as { current: HTMLDivElement | null } };
-      },
-    },
-    "./components/ShellBallBubbleZone": {
-      ShellBallBubbleZone(props: Record<string, unknown>) {
-        capturedProps = { ...(capturedProps ?? {}), ...props };
-        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
-      },
-    },
-  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
-
-  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, { visualState: "voice_locked" }));
-
-  assert.notEqual(capturedProps, null);
-  const resolvedProps = capturedProps as unknown as Record<string, unknown>;
-
-  assert.deepEqual(resolvedProps.visualState, "voice_locked");
-  assert.deepEqual(resolvedProps.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
-  assert.deepEqual(resolvedProps.metricsInput, {
-    role: "bubble",
-    visible: true,
-    clickThrough: helperSnapshot.bubbleRegion.clickThrough,
-  });
-  assert.equal(typeof resolvedProps.onDeleteBubble, "function");
-  assert.equal(typeof resolvedProps.onPinBubble, "function");
 });
 
 test("shell-ball bubble zone renders a real message list without placeholder chrome", () => {
@@ -4441,37 +4307,6 @@ test("shell-ball bubble window styles stay transparent, faded, and motion-ready"
   assert.match(markup, /shell-ball-bubble-zone__bottom-anchor/);
 });
 
-test("shell-ball input window owns the input rendering", () => {
-  const markup = renderToStaticMarkup(
-    createElement(ShellBallInputWindow, {
-      mode: "interactive",
-      voicePreview: null,
-      value: "draft",
-      onValueChange: () => {},
-      onAttachFile: () => {},
-      onSubmit: () => {},
-      onFocusChange: () => {},
-    }),
-  );
-
-  assert.match(markup, /shell-ball-input-bar/);
-  assert.doesNotMatch(markup, /shell-ball-bubble-zone/);
-});
-
-test("shell-ball voice window owns lock and cancel hint rendering", () => {
-  const voiceWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallVoiceWindow.tsx"), "utf8");
-  const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
-  const voiceHintsSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallVoiceHints.tsx"), "utf8");
-
-  assert.equal(typeof ShellBallVoiceWindow, "function");
-  assert.match(voiceWindowSource, /useShellBallHelperWindowSnapshot\(\{ role: "voice" \}\)/);
-  assert.match(voiceWindowSource, /role: "voice",\s*visible: snapshot\.visibility\.voice,\s*clickThrough: true/);
-  assert.match(voiceWindowSource, /hintMode=\{snapshot\.voiceHintMode\}/);
-  assert.doesNotMatch(mascotSource, /shell-ball-mascot__voice-hint--cancel/);
-  assert.doesNotMatch(voiceHintsSource, />锁定</);
-  assert.doesNotMatch(voiceHintsSource, />取消</);
-});
-
 test("shell-ball speech recognition treats no-speech as a silent retryable interruption", () => {
   assert.equal(shouldLogShellBallSpeechRecognitionError("no-speech"), false);
   assert.equal(shouldLogShellBallSpeechRecognitionError("network"), true);
@@ -4987,19 +4822,6 @@ test("shell-ball app routes real selection snapshots into input focus and an ack
     ),
     true,
   );
-});
-
-test("shell-ball input window skips window-focus pointer handling for the resize grip", () => {
-  const inputWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallInputWindow.tsx"), "utf8");
-  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
-
-  assert.match(inputWindowSource, /target\.closest\('\[data-shell-ball-input-resize-handle="true"\]'\)/);
-  assert.match(inputWindowSource, /clickThrough:\s*snapshot\.inputInteraction\.clickThrough/);
-  assert.match(inputWindowSource, /if \(isResizingRef\.current\) \{[\s\S]*return;[\s\S]*\}/);
-  assert.match(inputWindowSource, /function handlePointerLeave\(\) \{[\s\S]*void emitShellBallInputHover\(false\);[\s\S]*\}/);
-  assert.doesNotMatch(inputWindowSource, /activeElement\.blur\(\)/);
-  assert.match(coordinatorSource, /function handleCoordinatorInputHoverChange\(active: boolean\) \{/);
-  assert.match(coordinatorSource, /handlersRef\.current\.onInputHoverChange\(active\);/);
 });
 
 test("shell-ball resize drag keeps pointer capture and releases resize state on cleanup", () => {
