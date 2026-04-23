@@ -35,18 +35,15 @@ import {
 } from "../../platform/shellBallWindowController";
 import { setShellBallInteractiveRegions, setShellBallPressLock } from "../../platform/shellBallWindow";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
+import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
   advanceDesktopOnboarding,
-  clearDesktopOnboardingSession,
+  setDesktopOnboardingPresentation,
   shouldAutoStartDesktopOnboarding,
   startDesktopOnboarding,
 } from "@/features/onboarding/onboardingService";
+import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
-import {
-  hideShellBallOnboardingWindow,
-  positionShellBallOnboardingWindow,
-  showShellBallOnboardingWindow,
-} from "@/platform/onboardingWindowController";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -337,12 +334,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     },
   });
   const isEdgeDocked = edgeDockState.side !== null;
-  const isShellBallOnboardingVisible =
-    onboardingSession?.isOpen === true &&
-    (onboardingSession.step === "welcome" ||
-      onboardingSession.step === "shell_ball_intro" ||
-      onboardingSession.step === "shell_ball_hold_voice" ||
-      onboardingSession.step === "shell_ball_double_click");
   const windowFrameRef = useRef(windowFrame);
   dragDropHandlersRef.current = {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
@@ -456,41 +447,25 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       return;
     }
 
-    let disposed = false;
-
-    void (async () => {
-      await clearDesktopOnboardingSession();
-      if (disposed) {
-        return;
-      }
-
-      if (!shouldAutoStartDesktopOnboarding()) {
-        return;
-      }
-
-      await startDesktopOnboarding("first_launch");
-    })();
-
-    return () => {
-      disposed = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
+    if (!shouldAutoStartDesktopOnboarding()) {
       return;
     }
 
-    if (!isShellBallOnboardingVisible) {
-      void hideShellBallOnboardingWindow();
+    if (onboardingSession !== null) {
       return;
     }
 
-    void (async () => {
-      await positionShellBallOnboardingWindow();
-      await showShellBallOnboardingWindow();
-    })();
-  }, [isShellBallOnboardingVisible, windowFrame]);
+    void startDesktopOnboarding("first_launch");
+  }, [onboardingSession]);
+
+  useDesktopOnboardingActions(
+    "shell-ball",
+    useCallback((action) => {
+      if (action.type === "open_dashboard") {
+        void openOrFocusDesktopWindow("dashboard");
+      }
+    }, []),
+  );
 
   useEffect(() => {
     const wasVoiceActive =
@@ -702,6 +677,34 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     void openOrFocusDesktopWindow("dashboard");
   }
+
+  useEffect(() => {
+    if (
+      onboardingSession?.isOpen !== true ||
+      (onboardingSession.step !== "welcome" &&
+        onboardingSession.step !== "shell_ball_intro" &&
+        onboardingSession.step !== "shell_ball_hold_voice" &&
+        onboardingSession.step !== "shell_ball_double_click")
+    ) {
+      return;
+    }
+
+    void (async () => {
+      const presentation = await buildDesktopOnboardingPresentation({
+        anchors:
+          onboardingSession.step === "welcome"
+            ? []
+            : [mascotRef.current?.querySelector(".shell-ball-mascot__hotspot") ?? mascotRef.current],
+        placement: onboardingSession.step === "welcome" ? "center" : undefined,
+        step: onboardingSession.step,
+        windowLabel: "shell-ball",
+      });
+
+      if (presentation !== null) {
+        await setDesktopOnboardingPresentation(presentation);
+      }
+    })();
+  }, [mascotRef, onboardingSession]);
 
   const handleSurfaceTextDrop = useCallback((text: string) => {
     handleDroppedText(text);
@@ -925,7 +928,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       dashboardTransitionPhase={dashboardTransitionPhase}
       edgeDockRevealed={edgeDockState.revealed}
       edgeDockSide={edgeDockState.side}
-      highlightMascot={isShellBallOnboardingVisible && onboardingSession?.step !== "welcome"}
       mascotRef={mascotRef}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,

@@ -2,7 +2,7 @@
  * ControlPanelApp renders the desktop settings surface with a sidebar-driven
  * layout while preserving the existing draft, inspection, and save flows.
  */
-import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   BrainCircuit,
   CircleHelp,
@@ -25,11 +25,10 @@ import {
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { OnboardingOverlay } from "@/features/onboarding/OnboardingOverlay";
+import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
   advanceDesktopOnboarding,
-  completeDesktopOnboarding,
-  skipDesktopOnboarding,
+  setDesktopOnboardingPresentation,
   startDesktopOnboarding,
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
@@ -405,6 +404,8 @@ function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPane
  */
 export function ControlPanelApp() {
   const onboardingSession = useDesktopOnboardingSession();
+  const modelsCardRef = useRef<HTMLDivElement | null>(null);
+  const actionBarRef = useRef<HTMLDivElement | null>(null);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
@@ -452,6 +453,38 @@ export function ControlPanelApp() {
     if (onboardingSession?.isOpen === true && onboardingSession.step === "control_panel_api_key") {
       setActiveSection("models");
     }
+  }, [onboardingSession]);
+
+  useEffect(() => {
+    if (onboardingSession?.isOpen !== true) {
+      return;
+    }
+
+    if (onboardingSession.step === "control_panel_api_key" && draft?.settings.models.provider_api_key_configured) {
+      void advanceDesktopOnboarding("done");
+    }
+  }, [draft?.settings.models.provider_api_key_configured, onboardingSession]);
+
+  useEffect(() => {
+    if (
+      onboardingSession?.isOpen !== true ||
+      (onboardingSession.step !== "control_panel_api_key" && onboardingSession.step !== "done")
+    ) {
+      return;
+    }
+
+    void (async () => {
+      const presentation = await buildDesktopOnboardingPresentation({
+        anchors: onboardingSession.step === "control_panel_api_key" ? [modelsCardRef.current, actionBarRef.current] : [],
+        placement: onboardingSession.step === "control_panel_api_key" ? "top-left" : "center",
+        step: onboardingSession.step,
+        windowLabel: "control-panel",
+      });
+
+      if (presentation !== null) {
+        await setDesktopOnboardingPresentation(presentation);
+      }
+    })();
   }, [onboardingSession]);
 
   if (!draft || !panelData) {
@@ -538,9 +571,6 @@ export function ControlPanelApp() {
       setDraft(nextDraft);
       setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart, result.source));
 
-      if (onboardingSession?.isOpen === true && onboardingSession.step === "control_panel_api_key" && nextDraft.settings.models.provider_api_key_configured) {
-        void advanceDesktopOnboarding("done");
-      }
     } catch (error) {
       if (error instanceof ControlPanelSaveError && error.partialResult) {
         const nextPanelData = applyControlPanelSaveResult(panelData, error.partialResult);
@@ -909,11 +939,8 @@ export function ControlPanelApp() {
       case "models":
         return (
           <>
-            <SettingsCard
-              className={onboardingSession?.isOpen === true && onboardingSession.step === "control_panel_api_key" ? "desktop-onboarding-highlight" : undefined}
-              title="模型路由"
-              description="配置 provider、接口地址和默认模型。"
-            >
+            <div ref={modelsCardRef}>
+              <SettingsCard title="模型路由" description="配置 provider、接口地址和默认模型。">
               <ControlLine label="Provider" hint="当前任务默认使用的模型提供商。">
                 <TextField.Root
                   className="control-panel-shell__input"
@@ -992,7 +1019,8 @@ export function ControlPanelApp() {
                   }))
                 }
               />
-            </SettingsCard>
+              </SettingsCard>
+            </div>
 
             <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
               <InfoRow label="当前模型" value={draft.settings.models.model} />
@@ -1083,7 +1111,7 @@ export function ControlPanelApp() {
 
           <div className="control-panel-shell__cards">{renderSectionContent()}</div>
 
-          <div className={`control-panel-shell__action-bar ${onboardingSession?.isOpen === true && onboardingSession.step === "control_panel_api_key" ? "desktop-onboarding-highlight" : ""}`}>
+          <div ref={actionBarRef} className="control-panel-shell__action-bar">
             <div className="control-panel-shell__action-statuses">
               {saveStateValue}
               {draft.warnings && draft.warnings.length > 0 ? (
@@ -1143,40 +1171,6 @@ export function ControlPanelApp() {
           </div>
         </section>
       </div>
-
-      {onboardingSession?.isOpen === true && onboardingSession.step === "control_panel_api_key" ? (
-        <OnboardingOverlay
-          body={draft.settings.models.provider_api_key_configured ? "当前 provider 的 API Key 已经配置完成，保存后就可以正式开始使用产品。" : "首次使用建议先完成 API Key 配置。填写后点击“保存设置”，产品就会进入可用状态。"}
-          endLabel="结束引导"
-          footer={draft.settings.models.provider_api_key_configured ? "如果你想更换密钥，重新输入并保存即可。" : "未配置 API Key 时，部分功能暂不可用。你也可以先结束引导，稍后再回来配置。"}
-          onEnd={() => {
-            void skipDesktopOnboarding();
-          }}
-          onPrimary={() => {
-            void advanceDesktopOnboarding("done");
-          }}
-          onSecondary={() => {
-            void advanceDesktopOnboarding("done");
-          }}
-          primaryLabel={draft.settings.models.provider_api_key_configured ? "下一步" : "稍后配置"}
-          secondaryLabel="跳过本步"
-          stepLabel="第 6 步 / 6"
-          title="完成 API Key 配置"
-        />
-      ) : null}
-
-      {onboardingSession?.isOpen === true && onboardingSession.step === "done" ? (
-        <OnboardingOverlay
-          body="你已经学会了最基本的使用方式。之后可以在控制面板末尾重新查看这份引导，现在就可以开始使用产品了。"
-          onPrimary={() => {
-            void completeDesktopOnboarding();
-          }}
-          placement="modal"
-          primaryLabel="开始使用"
-          stepLabel="已完成"
-          title="准备好了"
-        />
-      ) : null}
     </main>
   );
 }

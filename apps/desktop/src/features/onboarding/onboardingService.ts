@@ -48,6 +48,11 @@ export type DesktopOnboardingPresentation = {
   windowLabel: "shell-ball" | "dashboard" | "control-panel";
 };
 
+export type DesktopOnboardingActionRequest = {
+  targetWindow: "shell-ball" | "dashboard" | "control-panel";
+  type: "open_control_panel" | "open_dashboard";
+};
+
 const DESKTOP_ONBOARDING_STATUS_KEY = "cialloclaw.desktop.onboarding.status";
 const DESKTOP_ONBOARDING_SESSION_KEY = "cialloclaw.desktop.onboarding.session";
 const DESKTOP_ONBOARDING_PRESENTATION_KEY = "cialloclaw.desktop.onboarding.presentation";
@@ -81,6 +86,14 @@ function dispatchLocalPresentationChanged(presentation: DesktopOnboardingPresent
   window.dispatchEvent(
     new CustomEvent<DesktopOnboardingPresentation | null>(desktopOnboardingLocalEvents.presentationChanged, {
       detail: presentation,
+    }),
+  );
+}
+
+function dispatchLocalActionRequested(action: DesktopOnboardingActionRequest) {
+  window.dispatchEvent(
+    new CustomEvent<DesktopOnboardingActionRequest>(desktopOnboardingLocalEvents.actionRequested, {
+      detail: action,
     }),
   );
 }
@@ -128,6 +141,30 @@ async function broadcastPresentation(presentation: DesktopOnboardingPresentation
         await targetWindow.emit(desktopOnboardingEvents.presentationChanged, presentation);
       } catch (error) {
         console.warn("desktop onboarding presentation sync failed", error);
+      }
+    }),
+  );
+}
+
+export async function requestDesktopOnboardingAction(action: DesktopOnboardingActionRequest) {
+  dispatchLocalActionRequested(action);
+
+  const currentWindowLabel = getCurrentWindow().label;
+  await Promise.all(
+    DESKTOP_ONBOARDING_WINDOW_LABELS.map(async (label) => {
+      if (label === currentWindowLabel) {
+        return;
+      }
+
+      try {
+        const targetWindow = await Window.getByLabel(label);
+        if (targetWindow === null) {
+          return;
+        }
+
+        await targetWindow.emit(desktopOnboardingEvents.actionRequested, action);
+      } catch (error) {
+        console.warn("desktop onboarding action sync failed", error);
       }
     }),
   );

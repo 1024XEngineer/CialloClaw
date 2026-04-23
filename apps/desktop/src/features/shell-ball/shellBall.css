@@ -620,15 +620,6 @@ body[data-app-window="shell-ball"],
   z-index: 4;
 }
 
-.shell-ball-surface__mascot-shell[data-onboarding-highlight="true"] {
-  border-radius: 999px;
-  box-shadow:
-    0 0 0 2px rgba(234, 154, 69, 0.78),
-    0 0 0 10px rgba(255, 240, 220, 0.42),
-    0 22px 44px -28px rgba(31, 21, 14, 0.44);
-  z-index: 121;
-}
-
 .shell-ball-surface__overlay {
   inset: 0;
   pointer-events: none;

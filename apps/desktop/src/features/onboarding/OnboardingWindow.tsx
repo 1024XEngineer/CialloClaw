@@ -6,6 +6,7 @@ import {
   advanceDesktopOnboarding,
   completeDesktopOnboarding,
   skipDesktopOnboarding,
+  requestDesktopOnboardingAction,
 } from "./onboardingService";
 import { useDesktopOnboardingPresentation } from "./useDesktopOnboardingPresentation";
 import { useDesktopOnboardingSession } from "./useDesktopOnboardingSession";
@@ -132,12 +133,20 @@ export function OnboardingWindow() {
         void advanceDesktopOnboarding("shell_ball_double_click");
         return;
       case "shell_ball_double_click":
+        void requestDesktopOnboardingAction({
+          targetWindow: "shell-ball",
+          type: "open_dashboard",
+        });
         void advanceDesktopOnboarding("dashboard_overview");
         return;
       case "dashboard_overview":
         void advanceDesktopOnboarding("tray_hint");
         return;
       case "tray_hint":
+        void requestDesktopOnboardingAction({
+          targetWindow: "dashboard",
+          type: "open_control_panel",
+        });
         void advanceDesktopOnboarding("control_panel_api_key");
         return;
       case "control_panel_api_key":
