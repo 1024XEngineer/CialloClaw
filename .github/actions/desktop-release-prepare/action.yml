@@ -115,7 +115,9 @@ runs:
       id: build_sidecar
       shell: pwsh
       run: |
-        $targetTriple = (& rustc --print host-tuple).Trim()
+        $targetTriple = ((rustc -vV) | Select-String '^host: ' | ForEach-Object {
+          $_.Line.Substring(6).Trim()
+        })
         if ([string]::IsNullOrWhiteSpace($targetTriple)) {
           throw "Failed to determine the Rust target triple for the local-service sidecar."
         }
