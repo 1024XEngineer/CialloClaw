@@ -18,10 +18,13 @@ import {
 } from "../../platform/shellBallWindowController";
 import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
+import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import type { ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
+import { startTaskFromSelectedText } from "@/services/taskService";
+import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
   createDefaultShellBallWindowSnapshot,
   createShellBallWindowSnapshot,
@@ -62,6 +65,8 @@ type ShellBallCoordinatorInput = {
   onInputHoverChange: (active: boolean) => void;
   onInputFocusChange: (focused: boolean) => void;
   onSubmitText: () => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null | void;
+  onSubmitVoiceText?: (text: string) => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null;
+  getCurrentConversationSessionId?: () => string | undefined;
   onAttachFile: () => void;
   onPrimaryClick: () => void;
 };
@@ -73,13 +78,27 @@ type ShellBallHelperSnapshotInput = {
 
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
-  performTaskOpenExecution: (plan: {
-    feedback: string;
-    mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
-    path: string | null;
-    taskId: string | null;
-    url: string | null;
-  }) => Promise<string>;
+  performTaskOpenExecution: (
+    plan: {
+      feedback: string;
+      mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+      path: string | null;
+      taskId: string | null;
+      url: string | null;
+    },
+    options?: {
+      onOpenTaskDetail?: (input: {
+        plan: {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        };
+        taskId: string;
+      }) => Promise<string | void> | string | void;
+    },
+  ) => Promise<string>;
   resolveTaskOpenExecutionPlan: (result: unknown) => {
     feedback: string;
     mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
@@ -89,6 +108,7 @@ type ShellBallTaskOutputServiceModule = {
   };
 };
 
+const defaultSubmitVoiceText: NonNullable<ShellBallCoordinatorInput["onSubmitVoiceText"]> = () => null;
 let shellBallTaskOutputServicePromise: Promise<ShellBallTaskOutputServiceModule> | null = null;
 
 // Lazy-load the dashboard delivery-open helpers so shell-ball can reuse the
@@ -350,6 +370,7 @@ export function shouldAutoOpenShellBallDeliveryResult(
   }
 
   switch (deliveryResult.type) {
+    case "task_detail":
     case "workspace_document":
     case "open_file":
     case "reveal_in_folder":
@@ -545,6 +566,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputHoverChange: input.onInputHoverChange,
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
+    onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
+    getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   });
@@ -562,6 +585,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputHoverChange: input.onInputHoverChange,
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
+    onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
+    getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   };
@@ -653,7 +678,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       const taskOutputService = await loadShellBallTaskOutputService();
       const openResult = await taskOutputService.openTaskDeliveryForTask(taskId, undefined, "rpc");
       const plan = taskOutputService.resolveTaskOpenExecutionPlan(openResult);
-      const feedback = await taskOutputService.performTaskOpenExecution(plan);
+      const feedback = await taskOutputService.performTaskOpenExecution(plan, {
+        onOpenTaskDetail: async ({ taskId: resolvedTaskId }) => {
+          await requestDashboardTaskDetailOpen(resolvedTaskId);
+          return plan.feedback;
+        },
+      });
 
       if (plan.mode === "copy_path" || feedback !== plan.feedback) {
         appendShellBallAutoOpenFeedback({
@@ -721,23 +751,101 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handlersRef.current.onAppendPendingFiles(normalizedPaths);
   }, []);
 
-  const handleSelectedTextPrompt = useCallback((text: string) => {
+  /**
+   * Selected-text intake should enter the same formal task pipeline as other
+   * shell-ball entries. The orb click is only the acceptance gesture; the
+   * actual selected content must continue through `agent.task.start`.
+   */
+  const handleSelectedTextPrompt = useCallback(async (selection: ShellBallSelectionSnapshot | string) => {
+    const text = typeof selection === "string" ? selection : selection.text;
+    const pageContext = typeof selection === "string" ? undefined : selection.page_context;
+    const normalizedText = text.trim();
+    const createdAt = new Date().toISOString();
     const turnIndex = allocateBubbleTurnIndex();
+    const previewBubbleItem = createShellBallTextBubbleItem({
+      role: "agent",
+      text: createShellBallSelectedTextPreview(text),
+      bubbleType: "status",
+      createdAt,
+      turnIndex,
+      turnPhase: 0,
+    });
+
+    if (normalizedText === "") {
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          previewBubbleItem,
+        ]),
+      );
+      revealBubbleRegion();
+      return;
+    }
+
+    const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+      createdAt: new Date().toISOString(),
+      turnIndex,
+      turnPhase: 1,
+    });
+
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
-        createShellBallTextBubbleItem({
-          role: "agent",
-          text: createShellBallSelectedTextPreview(text),
-          bubbleType: "status",
-          createdAt: new Date().toISOString(),
-          turnIndex,
-          turnPhase: 0,
-        }),
+        previewBubbleItem,
+        pendingAgentBubbleItem,
       ]),
     );
     revealBubbleRegion();
-  }, [revealBubbleRegion]);
+
+    try {
+      const result = await startTaskFromSelectedText(normalizedText, {
+        delivery: {
+          preferred: "bubble",
+          fallback: "task_detail",
+        },
+        pageContext,
+        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
+        source: "floating_ball",
+      });
+
+      if (!isShellBallInputSubmitResult(result)) {
+        setBubbleItems((currentItems) =>
+          replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+        );
+        return;
+      }
+
+      shellBallTaskIdsRef.current.add(result.task.task_id);
+      bindTaskToBubbleTurn(result.task.task_id, turnIndex);
+      setBubbleItems((currentItems) =>
+        replaceShellBallPendingBubble(
+          currentItems,
+          pendingAgentBubbleItem.bubble.bubble_id,
+          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ),
+      );
+      revealBubbleRegion();
+      void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+    } catch (error) {
+      console.warn("shell-ball selected text submit failed", error);
+      setBubbleItems((currentItems) =>
+        replaceShellBallPendingBubble(
+          currentItems,
+          pendingAgentBubbleItem.bubble.bubble_id,
+          createShellBallTaskErrorBubbleItem({
+            createdAt: new Date().toISOString(),
+            error,
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ),
+      );
+      revealBubbleRegion();
+    }
+  }, [autoOpenShellBallDeliveryResult, revealBubbleRegion]);
 
   /**
    * Submits clipboard text through the formal shell-ball text input path while
@@ -777,6 +885,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         source: "floating_ball",
         trigger: "hover_text_input",
         inputMode: "text",
+        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
         options: {
           confirm_required: false,
           preferred_delivery: "bubble",
@@ -1167,21 +1276,89 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handledFinalizedSpeechPayloadRef.current = finalizedSpeechPayload;
     appendedVoiceBubbleSequenceRef.current += 1;
     const turnIndex = allocateBubbleTurnIndex();
+    const userBubbleItem = createShellBallFinalizedSpeechBubbleItem({
+      text: finalizedSpeechPayload,
+      sequence: appendedVoiceBubbleSequenceRef.current,
+      createdAt: new Date().toISOString(),
+      turnIndex,
+      turnPhase: 0,
+    });
+    const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+      createdAt: new Date().toISOString(),
+      turnIndex,
+      turnPhase: 1,
+    });
 
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
-        createShellBallFinalizedSpeechBubbleItem({
-          text: finalizedSpeechPayload,
-          sequence: appendedVoiceBubbleSequenceRef.current,
-          createdAt: new Date().toISOString(),
-          turnIndex,
-          turnPhase: 0,
-        }),
+        userBubbleItem,
+        pendingAgentBubbleItem,
       ]),
     );
-    handlersRef.current.onFinalizedSpeechHandled();
-  }, [input.finalizedSpeechPayload]);
+    revealBubbleRegion();
+
+    /**
+     * Voice submissions should reuse the same task/bubble/delivery pipeline as
+     * hover-text submissions so the shell-ball can track task detail routing and
+     * formal delivery auto-open consistently.
+     */
+    void Promise.resolve(handlersRef.current.onSubmitVoiceText(finalizedSpeechPayload))
+      .then((result) => {
+        if (!isShellBallInputSubmitResult(result)) {
+          setBubbleItems((currentItems) =>
+            replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+          );
+          return;
+        }
+
+        shellBallTaskIdsRef.current.add(result.task.task_id);
+        bindTaskToBubbleTurn(result.task.task_id, turnIndex);
+        setBubbleItems((currentItems) => {
+          const nextItems = currentItems.map((item) =>
+            item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+              ? {
+                  ...item,
+                  bubble: {
+                    ...item.bubble,
+                    task_id: result.task.task_id,
+                  },
+                }
+              : item,
+          );
+
+          return replaceShellBallPendingBubble(
+            nextItems,
+            pendingAgentBubbleItem.bubble.bubble_id,
+            createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+              turnIndex,
+              turnPhase: 1,
+            }),
+          );
+        });
+        revealBubbleRegion();
+        void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+      })
+      .catch((error) => {
+        console.warn("shell-ball voice submit failed", error);
+        setBubbleItems((currentItems) =>
+          replaceShellBallPendingBubble(
+            currentItems,
+            pendingAgentBubbleItem.bubble.bubble_id,
+            createShellBallTaskErrorBubbleItem({
+              createdAt: new Date().toISOString(),
+              error,
+              turnIndex,
+              turnPhase: 1,
+            }),
+          ),
+        );
+        revealBubbleRegion();
+      })
+      .finally(() => {
+        handlersRef.current.onFinalizedSpeechHandled();
+      });
+  }, [autoOpenShellBallDeliveryResult, input.finalizedSpeechPayload, revealBubbleRegion]);
 
   useEffect(() => {
     return subscribeDeliveryReady((payload) => {

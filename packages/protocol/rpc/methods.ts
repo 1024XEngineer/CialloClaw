@@ -850,7 +850,7 @@ export interface AgentPluginDetailGetResult {
   tools: PluginToolContract[];
 }
 
-// TaskUpdatedNotification 定义当前模块的接口约束。
+// TaskUpdatedNotification carries the minimal task status delta emitted by the backend.
 export interface TaskUpdatedNotification {
   task_id: string;
   session_id: Task["session_id"];

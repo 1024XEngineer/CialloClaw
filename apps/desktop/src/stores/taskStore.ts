@@ -5,6 +5,7 @@ import type { Task } from "@cialloclaw/protocol";
 // seededTask 定义当前模块的基础变量。
 const seededTask: Task = {
   task_id: "task_demo_001",
+  session_id: null,
   title: "整理拖入的规划笔记并输出重点摘要",
   source_type: "dragged_file",
   status: "confirming_intent",
