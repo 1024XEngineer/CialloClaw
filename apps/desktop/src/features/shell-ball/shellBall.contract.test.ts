@@ -815,6 +815,9 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
 
   assert.deepEqual(parsedCapabilityConfig.windows, [
     "shell-ball",
+    "shell-ball-bubble",
+    "shell-ball-input",
+    "shell-ball-voice",
     "shell-ball-bubble-pinned-*",
     "dashboard",
     "control-panel",
@@ -841,6 +844,24 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.deepEqual(generatedCapabilitySchema.default.permissions, parsedCapabilityConfig.permissions);
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-create"), true);
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-unminimize"), true);
+});
+
+test("shell-ball tray hide and show paths cover restored helper windows", () => {
+  const mainSource = readFileSync(
+    resolve(desktopRoot, "src-tauri/src/main.rs"),
+    "utf8",
+  );
+
+  assert.match(mainSource, /const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";/);
+  assert.match(mainSource, /const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";/);
+  assert.match(
+    mainSource,
+    /let shell_ball_labels = \\[\s\S]*SHELL_BALL_WINDOW_LABEL,[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\];/,
+  );
+  assert.match(
+    mainSource,
+    /for label in \\[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\] \{/,
+  );
 });
 
 test("shell-ball pinned window labels and capabilities stay deterministic", () => {
