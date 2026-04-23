@@ -21,6 +21,16 @@
     "core:window:allow-minimize",
     "core:window:allow-unminimize",
     "core:window:allow-start-dragging",
-    "clipboard-manager:allow-read-text"
+    "clipboard-manager:allow-read-text",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "bin/cialloclaw-service",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }
