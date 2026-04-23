@@ -37,18 +37,13 @@ jobs:
           $shortSha = $env:GITHUB_SHA.Substring(0, 7)
           $packageJson = Get-Content 'apps/desktop/package.json' -Raw | ConvertFrom-Json
           $baseVersion = $packageJson.version
-          if ($baseVersion -notmatch '^(?<core>\d+\.\d+\.\d+)') {
-            throw "The desktop package version must start with a semver core."
-          }
-
-          $baseVersionCore = $Matches.core
           $utcNow = [DateTime]::UtcNow
-          $tipVersion = "{0}-{1}{2:000}.{3}.{4}" -f `
-            $baseVersionCore, `
-            $utcNow.ToString('yy'), `
-            $utcNow.DayOfYear, `
-            $utcNow.ToString('HHmm'), `
-            $utcNow.ToString('ss')
+          $tipDisplayVersion = "{0:yyyyMMdd}.{1}" -f $utcNow, $env:GITHUB_RUN_NUMBER
+          $tipAppVersion = "0.0.0-{0}.{1}.{2}.{3}" -f `
+            $utcNow.Year, `
+            $utcNow.Month, `
+            $utcNow.Day, `
+            [int]$env:GITHUB_RUN_NUMBER
           $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA"
 
           if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS_SHA) -and $env:PREVIOUS_SHA -ne '0000000000000000000000000000000000000000') {
@@ -56,7 +51,8 @@ jobs:
           }
 
           "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
-          "tip_version=$tipVersion" >> $env:GITHUB_OUTPUT
+          "tip_display_version=$tipDisplayVersion" >> $env:GITHUB_OUTPUT
+          "tip_app_version=$tipAppVersion" >> $env:GITHUB_OUTPUT
           "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
           "compare_url=$compareUrl" >> $env:GITHUB_OUTPUT
 
@@ -64,7 +60,7 @@ jobs:
         id: prepare
         uses: ./.github/actions/desktop-release-prepare
         with:
-          release_version: ${{ steps.meta.outputs.tip_version }}
+          release_version: ${{ steps.meta.outputs.tip_app_version }}
 
       - name: Replace the previous tip release
         env:
@@ -85,7 +81,8 @@ jobs:
             echo
             echo "- Release tag: \`tip\`"
             echo "- Release name: \`tip (${{ steps.meta.outputs.short_sha }})\`"
-            echo "- Tip build version: \`${{ steps.meta.outputs.tip_version }}\`"
+            echo "- Tip build version: \`${{ steps.meta.outputs.tip_display_version }}\`"
+            echo "- Bundled app version: \`${{ steps.meta.outputs.tip_app_version }}\`"
             echo "- Base desktop version: \`${{ steps.meta.outputs.base_version }}\`"
             echo "- Target SHA: \`${{ github.sha }}\`"
             echo "- Triggered by: \`${{ github.event_name }}\`"

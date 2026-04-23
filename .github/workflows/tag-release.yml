@@ -32,49 +32,37 @@ jobs:
           set -euo pipefail
 
           release_tag="${GITHUB_REF_NAME}"
-          release_version="${release_tag#v}"
+          release_display_version="${release_tag#v}"
 
-          if [ -z "$release_version" ] || [ "$release_version" = "$release_tag" ]; then
+          if [ -z "$release_display_version" ] || [ "$release_display_version" = "$release_tag" ]; then
             echo "The release tag must start with 'v' and include a version." >&2
             exit 1
           fi
 
-          if [[ ! "$release_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-.+)?$ ]]; then
-            echo "The release tag must resolve to a semver-like version." >&2
+          if [[ "$release_display_version" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})\.([0-9]+)$ ]]; then
+            release_year=$((10#${BASH_REMATCH[1]}))
+            release_month=$((10#${BASH_REMATCH[2]}))
+            release_day=$((10#${BASH_REMATCH[3]}))
+            release_sequence=$((10#${BASH_REMATCH[4]}))
+            release_app_version="0.0.0-${release_year}.${release_month}.${release_day}.${release_sequence}"
+          elif [[ "$release_display_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            release_app_version="$release_display_version"
+          else
+            echo "The release tag must resolve to YYYYMMDD.N or semver." >&2
             exit 1
-          fi
-
-          release_core="${BASH_REMATCH[1]}"
-          prerelease="${release_version#"$release_core"}"
-          resolved_release_version="$release_version"
-
-          if [ "$prerelease" != "$release_version" ]; then
-            prerelease="${prerelease#-}"
-            prerelease_valid=true
-            IFS='.' read -r -a prerelease_parts <<< "$prerelease"
-
-            for part in "${prerelease_parts[@]}"; do
-              if [[ ! "$part" =~ ^[0-9]+$ ]] || (( 10#$part > 65535 )); then
-                prerelease_valid=false
-                break
-              fi
-            done
-
-            if [ "$prerelease_valid" != true ]; then
-              resolved_release_version="${release_core}-$(date -u +%y%j).$(date -u +%H%M).$(date -u +%S)"
-            fi
           fi
 
           {
             echo "release_tag=$release_tag"
-            echo "release_version=$resolved_release_version"
+            echo "release_display_version=$release_display_version"
+            echo "release_app_version=$release_app_version"
           } >> "$GITHUB_OUTPUT"
 
       - name: Prepare the desktop release payload
         id: prepare
         uses: ./.github/actions/desktop-release-prepare
         with:
-          release_version: ${{ steps.meta.outputs.release_version }}
+          release_version: ${{ steps.meta.outputs.release_app_version }}
 
       - name: Compose release metadata
         id: release_meta
@@ -85,7 +73,8 @@ jobs:
             echo "## Release Metadata"
             echo
             echo "- Release tag: \`${{ steps.meta.outputs.release_tag }}\`"
-            echo "- Release version: \`${{ steps.meta.outputs.release_version }}\`"
+            echo "- Release version: \`${{ steps.meta.outputs.release_display_version }}\`"
+            echo "- Bundled app version: \`${{ steps.meta.outputs.release_app_version }}\`"
             echo "- Target SHA: \`${{ github.sha }}\`"
             echo "- Triggered by: \`${{ github.event_name }}\`"
             echo "- Bundled Go sidecar: \`${{ steps.prepare.outputs.sidecar_file_name }}\`"
