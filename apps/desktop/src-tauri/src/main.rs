@@ -601,7 +601,7 @@ fn start_local_service_sidecar(
         ),
     );
 
-    let sidecar_command = match app.shell().sidecar("local-service") {
+    let sidecar_command = match app.shell().sidecar("cialloclaw-service") {
         Ok(command) => command,
         Err(error) => {
             if cfg!(debug_assertions) {
