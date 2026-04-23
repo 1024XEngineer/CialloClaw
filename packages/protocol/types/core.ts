@@ -535,6 +535,7 @@ export interface ToolCall {
   run_id: string;
   task_id: string;
   step_id: string | null;
+  created_at: string | null;
   tool_name: string;
   status: ToolCallStatus;
   input: Record<string, unknown>;

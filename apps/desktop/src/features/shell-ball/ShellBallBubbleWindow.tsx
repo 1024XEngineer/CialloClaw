@@ -19,7 +19,9 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
   const { rootRef } = useShellBallWindowMetrics({
     role: "bubble",
     visible: snapshot.visibility.bubble,
-    clickThrough: snapshot.bubbleRegion.clickThrough,
+    // Keep the validation pass simple: the detached bubble window should not
+    // compete with the orb for pointer ownership at all.
+    clickThrough: true,
   });
 
   return (

@@ -126,7 +126,7 @@ func New(cfg config.Config) (*App, error) {
 		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
-		if errors.Is(err, model.ErrSecretSourceFailed) && (errors.Is(err, model.ErrSecretNotFound) || errors.Is(err, storage.ErrSecretNotFound)) {
+		if shouldFallbackBootstrapModelService(err) {
 			modelService = model.NewService(cfg.Model)
 		} else {
 			_ = storageService.Close()
@@ -182,6 +182,17 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
+func shouldFallbackBootstrapModelService(err error) bool {
+	if !errors.Is(err, model.ErrSecretSourceFailed) {
+		return false
+	}
+	return errors.Is(err, model.ErrSecretNotFound) ||
+		errors.Is(err, storage.ErrSecretNotFound) ||
+		errors.Is(err, storage.ErrSecretStoreAccessFailed) ||
+		errors.Is(err, storage.ErrStrongholdUnavailable) ||
+		errors.Is(err, storage.ErrStrongholdAccessFailed)
+}
+
 func persistPluginManifests(ctx context.Context, storageService *storage.Service, pluginService *plugin.Service) error {
 	if storageService == nil || pluginService == nil || storageService.PluginManifestStore() == nil {
 		return nil
@@ -213,7 +224,7 @@ func persistPluginManifests(ctx context.Context, storageService *storage.Service
 			Version:          manifest.Version,
 			Entry:            manifest.Entry,
 			Source:           manifest.Source,
-			Summary:          fmt.Sprintf("Built-in plugin manifest for %s.", manifest.Name),
+			Summary:          firstNonEmptyBootstrap(strings.TrimSpace(manifest.Summary), fmt.Sprintf("Built-in plugin manifest for %s.", manifest.Name)),
 			CapabilitiesJSON: string(capabilitiesJSON),
 			PermissionsJSON:  string(permissionsJSON),
 			RuntimeNamesJSON: string(runtimeNamesJSON),
@@ -225,6 +236,15 @@ func persistPluginManifests(ctx context.Context, storageService *storage.Service
 		}
 	}
 	return nil
+}
+
+func firstNonEmptyBootstrap(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // Start launches the RPC server and background runtimes.

@@ -44,6 +44,10 @@ type ShellBallInteractionConsumedEvent =
 
 type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
 
+function canStartShellBallVoiceEntry(state: ShellBallVisualState | undefined) {
+  return state !== "confirming_intent" && state !== "voice_listening" && state !== "voice_locked";
+}
+
 const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
   "audio-capture",
   "language-not-supported",
@@ -747,7 +751,6 @@ export function useShellBallInteraction() {
   function handleRegionEnter() {
     regionActiveRef.current = true;
     setRegionActive(true);
-    dispatch("pointer_enter_hotspot", { regionActive: true, hoverRetained: false });
   }
 
   function handleRegionLeave() {
@@ -759,24 +762,16 @@ export function useShellBallInteraction() {
       setCurrentVoicePreview(null);
     }
 
-    dispatch("pointer_leave_region", {
-      regionActive: false,
-      hoverRetained: getHoverRetained(),
-    });
+    if (controllerRef.current?.getState() === "hover_input" && inputFocusedRef.current) {
+      dispatch("pointer_leave_region", {
+        regionActive: false,
+        hoverRetained: true,
+      });
+    }
   }
 
   function handleInputHoverChange(active: boolean) {
     inputHoveredRef.current = active;
-
-    if (active) {
-      dispatch("pointer_enter_hotspot", {
-        regionActive: regionActiveRef.current,
-        hoverRetained: true,
-      });
-      return;
-    }
-
-    syncHoverRetention();
   }
 
   async function handleSubmitText() {
@@ -883,7 +878,7 @@ export function useShellBallInteraction() {
       return;
     }
 
-    if (currentState !== "idle" && currentState !== "hover_input") {
+    if (!canStartShellBallVoiceEntry(currentState)) {
       return;
     }
 
@@ -1042,7 +1037,14 @@ export function useShellBallInteraction() {
     }
 
     if (!focused) {
-      syncHoverRetention();
+      // Blur should fully retire the higher-level input-active state so later
+      // mascot gestures do not inherit a stale input hover relationship.
+      inputHoveredRef.current = false;
+      controllerRef.current?.forceState("idle", {
+        regionActive: false,
+        hoverRetained: false,
+      });
+      syncVisualState();
     }
   }
 

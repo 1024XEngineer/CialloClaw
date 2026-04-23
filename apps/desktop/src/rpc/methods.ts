@@ -59,6 +59,8 @@ import type {
   AgentTaskDetailGetResult,
   AgentTaskEventsListParams,
   AgentTaskEventsListResult,
+  AgentTaskToolCallsListParams,
+  AgentTaskToolCallsListResult,
   AgentTaskListParams,
   AgentTaskListResult,
   AgentTaskStartParams,
@@ -104,6 +106,11 @@ export function getTaskDetail(params: AgentTaskDetailGetParams) {
 // listTaskEvents loads persisted runtime events for the current task detail view.
 export function listTaskEvents(params: AgentTaskEventsListParams) {
   return rpcClient.request<AgentTaskEventsListResult>(RPC_METHODS.AGENT_TASK_EVENTS_LIST, params);
+}
+
+// listTaskToolCalls loads persisted tool_call records for task-level debugging.
+export function listTaskToolCalls(params: AgentTaskToolCallsListParams) {
+  return rpcClient.request<AgentTaskToolCallsListResult>(RPC_METHODS.AGENT_TASK_TOOL_CALLS_LIST, params);
 }
 
 // steerTask appends one follow-up instruction to an active task.

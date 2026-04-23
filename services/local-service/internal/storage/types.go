@@ -339,6 +339,8 @@ type TaskRunRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	RequestSource     string
+	RequestTrigger    string
 	ExecutionAttempt  int
 	Title             string
 	SourceType        string
@@ -383,6 +385,8 @@ type TaskRunStore interface {
 	DeleteTaskRun(ctx context.Context, taskID string) error
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
+	GetTaskRun(ctx context.Context, taskID string) (TaskRunRecord, error)
+	LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error)
 }
 
 // TaskRecord describes one first-class tasks row aligned with the product layer.
@@ -390,6 +394,7 @@ type TaskRecord struct {
 	TaskID              string
 	SessionID           string
 	RunID               string
+	PrimaryRunID        string
 	Title               string
 	SourceType          string
 	Status              string
@@ -400,6 +405,8 @@ type TaskRecord struct {
 	CurrentStep         string
 	CurrentStepStatus   string
 	RiskLevel           string
+	RequestSource       string
+	RequestTrigger      string
 	StartedAt           string
 	UpdatedAt           string
 	FinishedAt          string

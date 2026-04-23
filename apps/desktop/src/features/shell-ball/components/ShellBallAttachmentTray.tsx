@@ -16,7 +16,7 @@ export function ShellBallAttachmentTray({ paths, onRemove }: ShellBallAttachment
         const fileName = getShellBallAttachmentFileName(path);
 
         return (
-          <li key={path} className="shell-ball-attachment-tray__item" title={fileName}>
+          <li key={path} className="shell-ball-attachment-tray__item" data-shell-ball-interactive="true" title={fileName}>
             <div className="shell-ball-attachment-tray__meta">
               <span className="shell-ball-attachment-tray__leading">
                 <FileText className="shell-ball-attachment-tray__icon" />
@@ -26,7 +26,9 @@ export function ShellBallAttachmentTray({ paths, onRemove }: ShellBallAttachment
             <button
               type="button"
               className="shell-ball-attachment-tray__remove"
+              data-shell-ball-interactive="true"
               aria-label={`Remove ${fileName}`}
+              title={`Remove ${fileName}`}
               onClick={() => {
                 onRemove(path);
               }}

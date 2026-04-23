@@ -126,6 +126,7 @@ type ToolCallRecord struct {
 	RunID      string         `json:"run_id"`
 	TaskID     string         `json:"task_id"`
 	StepID     string         `json:"step_id"`
+	CreatedAt  string         `json:"created_at"`
 	ToolName   string         `json:"tool_name"`
 	Status     ToolCallStatus `json:"status"`
 	Input      map[string]any `json:"input,omitempty"`

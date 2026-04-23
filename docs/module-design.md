@@ -680,7 +680,7 @@ flowchart TB
 
 - 插件与技能不直接面向前端开放调用，必须通过 `/services/local-service` 统一编排。
 - 模型切换不改变 `task / run / delivery_result` 等核心协议对象。
-- 插件、技能、模型配置都必须有版本、来源与权限描述，以便进入审计和 Trace。
+- 插件、技能、模型配置都必须有版本、来源与权限描述，以便进入审计和 Trace；当前 owner-5 后端已把 built-in skill / blueprint / prompt、model provider route 与 plugin manifest 统一归到 extension asset attribution 边界。
 
 ### 3.7.8 上下文感知与主动协助域
 
@@ -702,7 +702,7 @@ flowchart TB
 
 当前 owner-5 底座实现约束：
 
-- 后端可先维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
+- 后端可先维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），并可把当前内建 perception package 的 version/source/permissions 通过 execution attribution 回流到 Trace/Eval，但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
 - recommendation 与 dashboard 可消费这些 richer signals 做机会识别和高价值信号增强，但正式推荐触发边界仍需由 4 号统一冻结；
 - 屏幕 / 页面 / 复制 / 停留 / 切换信号属于上下文候选输入，不得直接替代 `task` 创建、授权或正式交付链路；
 - 感知能力增强应优先服务主动推荐、Context Manager 和 memory query，而不是先扩散到新的前端页面状态模型。

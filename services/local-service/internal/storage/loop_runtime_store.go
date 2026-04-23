@@ -14,6 +14,7 @@ type RunRecord struct {
 	RunID      string
 	TaskID     string
 	SessionID  string
+	SourceType string
 	Status     string
 	IntentName string
 	StartedAt  string
@@ -265,9 +266,9 @@ func NewSQLiteLoopRuntimeStore(databasePath string) (*SQLiteLoopRuntimeStore, er
 
 func (s *SQLiteLoopRuntimeStore) SaveRun(ctx context.Context, record RunRecord) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO runs (run_id, task_id, session_id, status, intent_name, started_at, updated_at, finished_at, stop_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.RunID, record.TaskID, record.SessionID, record.Status, record.IntentName, record.StartedAt, record.UpdatedAt, nullableRuntimeString(record.FinishedAt), nullableRuntimeString(record.StopReason))
+		INSERT OR REPLACE INTO runs (run_id, task_id, session_id, source_type, status, intent_name, started_at, updated_at, finished_at, stop_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.RunID, record.TaskID, record.SessionID, strings.TrimSpace(record.SourceType), record.Status, record.IntentName, record.StartedAt, record.UpdatedAt, nullableRuntimeString(record.FinishedAt), nullableRuntimeString(record.StopReason))
 	if err != nil {
 		return fmt.Errorf("write run record: %w", err)
 	}
@@ -313,7 +314,7 @@ func (s *SQLiteLoopRuntimeStore) SaveDeliveryResult(ctx context.Context, record 
 
 func (s *SQLiteLoopRuntimeStore) GetRun(ctx context.Context, runID string) (RunRecord, error) {
 	var record RunRecord
-	err := s.db.QueryRowContext(ctx, `SELECT run_id, task_id, session_id, status, intent_name, started_at, updated_at, COALESCE(finished_at, ''), COALESCE(stop_reason, '') FROM runs WHERE run_id = ?`, runID).Scan(&record.RunID, &record.TaskID, &record.SessionID, &record.Status, &record.IntentName, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.StopReason)
+	err := s.db.QueryRowContext(ctx, `SELECT run_id, task_id, session_id, COALESCE(source_type, ''), status, intent_name, started_at, updated_at, COALESCE(finished_at, ''), COALESCE(stop_reason, '') FROM runs WHERE run_id = ?`, runID).Scan(&record.RunID, &record.TaskID, &record.SessionID, &record.SourceType, &record.Status, &record.IntentName, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.StopReason)
 	if err != nil {
 		return RunRecord{}, err
 	}
@@ -513,7 +514,8 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 		return fmt.Errorf("set sqlite busy timeout: %w", err)
 	}
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, intent_name TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, stop_reason TEXT);`,
+		`CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, source_type TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, intent_name TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, stop_reason TEXT);`,
+		`ALTER TABLE runs ADD COLUMN source_type TEXT NOT NULL DEFAULT '';`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_task_time ON runs(task_id, started_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS steps (step_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, order_index INTEGER NOT NULL, attempt_index INTEGER NOT NULL DEFAULT 1, segment_kind TEXT NOT NULL DEFAULT 'initial', loop_round INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, status TEXT NOT NULL, input_summary TEXT, output_summary TEXT, stop_reason TEXT, started_at TEXT NOT NULL, completed_at TEXT, planner_input TEXT, planner_output TEXT, observation TEXT, tool_name TEXT, tool_call_id TEXT);`,
 		`ALTER TABLE steps ADD COLUMN attempt_index INTEGER NOT NULL DEFAULT 1;`,

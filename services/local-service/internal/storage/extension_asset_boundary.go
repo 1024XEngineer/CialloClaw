@@ -65,6 +65,11 @@ func normalizeExtensionAssetReference(item ExtensionAssetReference) (ExtensionAs
 		if !allowedPluginManifestSource(normalized.Source) {
 			return ExtensionAssetReference{}, false
 		}
+	case ExtensionAssetKindModelProviderRoute, ExtensionAssetKindPerceptionPackage:
+		if normalized.Source != extensionAssetSourceBuiltin {
+			return ExtensionAssetReference{}, false
+		}
+		normalized.RuntimeNames = nil
 	default:
 		return ExtensionAssetReference{}, false
 	}

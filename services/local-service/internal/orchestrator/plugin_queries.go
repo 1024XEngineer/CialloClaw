@@ -9,11 +9,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-type pluginRuntimeRef struct {
-	Name string
-	Kind plugin.RuntimeKind
-}
-
 type pluginCapabilitySummary struct {
 	ToolName    string
 	DisplayName string
@@ -56,19 +51,6 @@ type pluginToolContract struct {
 	DeliveryMap    pluginDeliveryMapping
 }
 
-type pluginCatalogEntry struct {
-	PluginID    string
-	Name        string
-	DisplayName string
-	Summary     string
-	Version     string
-	Source      string
-	Entry       string
-	Enabled     bool
-	Permissions []string
-	RuntimeRefs []pluginRuntimeRef
-}
-
 // PluginList returns the task-adjacent plugin catalog view documented by the
 // protocol without exposing raw runtime caches as the primary list object.
 func (s *Service) PluginList(params map[string]any) (map[string]any, error) {
@@ -88,8 +70,8 @@ func (s *Service) PluginList(params map[string]any) (map[string]any, error) {
 	runtimeIndex := pluginRuntimeIndex(s.plugin)
 	toolIndex := pluginToolMetadataIndex(s.tools)
 	items := make([]map[string]any, 0)
-	for _, entry := range builtinPluginCatalog() {
-		runtimes := pluginRuntimesForEntry(entry, runtimeIndex)
+	for _, entry := range pluginCatalogEntries(s.plugin) {
+		runtimes := pluginRuntimesForCatalogEntry(entry, runtimeIndex)
 		if !matchesPluginListQuery(entry, runtimes, query, kinds, health) {
 			continue
 		}
@@ -121,7 +103,7 @@ func (s *Service) PluginDetailGet(params map[string]any) (map[string]any, error)
 	if pluginID == "" {
 		return nil, errors.New("plugin_id is required")
 	}
-	entry, ok := pluginCatalogEntryByID(pluginID)
+	snapshot, ok := pluginCatalogSnapshot(s.plugin, pluginID)
 	if !ok {
 		return nil, errors.New("plugin_id is invalid")
 	}
@@ -129,85 +111,81 @@ func (s *Service) PluginDetailGet(params map[string]any) (map[string]any, error)
 	includeRuntime := boolValue(params, "include_runtime", true)
 	includeMetrics := boolValue(params, "include_metrics", true)
 	includeEvents := boolValue(params, "include_events", true)
-	runtimeIndex := pluginRuntimeIndex(s.plugin)
-	metricIndex := pluginMetricIndex(s.plugin)
-	events := pluginEventSlice(s.plugin)
+	toolIndex := pluginToolMetadataIndex(s.tools)
 
 	result := map[string]any{
-		"plugin":        pluginManifestItem(entry, runtimeIndex, s.tools),
+		"plugin":        pluginManifestItemFromToolIndex(snapshot.Catalog, pluginToolMetadataForCatalogEntry(snapshot.Catalog, snapshot.Runtimes, toolIndex)),
 		"runtimes":      []map[string]any{},
 		"metrics":       []map[string]any{},
 		"recent_events": []map[string]any{},
-		"tools":         pluginToolItems(pluginToolContractsForEntry(entry, runtimeIndex, s.tools)),
+		"tools":         pluginToolItems(pluginToolContractsForCatalogEntry(snapshot.Catalog, snapshot.Runtimes, s.tools)),
 	}
 	if includeRuntime {
-		result["runtimes"] = pluginRuntimeItems(pluginRuntimesForEntry(entry, runtimeIndex))
+		result["runtimes"] = pluginRuntimeItems(snapshot.Runtimes)
 	}
 	if includeMetrics {
-		result["metrics"] = pluginMetricItems(pluginMetricsForEntry(entry, metricIndex))
+		result["metrics"] = pluginMetricItems(snapshot.Metrics)
 	}
 	if includeEvents {
-		result["recent_events"] = pluginEventItems(pluginEventsForEntry(entry, events))
+		result["recent_events"] = pluginEventItems(snapshot.RecentEvents)
 	}
 	return result, nil
 }
 
-func builtinPluginCatalog() []pluginCatalogEntry {
-	return []pluginCatalogEntry{
-		{
-			PluginID:    "playwright",
-			Name:        "playwright",
-			DisplayName: "Playwright Browser Automation",
-			Summary:     "Read, search, and interact with web pages through the controlled Playwright runtime.",
-			Version:     "builtin-1",
-			Source:      "builtin",
-			Entry:       "worker://playwright_worker",
-			Enabled:     true,
-			Permissions: []string{"workspace:read", "web:read"},
-			RuntimeRefs: []pluginRuntimeRef{
-				{Name: "playwright_worker", Kind: plugin.RuntimeKindWorker},
-				{Name: "playwright_sidecar", Kind: plugin.RuntimeKindSidecar},
-			},
-		},
-		{
-			PluginID:    "ocr",
-			Name:        "ocr",
-			DisplayName: "OCR Worker",
-			Summary:     "Extract text from files, images and PDFs.",
-			Version:     "builtin-1",
-			Source:      "builtin",
-			Entry:       "worker://ocr_worker",
-			Enabled:     true,
-			Permissions: []string{"workspace:read"},
-			RuntimeRefs: []pluginRuntimeRef{
-				{Name: "ocr_worker", Kind: plugin.RuntimeKindWorker},
-			},
-		},
-		{
-			PluginID:    "media",
-			Name:        "media",
-			DisplayName: "Media Worker",
-			Summary:     "Normalize recordings, transcode media, and extract representative frames.",
-			Version:     "builtin-1",
-			Source:      "builtin",
-			Entry:       "worker://media_worker",
-			Enabled:     true,
-			Permissions: []string{"workspace:read", "workspace:write"},
-			RuntimeRefs: []pluginRuntimeRef{
-				{Name: "media_worker", Kind: plugin.RuntimeKindWorker},
-			},
-		},
+func pluginCatalogEntries(service *plugin.Service) []plugin.CatalogEntry {
+	if service == nil {
+		return plugin.BuiltinCatalogEntries()
 	}
+	return service.CatalogEntries()
 }
 
-func pluginCatalogEntryByID(pluginID string) (pluginCatalogEntry, bool) {
-	needle := strings.TrimSpace(pluginID)
-	for _, entry := range builtinPluginCatalog() {
-		if entry.PluginID == needle {
-			return entry, true
-		}
+func pluginCatalogSnapshot(service *plugin.Service, pluginID string) (plugin.CatalogSnapshot, bool) {
+	if service == nil {
+		var nilService *plugin.Service
+		return nilService.CatalogSnapshot(pluginID)
 	}
-	return pluginCatalogEntry{}, false
+	return service.CatalogSnapshot(pluginID)
+}
+
+func pluginCatalogSnapshots(service *plugin.Service) []plugin.CatalogSnapshot {
+	if service == nil {
+		var nilService *plugin.Service
+		return nilService.CatalogSnapshots()
+	}
+	return service.CatalogSnapshots()
+}
+
+func pluginSnapshotRuntimes(items []plugin.CatalogSnapshot) []plugin.RuntimeState {
+	result := make([]plugin.RuntimeState, 0)
+	for _, item := range items {
+		result = append(result, item.Runtimes...)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func pluginSnapshotMetrics(items []plugin.CatalogSnapshot) []plugin.MetricSnapshot {
+	result := make([]plugin.MetricSnapshot, 0)
+	for _, item := range items {
+		result = append(result, item.Metrics...)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func pluginSnapshotEvents(items []plugin.CatalogSnapshot) []plugin.RuntimeEvent {
+	result := make([]plugin.RuntimeEvent, 0)
+	for _, item := range items {
+		result = append(result, item.RecentEvents...)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func pluginRuntimeIndex(service *plugin.Service) map[string]plugin.RuntimeState {
@@ -221,25 +199,7 @@ func pluginRuntimeIndex(service *plugin.Service) map[string]plugin.RuntimeState 
 	return index
 }
 
-func pluginMetricIndex(service *plugin.Service) map[string]plugin.MetricSnapshot {
-	if service == nil {
-		return map[string]plugin.MetricSnapshot{}
-	}
-	index := make(map[string]plugin.MetricSnapshot)
-	for _, item := range service.MetricSnapshots() {
-		index[pluginRefKey(item.Kind, item.Name)] = item
-	}
-	return index
-}
-
-func pluginEventSlice(service *plugin.Service) []plugin.RuntimeEvent {
-	if service == nil {
-		return nil
-	}
-	return service.RuntimeEvents()
-}
-
-func pluginRuntimesForEntry(entry pluginCatalogEntry, runtimeIndex map[string]plugin.RuntimeState) []plugin.RuntimeState {
+func pluginRuntimesForCatalogEntry(entry plugin.CatalogEntry, runtimeIndex map[string]plugin.RuntimeState) []plugin.RuntimeState {
 	result := make([]plugin.RuntimeState, 0, len(entry.RuntimeRefs))
 	for _, ref := range entry.RuntimeRefs {
 		if runtime, ok := runtimeIndex[pluginRefKey(ref.Kind, ref.Name)]; ok {
@@ -249,34 +209,7 @@ func pluginRuntimesForEntry(entry pluginCatalogEntry, runtimeIndex map[string]pl
 	return result
 }
 
-func pluginMetricsForEntry(entry pluginCatalogEntry, metricIndex map[string]plugin.MetricSnapshot) []plugin.MetricSnapshot {
-	result := make([]plugin.MetricSnapshot, 0, len(entry.RuntimeRefs))
-	for _, ref := range entry.RuntimeRefs {
-		if metric, ok := metricIndex[pluginRefKey(ref.Kind, ref.Name)]; ok {
-			result = append(result, metric)
-		}
-	}
-	return result
-}
-
-func pluginEventsForEntry(entry pluginCatalogEntry, events []plugin.RuntimeEvent) []plugin.RuntimeEvent {
-	if len(events) == 0 {
-		return nil
-	}
-	allowed := make(map[string]struct{}, len(entry.RuntimeRefs))
-	for _, ref := range entry.RuntimeRefs {
-		allowed[pluginRefKey(ref.Kind, ref.Name)] = struct{}{}
-	}
-	result := make([]plugin.RuntimeEvent, 0, len(events))
-	for _, event := range events {
-		if _, ok := allowed[pluginRefKey(event.Kind, event.Name)]; ok {
-			result = append(result, event)
-		}
-	}
-	return result
-}
-
-func matchesPluginListQuery(entry pluginCatalogEntry, runtimes []plugin.RuntimeState, query string, kinds []string, health []string) bool {
+func matchesPluginListQuery(entry plugin.CatalogEntry, runtimes []plugin.RuntimeState, query string, kinds []string, health []string) bool {
 	if query != "" {
 		haystack := strings.ToLower(strings.Join([]string{entry.PluginID, entry.Name, entry.DisplayName, entry.Summary}, " "))
 		if !strings.Contains(haystack, strings.ToLower(query)) {
@@ -360,17 +293,13 @@ func pluginRefKey(kind plugin.RuntimeKind, name string) string {
 	return string(kind) + "::" + strings.TrimSpace(name)
 }
 
-func pluginListItem(entry pluginCatalogEntry, runtimes []plugin.RuntimeState, toolIndex map[string]tools.ToolMetadata) map[string]any {
-	result := pluginManifestItemFromToolIndex(entry, pluginToolMetadataForEntry(entry, runtimes, toolIndex))
+func pluginListItem(entry plugin.CatalogEntry, runtimes []plugin.RuntimeState, toolIndex map[string]tools.ToolMetadata) map[string]any {
+	result := pluginManifestItemFromToolIndex(entry, pluginToolMetadataForCatalogEntry(entry, runtimes, toolIndex))
 	result["runtimes"] = pluginRuntimeItems(runtimes)
 	return result
 }
 
-func pluginManifestItem(entry pluginCatalogEntry, runtimeIndex map[string]plugin.RuntimeState, registry *tools.Registry) map[string]any {
-	return pluginManifestItemFromToolIndex(entry, pluginToolMetadataForEntry(entry, pluginRuntimesForEntry(entry, runtimeIndex), pluginToolMetadataIndex(registry)))
-}
-
-func pluginManifestItemFromToolIndex(entry pluginCatalogEntry, metadata []tools.ToolMetadata) map[string]any {
+func pluginManifestItemFromToolIndex(entry plugin.CatalogEntry, metadata []tools.ToolMetadata) map[string]any {
 	return map[string]any{
 		"plugin_id":    entry.PluginID,
 		"name":         entry.Name,
@@ -399,10 +328,18 @@ func pluginToolMetadataIndex(registry *tools.Registry) map[string]tools.ToolMeta
 // pluginToolMetadataForEntry resolves one plugin's declared runtime capabilities
 // back to the registered tool metadata so query surfaces stay aligned with the
 // real execution registry.
-func pluginToolMetadataForEntry(entry pluginCatalogEntry, runtimes []plugin.RuntimeState, toolIndex map[string]tools.ToolMetadata) []tools.ToolMetadata {
+func pluginToolMetadataForCatalogEntry(entry plugin.CatalogEntry, runtimes []plugin.RuntimeState, toolIndex map[string]tools.ToolMetadata) []tools.ToolMetadata {
 	names := make(map[string]struct{})
 	for _, runtime := range runtimes {
 		for _, capability := range runtime.Capabilities {
+			name := strings.TrimSpace(capability)
+			if name != "" {
+				names[name] = struct{}{}
+			}
+		}
+	}
+	if len(names) == 0 {
+		for _, capability := range entry.Capabilities {
 			name := strings.TrimSpace(capability)
 			if name != "" {
 				names[name] = struct{}{}
@@ -450,8 +387,8 @@ func pluginCapabilityItems(items []pluginCapabilitySummary) []map[string]any {
 	return result
 }
 
-func pluginToolContractsForEntry(entry pluginCatalogEntry, runtimeIndex map[string]plugin.RuntimeState, registry *tools.Registry) []pluginToolContract {
-	metadata := pluginToolMetadataForEntry(entry, pluginRuntimesForEntry(entry, runtimeIndex), pluginToolMetadataIndex(registry))
+func pluginToolContractsForCatalogEntry(entry plugin.CatalogEntry, runtimes []plugin.RuntimeState, registry *tools.Registry) []pluginToolContract {
+	metadata := pluginToolMetadataForCatalogEntry(entry, runtimes, pluginToolMetadataIndex(registry))
 	result := make([]pluginToolContract, 0, len(metadata))
 	for _, item := range metadata {
 		result = append(result, pluginToolContract{

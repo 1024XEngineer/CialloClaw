@@ -59,6 +59,9 @@ func TestPersistPluginManifestsHandlesNilAndSuccessPaths(t *testing.T) {
 	if err := json.Unmarshal([]byte(items[0].RuntimeNamesJSON), &runtimeNames); err != nil || len(runtimeNames) == 0 {
 		t.Fatalf("expected persisted plugin manifests to include runtime names, names=%+v err=%v", runtimeNames, err)
 	}
+	if items[0].Summary == "" {
+		t.Fatalf("expected persisted plugin manifests to keep manifest summaries, item=%+v", items[0])
+	}
 	if err := persistPluginManifests(context.Background(), service, &plugin.Service{}); err != nil {
 		t.Fatalf("expected empty plugin registry to be ignored, got %v", err)
 	}
@@ -169,17 +172,23 @@ func TestNewModelServiceFallbackAndFailureBranches(t *testing.T) {
 	originalNewModelService := newModelServiceFromConfigForBootstrap
 	defer func() { newModelServiceFromConfigForBootstrap = originalNewModelService }()
 
-	fallbackErrors := []error{model.ErrSecretNotFound, storage.ErrSecretNotFound}
+	fallbackErrors := []error{
+		model.ErrSecretNotFound,
+		storage.ErrSecretNotFound,
+		storage.ErrSecretStoreAccessFailed,
+		storage.ErrStrongholdUnavailable,
+		storage.ErrStrongholdAccessFailed,
+	}
 	for index, missingSecretErr := range fallbackErrors {
 		newModelServiceFromConfigForBootstrap = func(model.ServiceConfig) (*model.Service, error) {
 			return nil, fmt.Errorf("%w: %w", model.ErrSecretSourceFailed, missingSecretErr)
 		}
 		app, err := New(baseConfig(filepath.Join(t.TempDir(), fmt.Sprintf("fallback-%d", index))))
 		if err != nil {
-			t.Fatalf("expected missing secret bootstrap fallback to succeed for %v, got %v", missingSecretErr, err)
+			t.Fatalf("expected bootstrap fallback to succeed for %v, got %v", missingSecretErr, err)
 		}
 		if err := app.Close(); err != nil {
-			t.Fatalf("close app after missing secret fallback failed: %v", err)
+			t.Fatalf("close app after secret fallback failed: %v", err)
 		}
 	}
 

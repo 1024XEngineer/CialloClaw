@@ -71,6 +71,7 @@ export function ShellBallBubbleZone({
       <div
         ref={scrollRef}
         className="shell-ball-bubble-zone__scroll"
+        data-shell-ball-interactive="true"
         onScroll={syncAutoScrollState}
       >
         <div className="shell-ball-bubble-zone__spacer" aria-hidden="true" />

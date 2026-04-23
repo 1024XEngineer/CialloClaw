@@ -80,6 +80,21 @@ type stubMediaWorkerClient struct {
 	err             error
 }
 
+type screenSessionAction struct {
+	sessionID string
+	reason    string
+}
+
+type recordingScreenCaptureClient struct {
+	base                    tools.ScreenCaptureClient
+	startCalls              []tools.ScreenSessionStartInput
+	stopCalls               []screenSessionAction
+	expireCalls             []screenSessionAction
+	cleanupCalls            []tools.ScreenCleanupInput
+	expiredCleanupScanCalls []tools.ScreenCleanupInput
+	captureErr              error
+}
+
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	if b.result.ExitCode == 0 && b.result.Stdout == "" && b.result.Stderr == "" {
 		return tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}, nil
@@ -136,6 +151,46 @@ func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []m
 
 func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (c *recordingScreenCaptureClient) StartSession(ctx context.Context, input tools.ScreenSessionStartInput) (tools.ScreenSessionState, error) {
+	c.startCalls = append(c.startCalls, input)
+	return c.base.StartSession(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) GetSession(ctx context.Context, screenSessionID string) (tools.ScreenSessionState, error) {
+	return c.base.GetSession(ctx, screenSessionID)
+}
+
+func (c *recordingScreenCaptureClient) StopSession(ctx context.Context, screenSessionID, reason string) (tools.ScreenSessionState, error) {
+	c.stopCalls = append(c.stopCalls, screenSessionAction{sessionID: screenSessionID, reason: reason})
+	return c.base.StopSession(ctx, screenSessionID, reason)
+}
+
+func (c *recordingScreenCaptureClient) ExpireSession(ctx context.Context, screenSessionID, reason string) (tools.ScreenSessionState, error) {
+	c.expireCalls = append(c.expireCalls, screenSessionAction{sessionID: screenSessionID, reason: reason})
+	return c.base.ExpireSession(ctx, screenSessionID, reason)
+}
+
+func (c *recordingScreenCaptureClient) CaptureScreenshot(ctx context.Context, input tools.ScreenCaptureInput) (tools.ScreenFrameCandidate, error) {
+	if c.captureErr != nil {
+		return tools.ScreenFrameCandidate{}, c.captureErr
+	}
+	return c.base.CaptureScreenshot(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CaptureKeyframe(ctx context.Context, input tools.ScreenCaptureInput) (tools.KeyframeCaptureResult, error) {
+	return c.base.CaptureKeyframe(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CleanupSessionArtifacts(ctx context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
+	c.cleanupCalls = append(c.cleanupCalls, input)
+	return c.base.CleanupSessionArtifacts(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CleanupExpiredScreenTemps(ctx context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
+	c.expiredCleanupScanCalls = append(c.expiredCleanupScanCalls, input)
+	return c.base.CleanupExpiredScreenTemps(ctx, input)
 }
 
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
@@ -317,8 +372,11 @@ func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Co
 }
 
 type countingTaskRunStore struct {
-	base      storage.TaskRunStore
-	loadCalls int
+	base            storage.TaskRunStore
+	loadCalls       int
+	loadAllCalls    int
+	legacyLoadCalls int
+	getCalls        int
 }
 
 type countingTaskStore struct {
@@ -357,7 +415,20 @@ func (s *countingTaskRunStore) SaveTaskRun(ctx context.Context, record storage.T
 
 func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.TaskRunRecord, error) {
 	s.loadCalls++
+	s.loadAllCalls++
 	return s.base.LoadTaskRuns(ctx)
+}
+
+func (s *countingTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (storage.TaskRunRecord, error) {
+	s.loadCalls++
+	s.getCalls++
+	return s.base.GetTaskRun(ctx, taskID)
+}
+
+func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]storage.TaskRunRecord, error) {
+	s.loadCalls++
+	s.legacyLoadCalls++
+	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
 }
 
 func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
@@ -482,6 +553,10 @@ func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, 
 }
 
 func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient) (*Service, string) {
+	return newTestServiceWithExecutionWorkersAndScreen(t, modelOutput, executionBackend, checkpointWriter, playwrightClient, ocrClient, mediaClient, nil)
+}
+
+func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient, screenClient tools.ScreenCaptureClient) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -510,11 +585,14 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+	if screenClient == nil {
+		screenClient = sidecarclient.NewLocalScreenCaptureClient(fileSystem)
+	}
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -556,7 +634,7 @@ func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -3012,6 +3090,95 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
+	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(readPath), 0o755); err != nil {
+		t.Fatalf("create notes dir: %v", err)
+	}
+	if err := os.WriteFile(readPath, []byte("hello from formal sample chain"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_read_file_sample",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取这个文件",
+		},
+		"intent": map[string]any{
+			"name": "read_file",
+			"arguments": map[string]any{
+				"path": "notes/source.txt",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+
+	toolCallsResult, err := service.TaskToolCallsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	toolCalls := toolCallsResult["items"].([]map[string]any)
+	if len(toolCalls) != 1 || toolCalls[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected one persisted read_file tool call, got %+v", toolCalls)
+	}
+	if _, ok := toolCalls[0]["created_at"].(string); !ok {
+		t.Fatalf("expected persisted read_file tool call to expose created_at, got %+v", toolCalls[0])
+	}
+	if mapValue(toolCalls[0], "input")["path"] != "notes/source.txt" {
+		t.Fatalf("expected persisted read_file path, got %+v", toolCalls[0])
+	}
+
+	eventsResult, err := service.TaskEventsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	events := eventsResult["items"].([]map[string]any)
+	if len(events) != 2 {
+		t.Fatalf("expected tool_call.completed plus delivery.ready, got %+v", events)
+	}
+	foundToolCompleted := false
+	foundDeliveryReady := false
+	for _, event := range events {
+		switch event["type"] {
+		case "tool_call.completed":
+			foundToolCompleted = true
+		case "delivery.ready":
+			foundDeliveryReady = true
+		}
+	}
+	if !foundToolCompleted || !foundDeliveryReady {
+		t.Fatalf("expected persisted read_file runtime events, got %+v", events)
+	}
+
+	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get latest delivery result failed: %v", err)
+	}
+	if !ok || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
+		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["events_count"] != 2 || runtimeSummary["latest_event_type"] != "delivery.ready" {
+		t.Fatalf("expected task detail runtime summary to prefer formal event chain, got %+v", runtimeSummary)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", deliveryResult)
+	}
+}
+
 func TestServiceSubmitInputRespectsPreferredDelivery(t *testing.T) {
 	service := newTestService()
 
@@ -5285,6 +5452,16 @@ func TestLatestTaskFailurePrefersStructuredFailureMetadataOverBudgetSignals(t *t
 	}
 }
 
+func TestClassifyScreenFailureMapsMediaWorkerFailures(t *testing.T) {
+	failureCode, failureCategory := classifyScreenFailure(runengine.TaskRecord{
+		SourceType: "screen_capture",
+		Intent:     map[string]any{"name": "screen_analyze"},
+	}, tools.ErrMediaWorkerFailed)
+	if failureCode != "MEDIA_WORKER_FAILED" || failureCategory != "screen_media" {
+		t.Fatalf("expected media worker failures to map to screen media failure metadata, got code=%s category=%s", failureCode, failureCategory)
+	}
+}
+
 func TestBuildTaskCitationsPreservesDistinctFormalReferencesForSameArtifact(t *testing.T) {
 	task := runengine.TaskRecord{
 		TaskID: "task_screen_multi_citation",
@@ -5922,6 +6099,68 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001_clip_frames/frame-001.jpg", Text: "fatal clip error", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_local_0001/frame_0001.webm", OutputDir: "temp/screen_local_0001/frame_0001_clip_frames", FramePaths: []string{"temp/screen_local_0001/frame_0001_clip_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inputs"), 0o755); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.webm"), []byte("fake screen clip"), 0o644); err != nil {
+		t.Fatalf("write clip input failed: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_clip_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析录屏里的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path":         "inputs/screen.webm",
+				"capture_mode": string(tools.ScreenCaptureModeClip),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start clip screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || stringValue(record.PendingExecution, "capture_mode", "") != string(tools.ScreenCaptureModeClip) {
+		t.Fatalf("expected pending execution to preserve clip capture mode, got %+v", record.PendingExecution)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  task["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "completed" {
+		t.Fatalf("expected authorized clip screen task to complete, got %+v", respondTask)
+	}
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	if err != nil || total != 1 || len(artifacts) != 1 {
+		t.Fatalf("expected one persisted clip screen artifact, total=%d len=%d err=%v", total, len(artifacts), err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(artifacts[0].DeliveryPayloadJSON), &payload); err != nil {
+		t.Fatalf("decode persisted clip payload failed: %v", err)
+	}
+	if payload["capture_mode"] != string(tools.ScreenCaptureModeClip) {
+		t.Fatalf("expected persisted clip payload to keep clip capture_mode, got %+v", payload)
+	}
+	if !strings.HasSuffix(artifacts[0].Path, ".webm") {
+		t.Fatalf("expected clip artifact path to keep webm extension, got %+v", artifacts[0])
+	}
+}
+
 func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
@@ -5972,6 +6211,248 @@ func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T)
 	}
 	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
 		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
+func TestResolveScreenAnalyzeIntentInfersClipModeFromVideoPath(t *testing.T) {
+	service := newTestService()
+	resolvedIntent := service.resolveScreenAnalyzeIntent(contextsvc.TaskContextSnapshot{}, map[string]any{
+		"name": "screen_analyze",
+		"arguments": map[string]any{
+			"path": "clips/demo.webm",
+		},
+	})
+	arguments := mapValue(resolvedIntent, "arguments")
+	if arguments["capture_mode"] != "clip" {
+		t.Fatalf("expected video-backed screen analyze intent to infer clip capture mode, got %+v", arguments)
+	}
+}
+
+func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001_frames/frame-001.jpg", Text: "release validation failed in recording", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{
+		transcodeResult: tools.MediaTranscodeResult{InputPath: "temp/screen_sess_0001/frame_0001.webm", OutputPath: "temp/screen_sess_0001/frame_0001_normalized.mp4", Format: "mp4", Source: "media_worker_ffmpeg"},
+		framesResult:    tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_0001/frame_0001_normalized.mp4", OutputDir: "temp/screen_sess_0001/frame_0001_frames", FramePaths: []string{"temp/screen_sess_0001/frame_0001_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"},
+	}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "clips"), 0o755); err != nil {
+		t.Fatalf("mkdir clip source dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "clips", "demo.webm"), []byte("fake clip"), 0o644); err != nil {
+		t.Fatalf("write clip source failed: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_clip_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析这段录屏",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "clips/demo.webm",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start clip screen analyze task failed: %v", err)
+	}
+	result, err = service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond for clip screen analyze failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" || task["source_type"] != "screen_capture" {
+		t.Fatalf("expected clip screen analyze task to complete on screen_capture path, got %+v", task)
+	}
+	taskID := task["task_id"].(string)
+	record, exists := service.runEngine.GetTask(taskID)
+	if !exists || len(record.Artifacts) != 1 {
+		t.Fatalf("expected clip screen analyze to persist one runtime artifact, got %+v", record)
+	}
+	if record.Artifacts[0]["mime_type"] != "video/webm" {
+		t.Fatalf("expected clip screen analyze to keep video artifact mime type, got %+v", record.Artifacts)
+	}
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	if err != nil || total != 1 || len(artifacts) != 1 {
+		t.Fatalf("expected one persisted clip artifact, total=%d len=%d err=%v", total, len(artifacts), err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(artifacts[0].DeliveryPayloadJSON), &payload); err != nil {
+		t.Fatalf("decode persisted clip artifact payload failed: %v", err)
+	}
+	if payload["capture_mode"] != "clip" || payload["screen_session_id"] == "" {
+		t.Fatalf("expected clip artifact payload to preserve clip capture metadata, got %+v", payload)
+	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get for clip screen task failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["artifact_type"] != "screen_capture" || citations[0]["excerpt_text"] == nil {
+		t.Fatalf("expected clip screen task detail to expose one formal citation, got %+v", citations)
+	}
+}
+
+func TestServiceScreenAnalyzeStopsSessionAfterSuccessfulApproval(t *testing.T) {
+	baseScreenClient := sidecarclient.NewInMemoryScreenCaptureClient()
+	expiredSession, err := baseScreenClient.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_expired_cleanup", TaskID: "task_expired_cleanup", RunID: "run_expired_cleanup", CaptureMode: tools.ScreenCaptureModeScreenshot, TTL: time.Millisecond})
+	if err != nil {
+		t.Fatalf("start expired cleanup seed session failed: %v", err)
+	}
+	if _, err := baseScreenClient.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: expiredSession.ScreenSessionID, CaptureMode: tools.ScreenCaptureModeScreenshot, Source: "screen_capture"}); err != nil {
+		t.Fatalf("capture expired cleanup seed frame failed: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	screenClient := &recordingScreenCaptureClient{base: baseScreenClient}
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_stop",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	_, err = service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	if len(screenClient.stopCalls) != 1 || screenClient.stopCalls[0].reason != "analysis_completed" {
+		t.Fatalf("expected one successful screen session stop, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expiredCleanupScanCalls) != 1 || screenClient.expiredCleanupScanCalls[0].Reason != "expired_session_scan" {
+		t.Fatalf("expected successful screen analysis to scan expired sessions once, got %+v", screenClient.expiredCleanupScanCalls)
+	}
+	cleanupResult, err := baseScreenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{ScreenSessionID: expiredSession.ScreenSessionID, Reason: "assert_cleanup_scan"})
+	if err != nil || cleanupResult.DeletedCount != 0 {
+		t.Fatalf("expected expired cleanup scan to reclaim old temp artifacts before new execution, result=%+v err=%v", cleanupResult, err)
+	}
+	if len(screenClient.expireCalls) != 0 {
+		t.Fatalf("expected successful screen analysis to avoid expire semantics, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "analysis_completed" || len(screenClient.cleanupCalls[0].Paths) != 1 {
+		t.Fatalf("expected successful screen analysis to cleanup only the tracked capture residue, got %+v", screenClient.cleanupCalls)
+	}
+	if _, err := screenClient.GetSession(context.Background(), screenClient.stopCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected stopped session to become terminal, got err=%v", err)
+	}
+}
+
+func TestServiceScreenAnalyzeFailureExpiresAndCleansSession(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient()}
+	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_cleanup",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected screen analysis failure to end in failed status, got %+v", respondResult)
+	}
+	if len(screenClient.stopCalls) != 0 {
+		t.Fatalf("expected failed screen analysis to avoid stop semantics, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expiredCleanupScanCalls) != 1 || screenClient.expiredCleanupScanCalls[0].Reason != "expired_session_scan" {
+		t.Fatalf("expected failed screen analysis to scan expired sessions once, got %+v", screenClient.expiredCleanupScanCalls)
+	}
+	if len(screenClient.expireCalls) != 1 || screenClient.expireCalls[0].reason != "analysis_failed" {
+		t.Fatalf("expected failed screen analysis to expire session, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "analysis_failed" || screenClient.cleanupCalls[0].ScreenSessionID != screenClient.expireCalls[0].sessionID {
+		t.Fatalf("expected failed screen analysis to cleanup the expired session, got %+v", screenClient.cleanupCalls)
+	}
+	if _, err := screenClient.GetSession(context.Background(), screenClient.expireCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected expired session to become terminal, got err=%v", err)
+	}
+}
+
+func TestServiceScreenAnalyzeCaptureFailureExpiresAndCleansSession(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient(), captureErr: tools.ErrScreenCaptureFailed}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_capture_failure",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond should surface task-centric capture failure result, got %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected screen capture failure to end in failed status, got %+v", respondResult)
+	}
+	if len(screenClient.stopCalls) != 0 {
+		t.Fatalf("expected capture failure to avoid stop semantics, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expiredCleanupScanCalls) != 1 || screenClient.expiredCleanupScanCalls[0].Reason != "expired_session_scan" {
+		t.Fatalf("expected capture failure to scan expired sessions once, got %+v", screenClient.expiredCleanupScanCalls)
+	}
+	if len(screenClient.expireCalls) != 1 || screenClient.expireCalls[0].reason != "capture_failed" {
+		t.Fatalf("expected capture failure to expire session, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "capture_failed" || screenClient.cleanupCalls[0].ScreenSessionID != screenClient.expireCalls[0].sessionID {
+		t.Fatalf("expected capture failure to cleanup the expired session, got %+v", screenClient.cleanupCalls)
 	}
 }
 
@@ -8253,6 +8734,194 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured snapshot detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_snapshot",
+		SessionID:   "sess_structured_snapshot",
+		RunID:       "run_structured_snapshot",
+		Title:       "structured snapshot task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 10, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "workspace_document",
+			"title":        "Structured snapshot result",
+			"preview_text": "snapshot-backed detail",
+			"payload": map[string]any{
+				"task_id": "task_structured_snapshot",
+				"path":    "workspace/structured-snapshot.md",
+				"url":     nil,
+			},
+		},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:  "floating_ball",
+			Trigger: "hover_text_input",
+			Text:    "snapshot-backed detail",
+		},
+		MirrorReferences:  []map[string]any{{"memory_id": "mem_structured_snapshot"}},
+		SteeringMessages:  []string{"keep the current structure"},
+		CurrentStepStatus: "completed",
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_snapshot"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.loadCalls != 0 || countingStore.loadAllCalls != 0 || countingStore.legacyLoadCalls != 0 || countingStore.getCalls != 0 {
+		t.Fatalf("expected structured snapshot detail to avoid task_run reads, got total=%d full=%d legacy=%d get=%d", countingStore.loadCalls, countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	mirrorReferences := result["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_structured_snapshot" {
+		t.Fatalf("expected task detail to reuse structured snapshot mirror references, got %+v", mirrorReferences)
+	}
+	runtimeSummary := result["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected runtime summary to expose structured snapshot steering count, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetReloadsTaskRunWhenStructuredSnapshotIsInvalid(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured invalid snapshot detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_invalid_snapshot",
+		SessionID:   "sess_structured_invalid_snapshot",
+		RunID:       "run_structured_invalid_snapshot",
+		Title:       "structured invalid snapshot task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 11, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "workspace_document",
+			"title":        "Legacy reload result",
+			"preview_text": "legacy task_run detail",
+			"payload": map[string]any{
+				"task_id": "task_structured_invalid_snapshot",
+				"path":    "workspace/legacy-reload.md",
+				"url":     nil,
+			},
+		},
+		MirrorReferences:  []map[string]any{{"memory_id": "mem_legacy_snapshot"}},
+		SteeringMessages:  []string{"resume from legacy snapshot"},
+		CurrentStepStatus: "completed",
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_invalid_snapshot",
+		SessionID:           "sess_structured_invalid_snapshot",
+		RunID:               "run_structured_invalid_snapshot",
+		PrimaryRunID:        "run_structured_invalid_snapshot",
+		Title:               "structured invalid snapshot task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 11, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("overwrite structured task failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_invalid_snapshot"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.loadCalls != 1 || countingStore.getCalls != 1 || countingStore.loadAllCalls != 0 || countingStore.legacyLoadCalls != 0 {
+		t.Fatalf("expected invalid structured snapshot to trigger one direct task_run lookup, got total=%d full=%d legacy=%d get=%d", countingStore.loadCalls, countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	mirrorReferences := result["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_legacy_snapshot" {
+		t.Fatalf("expected invalid structured snapshot to backfill mirror references from task_runs, got %+v", mirrorReferences)
+	}
+	runtimeSummary := result["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected invalid structured snapshot to backfill steering count, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskListUsesLegacyTaskRunLoaderForLegacyOnlyRows(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "legacy task list loader")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	legacyTask := storage.TaskRunRecord{
+		TaskID:            "task_legacy_list_only",
+		SessionID:         "sess_legacy_list_only",
+		RunID:             "run_legacy_list_only",
+		Title:             "legacy list task",
+		SourceType:        "hover_input",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "summarize"},
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "green",
+		StartedAt:         time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC),
+		FinishedAt:        timePointer(time.Date(2026, 4, 15, 12, 6, 0, 0, time.UTC)),
+		CurrentStepStatus: "completed",
+	}
+	if err := countingStore.SaveTaskRun(context.Background(), legacyTask); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), legacyTask.TaskID); err != nil {
+		t.Fatalf("delete structured task failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{"group": "finished"})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.legacyLoadCalls != 1 || countingStore.loadAllCalls != 0 || countingStore.getCalls != 0 {
+		t.Fatalf("expected legacy-only task list to use legacy loader once, got full=%d legacy=%d get=%d", countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != legacyTask.TaskID {
+		t.Fatalf("expected task list to return legacy-only task row, got %+v", items)
+	}
+}
+
 func TestServiceTaskDetailGetStructuredFallbackUsesSessionAndRunStores(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured session run detail")
 	if service.storage == nil {
@@ -8989,6 +9658,754 @@ func TestServiceTaskDetailGetStructuredFallbackRehydratesAuthorizationAndAudit(t
 	auditRecord := detailResult["audit_record"].(map[string]any)
 	if auditRecord["audit_id"] != "audit_structured_screen_governance" {
 		t.Fatalf("expected structured fallback audit record, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStoredScreenFormalObjectsOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored screen detail precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_formal_prefer",
+		Title:             "screen formal preference task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "task_detail",
+		"title":        "runtime detail result",
+		"preview_text": "runtime preview",
+		"payload": map[string]any{
+			"task_id": runtimeTask.TaskID,
+			"path":    "workspace/runtime-screen.png",
+		},
+	}, []map[string]any{{
+		"artifact_id":      "art_screen_formal_prefer",
+		"task_id":          runtimeTask.TaskID,
+		"artifact_type":    "screen_capture",
+		"title":            "runtime-screen.png",
+		"path":             "workspace/runtime-screen.png",
+		"mime_type":        "image/png",
+		"delivery_type":    "task_detail",
+		"delivery_payload": map[string]any{"path": "workspace/runtime-screen.png", "task_id": runtimeTask.TaskID},
+		"created_at":       "2026-04-21T10:05:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if _, ok := service.runEngine.SetCitations(runtimeTask.TaskID, []map[string]any{{
+		"citation_id":       "cit_screen_formal_prefer",
+		"task_id":           runtimeTask.TaskID,
+		"run_id":            runtimeTask.RunID,
+		"source_type":       "file",
+		"source_ref":        "art_screen_formal_prefer",
+		"label":             "runtime label",
+		"artifact_id":       "art_screen_formal_prefer",
+		"artifact_type":     "screen_capture",
+		"evidence_role":     "error_evidence",
+		"excerpt_text":      "runtime excerpt",
+		"screen_session_id": "screen_runtime_prefer",
+	}}); !ok {
+		t.Fatal("expected runtime citations to update")
+	}
+	if _, ok := service.runEngine.ResolveAuthorization(runtimeTask.TaskID, map[string]any{
+		"authorization_record_id": "auth_runtime_prefer",
+		"task_id":                 runtimeTask.TaskID,
+		"approval_id":             "appr_runtime_prefer",
+		"decision":                "allow_once",
+		"remember_rule":           false,
+		"operator":                "runtime",
+		"created_at":              "2026-04-21T10:04:00Z",
+	}, map[string]any{"files": []string{"runtime.txt"}}); !ok {
+		t.Fatal("expected runtime authorization to update")
+	}
+	if _, ok := service.runEngine.AppendAuditData(runtimeTask.TaskID, []map[string]any{{
+		"audit_id":   "audit_runtime_prefer",
+		"task_id":    runtimeTask.TaskID,
+		"type":       "execution",
+		"action":     "execute_task",
+		"summary":    "runtime audit summary",
+		"target":     "workspace/runtime-screen.png",
+		"result":     "success",
+		"created_at": "2026-04-21T10:05:00Z",
+	}}, nil); !ok {
+		t.Fatal("expected runtime audit records to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_screen_formal_prefer",
+		TaskID:              runtimeTask.TaskID,
+		ArtifactType:        "screen_capture",
+		Title:               "stored-screen.png",
+		Path:                "workspace/stored-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"path":"workspace/stored-screen.png","task_id":"` + runtimeTask.TaskID + `","evidence_role":"error_evidence"}`,
+		CreatedAt:           "2026-04-21T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifacts failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), runtimeTask.TaskID, []storage.CitationRecord{{
+		CitationID:      "cit_screen_formal_prefer",
+		TaskID:          runtimeTask.TaskID,
+		RunID:           runtimeTask.RunID,
+		SourceType:      "file",
+		SourceRef:       "art_screen_formal_prefer",
+		Label:           "stored label",
+		ArtifactID:      "art_screen_formal_prefer",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "stored excerpt",
+		ScreenSessionID: "screen_stored_prefer",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("replace stored citations failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + runtimeTask.TaskID,
+		TaskID:           runtimeTask.TaskID,
+		Type:             "task_detail",
+		Title:            "stored detail result",
+		PayloadJSON:      `{"task_id":"` + runtimeTask.TaskID + `","path":"workspace/stored-screen.png","url":null}`,
+		PreviewText:      "stored preview",
+		CreatedAt:        "2026-04-21T10:06:00Z",
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_stored_prefer",
+		TaskID:                runtimeTask.TaskID,
+		ApprovalID:            "appr_stored_prefer",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-21T10:04:30Z",
+	}); err != nil {
+		t.Fatalf("write stored authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_stored_prefer",
+		TaskID:    runtimeTask.TaskID,
+		Type:      "execution",
+		Action:    "execute_task",
+		Summary:   "stored audit summary",
+		Target:    "workspace/stored-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-21T10:05:30Z",
+	}); err != nil {
+		t.Fatalf("write stored audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["preview_text"] != "stored preview" {
+		t.Fatalf("expected stored delivery_result to override runtime compatibility data, got %+v", deliveryResult)
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["path"] != "workspace/stored-screen.png" {
+		t.Fatalf("expected stored artifacts to override runtime compatibility data, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["label"] != "stored label" || citations[0]["excerpt_text"] != "stored excerpt" {
+		t.Fatalf("expected stored citations to override runtime compatibility data, got %+v", citations)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_stored_prefer" {
+		t.Fatalf("expected stored authorization_record to override runtime compatibility data, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_stored_prefer" {
+		t.Fatalf("expected stored audit_record to override runtime compatibility data, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStoredApprovalRequestOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored approval precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_approval_prefer",
+		Title:             "screen approval preference task",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "intent_confirmation",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "intent_confirmation"),
+	})
+	if _, ok := service.runEngine.MarkWaitingApprovalWithPlan(runtimeTask.TaskID, map[string]any{
+		"approval_id":    "appr_runtime_prefer",
+		"task_id":        runtimeTask.TaskID,
+		"operation_name": "screen_capture",
+		"target_object":  "runtime target",
+		"reason":         "runtime reason",
+		"risk_level":     "yellow",
+		"status":         "pending",
+		"created_at":     "2026-04-21T11:00:00Z",
+		"impact_scope":   map[string]any{"files": []string{"runtime.txt"}},
+	}, map[string]any{"kind": "screen_analysis"}, nil); !ok {
+		t.Fatal("expected runtime approval request to update")
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_stored_prefer",
+		TaskID:          runtimeTask.TaskID,
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "stored target",
+		Reason:          "stored reason",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["stored.txt"]}`,
+		CreatedAt:       "2026-04-21T11:00:30Z",
+		UpdatedAt:       "2026-04-21T11:00:30Z",
+	}); err != nil {
+		t.Fatalf("write stored approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest := detailResult["approval_request"].(map[string]any)
+	if approvalRequest["approval_id"] != "appr_stored_prefer" || approvalRequest["target_object"] != "stored target" || approvalRequest["reason"] != "stored reason" {
+		t.Fatalf("expected stored approval_request to override runtime compatibility data, got %+v", approvalRequest)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenFallbackPrefersFormalEvidenceObjects(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen detail formal precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	taskID := "task_structured_screen_formal_precedence"
+	finishedAt := time.Date(2026, 4, 16, 10, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_formal_precedence",
+		RunID:             "run_structured_screen_formal_precedence",
+		Title:             "structured screen precedence task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 10, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Artifacts: []map[string]any{{
+			"artifact_id":      "art_snapshot_screen_precedence",
+			"task_id":          taskID,
+			"artifact_type":    "screen_capture",
+			"title":            "snapshot screen artifact",
+			"path":             "workspace/snapshot-screen.png",
+			"mime_type":        "image/png",
+			"delivery_type":    "task_detail",
+			"delivery_payload": map[string]any{"task_id": taskID, "screen_session_id": "screen_snapshot_precedence", "evidence_role": "error_evidence"},
+		}},
+		Citations: []map[string]any{{
+			"citation_id":       "cit_snapshot_" + taskID,
+			"task_id":           taskID,
+			"run_id":            "run_structured_screen_formal_precedence",
+			"source_type":       "file",
+			"source_ref":        "art_snapshot_screen_precedence",
+			"label":             "snapshot evidence",
+			"artifact_id":       "art_snapshot_screen_precedence",
+			"artifact_type":     "screen_capture",
+			"evidence_role":     "error_evidence",
+			"excerpt_text":      "snapshot excerpt",
+			"screen_session_id": "screen_snapshot_precedence",
+		}},
+		Authorization: map[string]any{
+			"authorization_record_id": "auth_snapshot_screen_precedence",
+			"task_id":                 taskID,
+			"approval_id":             "appr_snapshot_screen_precedence",
+			"decision":                "deny_once",
+			"operator":                "user",
+			"created_at":              "2026-04-16T10:03:00Z",
+		},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_snapshot_delivery_precedence",
+			"task_id":    taskID,
+			"type":       "delivery",
+			"action":     "publish_result",
+			"summary":    "snapshot delivery audit",
+			"target":     "task_detail",
+			"result":     "success",
+			"created_at": "2026-04-16T10:07:00Z",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_formal_precedence",
+		RunID:               "run_structured_screen_formal_precedence",
+		Title:               "structured screen precedence task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_formal_screen_precedence",
+		TaskID:              taskID,
+		ArtifactType:        "screen_capture",
+		Title:               "formal screen artifact",
+		Path:                "artifacts/screen/structured/formal-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"task_id":"` + taskID + `","screen_session_id":"screen_formal_precedence","evidence_role":"error_evidence"}`,
+		CreatedAt:           "2026-04-16T10:05:00Z",
+	}}); err != nil {
+		t.Fatalf("save formal artifact failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_formal_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_screen_formal_precedence",
+		SourceType:      "file",
+		SourceRef:       "art_formal_screen_precedence",
+		Label:           "error_evidence | screen_capture | formal excerpt",
+		ArtifactID:      "art_formal_screen_precedence",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "formal excerpt",
+		ScreenSessionID: "screen_formal_precedence",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save formal citations failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_formal_screen_precedence",
+		TaskID:                taskID,
+		ApprovalID:            "appr_formal_screen_precedence",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-16T10:04:00Z",
+	}); err != nil {
+		t.Fatalf("write formal authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_formal_screen_precedence",
+		TaskID:    taskID,
+		Type:      "screen_capture",
+		Action:    "screen.capture.screenshot_analyze",
+		Summary:   "formal screen evidence audit",
+		Target:    "artifacts/screen/structured/formal-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T10:05:00Z",
+	}); err != nil {
+		t.Fatalf("write formal audit record failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_formal_screen_precedence" {
+		t.Fatalf("expected formal artifact to override snapshot artifact, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["artifact_id"] != "art_formal_screen_precedence" || citations[0]["screen_session_id"] != "screen_formal_precedence" {
+		t.Fatalf("expected formal citation to override snapshot citation, got %+v", citations)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_formal_screen_precedence" || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected formal authorization record to override snapshot authorization, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_formal_screen_precedence" || auditRecord["action"] != "screen.capture.screenshot_analyze" {
+		t.Fatalf("expected formal screen audit to override generic snapshot audit, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenFallbackUsesCurrentRunIDForFormalHydration(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen current run precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	taskID := "task_structured_screen_current_run"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_current_run",
+		RunID:               "run_screen_current_attempt",
+		PrimaryRunID:        "run_screen_primary_attempt",
+		Title:               "structured screen current run task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T09:00:00Z",
+		UpdatedAt:           "2026-04-22T09:05:00Z",
+		FinishedAt:          "2026-04-22T09:06:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_screen_primary_attempt",
+		TaskID:     taskID,
+		SessionID:  "sess_structured_screen_current_run",
+		SourceType: "screen_capture",
+		Status:     "completed",
+		IntentName: "screen_analyze",
+		StartedAt:  "2026-04-22T09:00:00Z",
+		UpdatedAt:  "2026-04-22T09:01:00Z",
+		FinishedAt: "2026-04-22T09:02:00Z",
+		StopReason: "superseded",
+	}); err != nil {
+		t.Fatalf("write primary run failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_screen_current_attempt",
+		TaskID:     taskID,
+		SessionID:  "sess_structured_screen_current_run",
+		SourceType: "screen_capture",
+		Status:     "completed",
+		IntentName: "screen_analyze",
+		StartedAt:  "2026-04-22T09:03:00Z",
+		UpdatedAt:  "2026-04-22T09:05:00Z",
+		FinishedAt: "2026-04-22T09:06:00Z",
+		StopReason: "completed",
+	}); err != nil {
+		t.Fatalf("write current run failed: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_primary_attempt",
+		TaskID:     taskID,
+		RunID:      "run_screen_primary_attempt",
+		CreatedAt:  "2026-04-22T09:02:00Z",
+		ToolName:   "screen_analyze_candidate",
+		Status:     tools.ToolCallStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("write primary tool call failed: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_current_attempt",
+		TaskID:     taskID,
+		RunID:      "run_screen_current_attempt",
+		CreatedAt:  "2026-04-22T09:05:00Z",
+		ToolName:   "screen_analyze_candidate",
+		Status:     tools.ToolCallStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("write current tool call failed: %v", err)
+	}
+
+	task, _, ok := service.taskDetailFromStructuredStorage(taskID)
+	if !ok {
+		t.Fatal("expected structured task detail to load")
+	}
+	if task.RunID != "run_screen_current_attempt" {
+		t.Fatalf("expected structured runtime task to keep current run_id, got %+v", task)
+	}
+	if task.LoopStopReason != "completed" {
+		t.Fatalf("expected structured runtime hydration to use current run stop reason, got %+v", task)
+	}
+	if stringValue(task.LatestToolCall, "tool_call_id", "") != "tool_call_current_attempt" || stringValue(task.LatestToolCall, "run_id", "") != "run_screen_current_attempt" {
+		t.Fatalf("expected structured runtime hydration to use current run tool call, got %+v", task.LatestToolCall)
+	}
+}
+
+func TestServiceTaskDetailGetReloadsTaskRunWhenFormalScreenObjectsMaskInvalidSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen invalid snapshot with formal evidence")
+	if service.storage == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	taskID := "task_structured_screen_invalid_snapshot_formal"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_invalid_snapshot_formal",
+		RunID:               "run_structured_screen_invalid_snapshot_formal",
+		Title:               "structured screen invalid snapshot formal task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T10:00:00Z",
+		UpdatedAt:           "2026-04-22T10:05:00Z",
+		FinishedAt:          "2026-04-22T10:06:00Z",
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_structured_screen_invalid_snapshot_formal",
+		TaskID:              taskID,
+		ArtifactType:        "screen_capture",
+		Title:               "stored-screen.png",
+		Path:                "workspace/stored-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"task_id":"` + taskID + `","path":"workspace/stored-screen.png"}`,
+		CreatedAt:           "2026-04-22T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save formal artifact failed: %v", err)
+	}
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      taskID,
+		SessionID:   "sess_structured_screen_invalid_snapshot_formal",
+		RunID:       "run_structured_screen_invalid_snapshot_formal",
+		Title:       "structured screen invalid snapshot formal task",
+		SourceType:  "screen_capture",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 22, 10, 6, 0, 0, time.UTC)),
+		MirrorReferences: []map[string]any{{
+			"memory_id": "mem_structured_screen_invalid_snapshot_formal",
+		}},
+		SteeringMessages: []string{"keep inspecting the screen evidence"},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			VisibleText: "legacy visible text",
+		},
+	}); err != nil {
+		t.Fatalf("save task_run compatibility record failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_invalid_snapshot_formal",
+		RunID:               "run_structured_screen_invalid_snapshot_formal",
+		Title:               "structured screen invalid snapshot formal task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T10:00:00Z",
+		UpdatedAt:           "2026-04-22T10:05:00Z",
+		FinishedAt:          "2026-04-22T10:06:00Z",
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("rewrite structured task with invalid snapshot failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.getCalls != 1 {
+		t.Fatalf("expected malformed snapshot with formal screen objects to trigger task_run fallback once, got %+v", countingStore)
+	}
+	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_structured_screen_invalid_snapshot_formal" {
+		t.Fatalf("expected malformed snapshot fallback to preserve legacy mirror references, got %+v", mirrorReferences)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected malformed snapshot fallback to preserve steering messages, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetScreenAuditPrefersNewerTerminalGovernanceRecord(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "screen terminal governance audit precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_terminal_governance"
+	finishedAt := time.Date(2026, 4, 16, 12, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_terminal_governance",
+		RunID:             "run_structured_screen_terminal_governance",
+		Title:             "structured screen terminal governance task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 12, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Artifacts:         []map[string]any{{"artifact_id": "art_terminal_screen", "task_id": taskID, "artifact_type": "screen_capture", "path": "artifacts/screen/terminal.png"}},
+		Citations:         []map[string]any{{"citation_id": "cit_terminal_screen", "task_id": taskID, "artifact_id": "art_terminal_screen", "artifact_type": "screen_capture", "screen_session_id": "screen_terminal"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_terminal_governance",
+		RunID:               "run_structured_screen_terminal_governance",
+		Title:               "structured screen terminal governance task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_screen_success_terminal",
+		TaskID:    taskID,
+		Type:      "screen_capture",
+		Action:    "screen.capture.screenshot_analyze",
+		Summary:   "screen analysis completed",
+		Target:    "artifacts/screen/terminal.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T12:05:00Z",
+	}); err != nil {
+		t.Fatalf("write screen success audit record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_restore_terminal",
+		TaskID:    taskID,
+		Type:      "recovery",
+		Action:    "restore_apply",
+		Summary:   "restore apply failed after screen analysis",
+		Target:    "artifacts/screen/terminal.png",
+		Result:    "failed",
+		CreatedAt: "2026-04-16T12:06:00Z",
+	}); err != nil {
+		t.Fatalf("write recovery audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_restore_terminal" || auditRecord["action"] != "restore_apply" || auditRecord["result"] != "failed" {
+		t.Fatalf("expected newer terminal governance audit to override stale screen success audit, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenApprovalPrefersFormalApprovalRequest(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen detail approval precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_waiting_auth_precedence"
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_waiting_auth_precedence",
+		RunID:             "run_structured_screen_waiting_auth_precedence",
+		Title:             "structured screen waiting auth precedence task",
+		SourceType:        "screen_capture",
+		Status:            "waiting_auth",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "waiting_authorization",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 11, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id":    "appr_snapshot_screen_waiting_auth_precedence",
+			"task_id":        taskID,
+			"operation_name": "write_file",
+			"risk_level":     "yellow",
+			"target_object":  "workspace/stale.txt",
+			"reason":         "stale snapshot approval",
+			"status":         "pending",
+			"created_at":     "2026-04-16T11:04:00Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot approval json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_waiting_auth_precedence",
+		RunID:               "run_structured_screen_waiting_auth_precedence",
+		Title:               "structured screen waiting auth precedence task",
+		SourceType:          "screen_capture",
+		Status:              "waiting_auth",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "waiting_authorization",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured screen waiting auth task failed: %v", err)
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_formal_screen_waiting_auth_precedence",
+		TaskID:          taskID,
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "current_screen",
+		Reason:          "formal screen approval should win",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":[]}`,
+		CreatedAt:       "2026-04-16T11:05:00Z",
+		UpdatedAt:       "2026-04-16T11:05:00Z",
+	}); err != nil {
+		t.Fatalf("write formal screen approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest := detailResult["approval_request"].(map[string]any)
+	if approvalRequest["approval_id"] != "appr_formal_screen_waiting_auth_precedence" || approvalRequest["operation_name"] != "screen_capture" || approvalRequest["target_object"] != "current_screen" {
+		t.Fatalf("expected formal screen approval request to override snapshot approval, got %+v", approvalRequest)
 	}
 }
 
@@ -9933,6 +11350,54 @@ func TestServicePluginDetailGetReturnsStructuredContracts(t *testing.T) {
 	}
 }
 
+func TestServicePluginListFallsBackToStaticCatalogWhenPluginRuntimeServiceMissing(t *testing.T) {
+	service := newTestService()
+	service.plugin = nil
+
+	result, err := service.PluginList(map[string]any{
+		"query": "media",
+		"page":  map[string]any{"limit": 10, "offset": 0},
+	})
+	if err != nil {
+		t.Fatalf("plugin list fallback failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "media" {
+		t.Fatalf("expected static plugin catalog fallback to return media plugin, got %+v", items)
+	}
+	if len(items[0]["capabilities"].([]map[string]any)) == 0 {
+		t.Fatalf("expected static plugin list fallback to preserve capability metadata, got %+v", items[0])
+	}
+	if len(items[0]["runtimes"].([]map[string]any)) != 0 {
+		t.Fatalf("expected static plugin list fallback to omit runtime rows, got %+v", items[0])
+	}
+}
+
+func TestServicePluginDetailGetFallsBackToStaticCatalogWhenPluginRuntimeServiceMissing(t *testing.T) {
+	service := newTestService()
+	service.plugin = nil
+
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "ocr",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail fallback failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "ocr" || pluginValue["display_name"] != "OCR Worker" {
+		t.Fatalf("expected static plugin detail fallback header, got %+v", pluginValue)
+	}
+	if len(result["runtimes"].([]map[string]any)) != 0 || len(result["metrics"].([]map[string]any)) != 0 || len(result["recent_events"].([]map[string]any)) != 0 {
+		t.Fatalf("expected static plugin detail fallback to avoid runtime payloads, got %+v", result)
+	}
+	if len(result["tools"].([]map[string]any)) == 0 {
+		t.Fatalf("expected static plugin detail fallback to retain declared tool contracts, got %+v", result)
+	}
+}
+
 func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
 	service := newTestService()
 	snapshot := service.Snapshot()
@@ -10226,6 +11691,200 @@ func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["run_id"] != "run_loop_time_b" {
 		t.Fatalf("expected time-filtered loop event, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_list_001",
+		RunID:      "run_tool_call_list_001",
+		TaskID:     "task_tool_call_list_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "notes/source.txt"},
+		Output:     map[string]any{"path": "notes/source.txt", "summary_output": map[string]any{"path": "notes/source.txt"}},
+		DurationMS: 12,
+	})
+	if err != nil {
+		t.Fatalf("save tool call failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_list_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected persisted read_file tool call, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
+func TestServiceTaskToolCallsListSupportsRunFilter(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list filters")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	for _, record := range []tools.ToolCallRecord{
+		{ToolCallID: "tool_call_filter_001", RunID: "run_filter_a", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, DurationMS: 5},
+		{ToolCallID: "tool_call_filter_002", RunID: "run_filter_b", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusFailed, DurationMS: 7},
+	} {
+		if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), record); err != nil {
+			t.Fatalf("save filtered tool call failed: %v", err)
+		}
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_filter_001", "run_id": "run_filter_b", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list with run filter failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_filter_b" || items[0]["status"] != string(tools.ToolCallStatusFailed) {
+		t.Fatalf("expected filtered tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListNormalizesProtocolStatuses(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list statuses")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_status_001",
+		RunID:      "run_tool_call_status_001",
+		TaskID:     "task_tool_call_status_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusStarted,
+		DurationMS: 3,
+	}); err != nil {
+		t.Fatalf("save tool call status failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_status_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["status"] != "running" {
+		t.Fatalf("expected outward running status, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestServiceTaskToolCallsListFallsBackToCompatibilityLatestToolCall(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat",
+		Title:             "compat tool call",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	if _, ok := service.runEngine.RecordToolCallLifecycle(task.TaskID, "read_file", "succeeded", map[string]any{"path": "notes/source.txt"}, map[string]any{"path": "notes/source.txt", "content_preview": "compat preview"}, 14, nil); !ok {
+		t.Fatal("expected compatibility tool call to be recorded")
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" || mapValue(items[0], "output")["content_preview"] != "compat preview" {
+		t.Fatalf("expected compatibility fallback tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListCompatibilityFallbackReturnsNonNilPayloadMaps(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat_nil",
+		Title:             "compat tool call nil payload",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	mutateRuntimeTask(t, service.runEngine, task.TaskID, func(record *runengine.TaskRecord) {
+		record.LatestToolCall = map[string]any{
+			"tool_call_id": "tool_call_compat_nil",
+			"task_id":      task.TaskID,
+			"run_id":       task.RunID,
+			"tool_name":    "read_file",
+			"status":       "started",
+			"duration_ms":  0,
+		}
+	})
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one compatibility tool call item, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected compatibility tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestPersistExecutionToolCallEventsFallsBackWhenToolCallIDMissing(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "missing tool call id")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_event_fallback",
+		Title:             "tool call event fallback",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	toolCall := tools.ToolCallRecord{
+		TaskID:     task.TaskID,
+		RunID:      task.RunID,
+		ToolName:   "screen_analyze",
+		Status:     tools.ToolCallStatusSucceeded,
+		DurationMS: 8,
+	}
+
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": task.TaskID, "type": "tool_call.completed", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two persisted tool_call.completed events, got %+v", items)
+	}
+	if items[0]["event_id"] == items[1]["event_id"] {
+		t.Fatalf("expected fallback event ids to remain unique, got %+v", items)
 	}
 }
 
