@@ -6298,8 +6298,11 @@ func TestServiceScreenAnalyzeStopsSessionAfterSuccessfulApproval(t *testing.T) {
 	if err != nil || cleanupResult.DeletedCount != 0 {
 		t.Fatalf("expected expired cleanup scan to reclaim old temp artifacts before new execution, result=%+v err=%v", cleanupResult, err)
 	}
-	if len(screenClient.expireCalls) != 0 || len(screenClient.cleanupCalls) != 0 {
-		t.Fatalf("expected successful screen analysis to avoid expire/cleanup, got expire=%+v cleanup=%+v", screenClient.expireCalls, screenClient.cleanupCalls)
+	if len(screenClient.expireCalls) != 0 {
+		t.Fatalf("expected successful screen analysis to avoid expire semantics, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "analysis_completed" || len(screenClient.cleanupCalls[0].Paths) != 1 {
+		t.Fatalf("expected successful screen analysis to cleanup only the tracked capture residue, got %+v", screenClient.cleanupCalls)
 	}
 	if _, err := screenClient.GetSession(context.Background(), screenClient.stopCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
 		t.Fatalf("expected stopped session to become terminal, got err=%v", err)
@@ -9991,6 +9994,204 @@ func TestServiceTaskDetailGetStructuredScreenFallbackPrefersFormalEvidenceObject
 	auditRecord := detailResult["audit_record"].(map[string]any)
 	if auditRecord["audit_id"] != "audit_formal_screen_precedence" || auditRecord["action"] != "screen.capture.screenshot_analyze" {
 		t.Fatalf("expected formal screen audit to override generic snapshot audit, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenFallbackUsesCurrentRunIDForFormalHydration(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen current run precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	taskID := "task_structured_screen_current_run"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_current_run",
+		RunID:               "run_screen_current_attempt",
+		PrimaryRunID:        "run_screen_primary_attempt",
+		Title:               "structured screen current run task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T09:00:00Z",
+		UpdatedAt:           "2026-04-22T09:05:00Z",
+		FinishedAt:          "2026-04-22T09:06:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_screen_primary_attempt",
+		TaskID:     taskID,
+		SessionID:  "sess_structured_screen_current_run",
+		SourceType: "screen_capture",
+		Status:     "completed",
+		IntentName: "screen_analyze",
+		StartedAt:  "2026-04-22T09:00:00Z",
+		UpdatedAt:  "2026-04-22T09:01:00Z",
+		FinishedAt: "2026-04-22T09:02:00Z",
+		StopReason: "superseded",
+	}); err != nil {
+		t.Fatalf("write primary run failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_screen_current_attempt",
+		TaskID:     taskID,
+		SessionID:  "sess_structured_screen_current_run",
+		SourceType: "screen_capture",
+		Status:     "completed",
+		IntentName: "screen_analyze",
+		StartedAt:  "2026-04-22T09:03:00Z",
+		UpdatedAt:  "2026-04-22T09:05:00Z",
+		FinishedAt: "2026-04-22T09:06:00Z",
+		StopReason: "completed",
+	}); err != nil {
+		t.Fatalf("write current run failed: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_primary_attempt",
+		TaskID:     taskID,
+		RunID:      "run_screen_primary_attempt",
+		CreatedAt:  "2026-04-22T09:02:00Z",
+		ToolName:   "screen_analyze_candidate",
+		Status:     tools.ToolCallStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("write primary tool call failed: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_current_attempt",
+		TaskID:     taskID,
+		RunID:      "run_screen_current_attempt",
+		CreatedAt:  "2026-04-22T09:05:00Z",
+		ToolName:   "screen_analyze_candidate",
+		Status:     tools.ToolCallStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("write current tool call failed: %v", err)
+	}
+
+	task, _, ok := service.taskDetailFromStructuredStorage(taskID)
+	if !ok {
+		t.Fatal("expected structured task detail to load")
+	}
+	if task.RunID != "run_screen_current_attempt" {
+		t.Fatalf("expected structured runtime task to keep current run_id, got %+v", task)
+	}
+	if task.LoopStopReason != "completed" {
+		t.Fatalf("expected structured runtime hydration to use current run stop reason, got %+v", task)
+	}
+	if stringValue(task.LatestToolCall, "tool_call_id", "") != "tool_call_current_attempt" || stringValue(task.LatestToolCall, "run_id", "") != "run_screen_current_attempt" {
+		t.Fatalf("expected structured runtime hydration to use current run tool call, got %+v", task.LatestToolCall)
+	}
+}
+
+func TestServiceTaskDetailGetReloadsTaskRunWhenFormalScreenObjectsMaskInvalidSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen invalid snapshot with formal evidence")
+	if service.storage == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	taskID := "task_structured_screen_invalid_snapshot_formal"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_invalid_snapshot_formal",
+		RunID:               "run_structured_screen_invalid_snapshot_formal",
+		Title:               "structured screen invalid snapshot formal task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T10:00:00Z",
+		UpdatedAt:           "2026-04-22T10:05:00Z",
+		FinishedAt:          "2026-04-22T10:06:00Z",
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_structured_screen_invalid_snapshot_formal",
+		TaskID:              taskID,
+		ArtifactType:        "screen_capture",
+		Title:               "stored-screen.png",
+		Path:                "workspace/stored-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"task_id":"` + taskID + `","path":"workspace/stored-screen.png"}`,
+		CreatedAt:           "2026-04-22T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save formal artifact failed: %v", err)
+	}
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      taskID,
+		SessionID:   "sess_structured_screen_invalid_snapshot_formal",
+		RunID:       "run_structured_screen_invalid_snapshot_formal",
+		Title:       "structured screen invalid snapshot formal task",
+		SourceType:  "screen_capture",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 22, 10, 6, 0, 0, time.UTC)),
+		MirrorReferences: []map[string]any{{
+			"memory_id": "mem_structured_screen_invalid_snapshot_formal",
+		}},
+		SteeringMessages: []string{"keep inspecting the screen evidence"},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			VisibleText: "legacy visible text",
+		},
+	}); err != nil {
+		t.Fatalf("save task_run compatibility record failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_invalid_snapshot_formal",
+		RunID:               "run_structured_screen_invalid_snapshot_formal",
+		Title:               "structured screen invalid snapshot formal task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T10:00:00Z",
+		UpdatedAt:           "2026-04-22T10:05:00Z",
+		FinishedAt:          "2026-04-22T10:06:00Z",
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("rewrite structured task with invalid snapshot failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.getCalls != 1 {
+		t.Fatalf("expected malformed snapshot with formal screen objects to trigger task_run fallback once, got %+v", countingStore)
+	}
+	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_structured_screen_invalid_snapshot_formal" {
+		t.Fatalf("expected malformed snapshot fallback to preserve legacy mirror references, got %+v", mirrorReferences)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected malformed snapshot fallback to preserve steering messages, got %+v", runtimeSummary)
 	}
 }
 

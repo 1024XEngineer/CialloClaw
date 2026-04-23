@@ -201,6 +201,51 @@ func TestLocalScreenCaptureClientStopAndHelperBranches(t *testing.T) {
 	}
 }
 
+func TestLocalScreenCaptureClientCleanupSessionArtifactsTreatsPromotedCaptureAsResolved(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	if err := fileSystem.MkdirAll("inputs"); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := fileSystem.WriteFile("inputs/frame.png", []byte("fake-frame")); err != nil {
+		t.Fatalf("write frame source failed: %v", err)
+	}
+	if err := fileSystem.MkdirAll("artifacts/screen/task_cleanup"); err != nil {
+		t.Fatalf("mkdir artifacts failed: %v", err)
+	}
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	client.now = func() time.Time { return time.Date(2026, 4, 18, 23, 15, 0, 0, time.UTC) }
+	session, err := client.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_screen_cleanup", TaskID: "task_screen_cleanup", RunID: "run_screen_cleanup", CaptureMode: tools.ScreenCaptureModeScreenshot})
+	if err != nil {
+		t.Fatalf("start session failed: %v", err)
+	}
+	candidate, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: session.ScreenSessionID, SourcePath: "inputs/frame.png"})
+	if err != nil {
+		t.Fatalf("capture screenshot failed: %v", err)
+	}
+	if err := fileSystem.Move(candidate.Path, "artifacts/screen/task_cleanup/frame.png"); err != nil {
+		t.Fatalf("move promoted capture failed: %v", err)
+	}
+	cleanup, err := client.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{
+		ScreenSessionID: session.ScreenSessionID,
+		Reason:          "analysis_completed",
+		Paths:           []string{candidate.Path},
+	})
+	if err != nil {
+		t.Fatalf("cleanup promoted capture failed: %v", err)
+	}
+	if cleanup.DeletedCount != 1 || cleanup.SkippedCount != 0 {
+		t.Fatalf("expected promoted capture cleanup to clear tracked residue, got %+v", cleanup)
+	}
+	if _, err := client.GetSession(context.Background(), session.ScreenSessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected cleaned session to be removed from active state, got %v", err)
+	}
+}
+
 func TestLocalScreenCaptureClientCleansOrphanTempFiles(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
