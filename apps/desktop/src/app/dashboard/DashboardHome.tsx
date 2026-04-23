@@ -13,6 +13,13 @@ import { DashboardEventOrb } from "@/features/dashboard/home/components/Dashboar
 import { DashboardEventPanel } from "@/features/dashboard/home/components/DashboardEventPanel";
 import { DashboardOrbitRings } from "@/features/dashboard/home/components/DashboardOrbitRings";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { OnboardingOverlay } from "@/features/onboarding/OnboardingOverlay";
+import {
+  advanceDesktopOnboarding,
+  skipDesktopOnboarding,
+} from "@/features/onboarding/onboardingService";
+import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
+import { openControlPanelFromTray } from "@/platform/trayController";
 import { cn } from "@/utils/cn";
 import "@/features/shell-ball/shellBall.css";
 import "@/features/dashboard/home/dashboardHome.css";
@@ -54,6 +61,7 @@ export function DashboardHome({
   onRecommendationFeedback,
   voiceOpen,
 }: DashboardHomeProps) {
+  const onboardingSession = useDesktopOnboardingSession();
   const navigate = useNavigate();
   const [orbDragOffset, setOrbDragOffset] = useState({ x: 0, y: 0 });
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
@@ -149,9 +157,77 @@ export function DashboardHome({
     [navigate],
   );
 
+  const handleAdvanceToTrayHint = useCallback(() => {
+    void advanceDesktopOnboarding("tray_hint");
+  }, []);
+
+  const handleOpenControlPanel = useCallback(() => {
+    void advanceDesktopOnboarding("control_panel_api_key");
+    void openControlPanelFromTray();
+  }, []);
+
+  const handleSkipStep = useCallback(() => {
+    if (onboardingSession?.step === "dashboard_overview") {
+      void advanceDesktopOnboarding("tray_hint");
+      return;
+    }
+
+    if (onboardingSession?.step === "tray_hint") {
+      void advanceDesktopOnboarding("control_panel_api_key");
+      void openControlPanelFromTray();
+    }
+  }, [onboardingSession]);
+
+  const handleEndOnboarding = useCallback(() => {
+    void skipDesktopOnboarding();
+  }, []);
+
+  const onboardingOverlay = (() => {
+    if (onboardingSession?.isOpen !== true) {
+      return null;
+    }
+
+    if (onboardingSession.step === "dashboard_overview") {
+      return (
+        <OnboardingOverlay
+          body="主界面包含 4 个子页面，你可以从入口球快速切换；当前也支持 Ctrl / Cmd + 1 2 3 4 快速跳页。"
+          endLabel="结束引导"
+          onEnd={handleEndOnboarding}
+          onPrimary={handleAdvanceToTrayHint}
+          onSecondary={handleSkipStep}
+          primaryLabel="下一步"
+          secondaryLabel="跳过本步"
+          stepLabel="第 4 步 / 6"
+          title="主界面可以快速切换"
+        />
+      );
+    }
+
+    if (onboardingSession.step === "tray_hint") {
+      return (
+        <OnboardingOverlay
+          body="更多设置在系统托盘里。右键托盘图标可以打开控制面板；你也可以直接从这里打开。"
+          endLabel="结束引导"
+          onEnd={handleEndOnboarding}
+          onPrimary={handleOpenControlPanel}
+          onSecondary={handleSkipStep}
+          primaryLabel="打开控制面板"
+          secondaryLabel="跳过本步"
+          stepLabel="第 5 步 / 6"
+          title="更完整的设置入口在托盘"
+        />
+      );
+    }
+
+    return null;
+  })();
+
+  const highlightHud = onboardingSession?.isOpen === true && onboardingSession.step === "tray_hint";
+  const highlightCanvas = onboardingSession?.isOpen === true && onboardingSession.step === "dashboard_overview";
+
   return (
     <ClickSpark className="dashboard-orbit-home" duration={360} extraScale={1.12} sparkColor="#d9b980" sparkCount={10} sparkRadius={18} sparkSize={11} style={pageStyle}>
-      <header className="dashboard-orbit-home__hud">
+      <header className={cn("dashboard-orbit-home__hud", highlightHud && "desktop-onboarding-highlight")}>
         <div className="dashboard-orbit-home__badge-shell">
           <div className="dashboard-orbit-home__badge-dot" />
           <span>Dashboard Orbit</span>
@@ -163,7 +239,7 @@ export function DashboardHome({
         </div>
       </header>
 
-      <div className="dashboard-orbit-home__canvas">
+      <div className={cn("dashboard-orbit-home__canvas", highlightCanvas && "desktop-onboarding-highlight")}>
         <DashboardOrbitRings offset={orbDragOffset} />
 
         {dashboardDecorOrbs.map((config) => (
@@ -220,6 +296,7 @@ export function DashboardHome({
       </div>
 
       <DashboardEventPanel activeState={activeState} onClose={() => setActiveStateKey(null)} onStateChange={setActiveStateKey} stateGroups={data.stateGroups} stateMap={data.stateMap} />
+      {onboardingOverlay}
     </ClickSpark>
   );
 }
