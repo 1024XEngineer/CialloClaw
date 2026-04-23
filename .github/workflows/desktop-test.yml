@@ -50,15 +50,16 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run desktop checks
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run stable desktop checks
         run: |
-          pnpm install --frozen-lockfile
           pnpm --dir apps/desktop lint
           pnpm --dir apps/desktop typecheck
           pnpm --dir apps/desktop test:dashboard
           pnpm --dir apps/desktop test:memory
-          pnpm --dir apps/desktop build
 
-      - name: Build Windows Tauri app without backend sidecars
+      - name: Build Windows Tauri app
         working-directory: apps/desktop
-        run: pnpm exec tauri build --debug --no-bundle --config src-tauri/tauri.desktop-test.json
+        run: pnpm exec tauri build --debug --no-bundle
