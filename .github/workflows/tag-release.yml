@@ -75,6 +75,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
+          tauriScript: pnpm exec tauri
           tagName: ${{ steps.meta.outputs.release_tag }}
           releaseName: ${{ steps.meta.outputs.release_tag }}
           releaseBody: ${{ steps.release_meta.outputs.release_body }}
