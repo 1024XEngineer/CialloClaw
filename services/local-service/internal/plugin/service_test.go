@@ -52,12 +52,32 @@ func TestServiceRuntimeLifecycleAndSnapshots(t *testing.T) {
 	if len(manifests) != 3 {
 		t.Fatalf("expected one manifest per declared plugin, got %+v", manifests)
 	}
+	if manifests[0].Summary == "" || manifests[1].Summary == "" || manifests[2].Summary == "" {
+		t.Fatalf("expected built-in manifests to expose summaries, got %+v", manifests)
+	}
 	if metrics[0].Name != "playwright_worker" || metrics[1].Name != "ocr_worker" || metrics[2].Name != "media_worker" {
 		t.Fatalf("expected metric snapshots to follow declaration order, got %+v", metrics)
 	}
 	events := service.RuntimeEvents()
 	if len(events) < 4 {
 		t.Fatalf("expected runtime events to be buffered, got %+v", events)
+	}
+	catalog := service.CatalogEntries()
+	if len(catalog) != 3 || catalog[0].PluginID != "playwright" || catalog[1].PluginID != "ocr" || catalog[2].PluginID != "media" {
+		t.Fatalf("expected stable builtin catalog order, got %+v", catalog)
+	}
+	if len(catalog[0].RuntimeRefs) != 2 || catalog[1].DisplayName != "OCR Worker" {
+		t.Fatalf("expected catalog to join static metadata and runtime refs, got %+v", catalog)
+	}
+	ocrSnapshot, ok := service.CatalogSnapshot("ocr")
+	if !ok {
+		t.Fatal("expected OCR catalog snapshot to resolve")
+	}
+	if ocrSnapshot.Manifest.PluginID != "ocr" || len(ocrSnapshot.Runtimes) != 1 || len(ocrSnapshot.Metrics) != 1 {
+		t.Fatalf("expected catalog snapshot to join manifest/runtime/metrics, got %+v", ocrSnapshot)
+	}
+	if len(ocrSnapshot.RecentEvents) == 0 || ocrSnapshot.RecentEvents[0].Name != "ocr_worker" {
+		t.Fatalf("expected catalog snapshot to include runtime events for matching plugin, got %+v", ocrSnapshot)
 	}
 }
 
@@ -80,6 +100,86 @@ func TestServiceRuntimeEventsStayBounded(t *testing.T) {
 	events := service.RuntimeEvents()
 	if len(events) != maxRuntimeEvents {
 		t.Fatalf("expected runtime events to stay bounded at %d, got %d", maxRuntimeEvents, len(events))
+	}
+}
+
+func TestCatalogEntriesAndSnapshotsAreCloned(t *testing.T) {
+	service := NewService()
+	entries := service.CatalogEntries()
+	entries[0].DisplayName = "mutated"
+	entries[0].RuntimeRefs[0].Name = "mutated_runtime"
+	freshEntries := service.CatalogEntries()
+	if freshEntries[0].DisplayName == "mutated" || freshEntries[0].RuntimeRefs[0].Name == "mutated_runtime" {
+		t.Fatalf("expected catalog entries to be cloned, got %+v", freshEntries)
+	}
+	snapshot, ok := service.CatalogSnapshot("playwright")
+	if !ok {
+		t.Fatal("expected playwright catalog snapshot")
+	}
+	snapshot.Catalog.DisplayName = "mutated"
+	snapshot.Manifest.Name = "mutated"
+	snapshot.Runtimes[0].Name = "mutated"
+	freshSnapshot, ok := service.CatalogSnapshot("playwright")
+	if !ok {
+		t.Fatal("expected fresh playwright catalog snapshot")
+	}
+	if freshSnapshot.Catalog.DisplayName == "mutated" || freshSnapshot.Manifest.Name == "mutated" || freshSnapshot.Runtimes[0].Name == "mutated" {
+		t.Fatalf("expected catalog snapshots to be cloned, got %+v", freshSnapshot)
+	}
+}
+
+func TestNilServiceCatalogSnapshotsStillExposeBuiltinStaticView(t *testing.T) {
+	var service *Service
+	entries := service.CatalogEntries()
+	if len(entries) != 3 || entries[0].PluginID != "playwright" {
+		t.Fatalf("expected nil service to expose builtin catalog entries, got %+v", entries)
+	}
+	snapshot, ok := service.CatalogSnapshot("ocr")
+	if !ok || snapshot.Manifest.PluginID != "ocr" || len(snapshot.Runtimes) != 0 {
+		t.Fatalf("expected nil service catalog snapshot to expose static manifest only, got snapshot=%+v ok=%v", snapshot, ok)
+	}
+}
+
+func TestCatalogEntriesIncludeNonBuiltinPluginRuntimeSources(t *testing.T) {
+	service := NewService()
+	extraManifest := Manifest{
+		PluginID:     "community_skill_runtime",
+		Name:         "Community Skill Runtime",
+		Summary:      "Loads verified community skills through a managed runtime.",
+		Version:      "github-v1",
+		Entry:        "github://community-skill/runtime",
+		Source:       "github",
+		Capabilities: []string{"community_skill_run"},
+		Permissions:  []string{"workspace_read"},
+	}
+	service.declareRuntime(RuntimeState{
+		Name:         "community_skill_worker",
+		Kind:         RuntimeKindWorker,
+		Status:       RuntimeStatusDeclared,
+		Transport:    "named_pipe",
+		Health:       RuntimeHealthUnknown,
+		Manifest:     &extraManifest,
+		Capabilities: []string{"community_skill_run"},
+	})
+	service.MarkRuntimeHealthy(RuntimeKindWorker, "community_skill_worker")
+
+	entries := service.CatalogEntries()
+	if len(entries) != 4 {
+		t.Fatalf("expected dynamic plugin runtime to extend catalog entries, got %+v", entries)
+	}
+	extraEntry := entries[3]
+	if extraEntry.PluginID != "community_skill_runtime" || extraEntry.DisplayName != "Community Skill Runtime" || len(extraEntry.RuntimeRefs) != 1 {
+		t.Fatalf("expected dynamic plugin runtime entry to be visible in catalog, got %+v", extraEntry)
+	}
+	snapshot, ok := service.CatalogSnapshot("community_skill_runtime")
+	if !ok {
+		t.Fatal("expected dynamic plugin runtime snapshot to resolve")
+	}
+	if snapshot.Manifest.PluginID != "community_skill_runtime" || len(snapshot.Runtimes) != 1 || len(snapshot.Metrics) != 1 {
+		t.Fatalf("expected dynamic plugin runtime snapshot to join runtime state, got %+v", snapshot)
+	}
+	if len(snapshot.RecentEvents) == 0 || snapshot.RecentEvents[0].Name != "community_skill_worker" {
+		t.Fatalf("expected dynamic plugin runtime snapshot to include runtime events, got %+v", snapshot)
 	}
 }
 

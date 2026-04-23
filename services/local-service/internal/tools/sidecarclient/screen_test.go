@@ -2,6 +2,7 @@ package sidecarclient
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,23 @@ func TestNoopScreenCaptureClientReturnsCapabilityErrors(t *testing.T) {
 	if _, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{}); err != tools.ErrScreenCaptureFailed {
 		t.Fatalf("expected capture failed error, got %v", err)
 	}
+	if _, err := client.GetSession(context.Background(), "screen_missing"); err != tools.ErrScreenCaptureSessionExpired {
+		t.Fatalf("expected session expired error, got %v", err)
+	}
+	if _, err := client.StopSession(context.Background(), "screen_missing", "stop"); err != tools.ErrScreenCaptureSessionExpired {
+		t.Fatalf("expected stop session to return expired error, got %v", err)
+	}
+	if _, err := client.ExpireSession(context.Background(), "screen_missing", "expire"); err != tools.ErrScreenCaptureSessionExpired {
+		t.Fatalf("expected expire session to return expired error, got %v", err)
+	}
+	if _, err := client.CaptureKeyframe(context.Background(), tools.ScreenCaptureInput{}); err != tools.ErrScreenKeyframeSamplingFailed {
+		t.Fatalf("expected keyframe failed error, got %v", err)
+	}
 	if _, err := client.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{}); err != tools.ErrScreenCleanupFailed {
 		t.Fatalf("expected cleanup failed error, got %v", err)
+	}
+	if _, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{}); err != tools.ErrScreenCleanupFailed {
+		t.Fatalf("expected expired cleanup failed error, got %v", err)
 	}
 }
 
@@ -58,6 +74,18 @@ func TestInMemoryScreenCaptureClientSessionLifecycle(t *testing.T) {
 	}
 	if _, err := client.GetSession(context.Background(), session.ScreenSessionID); err != tools.ErrScreenCaptureSessionExpired {
 		t.Fatalf("expected stopped session to be unavailable, got %v", err)
+	}
+
+	session, err = client.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_001b", TaskID: "task_001b", RunID: "run_001b", CaptureMode: tools.ScreenCaptureModeScreenshot, TTL: time.Minute})
+	if err != nil {
+		t.Fatalf("start follow-up session failed: %v", err)
+	}
+	expired, err := client.ExpireSession(context.Background(), session.ScreenSessionID, "manual_expire")
+	if err != nil {
+		t.Fatalf("expire session failed: %v", err)
+	}
+	if expired.AuthorizationState != tools.ScreenAuthorizationExpired || expired.TerminalReason != "manual_expire" {
+		t.Fatalf("expected explicit expire result, got %+v", expired)
 	}
 }
 
@@ -102,12 +130,29 @@ func TestInMemoryScreenCaptureClientCaptureAndCleanup(t *testing.T) {
 		t.Fatalf("unexpected keyframe result: %+v", keyframe)
 	}
 
+	clip, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
+		ScreenSessionID: session.ScreenSessionID,
+		CaptureMode:     tools.ScreenCaptureModeClip,
+		Source:          "task_control",
+		SourcePath:      "clips/demo.webm",
+		AllowPersist:    true,
+	})
+	if err != nil {
+		t.Fatalf("capture clip failed: %v", err)
+	}
+	if !strings.HasSuffix(clip.Path, ".webm") || clip.RetentionPolicy != tools.ScreenRetentionArtifact || clip.CleanupRequired {
+		t.Fatalf("expected retained clip candidate, got %+v", clip)
+	}
+
 	cleanup, err := client.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{ScreenSessionID: session.ScreenSessionID, Reason: "task_finished"})
 	if err != nil {
 		t.Fatalf("cleanup session artifacts failed: %v", err)
 	}
 	if cleanup.DeletedCount != 2 {
 		t.Fatalf("expected two deleted paths, got %+v", cleanup)
+	}
+	if _, err := client.GetSession(context.Background(), session.ScreenSessionID); err != tools.ErrScreenCaptureSessionExpired {
+		t.Fatalf("expected cleanup to retire session state, got %v", err)
 	}
 }
 
@@ -142,5 +187,18 @@ func TestInMemoryScreenCaptureClientExpiresAndCleansExpiredTemps(t *testing.T) {
 	}
 	if cleanup.DeletedCount != 1 {
 		t.Fatalf("expected one deleted temp path, got %+v", cleanup)
+	}
+	if _, err := client.GetSession(context.Background(), session.ScreenSessionID); err != tools.ErrScreenCaptureSessionExpired {
+		t.Fatalf("expected expired cleanup to retire session state, got %v", err)
+	}
+
+	if got := screenCleanupPaths([]string{"a"}, []string{"b", "c"}); len(got) != 2 || got[0] != "b" {
+		t.Fatalf("expected explicit cleanup paths to win, got %+v", got)
+	}
+	if got := removeScreenPaths([]string{"a", "b", "b"}, []string{"b"}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("expected one matching cleanup path to be removed, got %+v", got)
+	}
+	if got := screenCaptureExtension(tools.ScreenCaptureModeClip, ""); got != ".webm" {
+		t.Fatalf("expected clip capture extension, got %q", got)
 	}
 }

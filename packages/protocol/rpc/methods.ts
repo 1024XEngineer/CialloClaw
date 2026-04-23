@@ -33,6 +33,7 @@ import type {
   PluginToolContract,
   Task,
   TaskControlAction,
+  ToolCall,
   TaskListGroup,
   TaskStep,
   TimeInterval,
@@ -53,6 +54,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_LIST: "agent.task.list",
   AGENT_TASK_DETAIL_GET: "agent.task.detail.get",
   AGENT_TASK_EVENTS_LIST: "agent.task.events.list",
+  AGENT_TASK_TOOL_CALLS_LIST: "agent.task.tool_calls.list",
   AGENT_TASK_STEER: "agent.task.steer",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
@@ -396,6 +398,23 @@ export interface AgentTaskEventsListParams {
 // AgentTaskEventsListResult defines the result for agent.task.events.list.
 export interface AgentTaskEventsListResult {
   items: TaskEvent[];
+  page: JsonRpcPage;
+}
+
+// AgentTaskToolCallsListParams defines the parameters for
+// agent.task.tool_calls.list.
+export interface AgentTaskToolCallsListParams {
+  request_meta: RequestMeta;
+  task_id: string;
+  run_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// AgentTaskToolCallsListResult defines the result for
+// agent.task.tool_calls.list.
+export interface AgentTaskToolCallsListResult {
+  items: ToolCall[];
   page: JsonRpcPage;
 }
 

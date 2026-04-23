@@ -26,6 +26,7 @@ func (s *Server) registerHandlers() {
 		"agent.task.list":                      s.handleAgentTaskList,
 		"agent.task.detail.get":                s.handleAgentTaskDetailGet,
 		"agent.task.events.list":               s.handleAgentTaskEventsList,
+		"agent.task.tool_calls.list":           s.handleAgentTaskToolCallsList,
 		"agent.task.steer":                     s.handleAgentTaskSteer,
 		"agent.task.control":                   s.handleAgentTaskControl,
 		"agent.task_inspector.config.get":      s.handleAgentTaskInspectorConfigGet,
@@ -115,6 +116,12 @@ func (s *Server) handleAgentTaskDetailGet(params map[string]any) (any, *rpcError
 // handleAgentTaskEventsList handles agent.task.events.list.
 func (s *Server) handleAgentTaskEventsList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.TaskEventsList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentTaskToolCallsList handles agent.task.tool_calls.list.
+func (s *Server) handleAgentTaskToolCallsList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.TaskToolCallsList(params)
 	return wrapOrchestratorResult(data, err)
 }
 
