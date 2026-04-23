@@ -1,10 +1,11 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button, Heading, Text } from "@radix-ui/themes";
 import { cn } from "@/utils/cn";
 import { setOnboardingInteractiveRegions } from "@/platform/onboardingWindow";
 import {
   advanceDesktopOnboarding,
   completeDesktopOnboarding,
+  type DesktopOnboardingPresentation,
   skipDesktopOnboarding,
   requestDesktopOnboardingAction,
 } from "./onboardingService";
@@ -94,10 +95,47 @@ export function OnboardingWindow() {
   const cardRef = useRef<HTMLElement | null>(null);
   const session = useDesktopOnboardingSession();
   const presentation = useDesktopOnboardingPresentation();
+  const [stagedPresentation, setStagedPresentation] = useState<DesktopOnboardingPresentation | null>(null);
   const copy = useMemo(() => (session ? getOnboardingCopy(session.step) : null), [session]);
 
+  useEffect(() => {
+    if (presentation !== null) {
+      setStagedPresentation(presentation);
+      return;
+    }
+
+    if (session === null) {
+      setStagedPresentation(null);
+    }
+  }, [presentation, session]);
+
+  const activePresentation = useMemo(() => {
+    if (session === null) {
+      return null;
+    }
+
+    if (presentation?.step === session.step) {
+      return presentation;
+    }
+
+    if (stagedPresentation?.step === session.step) {
+      return stagedPresentation;
+    }
+
+    if (stagedPresentation !== null) {
+      return {
+        ...stagedPresentation,
+        highlights: session.step === "welcome" || session.step === "done" ? [] : stagedPresentation.highlights,
+        placement: session.step === "welcome" || session.step === "done" ? "center" : stagedPresentation.placement,
+        step: session.step,
+      } satisfies DesktopOnboardingPresentation;
+    }
+
+    return null;
+  }, [presentation, session, stagedPresentation]);
+
   useLayoutEffect(() => {
-    if (!cardRef.current || !session || !presentation) {
+    if (!cardRef.current || !session || !activePresentation) {
       void setOnboardingInteractiveRegions([]);
       return;
     }
@@ -116,9 +154,9 @@ export function OnboardingWindow() {
     return () => {
       void setOnboardingInteractiveRegions([]);
     };
-  }, [presentation, session]);
+  }, [activePresentation, session]);
 
-  if (!session || !copy || !presentation || presentation.step !== session.step) {
+  if (!session || !copy || !activePresentation) {
     return <main className="desktop-onboarding-window" />;
   }
 
@@ -192,7 +230,7 @@ export function OnboardingWindow() {
   return (
     <main className="desktop-onboarding-window">
       <div className="desktop-onboarding-window__veil" aria-hidden="true" />
-      {presentation.highlights.map((highlight, index) => (
+      {activePresentation.highlights.map((highlight, index) => (
         <div
           key={`${highlight.x}-${highlight.y}-${index}`}
           className="desktop-onboarding-window__highlight"
@@ -207,7 +245,7 @@ export function OnboardingWindow() {
 
       <section
         ref={cardRef}
-        className={cn("desktop-onboarding-window__card", `desktop-onboarding-window__card--${presentation.placement}`)}
+        className={cn("desktop-onboarding-window__card", `desktop-onboarding-window__card--${activePresentation.placement}`)}
         aria-label={copy.title}
       >
         {copy.stepLabel ? (
