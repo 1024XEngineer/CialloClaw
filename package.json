@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.6.1",
   "scripts": {
-    "build:service": "node -e \"require('node:fs').mkdirSync('apps/desktop/src-tauri/bin', { recursive: true })\" && go build -trimpath -o apps/desktop/src-tauri/bin/cialloclaw-service-x86_64-pc-windows-msvc.exe ./services/local-service/cmd/server",
+    "build:service": "node scripts/ci/build-service.mjs",
     "build:desktop": "pnpm --dir apps/desktop exec tauri build --target x86_64-pc-windows-msvc --bundles nsis msi",
     "build:bundle": "pnpm build:service && pnpm build:desktop",
     "dev": "pnpm --dir apps/desktop dev",

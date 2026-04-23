@@ -12,8 +12,10 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
+use std::thread;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -57,6 +59,8 @@ const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
 const SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT: &str = "desktop-shell-ball:clipboard-snapshot";
 const TRAY_ICON_ID: &str = "main-tray";
+const LOCAL_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
@@ -303,9 +307,9 @@ fn resolve_required_path(path: PathBuf, label: &str) -> Result<String, String> {
 fn start_local_service_sidecar(
     app: &tauri::AppHandle,
     sidecar_state: &Arc<LocalServiceSidecarState>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if sidecar_state.is_running()? {
-        return Ok(());
+        return Ok(true);
     }
 
     let data_dir = app
@@ -323,7 +327,7 @@ fn start_local_service_sidecar(
                 eprintln!(
                     "local service sidecar is unavailable in this debug session: {error}"
                 );
-                return Ok(());
+                return Ok(false);
             }
 
             return Err(format!("failed to resolve local service sidecar: {error}"));
@@ -348,7 +352,28 @@ fn start_local_service_sidecar(
         }
     });
 
-    Ok(())
+    Ok(true)
+}
+
+/// wait_for_local_service_ready blocks startup until the sidecar publishes the
+/// named pipe bridge, preventing first-load RPCs from racing service boot.
+fn wait_for_local_service_ready(bridge_state: &Arc<NamedPipeBridgeState>) -> Result<(), String> {
+    let start = Instant::now();
+    let mut last_error = String::from("local service did not become ready");
+
+    while start.elapsed() < LOCAL_SERVICE_READY_TIMEOUT {
+        match bridge_state.ensure_session() {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_error = error;
+                thread::sleep(LOCAL_SERVICE_READY_RETRY_DELAY);
+            }
+        }
+    }
+
+    Err(format!(
+        "timed out waiting for local service readiness: {last_error}"
+    ))
 }
 
 #[tauri::command]
@@ -1391,8 +1416,13 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let sidecar_state = app.state::<Arc<LocalServiceSidecarState>>();
-            start_local_service_sidecar(app.handle(), sidecar_state.inner())
+            let bridge_state = app.state::<Arc<NamedPipeBridgeState>>();
+            let sidecar_started = start_local_service_sidecar(app.handle(), sidecar_state.inner())
                 .map_err(std::io::Error::other)?;
+            if sidecar_started {
+                wait_for_local_service_ready(bridge_state.inner())
+                    .map_err(std::io::Error::other)?;
+            }
             // activity::install_mouse_activity_listener()
             //     .map_err(|error| std::io::Error::other(error))?;
             install_shell_ball_clipboard_hooks(app.handle())
