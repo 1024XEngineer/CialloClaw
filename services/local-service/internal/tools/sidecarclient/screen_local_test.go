@@ -443,3 +443,59 @@ func TestLocalScreenCaptureClientCleanupExpiredTempsReclaimsOrphanSessionDirs(t 
 		t.Fatalf("expected orphan screen dir to be removed, got %v", err)
 	}
 }
+
+func TestLocalScreenCaptureClientCleanupOrphanedTempsCoversNilAndRecursiveBranches(t *testing.T) {
+	var nilClient *localScreenCaptureClient
+	if got := nilClient.cleanupOrphanedSessionTemps(time.Now()); got != nil {
+		t.Fatalf("expected nil local screen client to skip orphan cleanup, got %+v", got)
+	}
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	now := time.Date(2026, 4, 19, 0, 10, 0, 0, time.UTC)
+	client.now = func() time.Time { return now }
+	if deleted := client.cleanupOrphanedSessionTemps(now); deleted != nil {
+		t.Fatalf("expected missing temp root to skip orphan cleanup, got %+v", deleted)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "temp", "misc_dir"), 0o755); err != nil {
+		t.Fatalf("mkdir unmanaged temp dir failed: %v", err)
+	}
+	activeDir := filepath.Join(workspaceRoot, "temp", "screen_local_active_001")
+	if err := os.MkdirAll(activeDir, 0o755); err != nil {
+		t.Fatalf("mkdir active temp dir failed: %v", err)
+	}
+	client.sessions["screen_local_active_001"] = tools.ScreenSessionState{ScreenSessionID: "screen_local_active_001", AuthorizationState: tools.ScreenAuthorizationGranted, ExpiresAt: now.Add(time.Minute)}
+	orphanNestedDir := filepath.Join(workspaceRoot, "temp", "screen_local_orphan_nested_001", "frames")
+	if err := os.MkdirAll(orphanNestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir orphan nested dir failed: %v", err)
+	}
+	orphanFile := filepath.Join(orphanNestedDir, "frame_001.png")
+	if err := os.WriteFile(orphanFile, []byte("frame"), 0o644); err != nil {
+		t.Fatalf("write orphan nested frame failed: %v", err)
+	}
+	orphanTime := now.Add(-2 * time.Hour)
+	if err := os.Chtimes(filepath.Dir(orphanNestedDir), orphanTime, orphanTime); err != nil {
+		t.Fatalf("chtimes orphan root failed: %v", err)
+	}
+	if err := os.Chtimes(orphanNestedDir, orphanTime, orphanTime); err != nil {
+		t.Fatalf("chtimes orphan nested dir failed: %v", err)
+	}
+	if err := os.Chtimes(orphanFile, orphanTime, orphanTime); err != nil {
+		t.Fatalf("chtimes orphan nested file failed: %v", err)
+	}
+	deleted := client.cleanupOrphanedSessionTemps(now)
+	if len(deleted) < 3 {
+		t.Fatalf("expected orphan cleanup to remove nested file and directories, got %+v", deleted)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_local_orphan_nested_001")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected orphan nested screen dir to be removed, got %v", err)
+	}
+	if _, err := os.Stat(activeDir); err != nil {
+		t.Fatalf("expected active managed screen dir to remain, got %v", err)
+	}
+}

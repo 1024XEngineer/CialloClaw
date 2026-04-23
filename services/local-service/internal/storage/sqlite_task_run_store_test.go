@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -248,6 +250,67 @@ func TestTaskRunStoresLoadLegacyTaskRunsOnlyForMissingStructuredRows(t *testing.
 	legacyRecords, err = sqliteStore.LoadLegacyTaskRuns(context.Background(), []string{first.TaskID})
 	if err != nil || len(legacyRecords) != 1 || legacyRecords[0].TaskID != second.TaskID {
 		t.Fatalf("expected sqlite legacy task run filter to keep only missing structured rows, records=%+v err=%v", legacyRecords, err)
+	}
+}
+
+func TestTaskRunStoresCoverGetTaskRunMissesAndSnapshotFallbacks(t *testing.T) {
+	inMemory := NewInMemoryTaskRunStore()
+	if _, err := inMemory.GetTaskRun(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing in-memory task run to return sql.ErrNoRows, got %v", err)
+	}
+	record := sampleTaskRunRecord()
+	record.RequestSource = ""
+	record.RequestTrigger = ""
+	record.Snapshot.Source = "selection_toolbar"
+	record.Snapshot.Trigger = "selection_click"
+	if err := inMemory.SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("in-memory SaveTaskRun returned error: %v", err)
+	}
+	taskRecord, err := inMemory.taskStore.GetTask(context.Background(), record.TaskID)
+	if err != nil || taskRecord.RequestSource != "selection_toolbar" || taskRecord.RequestTrigger != "selection_click" {
+		t.Fatalf("expected task snapshot projection to fall back to snapshot request metadata, record=%+v err=%v", taskRecord, err)
+	}
+	second := sampleTaskRunRecord()
+	second.TaskID = "task_same_started_b"
+	second.RunID = "run_same_started_b"
+	second.StartedAt = record.StartedAt
+	second.UpdatedAt = record.UpdatedAt
+	if err := inMemory.SaveTaskRun(context.Background(), second); err != nil {
+		t.Fatalf("in-memory SaveTaskRun second returned error: %v", err)
+	}
+	legacyRecords, err := inMemory.LoadLegacyTaskRuns(context.Background(), []string{"", "   "})
+	if err != nil || len(legacyRecords) != 2 || legacyRecords[0].TaskID != second.TaskID {
+		t.Fatalf("expected blank structured ids to be ignored and equal timestamps to sort by task id, records=%+v err=%v", legacyRecords, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "task-runs-missing.db")
+	sqliteStore, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = sqliteStore.Close() }()
+	if _, err := sqliteStore.GetTaskRun(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing sqlite task run to return sql.ErrNoRows, got %v", err)
+	}
+}
+
+func TestSQLiteTaskRunStoreLoadLegacyTaskRunsHandlesErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-runs-errors.db")
+	store, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO task_runs (task_id, run_id, session_id, status, started_at, updated_at, record_json) VALUES (?, ?, ?, ?, ?, ?, ?)`, "task_bad_json", "run_bad_json", "sess_bad_json", "completed", "2026-04-22T10:00:00Z", "2026-04-22T10:00:00Z", `{bad-json}`); err != nil {
+		t.Fatalf("insert malformed task run row failed: %v", err)
+	}
+	if _, err := store.LoadLegacyTaskRuns(context.Background(), []string{"", "   "}); err == nil {
+		t.Fatal("expected malformed task run row to surface an error")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if _, err := store.LoadLegacyTaskRuns(context.Background(), nil); err == nil {
+		t.Fatal("expected closed sqlite task run store to fail legacy load")
 	}
 }
 
