@@ -67,6 +67,21 @@
         "url": "shell-ball-voice.html"
       },
       {
+        "label": "shell-ball-onboarding",
+        "title": "CialloClaw Onboarding",
+        "width": 320,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false,
+        "focus": false,
+        "url": "shell-ball-onboarding.html"
+      },
+      {
         "label": "dashboard",
         "title": "CialloClaw Dashboard",
         "width": 1280,

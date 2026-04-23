@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop app permissions plus shell-ball floating window controls.",
-  "windows": ["shell-ball", "shell-ball-bubble", "shell-ball-input", "shell-ball-voice", "shell-ball-bubble-pinned-*", "dashboard", "control-panel"],
+  "windows": ["shell-ball", "shell-ball-bubble", "shell-ball-input", "shell-ball-voice", "shell-ball-onboarding", "shell-ball-bubble-pinned-*", "dashboard", "control-panel"],
   "permissions": [
     "core:default",
     "core:window:allow-create",
