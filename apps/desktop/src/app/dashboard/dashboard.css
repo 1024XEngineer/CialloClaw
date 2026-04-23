@@ -407,6 +407,16 @@
   gap: 0.75rem;
 }
 
+.dashboard-page__module-nav--floating {
+  position: fixed;
+  top: clamp(18px, 3vw, 28px);
+  right: clamp(18px, 3vw, 28px);
+  z-index: 80;
+  backdrop-filter: blur(14px);
+  border-radius: 999px;
+  box-shadow: 0 20px 45px -35px rgba(72, 98, 59, 0.55);
+}
+
 .dashboard-page__hero {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.8fr);

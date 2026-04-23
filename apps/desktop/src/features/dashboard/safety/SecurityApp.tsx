@@ -103,7 +103,7 @@ const CARD_STEP = 18;
 const BOARD_INSET_X = 22;
 const BOARD_INSET_TOP = 140;
 const BOARD_INSET_BOTTOM = 24;
-const DEFAULT_CARD_SIZE: CardSize = { width: 248, height: 176 };
+const DEFAULT_CARD_SIZE: CardSize = { width: 316, height: 236 };
 const FALLBACK_POSITION: CardPosition = { x: BOARD_INSET_X, y: BOARD_INSET_TOP };
 const SECURITY_DETAIL_PAGE_SIZE = 8;
 const ALL_AUDIT_TYPES = "__all__";
@@ -362,8 +362,8 @@ function getBoardCardSize(canvasWidth: number, canvasHeight: number, grid: Board
   const height = Math.floor((canvasHeight - BOARD_INSET_TOP - BOARD_INSET_BOTTOM - CARD_CLEARANCE * (grid.rows - 1)) / grid.rows);
 
   return {
-    width: clampValue(width, 208, 260),
-    height: clampValue(height, 152, 184),
+    width: clampValue(width, 228, DEFAULT_CARD_SIZE.width),
+    height: clampValue(height, 172, DEFAULT_CARD_SIZE.height),
   } satisfies CardSize;
 }
 
@@ -1095,6 +1095,19 @@ export function SecurityApp() {
     [cardKeys, getBoardLayout],
   );
 
+  const getClampedCardPosition = useCallback(
+    (target: CardPosition) => {
+      const layout = getBoardLayout();
+
+      if (!layout) {
+        return target;
+      }
+
+      return clampPosition(target, layout.bounds);
+    },
+    [getBoardLayout],
+  );
+
   useLayoutEffect(() => {
     const syncBoardLayout = () => {
       const layout = getBoardLayout();
@@ -1333,14 +1346,12 @@ export function SecurityApp() {
 
     setCardPositions((currentPositions) => ({
       ...currentPositions,
-      [key]: getSettledCardPosition(
-        key,
-        {
-          x: dragState.originX + deltaX,
-          y: dragState.originY + deltaY,
-        },
-        currentPositions,
-      ),
+      // Keep the drag path free while the card is moving so neighboring cards do
+      // not block the pointer. Collision avoidance still runs on release.
+      [key]: getClampedCardPosition({
+        x: dragState.originX + deltaX,
+        y: dragState.originY + deltaY,
+      }),
     }));
   };
 
@@ -1355,6 +1366,13 @@ export function SecurityApp() {
 
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (dragState.moved) {
+      setCardPositions((currentPositions) => ({
+        ...currentPositions,
+        [key]: getSettledCardPosition(key, currentPositions[key] ?? FALLBACK_POSITION, currentPositions),
+      }));
     }
 
     releaseDrag();
@@ -2110,10 +2128,10 @@ export function SecurityApp() {
 
               <div className="security-page__detail-actions">
                 <Flex align="center" gap="2" wrap="wrap" justify="end">
-                  <Badge color={preview.badgeColor} variant="soft" highContrast>
+                  <Badge color={preview.badgeColor} variant="soft" highContrast className="security-page__detail-badge">
                     {preview.badgeLabel}
                   </Badge>
-                  <Badge color={sourceBadgeColor} variant="soft" highContrast>
+                  <Badge color={sourceBadgeColor} variant="soft" highContrast className="security-page__detail-badge">
                     {sourceBadgeLabel}
                   </Badge>
                 </Flex>
@@ -2177,7 +2195,7 @@ export function SecurityApp() {
               <Icon className="security-page__card-icon" />
             </div>
 
-            <Badge color={preview.badgeColor} variant="soft" highContrast>
+            <Badge color={preview.badgeColor} variant="soft" highContrast className="security-page__card-badge">
               {preview.badgeLabel}
             </Badge>
 
@@ -2200,17 +2218,17 @@ export function SecurityApp() {
           <Heading size="9" className="security-page__title">
             安全卫士
           </Heading>
-          <Flex align="center" gap="2" wrap="wrap">
-            <Badge color={sourceBadgeColor} variant="soft" highContrast>
+          <Flex align="center" gap="2" wrap="wrap" className="security-page__status-strip">
+            <Badge color={sourceBadgeColor} variant="soft" highContrast className="security-page__status-badge">
               {sourceBadgeLabel}
             </Badge>
-            <Badge color={getStatusColor(moduleData.summary.security_status)} variant="soft" highContrast>
+            <Badge color={getStatusColor(moduleData.summary.security_status)} variant="soft" highContrast className="security-page__status-badge">
               {moduleData.summary.security_status}
             </Badge>
-            <Badge color={moduleData.summary.pending_authorizations > 0 ? "amber" : "gray"} variant="soft" highContrast>
+            <Badge color={moduleData.summary.pending_authorizations > 0 ? "amber" : "gray"} variant="soft" highContrast className="security-page__status-badge">
               {moduleData.summary.pending_authorizations} pending
             </Badge>
-            <Badge color={moduleData.summary.latest_restore_point ? "orange" : "gray"} variant="soft" highContrast>
+            <Badge color={moduleData.summary.latest_restore_point ? "orange" : "gray"} variant="soft" highContrast className="security-page__status-badge">
               {moduleData.summary.latest_restore_point ? "restore ready" : "no restore"}
             </Badge>
           </Flex>

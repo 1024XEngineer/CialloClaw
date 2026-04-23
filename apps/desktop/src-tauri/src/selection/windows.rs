@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WINDOWS_UIA_SELECTION_SOURCE: &str = "windows_uia";
 const WINDOWS_UIA_SELECTION_URL: &str = "native://windows-uia-selection";
 const SHELL_BALL_SELECTION_SNAPSHOT_EVENT: &str = "desktop-shell-ball:selection-snapshot";
-const SHELL_BALL_WINDOW_LABELS: [&str; 1] = ["shell-ball"];
+const SHELL_BALL_WINDOW_LABELS: [&str; 4] = ["shell-ball", "shell-ball-bubble", "shell-ball-input", "shell-ball-voice"];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_SELECTION_MOUSE_DELAY_MS: u64 = 100;
 const SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS: u64 = 80;

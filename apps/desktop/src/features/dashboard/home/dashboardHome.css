@@ -205,7 +205,21 @@
   font-weight: 700;
   letter-spacing: 0.14em;
   margin-top: 0.8rem;
+  opacity: 0;
+  pointer-events: none;
   text-transform: uppercase;
+  transform: translateY(-0.22rem) scale(0.96);
+  transform-origin: center;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.dashboard-orbit-entrance:hover .dashboard-orbit-entrance__label,
+.dashboard-orbit-entrance:focus-visible .dashboard-orbit-entrance__label,
+.dashboard-orbit-entrance[data-hovered="true"] .dashboard-orbit-entrance__label {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 .dashboard-orbit-decor {

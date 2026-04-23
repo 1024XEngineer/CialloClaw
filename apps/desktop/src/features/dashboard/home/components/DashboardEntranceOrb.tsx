@@ -156,6 +156,7 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClic
     <motion.button
       animate={{ opacity: dimmed ? 0.28 : 1, scale: isDragging ? 1.12 : isHovered ? 1.08 : 1 }}
       className="dashboard-orbit-entrance"
+      data-hovered={isHovered ? "true" : "false"}
       data-snapping={isSnapping ? "true" : "false"}
       onClick={(event) => {
         event.stopPropagation();

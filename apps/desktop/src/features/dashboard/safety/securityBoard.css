@@ -1,5 +1,5 @@
 .security-page {
-  --security-font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --security-font-body: "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
   --security-space-1: 0.5rem;
   --security-space-2: 0.8rem;
@@ -91,7 +91,7 @@
   display: grid;
   gap: var(--security-space-2);
   left: var(--security-space-5);
-  max-width: 28rem;
+  max-width: 34rem;
   top: var(--security-space-5);
 }
 
@@ -274,7 +274,7 @@
   color: var(--security-ink);
   font-size: 0.84rem;
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.46;
 }
 
 .security-page__source-description,
@@ -378,27 +378,56 @@
 }
 
 .security-page__card-line {
-  font-size: clamp(1.3rem, 1.7vw, 1.7rem);
-  line-height: 1.02;
+  font-size: clamp(1.22rem, 1.55vw, 1.56rem);
+  line-height: 1.18;
   margin: 0;
   min-width: 0;
-  overflow: hidden;
-  padding-bottom: 0.08em;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  padding-bottom: 0.14em;
   padding-top: 0.02em;
-  text-wrap: balance;
+  text-wrap: pretty;
 }
 
 .security-page__card-line--number {
-  font-size: clamp(1.5rem, 2vw, 2rem);
+  font-size: clamp(1.4rem, 1.82vw, 1.84rem);
 }
 
 .security-page__card-copy {
   font-size: 0.8rem;
-  overflow: hidden;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 
 .security-page__card-meta {
   align-self: end;
+  line-height: 1.5;
+}
+
+.security-page__status-strip {
+  align-items: flex-start;
+  max-width: 100%;
+}
+
+.security-page__status-badge,
+.security-page__card-badge,
+.security-page__detail-badge {
+  line-height: 1.24;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0.38rem 0.72rem;
+  text-transform: uppercase;
+  white-space: normal;
+}
+
+.security-page__status-badge {
+  font-size: 0.82rem;
+}
+
+.security-page__card-badge,
+.security-page__detail-badge {
+  justify-self: start;
 }
 
 .security-page :where(span.inline-flex.rounded-full.px-3.py-1.text-xs.font-medium) {

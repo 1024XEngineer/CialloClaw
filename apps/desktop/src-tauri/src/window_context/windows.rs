@@ -32,7 +32,7 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
-const SHELL_BALL_WINDOW_LABELS: [&str; 1] = ["shell-ball"];
+const SHELL_BALL_WINDOW_LABELS: [&str; 4] = ["shell-ball", "shell-ball-bubble", "shell-ball-input", "shell-ball-voice"];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
