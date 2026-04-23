@@ -169,7 +169,7 @@ func (c *localScreenCaptureClient) cleanupOrphanedSessionTemps(cutoff time.Time)
 	}
 	deleted := make([]string, 0)
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "screen_sess_") {
+		if !entry.IsDir() || !isManagedScreenTempDir(entry.Name()) {
 			continue
 		}
 		sessionID := entry.Name()
@@ -198,6 +198,11 @@ func screenSessionTempDir(screenSessionID string) string {
 		return ""
 	}
 	return path.Join("temp", screenSessionID)
+}
+
+func isManagedScreenTempDir(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.HasPrefix(name, "screen_local_") || strings.HasPrefix(name, "screen_sess_")
 }
 
 func removeLocalScreenCleanupPath(fileSystem platform.FileSystemAdapter, cleanupPath string) ([]string, error) {

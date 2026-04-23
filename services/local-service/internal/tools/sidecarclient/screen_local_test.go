@@ -215,7 +215,7 @@ func TestLocalScreenCaptureClientCleanupHelpersCoverFreshOrphanBranches(t *testi
 		t.Fatalf("new local path policy failed: %v", err)
 	}
 	fileSystem := platform.NewLocalFileSystemAdapter(policy)
-	freshOrphanDir := filepath.Join(workspaceRoot, "temp", "screen_sess_fresh_001")
+	freshOrphanDir := filepath.Join(workspaceRoot, "temp", "screen_local_fresh_001")
 	if err := os.MkdirAll(freshOrphanDir, 0o755); err != nil {
 		t.Fatalf("mkdir fresh orphan dir failed: %v", err)
 	}
@@ -231,12 +231,15 @@ func TestLocalScreenCaptureClientCleanupHelpersCoverFreshOrphanBranches(t *testi
 	if _, err := os.Stat(freshOrphanDir); err != nil {
 		t.Fatalf("expected fresh orphan dir to remain, got %v", err)
 	}
-	if _, err := removeLocalScreenCleanupPath(nil, "temp/screen_sess_nil"); err == nil {
+	if _, err := removeLocalScreenCleanupPath(nil, "temp/screen_local_nil"); err == nil {
 		t.Fatal("expected nil filesystem cleanup helper to fail")
 	}
 	deleted, err := removeLocalScreenCleanupPath(fileSystem, "")
 	if err != nil || len(deleted) != 0 {
 		t.Fatalf("expected blank cleanup path to no-op, got deleted=%+v err=%v", deleted, err)
+	}
+	if !isManagedScreenTempDir("screen_local_0001") || !isManagedScreenTempDir("screen_sess_0001") || isManagedScreenTempDir("temp_misc_0001") {
+		t.Fatal("expected managed screen temp dir detection to cover local and in-memory prefixes")
 	}
 }
 
@@ -247,7 +250,7 @@ func TestLocalScreenCaptureClientCleanupExpiredTempsReclaimsOrphanSessionDirs(t 
 		t.Fatalf("new local path policy failed: %v", err)
 	}
 	fileSystem := platform.NewLocalFileSystemAdapter(policy)
-	orphanDir := filepath.Join(workspaceRoot, "temp", "screen_sess_orphan_001")
+	orphanDir := filepath.Join(workspaceRoot, "temp", "screen_local_orphan_001")
 	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
 		t.Fatalf("mkdir orphan dir failed: %v", err)
 	}
