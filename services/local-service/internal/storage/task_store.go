@@ -6,8 +6,68 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
+
+const structuredTaskSelectColumns = `
+	task_id,
+	session_id,
+	run_id,
+	COALESCE(primary_run_id, run_id, ''),
+	title,
+	source_type,
+	status,
+	intent_name,
+	intent_arguments_json,
+	preferred_delivery,
+	fallback_delivery,
+	current_step,
+	current_step_status,
+	risk_level,
+	COALESCE(request_source, ''),
+	COALESCE(request_trigger, ''),
+	started_at,
+	updated_at,
+	COALESCE(finished_at, ''),
+	snapshot_json`
+
+func normalizedPrimaryRunID(record TaskRecord) string {
+	if strings.TrimSpace(record.PrimaryRunID) != "" {
+		return record.PrimaryRunID
+	}
+	return strings.TrimSpace(record.RunID)
+}
+
+func scanStructuredTask(scanner interface {
+	Scan(dest ...any) error
+}, record *TaskRecord) error {
+	if record == nil {
+		return fmt.Errorf("scan structured task: nil record")
+	}
+	return scanner.Scan(
+		&record.TaskID,
+		&record.SessionID,
+		&record.RunID,
+		&record.PrimaryRunID,
+		&record.Title,
+		&record.SourceType,
+		&record.Status,
+		&record.IntentName,
+		&record.IntentArgumentsJSON,
+		&record.PreferredDelivery,
+		&record.FallbackDelivery,
+		&record.CurrentStep,
+		&record.CurrentStepStatus,
+		&record.RiskLevel,
+		&record.RequestSource,
+		&record.RequestTrigger,
+		&record.StartedAt,
+		&record.UpdatedAt,
+		&record.FinishedAt,
+		&record.SnapshotJSON,
+	)
+}
 
 type inMemoryTaskStore struct {
 	mu      sync.Mutex
@@ -21,6 +81,10 @@ func newInMemoryTaskStore() *inMemoryTaskStore {
 func (s *inMemoryTaskStore) WriteTask(_ context.Context, record TaskRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record.PrimaryRunID = normalizedPrimaryRunID(record)
+	if strings.TrimSpace(record.RunID) == "" {
+		record.RunID = record.PrimaryRunID
+	}
 	s.records[record.TaskID] = record
 	return nil
 }
@@ -118,13 +182,18 @@ func NewSQLiteTaskStore(databasePath string) (*SQLiteTaskStore, error) {
 }
 
 func (s *SQLiteTaskStore) WriteTask(ctx context.Context, record TaskRecord) error {
+	primaryRunID := normalizedPrimaryRunID(record)
+	runID := strings.TrimSpace(record.RunID)
+	if runID == "" {
+		runID = primaryRunID
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR REPLACE INTO tasks (
-			task_id, session_id, run_id, title, source_type, status, intent_name, intent_arguments_json,
-			preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level,
+			task_id, session_id, run_id, primary_run_id, title, source_type, status, intent_name, intent_arguments_json,
+			preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level, request_source, request_trigger,
 			started_at, updated_at, finished_at, snapshot_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.TaskID, record.SessionID, record.RunID, record.Title, record.SourceType, record.Status, record.IntentName, record.IntentArgumentsJSON, record.PreferredDelivery, record.FallbackDelivery, record.CurrentStep, record.CurrentStepStatus, record.RiskLevel, record.StartedAt, record.UpdatedAt, nullableText(record.FinishedAt), record.SnapshotJSON)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.TaskID, record.SessionID, runID, primaryRunID, record.Title, record.SourceType, record.Status, record.IntentName, record.IntentArgumentsJSON, record.PreferredDelivery, record.FallbackDelivery, record.CurrentStep, record.CurrentStepStatus, record.RiskLevel, nullableText(record.RequestSource), nullableText(record.RequestTrigger), record.StartedAt, record.UpdatedAt, nullableText(record.FinishedAt), record.SnapshotJSON)
 	if err != nil {
 		return fmt.Errorf("write task: %w", err)
 	}
@@ -141,12 +210,10 @@ func (s *SQLiteTaskStore) DeleteTask(ctx context.Context, taskID string) error {
 
 func (s *SQLiteTaskStore) GetTask(ctx context.Context, taskID string) (TaskRecord, error) {
 	var record TaskRecord
-	err := s.db.QueryRowContext(ctx, `
-		SELECT task_id, session_id, run_id, title, source_type, status, intent_name, intent_arguments_json,
-		       preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level,
-		       started_at, updated_at, COALESCE(finished_at, ''), snapshot_json
+	err := scanStructuredTask(s.db.QueryRowContext(ctx, `
+		SELECT `+structuredTaskSelectColumns+`
 		FROM tasks WHERE task_id = ?
-	`, taskID).Scan(&record.TaskID, &record.SessionID, &record.RunID, &record.Title, &record.SourceType, &record.Status, &record.IntentName, &record.IntentArgumentsJSON, &record.PreferredDelivery, &record.FallbackDelivery, &record.CurrentStep, &record.CurrentStepStatus, &record.RiskLevel, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.SnapshotJSON)
+	`, taskID), &record)
 	if err != nil {
 		return TaskRecord{}, err
 	}
@@ -154,7 +221,7 @@ func (s *SQLiteTaskStore) GetTask(ctx context.Context, taskID string) (TaskRecor
 }
 
 func (s *SQLiteTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error) {
-	query := `SELECT task_id, session_id, run_id, title, source_type, status, intent_name, intent_arguments_json, preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level, started_at, updated_at, COALESCE(finished_at, ''), snapshot_json FROM tasks ORDER BY started_at DESC, task_id DESC`
+	query := `SELECT ` + structuredTaskSelectColumns + ` FROM tasks ORDER BY started_at DESC, task_id DESC`
 	countQuery := `SELECT COUNT(1) FROM tasks`
 	args := make([]any, 0, 2)
 	if limit > 0 {
@@ -173,7 +240,7 @@ func (s *SQLiteTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]T
 	items := make([]TaskRecord, 0)
 	for rows.Next() {
 		var record TaskRecord
-		if err := rows.Scan(&record.TaskID, &record.SessionID, &record.RunID, &record.Title, &record.SourceType, &record.Status, &record.IntentName, &record.IntentArgumentsJSON, &record.PreferredDelivery, &record.FallbackDelivery, &record.CurrentStep, &record.CurrentStepStatus, &record.RiskLevel, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.SnapshotJSON); err != nil {
+		if err := scanStructuredTask(rows, &record); err != nil {
 			return nil, 0, fmt.Errorf("scan task: %w", err)
 		}
 		items = append(items, record)
@@ -185,7 +252,7 @@ func (s *SQLiteTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]T
 }
 
 func (s *SQLiteTaskStore) ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]TaskRecord, int, error) {
-	query := `SELECT task_id, session_id, run_id, title, source_type, status, intent_name, intent_arguments_json, preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level, started_at, updated_at, COALESCE(finished_at, ''), snapshot_json FROM tasks WHERE session_id = ? ORDER BY started_at DESC, task_id DESC`
+	query := `SELECT ` + structuredTaskSelectColumns + ` FROM tasks WHERE session_id = ? ORDER BY started_at DESC, task_id DESC`
 	countQuery := `SELECT COUNT(1) FROM tasks WHERE session_id = ?`
 	args := []any{sessionID}
 	if limit > 0 {
@@ -204,7 +271,7 @@ func (s *SQLiteTaskStore) ListTasksBySession(ctx context.Context, sessionID stri
 	items := make([]TaskRecord, 0)
 	for rows.Next() {
 		var record TaskRecord
-		if err := rows.Scan(&record.TaskID, &record.SessionID, &record.RunID, &record.Title, &record.SourceType, &record.Status, &record.IntentName, &record.IntentArgumentsJSON, &record.PreferredDelivery, &record.FallbackDelivery, &record.CurrentStep, &record.CurrentStepStatus, &record.RiskLevel, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.SnapshotJSON); err != nil {
+		if err := scanStructuredTask(rows, &record); err != nil {
 			return nil, 0, fmt.Errorf("scan task by session: %w", err)
 		}
 		items = append(items, record)
@@ -234,6 +301,7 @@ func (s *SQLiteTaskStore) initialize(ctx context.Context) error {
 			task_id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
 			run_id TEXT NOT NULL UNIQUE,
+			primary_run_id TEXT,
 			title TEXT NOT NULL,
 			source_type TEXT NOT NULL,
 			status TEXT NOT NULL,
@@ -244,6 +312,8 @@ func (s *SQLiteTaskStore) initialize(ctx context.Context) error {
 			current_step TEXT NOT NULL,
 			current_step_status TEXT NOT NULL,
 			risk_level TEXT NOT NULL,
+			request_source TEXT,
+			request_trigger TEXT,
 			started_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			finished_at TEXT,
@@ -252,11 +322,28 @@ func (s *SQLiteTaskStore) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create tasks table: %w", err)
 	}
+	statements := []string{
+		`ALTER TABLE tasks ADD COLUMN primary_run_id TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN request_source TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN request_trigger TEXT;`,
+		`UPDATE tasks SET primary_run_id = run_id WHERE COALESCE(primary_run_id, '') = '';`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if isSQLiteDuplicateColumnError(err) {
+				continue
+			}
+			return fmt.Errorf("initialize tasks table: %w", err)
+		}
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_tasks_started_at ON tasks(started_at DESC, task_id DESC);`); err != nil {
 		return fmt.Errorf("create tasks started_at index: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id);`); err != nil {
 		return fmt.Errorf("create tasks session index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_tasks_primary_run_id ON tasks(primary_run_id);`); err != nil {
+		return fmt.Errorf("create tasks primary run index: %w", err)
 	}
 	return nil
 }

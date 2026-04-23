@@ -50,6 +50,8 @@ const CONTROL_PANEL_WINDOW_LABEL: &str = "control-panel";
 const DASHBOARD_WINDOW_LABEL: &str = "dashboard";
 const SHELL_BALL_WINDOW_LABEL: &str = "shell-ball";
 const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
+const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";
+const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
@@ -600,7 +602,12 @@ fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Resul
 }
 
 fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
-    let shell_ball_labels = [SHELL_BALL_WINDOW_LABEL, SHELL_BALL_BUBBLE_WINDOW_LABEL];
+    let shell_ball_labels = [
+        SHELL_BALL_WINDOW_LABEL,
+        SHELL_BALL_BUBBLE_WINDOW_LABEL,
+        SHELL_BALL_INPUT_WINDOW_LABEL,
+        SHELL_BALL_VOICE_WINDOW_LABEL,
+    ];
 
     for label in shell_ball_labels {
         if let Some(window) = app.get_webview_window(label) {
@@ -625,10 +632,16 @@ fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn show_shell_ball(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(SHELL_BALL_BUBBLE_WINDOW_LABEL) {
-        window
-            .hide()
-            .map_err(|error| format!("failed to hide {SHELL_BALL_BUBBLE_WINDOW_LABEL}: {error}"))?;
+    for label in [
+        SHELL_BALL_BUBBLE_WINDOW_LABEL,
+        SHELL_BALL_INPUT_WINDOW_LABEL,
+        SHELL_BALL_VOICE_WINDOW_LABEL,
+    ] {
+        if let Some(window) = app.get_webview_window(label) {
+            window
+                .hide()
+                .map_err(|error| format!("failed to hide {label}: {error}"))?;
+        }
     }
 
     let window = app

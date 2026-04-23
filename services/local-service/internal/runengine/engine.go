@@ -33,6 +33,8 @@ type TaskRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	RequestSource     string
+	RequestTrigger    string
 	ExecutionAttempt  int
 	Title             string
 	SourceType        string
@@ -93,6 +95,8 @@ type NotificationRecord struct {
 // CreateTaskInput contains the runtime initialization payload for a new task.
 type CreateTaskInput struct {
 	SessionID         string
+	RequestSource     string
+	RequestTrigger    string
 	Title             string
 	SourceType        string
 	Status            string
@@ -279,6 +283,8 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		TaskID:            taskID,
 		SessionID:         firstNonEmpty(input.SessionID, e.nextIdentifier("sess")),
 		RunID:             runID,
+		RequestSource:     strings.TrimSpace(input.RequestSource),
+		RequestTrigger:    strings.TrimSpace(input.RequestTrigger),
 		ExecutionAttempt:  1,
 		Title:             input.Title,
 		SourceType:        input.SourceType,
@@ -2878,6 +2884,8 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		RequestSource:     record.RequestSource,
+		RequestTrigger:    record.RequestTrigger,
 		ExecutionAttempt:  record.ExecutionAttempt,
 		Title:             record.Title,
 		SourceType:        record.SourceType,
@@ -2922,6 +2930,8 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		RequestSource:     firstNonEmpty(record.RequestSource, record.Snapshot.Source),
+		RequestTrigger:    firstNonEmpty(record.RequestTrigger, record.Snapshot.Trigger),
 		ExecutionAttempt:  maxInt(record.ExecutionAttempt, 1),
 		Title:             record.Title,
 		SourceType:        record.SourceType,

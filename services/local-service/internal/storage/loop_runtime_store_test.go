@@ -10,7 +10,7 @@ import (
 
 func TestInMemoryLoopRuntimeStoreSupportsStructuredQueries(t *testing.T) {
 	store := newInMemoryLoopRuntimeStore()
-	if err := store.SaveRun(context.Background(), RunRecord{RunID: "run_mem_001", TaskID: "task_mem_001", SessionID: "sess_mem_001", Status: "running", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z"}); err != nil {
+	if err := store.SaveRun(context.Background(), RunRecord{RunID: "run_mem_001", TaskID: "task_mem_001", SessionID: "sess_mem_001", SourceType: "hover_input", Status: "running", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z"}); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
 	if err := store.SaveSteps(context.Background(), []StepRecord{{StepID: "step_mem_001", RunID: "run_mem_001", TaskID: "task_mem_001", Name: "plan", Status: "completed", OrderIndex: 1}}); err != nil {
@@ -27,7 +27,7 @@ func TestInMemoryLoopRuntimeStoreSupportsStructuredQueries(t *testing.T) {
 	}
 
 	runRecord, err := store.GetRun(context.Background(), "run_mem_001")
-	if err != nil || runRecord.TaskID != "task_mem_001" {
+	if err != nil || runRecord.TaskID != "task_mem_001" || runRecord.SourceType != "hover_input" {
 		t.Fatalf("GetRun returned record=%+v err=%v", runRecord, err)
 	}
 	deliveryResults, total, err := store.ListDeliveryResults(context.Background(), "task_mem_001", 10, 0)
@@ -57,7 +57,7 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 		t.Fatalf("NewSQLiteLoopRuntimeStore returned error: %v", err)
 	}
 	defer func() { _ = store.Close() }()
-	if err := store.SaveRun(context.Background(), RunRecord{RunID: "run_sql_001", TaskID: "task_sql_001", SessionID: "sess_sql_001", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z", FinishedAt: "2026-04-21T10:00:02Z", StopReason: "completed"}); err != nil {
+	if err := store.SaveRun(context.Background(), RunRecord{RunID: "run_sql_001", TaskID: "task_sql_001", SessionID: "sess_sql_001", SourceType: "hover_input", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z", FinishedAt: "2026-04-21T10:00:02Z", StopReason: "completed"}); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
 	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_001", TaskID: "task_sql_001", Type: "workspace_document", Title: "result", PayloadJSON: `{"task_id":"task_sql_001"}`, PreviewText: "preview", CreatedAt: "2026-04-21T10:00:03Z"}); err != nil {
@@ -71,7 +71,7 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 	}
 
 	runRecord, err := store.GetRun(context.Background(), "run_sql_001")
-	if err != nil || runRecord.StopReason != "completed" {
+	if err != nil || runRecord.StopReason != "completed" || runRecord.SourceType != "hover_input" {
 		t.Fatalf("GetRun returned record=%+v err=%v", runRecord, err)
 	}
 	deliveryResults, total, err := store.ListDeliveryResults(context.Background(), "task_sql_001", 10, 0)
@@ -165,7 +165,7 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteLoopRuntimeStore returned error: %v", err)
 	}
-	if err := sqliteStore.SaveRun(context.Background(), RunRecord{RunID: "run_sql_extra", TaskID: "task_sql_extra", SessionID: "sess_sql_extra", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z"}); err != nil {
+	if err := sqliteStore.SaveRun(context.Background(), RunRecord{RunID: "run_sql_extra", TaskID: "task_sql_extra", SessionID: "sess_sql_extra", SourceType: "hover_input", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z"}); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
 	if err := sqliteStore.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_sql_extra", RunID: "run_sql_extra", TaskID: "task_sql_extra", Type: "loop.started", CreatedAt: "2026-04-21T10:00:01Z"}}); err != nil {
@@ -198,7 +198,7 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if err := sqliteStore.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
-	if err := sqliteStore.SaveRun(context.Background(), RunRecord{RunID: "run_closed", TaskID: "task_closed", SessionID: "sess_closed", Status: "failed", IntentName: "summarize", StartedAt: "2026-04-21T10:10:00Z", UpdatedAt: "2026-04-21T10:10:01Z"}); err == nil {
+	if err := sqliteStore.SaveRun(context.Background(), RunRecord{RunID: "run_closed", TaskID: "task_closed", SessionID: "sess_closed", SourceType: "hover_input", Status: "failed", IntentName: "summarize", StartedAt: "2026-04-21T10:10:00Z", UpdatedAt: "2026-04-21T10:10:01Z"}); err == nil {
 		t.Fatal("expected SaveRun on closed sqlite loop runtime store to fail")
 	}
 	if err := sqliteStore.SaveSteps(context.Background(), []StepRecord{{StepID: "step_closed", RunID: "run_closed", TaskID: "task_closed", Name: "plan", Status: "failed", OrderIndex: 1}}); err == nil {

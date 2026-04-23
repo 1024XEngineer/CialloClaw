@@ -610,7 +610,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const appendShellBallAutoOpenFeedback = useCallback((input: {
     taskId: string;
     text: string;
-  }) => {
+  }): void => {
     const turnIndex = getTaskBubbleTurnIndex(input.taskId) ?? allocateBubbleTurnIndex();
     bindTaskToBubbleTurn(input.taskId, turnIndex);
 
@@ -629,14 +629,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       ]),
     );
     revealBubbleRegion();
-  }, [autoOpenShellBallDeliveryResult, revealBubbleRegion]);
+  }, [revealBubbleRegion]);
 
   /**
    * Shell-ball only resolves and executes the formal delivery-open flow after
    * a task has already produced a formal delivery result. The actual open
    * action still comes from `agent.delivery.open`.
    */
-  const autoOpenShellBallDeliveryResult = useCallback(async (taskId: string, deliveryResult: DeliveryResult | null | undefined) => {
+  const autoOpenShellBallDeliveryResult = useCallback(async (taskId: string, deliveryResult: DeliveryResult | null | undefined): Promise<void> => {
     if (!shouldAutoOpenShellBallDeliveryResult(deliveryResult)) {
       return;
     }

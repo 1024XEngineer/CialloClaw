@@ -240,6 +240,60 @@ func (s *SQLiteTaskRunStore) LoadTaskRuns(ctx context.Context) ([]TaskRunRecord,
 	return records, nil
 }
 
+// GetTaskRun loads one task_run compatibility snapshot by task_id.
+func (s *SQLiteTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (TaskRunRecord, error) {
+	var recordJSON string
+	err := s.db.QueryRowContext(ctx, `SELECT record_json FROM task_runs WHERE task_id = ?`, taskID).Scan(&recordJSON)
+	if err != nil {
+		return TaskRunRecord{}, err
+	}
+	return unmarshalTaskRunRecord(recordJSON)
+}
+
+// LoadLegacyTaskRuns narrows compatibility fallback to task_runs rows that do
+// not yet have a first-class task row counterpart.
+func (s *SQLiteTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error) {
+	query := `SELECT record_json FROM task_runs`
+	args := make([]any, 0, len(structuredTaskIDs))
+	filteredTaskIDs := make([]string, 0, len(structuredTaskIDs))
+	for _, taskID := range structuredTaskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		filteredTaskIDs = append(filteredTaskIDs, taskID)
+		args = append(args, taskID)
+	}
+	if len(filteredTaskIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(filteredTaskIDs)), ",")
+		query += ` WHERE task_id NOT IN (` + placeholders + `)`
+	}
+	query += ` ORDER BY started_at DESC, task_id DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load legacy task runs: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]TaskRunRecord, 0)
+	for rows.Next() {
+		var recordJSON string
+		if err := rows.Scan(&recordJSON); err != nil {
+			return nil, fmt.Errorf("scan legacy task run row: %w", err)
+		}
+		record, err := unmarshalTaskRunRecord(recordJSON)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy task run rows: %w", err)
+	}
+	return records, nil
+}
+
 // Close closes the underlying SQLite connection.
 func (s *SQLiteTaskRunStore) Close() error {
 	if s.db == nil {
@@ -389,11 +443,11 @@ func writeStructuredTaskStateWithSQLiteTx(ctx context.Context, tx *sql.Tx, recor
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR REPLACE INTO tasks (
-			task_id, session_id, run_id, title, source_type, status, intent_name, intent_arguments_json,
-			preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level,
+			task_id, session_id, run_id, primary_run_id, title, source_type, status, intent_name, intent_arguments_json,
+			preferred_delivery, fallback_delivery, current_step, current_step_status, risk_level, request_source, request_trigger,
 			started_at, updated_at, finished_at, snapshot_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, taskRecord.TaskID, taskRecord.SessionID, taskRecord.RunID, taskRecord.Title, taskRecord.SourceType, taskRecord.Status, taskRecord.IntentName, taskRecord.IntentArgumentsJSON, taskRecord.PreferredDelivery, taskRecord.FallbackDelivery, taskRecord.CurrentStep, taskRecord.CurrentStepStatus, taskRecord.RiskLevel, taskRecord.StartedAt, taskRecord.UpdatedAt, nullableText(taskRecord.FinishedAt), taskRecord.SnapshotJSON); err != nil {
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, taskRecord.TaskID, taskRecord.SessionID, taskRecord.RunID, taskRecord.PrimaryRunID, taskRecord.Title, taskRecord.SourceType, taskRecord.Status, taskRecord.IntentName, taskRecord.IntentArgumentsJSON, taskRecord.PreferredDelivery, taskRecord.FallbackDelivery, taskRecord.CurrentStep, taskRecord.CurrentStepStatus, taskRecord.RiskLevel, nullableText(taskRecord.RequestSource), nullableText(taskRecord.RequestTrigger), taskRecord.StartedAt, taskRecord.UpdatedAt, nullableText(taskRecord.FinishedAt), taskRecord.SnapshotJSON); err != nil {
 		return fmt.Errorf("write task: %w", err)
 	}
 	if err := deleteStructuredTaskStepsWithSQLiteTx(ctx, tx, record.TaskID); err != nil {

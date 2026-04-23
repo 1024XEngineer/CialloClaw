@@ -110,6 +110,7 @@ func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Servi
 type Request struct {
 	TaskID               string
 	RunID                string
+	SourceType           string
 	Title                string
 	Intent               map[string]any
 	AttemptIndex         int
@@ -428,6 +429,12 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	}
 	promotedArtifact, promotedCleanup := s.promoteScreenArtifactForPersistence(ctx, request.TaskID, analysis.Artifact)
 	analysis.Artifact = promotedArtifact
+	if candidate.CaptureMode == tools.ScreenCaptureModeClip && len(analysis.ObservationSummary) > 0 {
+		if promotedPath := stringValue(promotedArtifact, "path", ""); strings.TrimSpace(promotedPath) != "" {
+			analysis.ObservationSummary["temp_clip_path"] = candidate.Path
+			analysis.ObservationSummary["clip_path"] = promotedPath
+		}
+	}
 	analysis.CitationSeed["artifact_id"] = stringValue(analysis.Artifact, "artifact_id", "")
 	analysis.CitationSeed["artifact_type"] = stringValue(analysis.Artifact, "artifact_type", "")
 	analysis.CitationSeed["screen_session_id"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "screen_session_id", "")
@@ -774,7 +781,7 @@ func (s *Service) screenAnalysisCleanupPlan(candidate tools.ScreenFrameCandidate
 	}
 	return map[string]any{
 		"screen_session_id": candidate.ScreenSessionID,
-		"reason":            "screen_analysis_pending_cleanup",
+		"reason":            screenAnalysisCleanupReason(candidate),
 		"cleanup_required":  true,
 		"paths":             paths,
 	}
@@ -906,11 +913,12 @@ func (s *Service) executeScreenCleanupPlan(plan map[string]any) map[string]any {
 		if strings.TrimSpace(pathValue) == "" {
 			continue
 		}
-		if err := s.fileSystem.Remove(pathValue); err != nil {
+		removedPaths, err := removeCleanupPath(s.fileSystem, pathValue)
+		if err != nil {
 			skipped = append(skipped, pathValue)
 			continue
 		}
-		deleted = append(deleted, pathValue)
+		deleted = append(deleted, removedPaths...)
 	}
 	return map[string]any{
 		"reason":        stringValue(plan, "reason", "screen_analysis_pending_cleanup"),
@@ -1383,7 +1391,7 @@ func (s *Service) buildScreenObservationFlow(ctx context.Context, taskID string,
 	}, nil
 }
 
-func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.ScreenFrameCandidate, language string) (*screenOCRPreparation, error) {
+func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.ScreenFrameCandidate, language string) (_ *screenOCRPreparation, err error) {
 	ocrInput, ok := screenOCRInputFromCandidate(candidate, language)
 	if candidate.CaptureMode != tools.ScreenCaptureModeClip {
 		if !ok {
@@ -1392,13 +1400,35 @@ func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.Scr
 		return &screenOCRPreparation{Input: ocrInput}, nil
 	}
 	if s == nil || s.media == nil {
-		return nil, fmt.Errorf("%w: media worker unavailable for clip analysis", tools.ErrScreenCaptureFailed)
+		return nil, fmt.Errorf("%w: media worker unavailable for clip analysis", tools.ErrMediaWorkerFailed)
 	}
-	outputDir := path.Join("temp", candidate.ScreenSessionID, fmt.Sprintf("%s_clip_frames", candidate.FrameID))
-	framesResult, err := s.media.ExtractFrames(ctx, candidate.Path, outputDir, 1, 1)
+	cleanupPaths := uniqueScreenCleanupPaths([]string{candidate.Path})
+	defer func() {
+		if err != nil {
+			cleanupScreenClipTemps(s.fileSystem, cleanupPaths)
+		}
+	}()
+	normalizedPath := clipNormalizedOutputPath(candidate.Path)
+	normalizedResult, err := s.media.NormalizeRecording(ctx, candidate.Path, normalizedPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", tools.ErrScreenCaptureFailed, err)
+		return nil, fmt.Errorf("%w: %v", tools.ErrMediaWorkerFailed, err)
 	}
+	effectiveNormalizedPath := firstNonEmpty(strings.TrimSpace(normalizedResult.OutputPath), normalizedPath)
+	if strings.TrimSpace(effectiveNormalizedPath) == "" {
+		return nil, fmt.Errorf("%w: normalized clip path is empty", tools.ErrToolOutputInvalid)
+	}
+	normalizedMediaPaths, ok := s.normalizeScreenWorkspacePaths([]string{effectiveNormalizedPath})
+	if !ok || len(normalizedMediaPaths) == 0 {
+		return nil, fmt.Errorf("%w: clip normalization returned invalid paths", tools.ErrToolOutputInvalid)
+	}
+	normalizedMediaPath := normalizedMediaPaths[0]
+	cleanupPaths = uniqueScreenCleanupPaths(append(cleanupPaths, normalizedMediaPath))
+	outputDir := clipFrameOutputDir(candidate.Path)
+	framesResult, err := s.media.ExtractFrames(ctx, effectiveNormalizedPath, outputDir, 1, 1)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrMediaWorkerFailed, err)
+	}
+	normalizedOutputDir := firstNonEmpty(strings.TrimSpace(framesResult.OutputDir), outputDir)
 	if len(framesResult.FramePaths) == 0 {
 		return nil, fmt.Errorf("%w: clip analysis produced no extracted frames", tools.ErrToolOutputInvalid)
 	}
@@ -1406,6 +1436,7 @@ func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.Scr
 	if !ok {
 		return nil, fmt.Errorf("%w: clip analysis returned invalid frame paths", tools.ErrToolOutputInvalid)
 	}
+	cleanupPaths = uniqueScreenCleanupPaths(append(cleanupPaths, append(normalizedFramePaths, normalizedOutputDir)...))
 	preparedInput := map[string]any{
 		"path": normalizedFramePaths[0],
 	}
@@ -1415,12 +1446,20 @@ func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.Scr
 	return &screenOCRPreparation{
 		Input: preparedInput,
 		ObservationPatch: map[string]any{
-			"analyzed_path":      normalizedFramePaths[0],
-			"clip_frame_count":   framesResult.FrameCount,
-			"clip_output_dir":    framesResult.OutputDir,
-			"clip_worker_source": framesResult.Source,
+			"clip_path":              candidate.Path,
+			"temp_clip_path":         candidate.Path,
+			"normalized_path":        normalizedMediaPath,
+			"normalized_output_path": normalizedMediaPath,
+			"normalized_format":      firstNonEmpty(strings.TrimSpace(normalizedResult.Format), "mp4"),
+			"analysis_frame_path":    normalizedFramePaths[0],
+			"analyzed_path":          normalizedFramePaths[0],
+			"clip_frame_count":       framesResult.FrameCount,
+			"clip_output_dir":        normalizedOutputDir,
+			"frame_output_dir":       normalizedOutputDir,
+			"clip_worker_source":     framesResult.Source,
+			"media_source":           firstNonEmpty(strings.TrimSpace(framesResult.Source), strings.TrimSpace(normalizedResult.Source)),
 		},
-		CleanupPaths: append([]string(nil), normalizedFramePaths...),
+		CleanupPaths: append([]string(nil), cleanupPaths[1:]...),
 	}, nil
 }
 
@@ -1490,6 +1529,73 @@ func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, 
 		CitationSeed:       citationSeed,
 		CleanupPaths:       append([]string(nil), flow.CleanupPaths...),
 	}, nil
+}
+
+func clipNormalizedOutputPath(pathValue string) string {
+	trimmedPath := strings.TrimSpace(pathValue)
+	if trimmedPath == "" {
+		return ""
+	}
+	baseName := strings.TrimSuffix(path.Base(trimmedPath), path.Ext(trimmedPath))
+	if strings.TrimSpace(baseName) == "" {
+		baseName = "clip"
+	}
+	return path.Join(path.Dir(trimmedPath), baseName+"_normalized.mp4")
+}
+
+func clipFrameOutputDir(pathValue string) string {
+	trimmedPath := strings.TrimSpace(pathValue)
+	if trimmedPath == "" {
+		return ""
+	}
+	baseName := strings.TrimSuffix(path.Base(trimmedPath), path.Ext(trimmedPath))
+	if strings.TrimSpace(baseName) == "" {
+		baseName = "clip"
+	}
+	return path.Join(path.Dir(trimmedPath), baseName+"_frames")
+}
+
+func screenAnalysisCleanupReason(candidate tools.ScreenFrameCandidate) string {
+	if candidate.CaptureMode == tools.ScreenCaptureModeClip {
+		return "screen_clip_pending_cleanup"
+	}
+	return "screen_analysis_pending_cleanup"
+}
+
+func cleanupScreenClipTemps(fileSystem platform.FileSystemAdapter, cleanupPaths []string) {
+	for _, cleanupPath := range cleanupPaths {
+		_, _ = removeCleanupPath(fileSystem, cleanupPath)
+	}
+}
+
+func removeCleanupPath(fileSystem platform.FileSystemAdapter, cleanupPath string) ([]string, error) {
+	if fileSystem == nil {
+		return nil, fmt.Errorf("file system unavailable")
+	}
+	cleanupPath = strings.TrimSpace(cleanupPath)
+	if cleanupPath == "" {
+		return nil, nil
+	}
+	entries, err := fs.ReadDir(fileSystem, cleanupPath)
+	if err == nil {
+		deleted := make([]string, 0, len(entries)+1)
+		for _, entry := range entries {
+			childPath := path.Join(cleanupPath, entry.Name())
+			childDeleted, childErr := removeCleanupPath(fileSystem, childPath)
+			deleted = append(deleted, childDeleted...)
+			if childErr != nil {
+				return deleted, childErr
+			}
+		}
+		if err := fileSystem.Remove(cleanupPath); err != nil {
+			return deleted, err
+		}
+		return append(deleted, cleanupPath), nil
+	}
+	if err := fileSystem.Remove(cleanupPath); err != nil {
+		return nil, err
+	}
+	return []string{cleanupPath}, nil
 }
 
 func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
@@ -2735,6 +2841,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		RunID:      request.RunID,
 		TaskID:     request.TaskID,
 		SessionID:  "",
+		SourceType: strings.TrimSpace(request.SourceType),
 		Status:     runStatusFromStopReason(result.StopReason),
 		IntentName: effectiveIntentName(request.Intent),
 		StartedAt:  updatedAt,

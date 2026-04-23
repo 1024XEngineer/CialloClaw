@@ -188,9 +188,10 @@ func (c *InMemoryScreenCaptureClient) CleanupSessionArtifacts(_ context.Context,
 func (c *InMemoryScreenCaptureClient) CleanupExpiredScreenTemps(_ context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	cutoff := cleanupCutoffTime(input.ExpiredBefore, c.now().UTC())
 	deleted := make([]string, 0)
 	for sessionID, state := range c.sessions {
-		if !state.ExpiresAt.IsZero() && !state.ExpiresAt.After(input.ExpiredBefore) {
+		if shouldCleanupScreenSessionState(state, cutoff) {
 			deleted = append(deleted, c.tempPaths[sessionID]...)
 			delete(c.tempPaths, sessionID)
 			delete(c.frameCounts, sessionID)
@@ -268,6 +269,26 @@ func defaultTTL(ttl time.Duration) time.Duration {
 		return ttl
 	}
 	return 5 * time.Minute
+}
+
+func cleanupCutoffTime(expiredBefore, now time.Time) time.Time {
+	if expiredBefore.IsZero() {
+		return now.UTC()
+	}
+	return expiredBefore.UTC()
+}
+
+func shouldCleanupScreenSessionState(state tools.ScreenSessionState, cutoff time.Time) bool {
+	if state.AuthorizationState == tools.ScreenAuthorizationExpired || state.AuthorizationState == tools.ScreenAuthorizationEnded {
+		if state.EndedAt == nil {
+			return true
+		}
+		return !state.EndedAt.After(cutoff)
+	}
+	if state.ExpiresAt.IsZero() {
+		return false
+	}
+	return !state.ExpiresAt.After(cutoff)
 }
 
 func expireState(state tools.ScreenSessionState, endedAt time.Time, reason string) tools.ScreenSessionState {

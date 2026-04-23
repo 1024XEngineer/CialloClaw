@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -114,6 +115,51 @@ func (s *InMemoryTaskRunStore) LoadTaskRuns(_ context.Context) ([]TaskRunRecord,
 	return records, nil
 }
 
+// GetTaskRun loads one persisted task/run snapshot by task_id.
+func (s *InMemoryTaskRunStore) GetTaskRun(_ context.Context, taskID string) (TaskRunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	record, ok := s.records[strings.TrimSpace(taskID)]
+	if !ok {
+		return TaskRunRecord{}, sql.ErrNoRows
+	}
+	return cloneTaskRunRecord(record), nil
+}
+
+// LoadLegacyTaskRuns returns task_run compatibility snapshots whose task_id is
+// still missing from the structured tasks table.
+func (s *InMemoryTaskRunStore) LoadLegacyTaskRuns(_ context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	excluded := make(map[string]struct{}, len(structuredTaskIDs))
+	for _, taskID := range structuredTaskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		excluded[taskID] = struct{}{}
+	}
+
+	records := make([]TaskRunRecord, 0, len(s.records))
+	for taskID, record := range s.records {
+		if _, skip := excluded[taskID]; skip {
+			continue
+		}
+		records = append(records, cloneTaskRunRecord(record))
+	}
+
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].StartedAt.Equal(records[j].StartedAt) {
+			return records[i].TaskID > records[j].TaskID
+		}
+		return records[i].StartedAt.After(records[j].StartedAt)
+	})
+
+	return records, nil
+}
+
 // writeStructuredTaskState keeps the new product-facing tasks/task_steps tables
 // in sync with the legacy task_runs snapshot so the migration can stay dual-write
 // until all read paths fully leave the compatibility record_json layer.
@@ -154,10 +200,19 @@ func taskRecordFromSnapshot(record TaskRunRecord) (TaskRecord, error) {
 	if record.FinishedAt != nil {
 		finishedAt = record.FinishedAt.Format(time.RFC3339Nano)
 	}
+	requestSource := strings.TrimSpace(record.RequestSource)
+	if requestSource == "" {
+		requestSource = strings.TrimSpace(record.Snapshot.Source)
+	}
+	requestTrigger := strings.TrimSpace(record.RequestTrigger)
+	if requestTrigger == "" {
+		requestTrigger = strings.TrimSpace(record.Snapshot.Trigger)
+	}
 	return TaskRecord{
 		TaskID:              record.TaskID,
 		SessionID:           record.SessionID,
 		RunID:               record.RunID,
+		PrimaryRunID:        record.RunID,
 		Title:               record.Title,
 		SourceType:          record.SourceType,
 		Status:              record.Status,
@@ -168,6 +223,8 @@ func taskRecordFromSnapshot(record TaskRunRecord) (TaskRecord, error) {
 		CurrentStep:         record.CurrentStep,
 		CurrentStepStatus:   record.CurrentStepStatus,
 		RiskLevel:           record.RiskLevel,
+		RequestSource:       requestSource,
+		RequestTrigger:      requestTrigger,
 		StartedAt:           record.StartedAt.Format(time.RFC3339Nano),
 		UpdatedAt:           record.UpdatedAt.Format(time.RFC3339Nano),
 		FinishedAt:          finishedAt,

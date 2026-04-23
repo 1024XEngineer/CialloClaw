@@ -849,6 +849,17 @@ test("task page no longer exposes edit guidance and uses 安全总览 without an
   assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
+test("dashboard home entrance labels stay hidden until hover or focus", () => {
+  const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
+  const entranceOrbSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEntranceOrb.tsx"), "utf8");
+
+  assert.match(entranceOrbSource, /data-hovered=\{isHovered \? "true" : "false"\}/);
+  assert.match(dashboardHomeStyleSource, /\.dashboard-orbit-entrance__label \{[\s\S]*opacity: 0;/);
+  assert.match(dashboardHomeStyleSource, /\.dashboard-orbit-entrance:hover \.dashboard-orbit-entrance__label,/);
+  assert.match(dashboardHomeStyleSource, /\.dashboard-orbit-entrance:focus-visible \.dashboard-orbit-entrance__label,/);
+  assert.match(dashboardHomeStyleSource, /\.dashboard-orbit-entrance\[data-hovered="true"\] \.dashboard-orbit-entrance__label \{/);
+});
+
 test("security board styles stay scoped to the safety feature stylesheet", () => {
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const securityBoardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityBoard.css"), "utf8");
@@ -859,6 +870,36 @@ test("security board styles stay scoped to the safety feature stylesheet", () =>
   assert.match(securityBoardSource, /@media \(max-width: 980px\)[\s\S]*\.security-page__detail-grid\s*\{/);
   assert.doesNotMatch(globalsSource, /\.security-page__canvas\s*\{/);
   assert.doesNotMatch(globalsSource, /\.security-page__draggable\s*\{/);
+});
+
+test("security board cards keep CJK headlines and status badges readable", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const securityBoardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityBoard.css"), "utf8");
+
+  assert.match(securityAppSource, /className="security-page__status-strip"/);
+  assert.match(securityAppSource, /className="security-page__status-badge"/);
+  assert.match(securityAppSource, /className="security-page__card-badge"/);
+  assert.match(securityBoardSource, /--security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*line-height: 1\.18;/);
+  assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*overflow-wrap: anywhere;/);
+  assert.match(securityBoardSource, /\.security-page__status-badge,[\s\S]*white-space: normal;/);
+});
+
+test("security board cards reserve a larger readable footprint", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const DEFAULT_CARD_SIZE: CardSize = \{ width: 316, height: 236 \};/);
+  assert.match(securityAppSource, /width: clampValue\(width, 228, DEFAULT_CARD_SIZE\.width\)/);
+  assert.match(securityAppSource, /height: clampValue\(height, 172, DEFAULT_CARD_SIZE\.height\)/);
+});
+
+test("security board dragging keeps the path free until drop settles collisions", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const getClampedCardPosition = useCallback/);
+  assert.match(securityAppSource, /Keep the drag path free while the card is moving/);
+  assert.match(securityAppSource, /handleCardPointerMove[\s\S]*getClampedCardPosition\(/);
+  assert.match(securityAppSource, /handleCardPointerUp[\s\S]*getSettledCardPosition\(key, currentPositions\[key\] \?\? FALLBACK_POSITION, currentPositions\)/);
 });
 
 test("SecurityApp keeps task-detail navigation hooks above the module-data early return", () => {
@@ -898,6 +939,26 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(mirrorAppSource, /overview\.history_summary\[1\] \?\?[\s\S]*latestConversation\?\.agent_text/);
   assert.match(mirrorAppSource, /latestMemoryReference\?\.summary \|\| latestMemoryReference\?\.reason/);
   assert.match(mirrorDetailSource, /reference\.summary \|\| reference\.reason/);
+});
+
+test("mirror cards use CJK-friendly display typography without clipped line clamps", () => {
+  const mirrorStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirror.css"), "utf8");
+
+  assert.match(mirrorStyleSource, /--mirror-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*line-height: 1\.28;/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*padding-bottom: 0\.12em;/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-line--memory \{[\s\S]*word-break: break-word;/);
+  assert.match(mirrorStyleSource, /\.mirror-page__card-detail \{[\s\S]*overflow-wrap: anywhere;/);
+});
+
+test("mirror floating cards reserve a slightly larger readable footprint", () => {
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+
+  assert.match(mirrorAppSource, /const MIN_COMPACT_CARD_WIDTH = 132;/);
+  assert.match(mirrorAppSource, /const MIN_COMPACT_CARD_HEIGHT = 132;/);
+  assert.match(mirrorAppSource, /const DEFAULT_CARD_SIZE: ModuleSize = \{ width: 376, height: 252 \};/);
+  assert.match(mirrorAppSource, /width: clampValue\(width, 1, DEFAULT_CARD_SIZE\.width\)/);
+  assert.match(mirrorAppSource, /height: clampValue\(height, 1, DEFAULT_CARD_SIZE\.height\)/);
 });
 
 test("task context links back into mirror detail state instead of plain text dead ends", () => {

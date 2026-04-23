@@ -308,6 +308,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	if s.intent.AnalyzeSnapshot(snapshot) == "waiting_input" {
 		task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 			SessionID:         stringValue(params, "session_id", ""),
+			RequestSource:     stringValue(params, "source", ""),
+			RequestTrigger:    stringValue(params, "trigger", ""),
 			Title:             "等待补充输入",
 			SourceType:        suggestion.TaskSourceType,
 			Status:            "waiting_input",
@@ -334,6 +336,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             suggestion.TaskTitle,
 		SourceType:        suggestion.TaskSourceType,
 		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -413,6 +417,8 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             suggestion.TaskTitle,
 		SourceType:        suggestion.TaskSourceType,
 		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -478,6 +484,8 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 	resolvedIntent := s.resolveScreenAnalyzeIntent(snapshot, explicitIntent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             firstNonEmptyString(stringValue(resolvedIntent, "title", ""), inferredScreenTaskTitle(snapshot)),
 		SourceType:        "screen_capture",
 		Status:            "waiting_auth",
@@ -558,7 +566,7 @@ func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) stri
 func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (map[string]any, map[string]any, map[string]any, error) {
 	arguments := mapValue(task.Intent, "arguments")
 	sourcePath := stringValue(arguments, "path", "")
-	captureMode := screenCaptureModeFromArguments(arguments)
+	captureMode := screenCaptureModeForIntent(arguments)
 	source := firstNonEmptyString(stringValue(arguments, "source", ""), "screen_capture")
 	targetObject := screenTargetObject(arguments)
 	approvalRequest := map[string]any{
@@ -604,6 +612,9 @@ func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnap
 	if strings.TrimSpace(stringValue(arguments, "language", "")) == "" {
 		arguments["language"] = "eng"
 	}
+	if strings.TrimSpace(stringValue(arguments, "capture_mode", "")) == "" {
+		arguments["capture_mode"] = string(screenCaptureModeForIntent(arguments))
+	}
 	if strings.TrimSpace(stringValue(arguments, "evidence_role", "")) == "" {
 		arguments["evidence_role"] = inferredScreenEvidenceRole(snapshot, arguments)
 	}
@@ -624,6 +635,31 @@ func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnap
 		updatedIntent["title"] = inferredScreenTaskTitle(snapshot)
 	}
 	return updatedIntent
+}
+
+func screenCaptureModeForIntent(arguments map[string]any) tools.ScreenCaptureMode {
+	switch strings.ToLower(strings.TrimSpace(stringValue(arguments, "capture_mode", ""))) {
+	case string(tools.ScreenCaptureModeClip):
+		return tools.ScreenCaptureModeClip
+	case string(tools.ScreenCaptureModeKeyframe):
+		return tools.ScreenCaptureModeKeyframe
+	case string(tools.ScreenCaptureModeScreenshot):
+		return tools.ScreenCaptureModeScreenshot
+	}
+	if isClipScreenSourcePath(stringValue(arguments, "path", "")) {
+		return tools.ScreenCaptureModeClip
+	}
+	return tools.ScreenCaptureModeScreenshot
+}
+
+func isClipScreenSourcePath(pathValue string) bool {
+	trimmedPath := strings.ToLower(strings.TrimSpace(pathValue))
+	switch path.Ext(trimmedPath) {
+	case ".mp4", ".webm", ".mov", ".mkv", ".avi":
+		return true
+	default:
+		return false
+	}
 }
 
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
@@ -1037,7 +1073,10 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if securitySummary == nil {
 		securitySummary = map[string]any{}
 	}
-	approvalRequest := activeTaskDetailApprovalRequest(task)
+	approvalRequest := s.pendingApprovalRequestFromStorage(task.TaskID, task.RiskLevel)
+	if approvalRequest == nil {
+		approvalRequest = activeTaskDetailApprovalRequest(task)
+	}
 	if task.Status != "waiting_auth" {
 		approvalRequest = nil
 	}
@@ -1069,7 +1108,12 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
 	deliveryResultValue := any(nil)
-	if normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, task.DeliveryResult); len(normalizedDelivery) > 0 {
+	deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID)
+	if len(deliveryResult) == 0 {
+		deliveryResult = task.DeliveryResult
+	}
+	normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, deliveryResult)
+	if len(normalizedDelivery) > 0 {
 		deliveryResultValue = normalizedDelivery
 	}
 
@@ -1915,13 +1959,14 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	itemTitle := stringValue(item, "title", "待办事项")
 	taskIntent := notepadIntent(item)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		Title:       itemTitle,
-		SourceType:  "todo",
-		Status:      "confirming_intent",
-		Intent:      taskIntent,
-		CurrentStep: "intent_confirmation",
-		RiskLevel:   s.risk.DefaultLevel(),
-		Timeline:    initialTimeline("confirming_intent", "intent_confirmation"),
+		RequestSource: "dashboard",
+		Title:         itemTitle,
+		SourceType:    "todo",
+		Status:        "confirming_intent",
+		Intent:        taskIntent,
+		CurrentStep:   "intent_confirmation",
+		RiskLevel:     s.risk.DefaultLevel(),
+		Timeline:      initialTimeline("confirming_intent", "intent_confirmation"),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
@@ -2452,18 +2497,11 @@ func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, e
 	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
 	task, ok := s.runEngine.GetTask(resolvedTaskID)
 	if !ok {
-		if s.storage == nil {
-			return nil, ErrTaskNotFound
-		}
-		persisted, loadErr := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
-		if loadErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, loadErr)
-		}
-		loadedTask, found := findTaskRecordFromStorage(persisted, resolvedTaskID)
+		persistedTask, found := s.taskDetailFromStorage(resolvedTaskID)
 		if !found {
 			return nil, ErrTaskNotFound
 		}
-		task = s.runEngine.HydrateTaskFromStorage(loadedTask)
+		task = s.runEngine.HydrateTaskFromStorage(persistedTask)
 	}
 
 	recoveryPoint := recoveryPointMap(point)
@@ -2832,9 +2870,11 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, tools.ErrScreenCaptureNotSupported)
 		return failedTask, failureBubble, nil, nil
 	}
+	screenClient := s.executor.ScreenClient()
+	cleanupExpiredScreenTemps(screenClient, "expired_session_scan", time.Now().UTC())
 	captureMode := screenCaptureModeFromArguments(pendingExecution)
 	source := firstNonEmptyString(stringValue(pendingExecution, "source", ""), "screen_capture")
-	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
+	screenSession, err := screenClient.StartSession(context.Background(), tools.ScreenSessionStartInput{
 		SessionID:   task.SessionID,
 		TaskID:      task.TaskID,
 		RunID:       task.RunID,
@@ -2845,15 +2885,9 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
-	candidate, err := s.executor.ScreenClient().CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
-		ScreenSessionID: screenSession.ScreenSessionID,
-		TaskID:          task.TaskID,
-		RunID:           task.RunID,
-		CaptureMode:     captureMode,
-		Source:          source,
-		SourcePath:      stringValue(pendingExecution, "source_path", ""),
-	})
+	candidate, err := captureScreenCandidateAfterApproval(screenClient, screenSession.ScreenSessionID, task, pendingExecution, captureMode)
 	if err != nil {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "capture_failed")
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
@@ -2876,9 +2910,93 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 	}
 	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), execIntent)
 	if err != nil {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
 		return runengine.TaskRecord{}, nil, nil, err
 	}
+	// Successful analyses stop the session so stale authorizations do not linger.
+	// Failed terminal attempts still expire and clean temp session outputs because
+	// no durable artifact handoff completed for that branch.
+	if updatedTask.Status == "completed" {
+		stopScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_completed")
+		cleanupSuccessfulScreenSession(screenClient, screenSession.ScreenSessionID, candidate.Path)
+	} else if taskIsTerminal(updatedTask.Status) {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
+	}
 	return updatedTask, bubble, deliveryResult, nil
+}
+
+// captureScreenCandidateAfterApproval keeps the controlled screen entry on one
+// orchestrator path while still selecting the owner-5 capture primitive that
+// matches the approved screen analysis mode.
+func captureScreenCandidateAfterApproval(screenClient tools.ScreenCaptureClient, screenSessionID string, task runengine.TaskRecord, pendingExecution map[string]any, captureMode tools.ScreenCaptureMode) (tools.ScreenFrameCandidate, error) {
+	input := tools.ScreenCaptureInput{
+		ScreenSessionID: screenSessionID,
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		CaptureMode:     captureMode,
+		Source:          firstNonEmptyString(stringValue(pendingExecution, "source", ""), "screen_capture"),
+		SourcePath:      stringValue(pendingExecution, "source_path", ""),
+	}
+	switch captureMode {
+	case tools.ScreenCaptureModeKeyframe:
+		result, err := screenClient.CaptureKeyframe(context.Background(), input)
+		if err != nil {
+			return tools.ScreenFrameCandidate{}, err
+		}
+		return result.Candidate, nil
+	default:
+		return screenClient.CaptureScreenshot(context.Background(), input)
+	}
+}
+
+func stopScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" {
+		return
+	}
+	_, _ = screenClient.StopSession(context.Background(), screenSessionID, reason)
+}
+
+// cleanupSuccessfulScreenSession only clears the tracked capture file that the
+// screen client still owns after execution has already promoted durable
+// artifacts. Deferred execution cleanup plans keep managing any extra temp clip
+// derivatives, so this path must not recursively wipe the whole session dir.
+func cleanupSuccessfulScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, capturePath string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" || strings.TrimSpace(capturePath) == "" {
+		return
+	}
+	_, _ = screenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{
+		ScreenSessionID: screenSessionID,
+		Reason:          "analysis_completed",
+		Paths:           []string{capturePath},
+	})
+}
+
+// expireAndCleanupScreenSession keeps failed screen-analysis attempts from
+// leaving temporary session state behind when no durable artifact is produced.
+func expireAndCleanupScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" {
+		return
+	}
+	_, _ = screenClient.ExpireSession(context.Background(), screenSessionID, reason)
+	_, _ = screenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{
+		ScreenSessionID: screenSessionID,
+		Reason:          reason,
+	})
+}
+
+// cleanupExpiredScreenTemps keeps new screen-analysis executions from piling up
+// abandoned temp outputs left behind by older expired sessions.
+func cleanupExpiredScreenTemps(screenClient tools.ScreenCaptureClient, reason string, expiredBefore time.Time) {
+	if screenClient == nil {
+		return
+	}
+	if expiredBefore.IsZero() {
+		expiredBefore = time.Now().UTC()
+	}
+	_, _ = screenClient.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{
+		Reason:        reason,
+		ExpiredBefore: expiredBefore.UTC(),
+	})
 }
 
 // taskMap converts a runengine task record into the protocol-facing task shape.
@@ -3019,7 +3137,7 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 			return tasks, total, true
 		}
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), nil)
 	if err != nil || len(records) == 0 {
 		return nil, 0, false
 	}
@@ -3050,7 +3168,7 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record)
+		task, ok := s.structuredTaskRecordToRuntime(record, false)
 		if !ok {
 			continue
 		}
@@ -3082,21 +3200,43 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	if s.storage.TaskStore() != nil {
 		structuredTasks = s.loadAllTasksFromStructuredStorage()
 	}
-	taskRunTasks := s.loadAllTasksFromTaskRunStorage()
 	if len(structuredTasks) == 0 {
-		return taskRunTasks
+		return s.loadAllTasksFromTaskRunStorage()
 	}
-	if len(taskRunTasks) == 0 {
+	legacyTasks := s.loadLegacyTaskRunsFromStorage(structuredTasks)
+	if len(legacyTasks) == 0 {
 		return structuredTasks
 	}
-	return mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks)
+	return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks)
 }
 
 func (s *Service) loadAllTasksFromTaskRunStorage() []runengine.TaskRecord {
 	if s.storage == nil || s.storage.TaskRunStore() == nil {
 		return nil
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), nil)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		tasks = append(tasks, taskRecordFromStorage(record))
+	}
+	return tasks
+}
+
+func (s *Service) loadLegacyTaskRunsFromStorage(structuredTasks []runengine.TaskRecord) []runengine.TaskRecord {
+	if s.storage == nil || s.storage.TaskRunStore() == nil {
+		return nil
+	}
+	structuredTaskIDs := make([]string, 0, len(structuredTasks))
+	for _, task := range structuredTasks {
+		if strings.TrimSpace(task.TaskID) == "" {
+			continue
+		}
+		structuredTaskIDs = append(structuredTaskIDs, task.TaskID)
+	}
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), structuredTaskIDs)
 	if err != nil || len(records) == 0 {
 		return nil
 	}
@@ -3117,16 +3257,9 @@ func mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks []runeng
 	if len(taskRunTasks) == 0 {
 		return structuredTasks
 	}
-	taskRunByID := make(map[string]runengine.TaskRecord, len(taskRunTasks))
-	for _, task := range taskRunTasks {
-		taskRunByID[task.TaskID] = task
-	}
 	merged := make([]runengine.TaskRecord, 0, len(structuredTasks)+len(taskRunTasks))
 	seen := make(map[string]struct{}, len(structuredTasks)+len(taskRunTasks))
 	for _, task := range structuredTasks {
-		if taskRunTask, ok := taskRunByID[task.TaskID]; ok {
-			task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
-		}
 		merged = append(merged, task)
 		seen[task.TaskID] = struct{}{}
 	}
@@ -3146,7 +3279,7 @@ func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record)
+		task, ok := s.structuredTaskRecordToRuntime(record, false)
 		if !ok {
 			continue
 		}
@@ -3283,16 +3416,17 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 	if s.storage == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
-	taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID)
 	if s.storage.TaskStore() != nil {
-		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
-			if taskRunOK {
-				task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+		if task, record, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			if structuredTaskNeedsTaskRunFallback(record, task) {
+				if taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID); taskRunOK {
+					task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+				}
 			}
 			return task, true
 		}
 	}
-	if taskRunOK {
+	if taskRunTask, ok := s.taskDetailFromTaskRunStorage(taskID); ok {
 		return taskRunTask, true
 	}
 	return runengine.TaskRecord{}, false
@@ -3302,16 +3436,23 @@ func (s *Service) taskDetailFromTaskRunStorage(taskID string) (runengine.TaskRec
 	if s.storage == nil || s.storage.TaskRunStore() == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	record, err := s.storage.TaskRunStore().GetTaskRun(context.Background(), taskID)
 	if err != nil {
 		return runengine.TaskRecord{}, false
 	}
-	for _, record := range records {
-		if record.TaskID == taskID {
-			return taskRecordFromStorage(record), true
+	return taskRecordFromStorage(record), true
+}
+
+// structuredTaskNeedsTaskRunFallback keeps task-run reads as a recovery path
+// whenever snapshot_json is missing or malformed because several legacy detail
+// fields still only exist in compatibility snapshots today.
+func structuredTaskNeedsTaskRunFallback(record storage.TaskRecord, _ runengine.TaskRecord) bool {
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		if _, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON); err == nil {
+			return false
 		}
 	}
-	return runengine.TaskRecord{}, false
+	return true
 }
 
 // mergeStructuredTaskDetailCompatibility fills task-detail fields that are
@@ -3453,15 +3594,16 @@ func (s *Service) loadTaskCitationsFromStorage(taskID string) []map[string]any {
 	return citations
 }
 
-func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
+func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, storage.TaskRecord, bool) {
 	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
 		if storage.IsTaskRecordNotFound(err) {
-			return runengine.TaskRecord{}, false
+			return runengine.TaskRecord{}, storage.TaskRecord{}, false
 		}
-		return runengine.TaskRecord{}, false
+		return runengine.TaskRecord{}, storage.TaskRecord{}, false
 	}
-	return s.structuredTaskRecordToRuntime(record)
+	task, ok := s.structuredTaskRecordToRuntime(record, true)
+	return task, record, ok
 }
 
 func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (map[string]any, error) {
@@ -3821,6 +3963,8 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		RequestSource:     firstNonEmptyString(strings.TrimSpace(record.RequestSource), strings.TrimSpace(record.Snapshot.Source)),
+		RequestTrigger:    firstNonEmptyString(strings.TrimSpace(record.RequestTrigger), strings.TrimSpace(record.Snapshot.Trigger)),
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -3858,9 +4002,9 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 }
 
 // structuredTaskRecordToRuntime hydrates one task-centric read model from the
-// new first-class tasks/task_steps tables while still honoring snapshot_json as
-// the compatibility bridge during the migration away from task_runs-only reads.
-func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (runengine.TaskRecord, bool) {
+// new first-class tasks/task_steps tables while still reusing snapshot_json as
+// the compatibility bridge for fields that are not fully normalized yet.
+func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, includeCompatibility bool) (runengine.TaskRecord, bool) {
 	var snapshotCompatibility runengine.TaskRecord
 	var snapshotCompatibilityOK bool
 	if strings.TrimSpace(record.SnapshotJSON) != "" {
@@ -3894,7 +4038,9 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 	runtime := runengine.TaskRecord{
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
-		RunID:             record.RunID,
+		RunID:             strings.TrimSpace(record.RunID),
+		RequestSource:     record.RequestSource,
+		RequestTrigger:    record.RequestTrigger,
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -5152,70 +5298,6 @@ func (s *Service) writeRestoreAuditRecord(taskID string, point checkpoint.Recove
 	return nil
 }
 
-func findTaskRecordFromStorage(records []storage.TaskRunRecord, taskID string) (runengine.TaskRecord, bool) {
-	for _, record := range records {
-		if record.TaskID == taskID {
-			return runengine.TaskRecord{
-				TaskID:            record.TaskID,
-				SessionID:         record.SessionID,
-				RunID:             record.RunID,
-				Title:             record.Title,
-				SourceType:        record.SourceType,
-				Status:            record.Status,
-				Intent:            cloneMap(record.Intent),
-				PreferredDelivery: record.PreferredDelivery,
-				FallbackDelivery:  record.FallbackDelivery,
-				CurrentStep:       record.CurrentStep,
-				RiskLevel:         record.RiskLevel,
-				StartedAt:         record.StartedAt,
-				UpdatedAt:         record.UpdatedAt,
-				FinishedAt:        cloneStorageTimePointer(record.FinishedAt),
-				Timeline:          taskTimelineFromStorage(record.Timeline),
-				BubbleMessage:     cloneMap(record.BubbleMessage),
-				DeliveryResult:    cloneMap(record.DeliveryResult),
-				Artifacts:         cloneMapSlice(record.Artifacts),
-				Citations:         cloneMapSlice(record.Citations),
-				AuditRecords:      cloneMapSlice(record.AuditRecords),
-				MirrorReferences:  cloneMapSlice(record.MirrorReferences),
-				SecuritySummary:   cloneMap(record.SecuritySummary),
-				ApprovalRequest:   cloneMap(record.ApprovalRequest),
-				PendingExecution:  cloneMap(record.PendingExecution),
-				Authorization:     cloneMap(record.Authorization),
-				ImpactScope:       cloneMap(record.ImpactScope),
-				TokenUsage:        cloneMap(record.TokenUsage),
-				MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
-				MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
-				StorageWritePlan:  cloneMap(record.StorageWritePlan),
-				ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
-				Notifications:     taskNotificationsFromStorage(record.Notifications),
-				LatestEvent:       cloneMap(record.LatestEvent),
-				LatestToolCall:    cloneMap(record.LatestToolCall),
-				CurrentStepStatus: record.CurrentStepStatus,
-			}, true
-		}
-	}
-	return runengine.TaskRecord{}, false
-}
-
-func taskTimelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
-	if len(timeline) == 0 {
-		return nil
-	}
-	result := make([]runengine.TaskStepRecord, len(timeline))
-	for index, step := range timeline {
-		result[index] = runengine.TaskStepRecord{
-			StepID:        step.StepID,
-			TaskID:        step.TaskID,
-			Name:          step.Name,
-			Status:        step.Status,
-			OrderIndex:    step.OrderIndex,
-			InputSummary:  step.InputSummary,
-			OutputSummary: step.OutputSummary,
-		}
-	}
-	return result
-}
-
 func normalizeTaskDetailAuthorizationRecord(taskID string, authorizationRecord map[string]any) map[string]any {
 	if len(authorizationRecord) == 0 {
 		return nil
@@ -5888,6 +5970,7 @@ func (s *Service) assessTaskGovernance(task runengine.TaskRecord, taskIntent map
 	return s.executor.AssessGovernance(context.Background(), execution.Request{
 		TaskID:       task.TaskID,
 		RunID:        task.RunID,
+		SourceType:   task.SourceType,
 		Title:        task.Title,
 		Intent:       taskIntent,
 		Snapshot:     snapshotFromTask(task),
@@ -6045,10 +6128,7 @@ func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]
 }
 
 func (s *Service) citationsForTask(taskID string, runtimeCitations []map[string]any) []map[string]any {
-	if len(runtimeCitations) > 0 {
-		return cloneMapSlice(runtimeCitations)
-	}
-	return s.loadTaskCitationsFromStorage(taskID)
+	return mergeCitationsWithStored(s.loadTaskCitationsFromStorage(taskID), runtimeCitations)
 }
 
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
@@ -6161,6 +6241,43 @@ func mergeArtifactsWithStored(runtimeArtifacts, storedArtifacts []map[string]any
 		}
 	}
 	return merged
+}
+
+func mergeCitationsWithStored(storedCitations, runtimeCitations []map[string]any) []map[string]any {
+	if len(storedCitations) == 0 && len(runtimeCitations) == 0 {
+		return nil
+	}
+	merged := make([]map[string]any, 0, len(storedCitations)+len(runtimeCitations))
+	seen := make(map[string]struct{})
+	for _, group := range [][]map[string]any{storedCitations, runtimeCitations} {
+		for index, citation := range group {
+			mergeKey := citationMergeKey(citation, index)
+			if _, ok := seen[mergeKey]; ok {
+				continue
+			}
+			seen[mergeKey] = struct{}{}
+			merged = append(merged, cloneMap(citation))
+		}
+	}
+	return merged
+}
+
+func citationMergeKey(citation map[string]any, index int) string {
+	if citationID := strings.TrimSpace(stringValue(citation, "citation_id", "")); citationID != "" {
+		return citationID
+	}
+	parts := []string{
+		strings.TrimSpace(stringValue(citation, "task_id", "")),
+		strings.TrimSpace(stringValue(citation, "source_ref", "")),
+		strings.TrimSpace(stringValue(citation, "artifact_id", "")),
+		strings.TrimSpace(stringValue(citation, "label", "")),
+		strings.TrimSpace(stringValue(citation, "excerpt_text", "")),
+	}
+	key := strings.Join(parts, "|")
+	if strings.Trim(key, "|") != "" {
+		return key
+	}
+	return fmt.Sprintf("citation_%d", index)
 }
 
 func artifactMapFromStorage(record storage.ArtifactRecord) map[string]any {
@@ -6687,6 +6804,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
 		TaskID:               processingTask.TaskID,
 		RunID:                processingTask.RunID,
+		SourceType:           processingTask.SourceType,
 		Title:                processingTask.Title,
 		Intent:               taskIntent,
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
@@ -7360,6 +7478,8 @@ func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string
 		return "PLATFORM_NOT_SUPPORTED", "screen_capability"
 	case errors.Is(err, tools.ErrOCRWorkerFailed):
 		return "OCR_WORKER_FAILED", "screen_ocr"
+	case errors.Is(err, tools.ErrMediaWorkerFailed):
+		return "MEDIA_WORKER_FAILED", "screen_media"
 	case errors.Is(err, tools.ErrPlaywrightSidecarFailed), errors.Is(err, tools.ErrScreenCaptureFailed), errors.Is(err, tools.ErrScreenKeyframeSamplingFailed):
 		return "PLAYWRIGHT_SIDECAR_FAILED", "screen_capture"
 	case errors.Is(err, tools.ErrCapabilityDenied):

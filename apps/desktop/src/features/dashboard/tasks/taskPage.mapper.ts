@@ -51,6 +51,48 @@ export function getPriorityBadgeClass(priority: TaskPriority) {
   return classes[priority];
 }
 
+/**
+ * Maps task priority onto concise stage labels for the dashboard scene.
+ */
+export function getTaskPriorityLabel(priority: TaskPriority) {
+  if (priority === "critical") {
+    return "高优先级";
+  }
+
+  if (priority === "high") {
+    return "重点任务";
+  }
+
+  return "常规推进";
+}
+
+/**
+ * Builds a compact scene code so each task can be identified at a glance.
+ */
+export function buildTaskTowerCode(taskId: string) {
+  const normalizedSuffix = taskId.replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase().padStart(4, "0");
+  return `CLW-${normalizedSuffix}`;
+}
+
+/**
+ * Collapses formal task states into presentation tones for the dashboard scene.
+ */
+export function getTaskRunwayTone(status: Task["status"]) {
+  if (status === "processing" || status === "confirming_intent") {
+    return "departure";
+  }
+
+  if (status === "waiting_auth" || status === "waiting_input" || status === "paused") {
+    return "holding";
+  }
+
+  if (status === "blocked" || status === "failed") {
+    return "irregular";
+  }
+
+  return "archive";
+}
+
 export function getTaskProgress(timeline: TaskStep[]): TaskProgressState {
   if (timeline.length === 0) {
     return {
@@ -138,7 +180,7 @@ export function getFinishedTaskGroups(items: TaskListItem[], expanded: boolean):
 
   const groups: FinishedTaskGroup[] = [
     { key: "recent", title: "近 3 天", description: "刚刚结束的任务与取消记录。", items: recent },
-    { key: "weekly", title: "近 7 天", description: "一周内已沉淀的任务舱记录。", items: weekly },
+    { key: "weekly", title: "近 7 天", description: "一周内已经沉淀下来的任务记录。", items: weekly },
   ];
 
   if (expanded && older.length > 0) {
