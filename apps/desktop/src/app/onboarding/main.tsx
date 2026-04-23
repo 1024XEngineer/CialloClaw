@@ -9,9 +9,22 @@ const rootElement = document.getElementById("root")!;
 document.documentElement.dataset.appWindow = "onboarding";
 document.body.dataset.appWindow = "onboarding";
 rootElement.dataset.appWindow = "onboarding";
+document.documentElement.style.background = "transparent";
+document.documentElement.style.backgroundColor = "transparent";
+document.body.style.background = "transparent";
+document.body.style.backgroundColor = "transparent";
+rootElement.style.background = "transparent";
+rootElement.style.backgroundColor = "transparent";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <Theme appearance="light" panelBackground="translucent" accentColor="orange" grayColor="sand" radius="large">
+  <Theme
+    appearance="light"
+    panelBackground="translucent"
+    accentColor="orange"
+    grayColor="sand"
+    radius="large"
+    style={{ background: "transparent", backgroundColor: "transparent" }}
+  >
     <AppProviders>
       <OnboardingWindow />
     </AppProviders>

@@ -6,10 +6,17 @@
 }
 
 .desktop-onboarding-window {
+  background: transparent !important;
+  background-color: transparent !important;
   height: 100vh;
   overflow: hidden;
   position: relative;
   width: 100vw;
+}
+
+html[data-app-window="onboarding"] .radix-themes {
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 .desktop-onboarding-window__veil {
