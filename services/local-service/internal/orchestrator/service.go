@@ -584,6 +584,8 @@ func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) stri
 func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (map[string]any, map[string]any, map[string]any, error) {
 	arguments := mapValue(task.Intent, "arguments")
 	sourcePath := stringValue(arguments, "path", "")
+	captureMode := screenCaptureModeFromArguments(arguments)
+	source := firstNonEmptyString(stringValue(arguments, "source", ""), "screen_capture")
 	targetObject := screenTargetObject(arguments)
 	approvalRequest := map[string]any{
 		"approval_id":    fmt.Sprintf("appr_%s", task.TaskID),
@@ -599,12 +601,14 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 		"kind":           "screen_analysis",
 		"operation_name": "screen_capture",
 		"source_path":    sourcePath,
+		"capture_mode":   string(captureMode),
+		"source":         source,
 		"target_object":  targetObject,
 		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
 		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
 		"delivery_type":  "bubble",
 		"result_title":   "屏幕分析结果",
-		"preview_text":   "已准备分析屏幕截图",
+		"preview_text":   screenAnalysisPreviewText(captureMode),
 		"impact_scope": map[string]any{
 			"files":                    impactFilesForScreenTarget(sourcePath),
 			"webpages":                 []string{},
@@ -681,6 +685,23 @@ func screenTargetObject(arguments map[string]any) string {
 		}
 	}
 	return "current_screen"
+}
+
+func screenCaptureModeFromArguments(arguments map[string]any) tools.ScreenCaptureMode {
+	mode := tools.ScreenCaptureMode(strings.TrimSpace(stringValue(arguments, "capture_mode", string(tools.ScreenCaptureModeScreenshot))))
+	switch mode {
+	case tools.ScreenCaptureModeScreenshot, tools.ScreenCaptureModeKeyframe, tools.ScreenCaptureModeClip:
+		return mode
+	default:
+		return tools.ScreenCaptureModeScreenshot
+	}
+}
+
+func screenAnalysisPreviewText(captureMode tools.ScreenCaptureMode) string {
+	if captureMode == tools.ScreenCaptureModeClip {
+		return "已准备分析屏幕录屏片段"
+	}
+	return "已准备分析屏幕截图"
 }
 
 func impactFilesForScreenTarget(sourcePath string) []string {
