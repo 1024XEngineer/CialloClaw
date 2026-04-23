@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -42,6 +43,7 @@ var (
 	ErrStorageQueryFailed     = errors.New("storage query failed")
 	ErrStrongholdAccessFailed = errors.New("stronghold access failed")
 	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
+	persistedToolCallEventSeq atomic.Uint64
 )
 
 const (
@@ -1276,6 +1278,150 @@ func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) 
 		"items": items,
 		"page":  pageMap(limit, offset, total),
 	}, nil
+}
+
+// TaskToolCallsList handles agent.task.tool_calls.list and exposes persisted
+// tool_call records through one task-centric query surface.
+func (s *Service) TaskToolCallsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	runID := stringValue(params, "run_id", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if s.storage == nil || s.storage.ToolCallStore() == nil {
+		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
+		return map[string]any{"items": paginateTaskToolCallItems(compatibilityItems, limit, offset), "page": pageMap(limit, offset, len(compatibilityItems))}, nil
+	}
+	items, total, err := s.storage.ToolCallStore().ListToolCalls(context.Background(), taskID, runID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	if total == 0 {
+		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
+		return map[string]any{"items": paginateTaskToolCallItems(compatibilityItems, limit, offset), "page": pageMap(limit, offset, len(compatibilityItems))}, nil
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, taskToolCallMap(item))
+	}
+	return map[string]any{
+		"items": result,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+func compatibilityTaskToolCalls(s *Service, taskID, runID string) []map[string]any {
+	if s == nil {
+		return nil
+	}
+	task, ok := s.taskDetailFromStorage(taskID)
+	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
+		if ok {
+			task = mergeRuntimeTaskDetail(task, runtimeTask)
+		} else {
+			task = runtimeTask
+			ok = true
+		}
+	}
+	if !ok || len(task.LatestToolCall) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(runID) != "" && stringValue(task.LatestToolCall, "run_id", "") != runID {
+		return nil
+	}
+	return []map[string]any{normalizeTaskToolCallMap(task.LatestToolCall)}
+}
+
+func paginateTaskToolCallItems(items []map[string]any, limit, offset int) []map[string]any {
+	if len(items) == 0 || offset >= len(items) {
+		return []map[string]any{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return cloneMapSlice(items[offset:end])
+}
+
+func normalizeTaskToolCallMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	stepID := any(nil)
+	if candidate := stringValue(value, "step_id", ""); strings.TrimSpace(candidate) != "" {
+		stepID = candidate
+	}
+	createdAt := any(nil)
+	if candidate := stringValue(value, "created_at", ""); strings.TrimSpace(candidate) != "" {
+		createdAt = candidate
+	}
+	errorCode := value["error_code"]
+	if errorCode == nil {
+		errorCode = nil
+	}
+	return map[string]any{
+		"tool_call_id": stringValue(value, "tool_call_id", ""),
+		"run_id":       stringValue(value, "run_id", ""),
+		"task_id":      stringValue(value, "task_id", ""),
+		"step_id":      stepID,
+		"created_at":   createdAt,
+		"tool_name":    stringValue(value, "tool_name", ""),
+		"status":       outwardToolCallStatus(stringValue(value, "status", "pending")),
+		"input":        cloneMapOrEmpty(mapValue(value, "input")),
+		"output":       cloneMapOrEmpty(mapValue(value, "output")),
+		"error_code":   errorCode,
+		"duration_ms":  intValue(value, "duration_ms", 0),
+	}
+}
+
+func taskToolCallMap(record tools.ToolCallRecord) map[string]any {
+	stepID := any(nil)
+	if strings.TrimSpace(record.StepID) != "" {
+		stepID = record.StepID
+	}
+	createdAt := any(nil)
+	if strings.TrimSpace(record.CreatedAt) != "" {
+		createdAt = record.CreatedAt
+	}
+	errorCode := any(nil)
+	if record.ErrorCode != nil {
+		errorCode = *record.ErrorCode
+	}
+	return map[string]any{
+		"tool_call_id": record.ToolCallID,
+		"run_id":       record.RunID,
+		"task_id":      record.TaskID,
+		"step_id":      stepID,
+		"created_at":   createdAt,
+		"tool_name":    record.ToolName,
+		"status":       outwardToolCallStatus(string(record.Status)),
+		"input":        cloneMapOrEmpty(record.Input),
+		"output":       cloneMapOrEmpty(record.Output),
+		"error_code":   errorCode,
+		"duration_ms":  record.DurationMS,
+	}
+}
+
+func cloneMapOrEmpty(values map[string]any) map[string]any {
+	if cloned := cloneMap(values); cloned != nil {
+		return cloned
+	}
+	return map[string]any{}
+}
+
+func outwardToolCallStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "started":
+		return "running"
+	case "succeeded":
+		return "succeeded"
+	case "failed", "timeout":
+		return "failed"
+	default:
+		return "pending"
+	}
 }
 
 func normalizeEventTimeFilter(value string) (string, error) {
@@ -6563,6 +6709,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		},
 	})
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
+	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
 	if err != nil {
 		auditDeliveryResult = nil
@@ -6598,6 +6745,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
+	s.persistExecutionDeliveryResult(updatedTask, taskIntent, executionResult.DeliveryResult)
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
@@ -6986,6 +7134,140 @@ func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls 
 		}
 	}
 	return task
+}
+
+func (s *Service) persistExecutionToolCallEvents(task runengine.TaskRecord, taskIntent map[string]any, toolCalls []tools.ToolCallRecord) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || isAgentLoopTaskIntent(taskIntent) || len(toolCalls) == 0 {
+		return
+	}
+	startedAt := time.Now().UTC()
+	records := make([]storage.EventRecord, 0, len(toolCalls))
+	for index, toolCall := range toolCalls {
+		if strings.TrimSpace(toolCall.ToolName) == "" {
+			continue
+		}
+		createdAt := startedAt.Add(time.Duration(index) * time.Millisecond)
+		records = append(records, storage.EventRecord{
+			EventID:     executionToolCallEventID(task.TaskID, toolCall, index, createdAt),
+			RunID:       task.RunID,
+			TaskID:      task.TaskID,
+			StepID:      toolCall.StepID,
+			Type:        "tool_call.completed",
+			Level:       executionToolCallEventLevel(toolCall),
+			PayloadJSON: marshalOrchestratorEventPayload(executionToolCallEventPayload(task.TaskID, toolCall)),
+			CreatedAt:   createdAt.Format(time.RFC3339Nano),
+		})
+	}
+	if len(records) == 0 {
+		return
+	}
+	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), records)
+}
+
+func executionToolCallEventID(taskID string, toolCall tools.ToolCallRecord, index int, createdAt time.Time) string {
+	if sanitizedToolCallID := strings.TrimSpace(strings.ReplaceAll(toolCall.ToolCallID, ".", "_")); sanitizedToolCallID != "" {
+		return fmt.Sprintf("evt_%s_%s_%d", taskID, sanitizedToolCallID, index)
+	}
+	sanitizedToolName := strings.TrimSpace(strings.ReplaceAll(toolCall.ToolName, ".", "_"))
+	if sanitizedToolName == "" {
+		sanitizedToolName = "tool_call"
+	}
+	sanitizedStepID := strings.TrimSpace(strings.ReplaceAll(toolCall.StepID, ".", "_"))
+	if sanitizedStepID == "" {
+		sanitizedStepID = "task_scope"
+	}
+	return fmt.Sprintf("evt_%s_%s_%s_%d_%d_%d", taskID, sanitizedToolName, sanitizedStepID, index, createdAt.UnixNano(), persistedToolCallEventSeq.Add(1))
+}
+
+func (s *Service) persistExecutionDeliveryResult(task runengine.TaskRecord, taskIntent map[string]any, deliveryResult map[string]any) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || isAgentLoopTaskIntent(taskIntent) || len(deliveryResult) == 0 {
+		return
+	}
+	createdAt := time.Now().UTC()
+	deliveryResultID := fmt.Sprintf("delivery_result_%s_%d", task.TaskID, createdAt.UnixNano())
+	payloadJSON := marshalOrchestratorEventPayload(mapValue(deliveryResult, "payload"))
+	_ = s.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: deliveryResultID,
+		TaskID:           task.TaskID,
+		Type:             stringValue(deliveryResult, "type", "bubble"),
+		Title:            stringValue(deliveryResult, "title", ""),
+		PayloadJSON:      payloadJSON,
+		PreviewText:      stringValue(deliveryResult, "preview_text", ""),
+		CreatedAt:        createdAt.Format(time.RFC3339Nano),
+	})
+	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     fmt.Sprintf("evt_%s_delivery_ready_%d", task.TaskID, createdAt.UnixNano()),
+		RunID:       task.RunID,
+		TaskID:      task.TaskID,
+		Type:        "delivery.ready",
+		Level:       "info",
+		PayloadJSON: marshalOrchestratorEventPayload(executionDeliveryReadyPayload(task.TaskID, deliveryResultID, deliveryResult)),
+		CreatedAt:   createdAt.Add(time.Millisecond).Format(time.RFC3339Nano),
+	}})
+}
+
+func executionToolCallEventLevel(toolCall tools.ToolCallRecord) string {
+	if toolCall.Status == tools.ToolCallStatusFailed || toolCall.Status == tools.ToolCallStatusTimeout {
+		return "error"
+	}
+	return "info"
+}
+
+func executionToolCallEventPayload(taskID string, toolCall tools.ToolCallRecord) map[string]any {
+	payload := map[string]any{
+		"task_id":      taskID,
+		"tool_call_id": toolCall.ToolCallID,
+		"tool_name":    toolCall.ToolName,
+		"tool_status":  string(toolCall.Status),
+		"duration_ms":  toolCall.DurationMS,
+	}
+	if toolCall.ErrorCode != nil {
+		payload["error_code"] = *toolCall.ErrorCode
+	}
+	for _, key := range []string{"path", "url", "output_path", "output_dir", "source", "execution_backend", "page_count", "frame_count"} {
+		if value, ok := toolCall.Output[key]; ok {
+			payload[key] = value
+			continue
+		}
+		if value, ok := toolCall.Input[key]; ok {
+			payload[key] = value
+		}
+	}
+	if summaryOutput, ok := toolCall.Output["summary_output"].(map[string]any); ok && len(summaryOutput) > 0 {
+		payload["summary_output"] = cloneMap(summaryOutput)
+	}
+	return payload
+}
+
+func executionDeliveryReadyPayload(taskID, deliveryResultID string, deliveryResult map[string]any) map[string]any {
+	payload := map[string]any{
+		"task_id":            taskID,
+		"delivery_result_id": deliveryResultID,
+		"delivery_type":      stringValue(deliveryResult, "type", "bubble"),
+		"preview_text":       stringValue(deliveryResult, "preview_text", ""),
+	}
+	deliveryPayload := mapValue(deliveryResult, "payload")
+	for _, key := range []string{"path", "url"} {
+		if value, ok := deliveryPayload[key]; ok {
+			payload[key] = value
+		}
+	}
+	return payload
+}
+
+func marshalOrchestratorEventPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return "{}"
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
+	return stringValue(taskIntent, "name", "") == "agent_loop"
 }
 
 func executionStepName(taskIntent map[string]any) string {

@@ -172,17 +172,23 @@ func TestNewModelServiceFallbackAndFailureBranches(t *testing.T) {
 	originalNewModelService := newModelServiceFromConfigForBootstrap
 	defer func() { newModelServiceFromConfigForBootstrap = originalNewModelService }()
 
-	fallbackErrors := []error{model.ErrSecretNotFound, storage.ErrSecretNotFound}
+	fallbackErrors := []error{
+		model.ErrSecretNotFound,
+		storage.ErrSecretNotFound,
+		storage.ErrSecretStoreAccessFailed,
+		storage.ErrStrongholdUnavailable,
+		storage.ErrStrongholdAccessFailed,
+	}
 	for index, missingSecretErr := range fallbackErrors {
 		newModelServiceFromConfigForBootstrap = func(model.ServiceConfig) (*model.Service, error) {
 			return nil, fmt.Errorf("%w: %w", model.ErrSecretSourceFailed, missingSecretErr)
 		}
 		app, err := New(baseConfig(filepath.Join(t.TempDir(), fmt.Sprintf("fallback-%d", index))))
 		if err != nil {
-			t.Fatalf("expected missing secret bootstrap fallback to succeed for %v, got %v", missingSecretErr, err)
+			t.Fatalf("expected bootstrap fallback to succeed for %v, got %v", missingSecretErr, err)
 		}
 		if err := app.Close(); err != nil {
-			t.Fatalf("close app after missing secret fallback failed: %v", err)
+			t.Fatalf("close app after secret fallback failed: %v", err)
 		}
 	}
 

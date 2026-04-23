@@ -126,7 +126,7 @@ func New(cfg config.Config) (*App, error) {
 		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
-		if errors.Is(err, model.ErrSecretSourceFailed) && (errors.Is(err, model.ErrSecretNotFound) || errors.Is(err, storage.ErrSecretNotFound)) {
+		if shouldFallbackBootstrapModelService(err) {
 			modelService = model.NewService(cfg.Model)
 		} else {
 			_ = storageService.Close()
@@ -180,6 +180,17 @@ func New(cfg config.Config) (*App, error) {
 		ocr:          ocrRuntime,
 		media:        mediaRuntime,
 	}, nil
+}
+
+func shouldFallbackBootstrapModelService(err error) bool {
+	if !errors.Is(err, model.ErrSecretSourceFailed) {
+		return false
+	}
+	return errors.Is(err, model.ErrSecretNotFound) ||
+		errors.Is(err, storage.ErrSecretNotFound) ||
+		errors.Is(err, storage.ErrSecretStoreAccessFailed) ||
+		errors.Is(err, storage.ErrStrongholdUnavailable) ||
+		errors.Is(err, storage.ErrStrongholdAccessFailed)
 }
 
 func persistPluginManifests(ctx context.Context, storageService *storage.Service, pluginService *plugin.Service) error {

@@ -1857,6 +1857,46 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-tool-calls.db")})
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	if err := storageService.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_rpc_001",
+		RunID:      "run_rpc_tool_001",
+		TaskID:     "task_rpc_tool_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "notes/source.txt"},
+		Output:     map[string]any{"path": "notes/source.txt"},
+		DurationMS: 9,
+	}); err != nil {
+		t.Fatalf("save tool call failed: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-tool-calls-list"`),
+		Method:  "agent.task.tool_calls.list",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": "task_rpc_tool_001",
+			"limit":   20,
+			"offset":  0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected rpc task tool calls list to return read_file, got %+v", items)
+	}
+}
+
 func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 	server := newTestServer()
 	startResult, err := server.orchestrator.StartTask(map[string]any{

@@ -23,8 +23,10 @@ func NewToolCallRecorder(sink ToolCallSink) *ToolCallRecorder {
 
 // Start creates and persists a started tool_call record.
 func (r *ToolCallRecorder) Start(ctx context.Context, execCtx *ToolExecuteContext, toolName string, input map[string]any) ToolCallRecord {
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
 	record := ToolCallRecord{
 		ToolCallID: nextToolCallID(),
+		CreatedAt:  createdAt,
 		ToolName:   toolName,
 		Status:     ToolCallStatusStarted,
 		Input:      summarizeMap(input),

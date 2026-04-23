@@ -460,7 +460,7 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -506,7 +506,7 @@ func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -2959,6 +2959,95 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	}
 	if record.StorageWritePlan != nil || len(record.ArtifactPlans) != 0 {
 		t.Fatal("expected bubble delivery not to create document persistence plans")
+	}
+}
+
+func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
+	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(readPath), 0o755); err != nil {
+		t.Fatalf("create notes dir: %v", err)
+	}
+	if err := os.WriteFile(readPath, []byte("hello from formal sample chain"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_read_file_sample",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取这个文件",
+		},
+		"intent": map[string]any{
+			"name": "read_file",
+			"arguments": map[string]any{
+				"path": "notes/source.txt",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+
+	toolCallsResult, err := service.TaskToolCallsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	toolCalls := toolCallsResult["items"].([]map[string]any)
+	if len(toolCalls) != 1 || toolCalls[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected one persisted read_file tool call, got %+v", toolCalls)
+	}
+	if _, ok := toolCalls[0]["created_at"].(string); !ok {
+		t.Fatalf("expected persisted read_file tool call to expose created_at, got %+v", toolCalls[0])
+	}
+	if mapValue(toolCalls[0], "input")["path"] != "notes/source.txt" {
+		t.Fatalf("expected persisted read_file path, got %+v", toolCalls[0])
+	}
+
+	eventsResult, err := service.TaskEventsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	events := eventsResult["items"].([]map[string]any)
+	if len(events) != 2 {
+		t.Fatalf("expected tool_call.completed plus delivery.ready, got %+v", events)
+	}
+	foundToolCompleted := false
+	foundDeliveryReady := false
+	for _, event := range events {
+		switch event["type"] {
+		case "tool_call.completed":
+			foundToolCompleted = true
+		case "delivery.ready":
+			foundDeliveryReady = true
+		}
+	}
+	if !foundToolCompleted || !foundDeliveryReady {
+		t.Fatalf("expected persisted read_file runtime events, got %+v", events)
+	}
+
+	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get latest delivery result failed: %v", err)
+	}
+	if !ok || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
+		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["events_count"] != 2 || runtimeSummary["latest_event_type"] != "delivery.ready" {
+		t.Fatalf("expected task detail runtime summary to prefer formal event chain, got %+v", runtimeSummary)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", deliveryResult)
 	}
 }
 
@@ -10614,6 +10703,200 @@ func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["run_id"] != "run_loop_time_b" {
 		t.Fatalf("expected time-filtered loop event, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_list_001",
+		RunID:      "run_tool_call_list_001",
+		TaskID:     "task_tool_call_list_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "notes/source.txt"},
+		Output:     map[string]any{"path": "notes/source.txt", "summary_output": map[string]any{"path": "notes/source.txt"}},
+		DurationMS: 12,
+	})
+	if err != nil {
+		t.Fatalf("save tool call failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_list_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected persisted read_file tool call, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
+func TestServiceTaskToolCallsListSupportsRunFilter(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list filters")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	for _, record := range []tools.ToolCallRecord{
+		{ToolCallID: "tool_call_filter_001", RunID: "run_filter_a", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, DurationMS: 5},
+		{ToolCallID: "tool_call_filter_002", RunID: "run_filter_b", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusFailed, DurationMS: 7},
+	} {
+		if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), record); err != nil {
+			t.Fatalf("save filtered tool call failed: %v", err)
+		}
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_filter_001", "run_id": "run_filter_b", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list with run filter failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_filter_b" || items[0]["status"] != string(tools.ToolCallStatusFailed) {
+		t.Fatalf("expected filtered tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListNormalizesProtocolStatuses(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list statuses")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_status_001",
+		RunID:      "run_tool_call_status_001",
+		TaskID:     "task_tool_call_status_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusStarted,
+		DurationMS: 3,
+	}); err != nil {
+		t.Fatalf("save tool call status failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_status_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["status"] != "running" {
+		t.Fatalf("expected outward running status, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestServiceTaskToolCallsListFallsBackToCompatibilityLatestToolCall(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat",
+		Title:             "compat tool call",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	if _, ok := service.runEngine.RecordToolCallLifecycle(task.TaskID, "read_file", "succeeded", map[string]any{"path": "notes/source.txt"}, map[string]any{"path": "notes/source.txt", "content_preview": "compat preview"}, 14, nil); !ok {
+		t.Fatal("expected compatibility tool call to be recorded")
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" || mapValue(items[0], "output")["content_preview"] != "compat preview" {
+		t.Fatalf("expected compatibility fallback tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListCompatibilityFallbackReturnsNonNilPayloadMaps(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat_nil",
+		Title:             "compat tool call nil payload",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	mutateRuntimeTask(t, service.runEngine, task.TaskID, func(record *runengine.TaskRecord) {
+		record.LatestToolCall = map[string]any{
+			"tool_call_id": "tool_call_compat_nil",
+			"task_id":      task.TaskID,
+			"run_id":       task.RunID,
+			"tool_name":    "read_file",
+			"status":       "started",
+			"duration_ms":  0,
+		}
+	})
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one compatibility tool call item, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected compatibility tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestPersistExecutionToolCallEventsFallsBackWhenToolCallIDMissing(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "missing tool call id")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_event_fallback",
+		Title:             "tool call event fallback",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	toolCall := tools.ToolCallRecord{
+		TaskID:     task.TaskID,
+		RunID:      task.RunID,
+		ToolName:   "screen_analyze",
+		Status:     tools.ToolCallStatusSucceeded,
+		DurationMS: 8,
+	}
+
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": task.TaskID, "type": "tool_call.completed", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two persisted tool_call.completed events, got %+v", items)
+	}
+	if items[0]["event_id"] == items[1]["event_id"] {
+		t.Fatalf("expected fallback event ids to remain unique, got %+v", items)
 	}
 }
 

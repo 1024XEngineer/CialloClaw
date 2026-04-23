@@ -16,6 +16,7 @@ import type {
   AgentTaskArtifactListResult,
   AgentTaskArtifactOpenResult,
   AgentTaskEventsListResult,
+  AgentTaskToolCallsListResult,
   AgentTaskStartResult,
   AgentTaskSteerResult,
   AuditRecord,
@@ -416,6 +417,39 @@ export async function listTaskEvents(_params?: unknown): Promise<AgentTaskEvents
         level: "info",
         payload_json: JSON.stringify({ stop_reason: "completed" }),
         created_at: new Date().toISOString(),
+      },
+    ],
+    page: {
+      has_more: false,
+      limit: 20,
+      offset: 0,
+      total: 1,
+    },
+  };
+}
+
+export async function listTaskToolCalls(_params?: unknown): Promise<AgentTaskToolCallsListResult> {
+  return {
+    items: [
+      {
+        tool_call_id: "tool_call_stub_001",
+        run_id: "run_stub",
+        task_id: "task_stub",
+        step_id: null,
+        created_at: new Date().toISOString(),
+        tool_name: "read_file",
+        status: "succeeded",
+        input: {
+          path: "notes/source.txt",
+        },
+        output: {
+          path: "notes/source.txt",
+          summary_output: {
+            excerpt: "stub content",
+          },
+        },
+        error_code: null,
+        duration_ms: 12,
       },
     ],
     page: {
