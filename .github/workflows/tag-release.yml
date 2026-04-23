@@ -44,7 +44,7 @@ jobs:
             release_month=$((10#${BASH_REMATCH[2]}))
             release_day=$((10#${BASH_REMATCH[3]}))
             release_sequence=$((10#${BASH_REMATCH[4]}))
-            release_app_version="0.0.0-${release_year}.${release_month}.${release_day}.${release_sequence}"
+            release_app_version="${release_year}.${release_month}.${release_day}-${release_sequence}"
           elif [[ "$release_display_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             release_app_version="$release_display_version"
           else

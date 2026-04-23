@@ -39,7 +39,7 @@ jobs:
           $baseVersion = $packageJson.version
           $utcNow = [DateTime]::UtcNow
           $tipDisplayVersion = "{0:yyyyMMdd}.{1}" -f $utcNow, $env:GITHUB_RUN_NUMBER
-          $tipAppVersion = "0.0.0-{0}.{1}.{2}.{3}" -f `
+          $tipAppVersion = "{0}.{1}.{2}-{3}" -f `
             $utcNow.Year, `
             $utcNow.Month, `
             $utcNow.Day, `
