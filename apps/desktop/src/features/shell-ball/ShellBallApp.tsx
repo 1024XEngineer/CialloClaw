@@ -472,15 +472,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   );
 
   useEffect(() => {
-    const shouldRaiseShellBall =
-      onboardingSession?.isOpen === true &&
-      (onboardingSession.step === "welcome" ||
-        onboardingSession.step === "shell_ball_intro" ||
-        onboardingSession.step === "shell_ball_hold_voice" ||
-        onboardingSession.step === "shell_ball_double_click");
-
-    void setShellBallAlwaysOnTop(shouldRaiseShellBall);
-  }, [onboardingSession]);
+    void setShellBallAlwaysOnTop(true);
+  }, []);
 
   useEffect(() => {
     const wasVoiceActive =
