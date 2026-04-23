@@ -144,3 +144,35 @@ func TestInMemoryScreenCaptureClientExpiresAndCleansExpiredTemps(t *testing.T) {
 		t.Fatalf("expected one deleted temp path, got %+v", cleanup)
 	}
 }
+
+func TestInMemoryScreenCaptureClientCleansStoppedSessionTempsOnExpiredScan(t *testing.T) {
+	client := NewInMemoryScreenCaptureClient()
+	now := time.Date(2026, 4, 18, 15, 0, 0, 0, time.UTC)
+	client.now = func() time.Time { return now }
+
+	session, err := client.StartSession(context.Background(), tools.ScreenSessionStartInput{
+		SessionID:   "sess_004",
+		TaskID:      "task_004",
+		RunID:       "run_004",
+		Source:      "voice",
+		CaptureMode: tools.ScreenCaptureModeScreenshot,
+		TTL:         10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("start session failed: %v", err)
+	}
+	if _, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: session.ScreenSessionID}); err != nil {
+		t.Fatalf("capture screenshot failed: %v", err)
+	}
+	if _, err := client.StopSession(context.Background(), session.ScreenSessionID, "analysis_completed"); err != nil {
+		t.Fatalf("stop session failed: %v", err)
+	}
+
+	cleanup, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{Reason: "residue_cleanup", ExpiredBefore: now})
+	if err != nil {
+		t.Fatalf("cleanup expired temps failed: %v", err)
+	}
+	if cleanup.DeletedCount != 1 {
+		t.Fatalf("expected stopped session cleanup to remove one temp path, got %+v", cleanup)
+	}
+}

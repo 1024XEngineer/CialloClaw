@@ -62,8 +62,8 @@ func TestLocalScreenCaptureClientCapturesWorkspaceSourceAndCleansUp(t *testing.T
 	if err != nil {
 		t.Fatalf("cleanup session artifacts failed: %v", err)
 	}
-	if cleanup.DeletedCount != 1 {
-		t.Fatalf("expected one deleted temp file, got %+v", cleanup)
+	if cleanup.DeletedCount != 2 {
+		t.Fatalf("expected temp file and directory cleanup, got %+v", cleanup)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(candidate.Path))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected cleaned temp file to be removed, got %v", err)
@@ -125,7 +125,45 @@ func TestLocalScreenCaptureClientGetExpireAndKeyframeBranches(t *testing.T) {
 		t.Fatalf("expected explicit expire path, got session=%+v err=%v", expired, err)
 	}
 	cleanup, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{Reason: "ttl_cleanup", ExpiredBefore: now.Add(time.Minute)})
-	if err != nil || cleanup.DeletedCount != 1 {
+	if err != nil || cleanup.DeletedCount != 2 {
 		t.Fatalf("expected expired temp cleanup, got cleanup=%+v err=%v", cleanup, err)
+	}
+}
+
+func TestLocalScreenCaptureClientCleanupExpiredTempsReclaimsOrphanSessionDirs(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	orphanDir := filepath.Join(workspaceRoot, "temp", "screen_sess_orphan_001")
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatalf("mkdir orphan dir failed: %v", err)
+	}
+	orphanFile := filepath.Join(orphanDir, "frame_0001.png")
+	if err := os.WriteFile(orphanFile, []byte("fake-frame"), 0o644); err != nil {
+		t.Fatalf("write orphan frame failed: %v", err)
+	}
+	orphanTime := time.Date(2026, 4, 18, 20, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(orphanDir, orphanTime, orphanTime); err != nil {
+		t.Fatalf("chtimes orphan dir failed: %v", err)
+	}
+	if err := os.Chtimes(orphanFile, orphanTime, orphanTime); err != nil {
+		t.Fatalf("chtimes orphan file failed: %v", err)
+	}
+
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	client.now = func() time.Time { return orphanTime.Add(10 * time.Minute) }
+
+	cleanup, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{Reason: "orphan_cleanup", ExpiredBefore: orphanTime.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("cleanup orphaned temps failed: %v", err)
+	}
+	if cleanup.DeletedCount != 2 {
+		t.Fatalf("expected orphan cleanup to remove file and directory, got %+v", cleanup)
+	}
+	if _, err := os.Stat(orphanDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected orphan screen dir to be removed, got %v", err)
 	}
 }
