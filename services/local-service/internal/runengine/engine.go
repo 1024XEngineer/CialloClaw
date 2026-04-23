@@ -93,9 +93,16 @@ type NotificationRecord struct {
 func taskUpdatedNotificationParams(record *TaskRecord) map[string]any {
 	return map[string]any{
 		"task_id":    record.TaskID,
-		"session_id": record.SessionID,
+		"session_id": taskSessionValue(record.SessionID),
 		"status":     record.Status,
 	}
+}
+
+func taskSessionValue(sessionID string) any {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	return strings.TrimSpace(sessionID)
 }
 
 // CreateTaskInput contains the runtime initialization payload for a new task.

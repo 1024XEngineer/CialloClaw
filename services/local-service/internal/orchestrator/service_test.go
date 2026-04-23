@@ -5922,6 +5922,59 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_infer_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看看这个页面的报错",
+			"page_context": map[string]any{
+				"title":        "Build Dashboard",
+				"url":          "https://example.com/build",
+				"app_name":     "Chrome",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+		},
+		"context": map[string]any{
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start inferred screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] != "screen_capture" {
+		t.Fatalf("expected screen_capture source type, got %+v", task)
+	}
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected inferred screen analyze task to wait for auth, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "screen_analyze" {
+		t.Fatalf("expected screen_analyze intent, got %+v", intentValue)
+	}
+	arguments := intentValue["arguments"].(map[string]any)
+	if arguments["evidence_role"] != "error_evidence" || arguments["page_title"] != "Build Dashboard" {
+		t.Fatalf("expected inferred visual arguments to be preserved, got %+v", arguments)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.PendingExecution == nil {
+		t.Fatalf("expected runtime task to keep pending execution for inferred screen task, got %+v", record)
+	}
+	if stringValue(record.PendingExecution, "source_path", "") != "" {
+		t.Fatalf("expected inferred screen task to authorize current screen instead of an existing file, got %+v", record.PendingExecution)
+	}
+	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
+		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
 func TestServiceStartTaskExplicitScreenAnalyzeBypassesContinuationRouting(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
@@ -6004,59 +6057,6 @@ func TestServiceStartTaskExplicitScreenAnalyzeBypassesContinuationRouting(t *tes
 	}
 	if approvalRequests[0]["task_id"] != task["task_id"] {
 		t.Fatalf("expected approval to target new screen task, got %+v", approvalRequests[0])
-	}
-}
-
-func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
-	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
-	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
-
-	result, err := service.StartTask(map[string]any{
-		"session_id": "sess_screen_infer_start",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"input": map[string]any{
-			"type": "text",
-			"text": "帮我看看这个页面的报错",
-			"page_context": map[string]any{
-				"title":        "Build Dashboard",
-				"url":          "https://example.com/build",
-				"app_name":     "Chrome",
-				"window_title": "Browser - Build Dashboard",
-				"visible_text": "Fatal build error: missing release asset",
-			},
-		},
-		"context": map[string]any{
-			"screen_summary": "release validation failed on current screen",
-		},
-	})
-	if err != nil {
-		t.Fatalf("start inferred screen analyze task failed: %v", err)
-	}
-	task := result["task"].(map[string]any)
-	if task["source_type"] != "screen_capture" {
-		t.Fatalf("expected screen_capture source type, got %+v", task)
-	}
-	if task["status"] != "waiting_auth" {
-		t.Fatalf("expected inferred screen analyze task to wait for auth, got %+v", task)
-	}
-	intentValue := task["intent"].(map[string]any)
-	if intentValue["name"] != "screen_analyze" {
-		t.Fatalf("expected screen_analyze intent, got %+v", intentValue)
-	}
-	arguments := intentValue["arguments"].(map[string]any)
-	if arguments["evidence_role"] != "error_evidence" || arguments["page_title"] != "Build Dashboard" {
-		t.Fatalf("expected inferred visual arguments to be preserved, got %+v", arguments)
-	}
-	record, exists := service.runEngine.GetTask(task["task_id"].(string))
-	if !exists || record.PendingExecution == nil {
-		t.Fatalf("expected runtime task to keep pending execution for inferred screen task, got %+v", record)
-	}
-	if stringValue(record.PendingExecution, "source_path", "") != "" {
-		t.Fatalf("expected inferred screen task to authorize current screen instead of an existing file, got %+v", record.PendingExecution)
-	}
-	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
-		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
 	}
 }
 

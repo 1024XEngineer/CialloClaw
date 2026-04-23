@@ -2746,7 +2746,7 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 func taskMap(record runengine.TaskRecord) map[string]any {
 	result := map[string]any{
 		"task_id":          record.TaskID,
-		"session_id":       record.SessionID,
+		"session_id":       taskSessionValue(record.SessionID),
 		"title":            record.Title,
 		"source_type":      record.SourceType,
 		"status":           record.Status,
@@ -2762,6 +2762,13 @@ func taskMap(record runengine.TaskRecord) map[string]any {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
 	}
 	return result
+}
+
+func taskSessionValue(sessionID string) any {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	return strings.TrimSpace(sessionID)
 }
 
 func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, bool, error) {

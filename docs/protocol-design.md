@@ -767,7 +767,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - 若客户端已显式提供 `intent.name = screen_analyze`，后端应复用同一条主链路；若客户端未显式提供 intent，也不应要求前端额外发明平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
-- `task.session_id` 是正式协议字段，schema 和类型层必须始终返回该字段；若当前任务没有关联隐藏协作 session，可返回 `null`，但不得省略字段本身。
+- `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 - 若客户端已显式提供 `intent.name = screen_analyze`，后端必须直接进入受控视觉任务主链路并建立新的授权边界，不得先经过 continuation classifier 再决定是否并回旧 task。
 - 若 `agent.task.start` 携带显式 `intent`，后端不得仅凭“当前只有一个 waiting task”就把该输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或本次输入本身就是结构化补充证据时，才允许把显式 intent 视为旧 task 的 continuation。
@@ -4111,7 +4111,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 9.1 事件语义
 
-- `task.updated`：任务主状态或关键摘要变化
+- `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
 - `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）
