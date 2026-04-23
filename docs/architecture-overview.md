@@ -1,4 +1,4 @@
-# CialloClaw 架构总览文档（v15）
+# CialloClaw 架构总览文档
 
 ## 1. 文档目的与范围
 
