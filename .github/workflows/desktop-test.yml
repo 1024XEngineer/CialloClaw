@@ -5,12 +5,9 @@ on:
     paths:
       - ".github/workflows/desktop-test.yml"
       - "apps/desktop/**"
-      - "services/local-service/**"
       - "packages/config/**"
       - "packages/protocol/**"
       - "packages/ui/**"
-      - "go.mod"
-      - "go.sum"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -18,12 +15,9 @@ on:
     paths:
       - ".github/workflows/desktop-test.yml"
       - "apps/desktop/**"
-      - "services/local-service/**"
       - "packages/config/**"
       - "packages/protocol/**"
       - "packages/ui/**"
-      - "go.mod"
-      - "go.sum"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -55,32 +49,8 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.0"
-          cache-dependency-path: go.sum
-
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Build the local-service sidecar
-        shell: pwsh
-        run: |
-          $targetTriple = (& rustc --print host-tuple).Trim()
-          if ([string]::IsNullOrWhiteSpace($targetTriple)) {
-            throw "Failed to determine the Rust target triple for the local-service sidecar."
-          }
-
-          $sidecarDirectory = "apps/desktop/src-tauri/binaries"
-          New-Item -ItemType Directory -Force -Path $sidecarDirectory | Out-Null
-
-          $sidecarPath = Join-Path $sidecarDirectory "local-service-$targetTriple.exe"
-          go build -trimpath -o $sidecarPath ./services/local-service/cmd/server
-
-          if (-not (Test-Path -LiteralPath $sidecarPath)) {
-            throw "The local-service sidecar was not built at $sidecarPath."
-          }
 
       - name: Build Windows Tauri app
         working-directory: apps/desktop
