@@ -88,6 +88,33 @@ func TestLocalScreenCaptureClientRejectsMissingWorkspaceSource(t *testing.T) {
 	}
 }
 
+func TestLocalScreenCaptureClientLookupAndCaptureErrorBranches(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	now := time.Date(2026, 4, 18, 21, 45, 0, 0, time.UTC)
+	client.now = func() time.Time { return now }
+
+	if _, err := client.GetSession(context.Background(), "screen_sess_missing"); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected missing session lookup to fail, got %v", err)
+	}
+	session, err := client.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_screen_002b", TaskID: "task_screen_002b", RunID: "run_screen_002b", CaptureMode: tools.ScreenCaptureModeScreenshot, TTL: time.Minute})
+	if err != nil {
+		t.Fatalf("start session failed: %v", err)
+	}
+	if _, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: session.ScreenSessionID}); !errors.Is(err, tools.ErrScreenCaptureFailed) {
+		t.Fatalf("expected blank source path to fail capture, got %v", err)
+	}
+	now = now.Add(2 * time.Minute)
+	if _, err := client.GetSession(context.Background(), session.ScreenSessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected ttl-expired session lookup to fail, got %v", err)
+	}
+}
+
 func TestLocalScreenCaptureClientGetExpireAndKeyframeBranches(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
@@ -127,6 +154,89 @@ func TestLocalScreenCaptureClientGetExpireAndKeyframeBranches(t *testing.T) {
 	cleanup, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{Reason: "ttl_cleanup", ExpiredBefore: now.Add(time.Minute)})
 	if err != nil || cleanup.DeletedCount != 2 {
 		t.Fatalf("expected expired temp cleanup, got cleanup=%+v err=%v", cleanup, err)
+	}
+}
+
+func TestLocalScreenCaptureClientStopSessionLeavesResidueForExpiredCleanupScan(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	if err := fileSystem.MkdirAll("inputs"); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := fileSystem.WriteFile("inputs/frame.png", []byte("fake-frame")); err != nil {
+		t.Fatalf("write frame source failed: %v", err)
+	}
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	now := time.Date(2026, 4, 18, 22, 30, 0, 0, time.UTC)
+	client.now = func() time.Time { return now }
+
+	session, err := client.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_screen_004", TaskID: "task_screen_004", RunID: "run_screen_004", CaptureMode: tools.ScreenCaptureModeScreenshot, TTL: 10 * time.Minute})
+	if err != nil {
+		t.Fatalf("start session failed: %v", err)
+	}
+	candidate, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: session.ScreenSessionID, SourcePath: "inputs/frame.png"})
+	if err != nil {
+		t.Fatalf("capture screenshot failed: %v", err)
+	}
+	stopped, err := client.StopSession(context.Background(), session.ScreenSessionID, "analysis_completed")
+	if err != nil || stopped.TerminalReason != "analysis_completed" {
+		t.Fatalf("expected explicit stop session state, got session=%+v err=%v", stopped, err)
+	}
+	if _, err := client.GetSession(context.Background(), session.ScreenSessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected stopped session lookup to fail, got %v", err)
+	}
+	cleanup, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{Reason: "residue_cleanup", ExpiredBefore: now})
+	if err != nil || cleanup.DeletedCount != 2 {
+		t.Fatalf("expected stopped session residue cleanup, got cleanup=%+v err=%v", cleanup, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(candidate.Path))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected stopped session temp file to be removed, got %v", err)
+	}
+}
+
+func TestNewLocalScreenCaptureClientFallsBackToNoopWithoutFilesystem(t *testing.T) {
+	client := NewLocalScreenCaptureClient(nil)
+	if _, ok := client.(noopScreenCaptureClient); !ok {
+		t.Fatalf("expected nil filesystem constructor to return noop client, got %T", client)
+	}
+	if screenSessionTempDir("") != "" {
+		t.Fatalf("expected blank session id to yield empty temp dir")
+	}
+}
+
+func TestLocalScreenCaptureClientCleanupHelpersCoverFreshOrphanBranches(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	freshOrphanDir := filepath.Join(workspaceRoot, "temp", "screen_sess_fresh_001")
+	if err := os.MkdirAll(freshOrphanDir, 0o755); err != nil {
+		t.Fatalf("mkdir fresh orphan dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(freshOrphanDir, "frame_0001.png"), []byte("fresh-frame"), 0o644); err != nil {
+		t.Fatalf("write fresh orphan frame failed: %v", err)
+	}
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	now := time.Date(2026, 4, 18, 23, 0, 0, 0, time.UTC)
+	client.now = func() time.Time { return now }
+	if deleted := client.cleanupOrphanedSessionTemps(now.Add(-time.Minute)); len(deleted) != 0 {
+		t.Fatalf("expected fresh orphan dir to be preserved, got %+v", deleted)
+	}
+	if _, err := os.Stat(freshOrphanDir); err != nil {
+		t.Fatalf("expected fresh orphan dir to remain, got %v", err)
+	}
+	if _, err := removeLocalScreenCleanupPath(nil, "temp/screen_sess_nil"); err == nil {
+		t.Fatal("expected nil filesystem cleanup helper to fail")
+	}
+	deleted, err := removeLocalScreenCleanupPath(fileSystem, "")
+	if err != nil || len(deleted) != 0 {
+		t.Fatalf("expected blank cleanup path to no-op, got deleted=%+v err=%v", deleted, err)
 	}
 }
 
