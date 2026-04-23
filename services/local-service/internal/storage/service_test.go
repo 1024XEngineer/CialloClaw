@@ -65,6 +65,61 @@ func (s *stubStrongholdProvider) Descriptor() StrongholdDescriptor {
 	}
 }
 
+func TestDefaultStrongholdBootstrapConfigReturnsProviderFactories(t *testing.T) {
+	config := defaultStrongholdBootstrapConfig()
+	if config.formalProvider == nil || config.fallbackProvider == nil {
+		t.Fatalf("expected default Stronghold bootstrap config to provide both factories, got %+v", config)
+	}
+	formal := config.formalProvider(filepath.Join(t.TempDir(), "formal.stronghold"))
+	if formal == nil || formal.Descriptor().Backend != "stronghold" || formal.Descriptor().Fallback {
+		t.Fatalf("expected default formal provider descriptor, got %+v", formal)
+	}
+	fallback := config.fallbackProvider(filepath.Join(t.TempDir(), "fallback.stronghold"))
+	if fallback == nil || fallback.Descriptor().Backend != "stronghold_sqlite_fallback" || !fallback.Descriptor().Fallback {
+		t.Fatalf("expected default fallback provider descriptor, got %+v", fallback)
+	}
+}
+
+func TestNewServiceWithStrongholdBootstrapFillsMissingFactories(t *testing.T) {
+	t.Run("fills missing formal provider", func(t *testing.T) {
+		fallbackCalls := 0
+		fallbackProvider := &stubStrongholdProvider{backend: "fallback_only", fallback: true, store: newInMemorySecretStore()}
+		service := newServiceWithStrongholdBootstrap(nil, strongholdBootstrapConfig{
+			fallbackProvider: func(string) StrongholdProvider {
+				fallbackCalls++
+				return fallbackProvider
+			},
+		})
+		defer func() { _ = service.Close() }()
+		if service == nil || fallbackCalls != 0 {
+			t.Fatalf("expected missing formal provider bootstrap to stay local without invoking fallback, service=%v fallbackCalls=%d", service, fallbackCalls)
+		}
+	})
+
+	t.Run("fills missing fallback provider", func(t *testing.T) {
+		formalCalls := 0
+		formalProvider := &stubStrongholdProvider{backend: "formal_only", store: newInMemorySecretStore()}
+		service := newServiceWithStrongholdBootstrap(nil, strongholdBootstrapConfig{
+			formalProvider: func(string) StrongholdProvider {
+				formalCalls++
+				return formalProvider
+			},
+		})
+		defer func() { _ = service.Close() }()
+		if service == nil || formalCalls != 0 {
+			t.Fatalf("expected missing fallback provider bootstrap to stay local without invoking formal, service=%v formalCalls=%d", service, formalCalls)
+		}
+	})
+
+	t.Run("fills both providers from defaults", func(t *testing.T) {
+		service := newServiceWithStrongholdBootstrap(nil, strongholdBootstrapConfig{})
+		defer func() { _ = service.Close() }()
+		if service == nil {
+			t.Fatal("expected default bootstrap to create a storage service")
+		}
+	})
+}
+
 // TestBackendReturnsSQLiteWAL 验证BackendReturnsSQLiteWAL。
 func TestBackendReturnsSQLiteWAL(t *testing.T) {
 	service := NewService(nil)
