@@ -1079,25 +1079,19 @@ func TestServiceUsesUnavailableSecretStoreWhenStrongholdCannotOpen(t *testing.T)
 
 func TestServiceUsesFormalStrongholdProviderWhenAvailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stronghold-formal-service.db")
-	originalFormalFactory := newStrongholdProviderForService
-	originalFallbackFactory := newStrongholdFallbackProviderForService
-	defer func() {
-		newStrongholdProviderForService = originalFormalFactory
-		newStrongholdFallbackProviderForService = originalFallbackFactory
-	}()
 
 	formalProvider := &stubStrongholdProvider{
 		backend:  "stronghold",
 		fallback: false,
 		store:    newInMemorySecretStore(),
 	}
-	newStrongholdProviderForService = func(string) StrongholdProvider { return formalProvider }
-	newStrongholdFallbackProviderForService = func(string) StrongholdProvider {
-		t.Fatal("fallback provider should not open when formal Stronghold succeeds")
-		return nil
-	}
-
-	service := NewService(stubAdapter{databasePath: path})
+	service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+		formalProvider: func(string) StrongholdProvider { return formalProvider },
+		fallbackProvider: func(string) StrongholdProvider {
+			t.Fatal("fallback provider should not open when formal Stronghold succeeds")
+			return nil
+		},
+	})
 	defer func() { _ = service.Close() }()
 
 	if service.Stronghold() == nil {
@@ -1120,12 +1114,6 @@ func TestServiceUsesFormalStrongholdProviderWhenAvailable(t *testing.T) {
 
 func TestServiceFallsBackToDevelopmentStrongholdProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stronghold-fallback-service.db")
-	originalFormalFactory := newStrongholdProviderForService
-	originalFallbackFactory := newStrongholdFallbackProviderForService
-	defer func() {
-		newStrongholdProviderForService = originalFormalFactory
-		newStrongholdFallbackProviderForService = originalFallbackFactory
-	}()
 
 	formalProvider := &stubStrongholdProvider{
 		backend:  "stronghold",
@@ -1137,10 +1125,10 @@ func TestServiceFallsBackToDevelopmentStrongholdProvider(t *testing.T) {
 		fallback: true,
 		store:    newInMemorySecretStore(),
 	}
-	newStrongholdProviderForService = func(string) StrongholdProvider { return formalProvider }
-	newStrongholdFallbackProviderForService = func(string) StrongholdProvider { return fallbackProvider }
-
-	service := NewService(stubAdapter{databasePath: path})
+	service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+		formalProvider:   func(string) StrongholdProvider { return formalProvider },
+		fallbackProvider: func(string) StrongholdProvider { return fallbackProvider },
+	})
 	defer func() { _ = service.Close() }()
 
 	descriptor := service.Stronghold().Descriptor()
@@ -1163,21 +1151,14 @@ func TestServiceFallsBackToDevelopmentStrongholdProvider(t *testing.T) {
 
 func TestServiceReportsStrongholdBootstrapFailureWhenFallbackUnavailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stronghold-unavailable-service.db")
-	originalFormalFactory := newStrongholdProviderForService
-	originalFallbackFactory := newStrongholdFallbackProviderForService
-	defer func() {
-		newStrongholdProviderForService = originalFormalFactory
-		newStrongholdFallbackProviderForService = originalFallbackFactory
-	}()
-
-	newStrongholdProviderForService = func(string) StrongholdProvider {
-		return &stubStrongholdProvider{backend: "stronghold", openErr: ErrStrongholdUnavailable}
-	}
-	newStrongholdFallbackProviderForService = func(string) StrongholdProvider {
-		return &stubStrongholdProvider{backend: "stronghold_sqlite_fallback", fallback: true, openErr: ErrStrongholdUnavailable}
-	}
-
-	service := NewService(stubAdapter{databasePath: path})
+	service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+		formalProvider: func(string) StrongholdProvider {
+			return &stubStrongholdProvider{backend: "stronghold", openErr: ErrStrongholdUnavailable}
+		},
+		fallbackProvider: func(string) StrongholdProvider {
+			return &stubStrongholdProvider{backend: "stronghold_sqlite_fallback", fallback: true, openErr: ErrStrongholdUnavailable}
+		},
+	})
 	defer func() { _ = service.Close() }()
 
 	if err := service.Validate(); err == nil || !strings.Contains(err.Error(), "initialize formal stronghold secret store") || !strings.Contains(err.Error(), "initialize fallback stronghold secret store") {

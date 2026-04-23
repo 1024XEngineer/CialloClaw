@@ -42,15 +42,23 @@ var newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) 
 	return NewSQLiteEvalStore(databasePath)
 }
 
-// These provider factories stay overridable in tests so bootstrap semantics can
-// deterministically verify formal Stronghold success, fallback activation, and
-// unavailable-secret behavior without depending on platform-specific DPAPI.
-var newStrongholdProviderForService = func(databasePath string) StrongholdProvider {
-	return NewStrongholdSQLiteProvider(databasePath)
+// strongholdBootstrapConfig keeps Stronghold provider injection scoped to one
+// service bootstrap so tests can validate formal/fallback semantics without
+// mutating shared package state.
+type strongholdBootstrapConfig struct {
+	formalProvider   func(databasePath string) StrongholdProvider
+	fallbackProvider func(databasePath string) StrongholdProvider
 }
 
-var newStrongholdFallbackProviderForService = func(databasePath string) StrongholdProvider {
-	return NewStrongholdSQLiteFallbackProvider(databasePath)
+func defaultStrongholdBootstrapConfig() strongholdBootstrapConfig {
+	return strongholdBootstrapConfig{
+		formalProvider: func(databasePath string) StrongholdProvider {
+			return NewStrongholdSQLiteProvider(databasePath)
+		},
+		fallbackProvider: func(databasePath string) StrongholdProvider {
+			return NewStrongholdSQLiteFallbackProvider(databasePath)
+		},
+	}
 }
 
 // Descriptor captures the configured storage backend state.
@@ -96,8 +104,21 @@ type Service struct {
 	fallbackActive           bool
 }
 
-// NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
+	return newServiceWithStrongholdBootstrap(adapter, defaultStrongholdBootstrapConfig())
+}
+
+func newServiceWithStrongholdBootstrap(adapter platform.StorageAdapter, bootstrap strongholdBootstrapConfig) *Service {
+	if bootstrap.formalProvider == nil || bootstrap.fallbackProvider == nil {
+		defaults := defaultStrongholdBootstrapConfig()
+		if bootstrap.formalProvider == nil {
+			bootstrap.formalProvider = defaults.formalProvider
+		}
+		if bootstrap.fallbackProvider == nil {
+			bootstrap.fallbackProvider = defaults.fallbackProvider
+		}
+	}
+
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	loopRuntimeStore := LoopRuntimeStore(newInMemoryLoopRuntimeStore())
@@ -277,7 +298,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			}
 
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
-				formalStrongholdProvider := newStrongholdProviderForService(secretPath)
+				formalStrongholdProvider := bootstrap.formalProvider(secretPath)
 				strongholdProvider = formalStrongholdProvider
 				strongholdStore, err := formalStrongholdProvider.Open(context.Background())
 				if err == nil {
@@ -286,7 +307,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				}
 				if err != nil {
 					formalStrongholdErr := fmt.Errorf("initialize formal stronghold secret store: %w", err)
-					fallbackProvider := newStrongholdFallbackProviderForService(secretPath)
+					fallbackProvider := bootstrap.fallbackProvider(secretPath)
 					fallbackStore, fallbackErr := fallbackProvider.Open(context.Background())
 					if fallbackErr == nil {
 						// A working fallback keeps the overall storage service healthy in
