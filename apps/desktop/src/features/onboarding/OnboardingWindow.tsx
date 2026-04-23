@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button, Heading, Text } from "@radix-ui/themes";
 import { cn } from "@/utils/cn";
 import { setOnboardingInteractiveRegions } from "@/platform/onboardingWindow";
@@ -140,16 +141,23 @@ export function OnboardingWindow() {
       return;
     }
 
-    const rect = cardRef.current.getBoundingClientRect();
-    const interactivePadding = 12;
-    void setOnboardingInteractiveRegions([
-      {
-        x: Math.round(rect.left - interactivePadding),
-        y: Math.round(rect.top - interactivePadding),
-        width: Math.round(rect.width + interactivePadding * 2),
-        height: Math.round(rect.height + interactivePadding * 2),
-      },
-    ]);
+    void (async () => {
+      const rect = cardRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+
+      const scaleFactor = await getCurrentWindow().scaleFactor();
+      const interactivePadding = 12;
+      await setOnboardingInteractiveRegions([
+        {
+          x: Math.round((rect.left - interactivePadding) * scaleFactor),
+          y: Math.round((rect.top - interactivePadding) * scaleFactor),
+          width: Math.max(1, Math.round((rect.width + interactivePadding * 2) * scaleFactor)),
+          height: Math.max(1, Math.round((rect.height + interactivePadding * 2) * scaleFactor)),
+        },
+      ]);
+    })();
 
     return () => {
       void setOnboardingInteractiveRegions([]);
