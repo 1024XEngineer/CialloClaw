@@ -44,11 +44,26 @@ jobs:
             release_month=$((10#${BASH_REMATCH[2]}))
             release_day=$((10#${BASH_REMATCH[3]}))
             release_sequence=$((10#${BASH_REMATCH[4]}))
-            release_app_version="${release_year}.${release_month}.${release_day}-${release_sequence}"
+
+            if [ "$release_sequence" -gt 999 ]; then
+              echo "Warning: release_sequence $release_sequence exceeds 999, capping to 999" >&2
+              release_sequence=999
+            fi
+
+            release_app_version="$((release_year % 100)).${release_month}.${release_day}${release_sequence}"
           elif [[ "$release_display_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            major=$(echo "$release_display_version" | cut -d. -f1)
+            minor=$(echo "$release_display_version" | cut -d. -f2)
+            patch=$(echo "$release_display_version" | cut -d. -f3)
+
+            if [ "$major" -gt 255 ] || [ "$minor" -gt 255 ] || [ "$patch" -gt 65535 ]; then
+              echo "Error: Version components exceed limits (major<=255, minor<=255, patch<=65535)." >&2
+              exit 1
+            fi
+
             release_app_version="$release_display_version"
           else
-            echo "The release tag must resolve to YYYYMMDD.N or semver." >&2
+            echo "The release tag must resolve to YYYYMMDD.N or semver (for example, 1.2.3)." >&2
             exit 1
           fi
 
@@ -85,7 +100,7 @@ jobs:
 
       - name: Build and publish the tagged release
         id: publish
-        uses: tauri-apps/tauri-action@v0.6.2
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

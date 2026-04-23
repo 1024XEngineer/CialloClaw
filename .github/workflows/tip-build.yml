@@ -39,11 +39,18 @@ jobs:
           $baseVersion = $packageJson.version
           $utcNow = [DateTime]::UtcNow
           $tipDisplayVersion = "{0:yyyyMMdd}.{1}" -f $utcNow, $env:GITHUB_RUN_NUMBER
-          $tipAppVersion = "{0}.{1}.{2}-{3}" -f `
-            $utcNow.Year, `
-            $utcNow.Month, `
-            $utcNow.Day, `
-            [int]$env:GITHUB_RUN_NUMBER
+
+          $yearShort = $utcNow.Year % 100
+          $month = $utcNow.Month
+          $day = $utcNow.Day
+          $runNum = [int]$env:GITHUB_RUN_NUMBER
+
+          if ($runNum -gt 999) {
+            Write-Warning "Run number $runNum exceeds 999, capping to 999"
+            $runNum = 999
+          }
+
+          $tipAppVersion = "{0}.{1}.{2}{3}" -f $yearShort, $month, $day, $runNum
           $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA"
 
           if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS_SHA) -and $env:PREVIOUS_SHA -ne '0000000000000000000000000000000000000000') {
@@ -70,6 +77,7 @@ jobs:
           set -euo pipefail
           gh release delete tip --yes --cleanup-tag || true
           git push origin :refs/tags/tip || true
+          sleep 3
 
       - name: Compose tip release metadata
         id: release_meta
@@ -95,7 +103,7 @@ jobs:
 
       - name: Build and publish the tip release
         id: publish
-        uses: tauri-apps/tauri-action@v0.6.2
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
