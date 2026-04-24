@@ -4,7 +4,6 @@ package intent
 import (
 	"path/filepath"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
@@ -74,9 +73,6 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	if intentName == "screen_analyze" {
 		requiresConfirm = false
 	}
-	if !requiresConfirm && len(explicitIntent) == 0 {
-		requiresConfirm = requiresConfirmation(snapshot, intentName)
-	}
 
 	directDeliveryType := directDeliveryTypeForSnapshot(snapshot, intentName)
 	resultPreview := previewForDeliveryType(directDeliveryType)
@@ -95,15 +91,12 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 }
 
 // defaultIntent chooses the minimum default route when the client does not provide
-// an explicit intent payload. The current correction path no longer classifies
-// free-form requests into summarize / translate / explain via keyword matching.
-// Instead, non-trivial inputs fall back to the generic agent loop path.
+// an explicit intent payload. Free-form requests always fall back to the
+// generic agent loop path so clarification stays in the main execution flow
+// instead of growing an intent-side phrase router.
 func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[string]any {
 	if screenIntent, ok := screenAnalyzeIntent(snapshot); ok {
 		return screenIntent
-	}
-	if shouldConfirmTextGoal(snapshot) {
-		return map[string]any{}
 	}
 
 	return intentPayload(defaultAgentLoopIntent)
@@ -209,100 +202,6 @@ func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 		}
 		return "hover_input"
 	}
-}
-
-func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName string) bool {
-	switch {
-	case intentName == "":
-		return true
-	case intentName == defaultAgentLoopIntent:
-		return false
-	case snapshot.InputType == "file":
-		return true
-	case snapshot.InputType == "text_selection":
-		return intentName != "translate"
-	case isLongContent(snapshot.Text):
-		return intentName == "summarize" || intentName == "rewrite"
-	default:
-		return false
-	}
-}
-
-func shouldConfirmTextGoal(snapshot contextsvc.TaskContextSnapshot) bool {
-	if snapshot.InputType != "text" {
-		return false
-	}
-	trimmed := strings.TrimSpace(snapshot.Text)
-	if trimmed == "" {
-		return false
-	}
-	if hasIntentContextAnchor(snapshot) {
-		return false
-	}
-	if isLongContent(trimmed) || isQuestionText(trimmed) {
-		return false
-	}
-	if utf8.RuneCountInString(trimmed) > 4 {
-		return false
-	}
-
-	// Short text should default to agent_loop. Only clearly non-goal inputs stay
-	// in confirmation so the gateway does not turn into a growing action lexicon.
-	return isClearlyAmbiguousShortText(trimmed)
-}
-
-func hasIntentContextAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
-	return strings.TrimSpace(snapshot.SelectionText) != "" ||
-		strings.TrimSpace(snapshot.ErrorText) != "" ||
-		len(snapshot.Files) > 0 ||
-		strings.TrimSpace(snapshot.PageTitle) != "" ||
-		strings.TrimSpace(snapshot.WindowTitle) != "" ||
-		strings.TrimSpace(snapshot.VisibleText) != "" ||
-		strings.TrimSpace(snapshot.ScreenSummary) != ""
-}
-
-func isClearlyAmbiguousShortText(text string) bool {
-	if isPunctuationOrEmojiOnly(text) {
-		return true
-	}
-
-	normalized := normalizeAmbiguousShortText(text)
-	if normalized == "" {
-		return false
-	}
-
-	switch normalized {
-	case "hi", "hello", "hey", "ok", "okay",
-		"你好", "您好", "在吗", "在么",
-		"嗯", "嗯嗯", "哦", "哦哦", "啊", "啊啊",
-		"好的", "好", "行", "收到",
-		"这个", "那个", "这", "那":
-		return true
-	default:
-		return false
-	}
-}
-
-func normalizeAmbiguousShortText(text string) string {
-	normalized := strings.TrimSpace(strings.ToLower(text))
-	return strings.Trim(normalized, " \t\r\n.,!?;:~，。！？；：、…'\"`“”‘’()[]{}<>《》【】")
-}
-
-func isPunctuationOrEmojiOnly(text string) bool {
-	hasSymbol := false
-	for _, value := range strings.TrimSpace(text) {
-		switch {
-		case unicode.IsSpace(value):
-			continue
-		case unicode.IsLetter(value), unicode.IsNumber(value):
-			return false
-		case unicode.IsPunct(value), unicode.IsSymbol(value):
-			hasSymbol = true
-		default:
-			return false
-		}
-	}
-	return hasSymbol
 }
 
 func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {

@@ -52,10 +52,10 @@ func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 	}
 }
 
-func TestSuggestRoutesNonAmbiguousShortTextToAgentLoopWithoutConfirmation(t *testing.T) {
+func TestSuggestRoutesShortFreeTextToAgentLoopWithoutConfirmation(t *testing.T) {
 	service := NewService()
 
-	testCases := []string{"解释下", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
 	for _, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
 			suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
@@ -73,43 +73,19 @@ func TestSuggestRoutesNonAmbiguousShortTextToAgentLoopWithoutConfirmation(t *tes
 	}
 }
 
-func TestSuggestKeepsAmbiguousShortTextInConfirmation(t *testing.T) {
-	service := NewService()
-
-	testCases := []string{"你好", "hi", "好的", "这个", "🙂"}
-	for _, testCase := range testCases {
-		t.Run(testCase, func(t *testing.T) {
-			suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
-				InputType: "text",
-				Text:      testCase,
-			}, nil, false)
-
-			if len(suggestion.Intent) != 0 {
-				t.Fatalf("expected ambiguous short text to keep empty intent payload, got %+v", suggestion.Intent)
-			}
-			if !suggestion.RequiresConfirm {
-				t.Fatal("expected ambiguous short text to remain in confirmation flow")
-			}
-		})
-	}
-}
-
-func TestSuggestKeepsAnchoredShortTextOnAgentLoopWithoutConfirmation(t *testing.T) {
+func TestSuggestRespectsExplicitConfirmationRequestForFreeText(t *testing.T) {
 	service := NewService()
 
 	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
-		InputType:   "text",
-		Text:        "这个",
-		PageTitle:   "Build Dashboard",
-		WindowTitle: "Browser - Build Dashboard",
-		VisibleText: "release validation failed",
-	}, nil, false)
+		InputType: "text",
+		Text:      "你好",
+	}, nil, true)
 
 	if got := stringValue(suggestion.Intent, "name"); got != defaultAgentLoopIntent {
-		t.Fatalf("expected anchored short text to route through agent loop, got %q", got)
+		t.Fatalf("expected explicit confirmation request to keep agent_loop intent, got %q", got)
 	}
-	if suggestion.RequiresConfirm {
-		t.Fatal("expected anchored short text to skip forced confirmation")
+	if !suggestion.RequiresConfirm {
+		t.Fatal("expected explicit confirmation request to preserve confirming_intent entry")
 	}
 }
 

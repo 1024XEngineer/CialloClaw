@@ -914,46 +914,10 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputKeepsAmbiguousShortTextInIntentConfirmation(t *testing.T) {
-	service := newTestService()
+func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "请补充你的目标。")
 
-	result, err := service.SubmitInput(map[string]any{
-		"session_id": "sess_unknown_text",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"input": map[string]any{
-			"type": "text",
-			"text": "你好",
-		},
-	})
-	if err != nil {
-		t.Fatalf("submit input failed: %v", err)
-	}
-
-	task := result["task"].(map[string]any)
-	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected ambiguous short text to remain in confirming_intent, got %v", task["status"])
-	}
-	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || len(intentValue) != 0 {
-		t.Fatalf("expected ambiguous short text task to keep empty intent payload, got %+v", task["intent"])
-	}
-	bubble := result["bubble_message"].(map[string]any)
-	if bubble["text"] != "我还不确定你想如何处理这段内容，请确认目标。" {
-		t.Fatalf("expected neutral confirmation prompt, got %v", bubble["text"])
-	}
-	if result["delivery_result"] != nil {
-		t.Fatalf("expected no delivery result before intent is confirmed, got %+v", result["delivery_result"])
-	}
-	if _, ok := service.runEngine.GetTask(task["task_id"].(string)); !ok {
-		t.Fatal("expected task to remain available in runtime")
-	}
-}
-
-func TestServiceSubmitInputRoutesNonAmbiguousShortTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
-	service, _ := newTestServiceWithExecution(t, "Short text request completed.")
-
-	testCases := []string{"解释下", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
 	for index, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
 			result, err := service.SubmitInput(map[string]any{
@@ -971,20 +935,52 @@ func TestServiceSubmitInputRoutesNonAmbiguousShortTextToAgentLoopWithoutForcedCo
 
 			task := result["task"].(map[string]any)
 			if task["status"] != "completed" {
-				t.Fatalf("expected non-ambiguous short text to execute directly, got %v", task["status"])
+				t.Fatalf("expected short free text to execute directly through agent_loop, got %v", task["status"])
 			}
 			intentValue, ok := task["intent"].(map[string]any)
 			if !ok || intentValue["name"] != "agent_loop" {
-				t.Fatalf("expected non-ambiguous short text to route through agent_loop, got %+v", task["intent"])
+				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
 			}
 			deliveryResult, ok := result["delivery_result"].(map[string]any)
 			if !ok {
-				t.Fatal("expected non-ambiguous short text to return delivery_result")
+				t.Fatal("expected short free text to return delivery_result")
 			}
 			if deliveryResult["type"] != "bubble" {
-				t.Fatalf("expected non-ambiguous short text to prefer bubble delivery, got %v", deliveryResult["type"])
+				t.Fatalf("expected short free text to prefer bubble delivery, got %v", deliveryResult["type"])
 			}
 		})
+	}
+}
+
+func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_confirm_free_text",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected explicit confirm_required to preserve confirming_intent, got %v", task["status"])
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected explicit confirm_required to keep agent_loop intent, got %+v", task["intent"])
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected explicit confirmation flow to defer delivery_result, got %+v", result["delivery_result"])
 	}
 }
 
@@ -1209,6 +1205,9 @@ func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T
 		"input": map[string]any{
 			"type": "text",
 			"text": "ok",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1562,8 +1561,8 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	}
 }
 
-func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
-	service := newTestService()
+func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "请补充你的目标。")
 
 	startResult, err := service.SubmitInput(map[string]any{
 		"session_id": "sess_unknown_confirm",
@@ -1572,6 +1571,9 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1588,15 +1590,23 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected task to remain in confirming_intent when no corrected intent is provided, got %v", task["status"])
+	if task["status"] != "completed" {
+		t.Fatalf("expected confirmed task to execute stored agent_loop intent, got %v", task["status"])
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected confirmed task to keep agent_loop intent, got %+v", task["intent"])
 	}
 	bubble := confirmResult["bubble_message"].(map[string]any)
-	if bubble["text"] != "请先明确告诉我你希望执行的处理方式。" {
-		t.Fatalf("expected clarification bubble, got %v", bubble["text"])
+	if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+		t.Fatalf("expected agent_loop clarification bubble, got %v", bubble["text"])
 	}
-	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected no delivery result while intent is still missing, got %+v", confirmResult["delivery_result"])
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected confirmed agent_loop task to produce delivery_result")
+	}
+	if !strings.Contains(stringValue(deliveryResult, "preview_text", ""), "请补充你的目标") {
+		t.Fatalf("expected delivery_result preview to carry clarification text, got %+v", deliveryResult)
 	}
 }
 
@@ -1610,6 +1620,9 @@ func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testi
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1654,6 +1667,9 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
