@@ -24,6 +24,14 @@ function run(command, args, options) {
 }
 
 function resolveRustTargetTriple(repoRoot) {
+  const requestedTarget = process.env.TAURI_ENV_TARGET_TRIPLE
+    || process.env.CARGO_BUILD_TARGET
+    || process.env.TARGET;
+
+  if (requestedTarget) {
+    return requestedTarget;
+  }
+
   const result = run("rustc", ["-vV"], { cwd: repoRoot });
   const hostLine = result.stdout
     .split(/\r?\n/)
@@ -36,10 +44,39 @@ function resolveRustTargetTriple(repoRoot) {
   return hostLine.slice("host: ".length).trim();
 }
 
+function resolveGoPlatform(targetTriple) {
+  const normalizedTriple = targetTriple.toLowerCase();
+
+  const goos = normalizedTriple.includes("windows")
+    ? "windows"
+    : normalizedTriple.includes("darwin") || normalizedTriple.includes("apple")
+      ? "darwin"
+      : normalizedTriple.includes("linux")
+        ? "linux"
+        : null;
+
+  const goarch = normalizedTriple.startsWith("x86_64") || normalizedTriple.startsWith("amd64")
+    ? "amd64"
+    : normalizedTriple.startsWith("aarch64") || normalizedTriple.startsWith("arm64")
+      ? "arm64"
+      : normalizedTriple.startsWith("i686") || normalizedTriple.startsWith("i586") || normalizedTriple.startsWith("i386")
+        ? "386"
+        : normalizedTriple.startsWith("armv7") || normalizedTriple.startsWith("arm")
+          ? "arm"
+          : null;
+
+  if (!goos || !goarch) {
+    throw new Error(`Unsupported target triple for local-service sidecar: ${targetTriple}`);
+  }
+
+  return { goos, goarch };
+}
+
 export function buildLocalServiceSidecar() {
   const repoRoot = resolve(currentDirectory, "..", "..", "..", "..");
   const srcTauriRoot = resolve(currentDirectory, "..");
   const targetTriple = resolveRustTargetTriple(repoRoot);
+  const { goarch, goos } = resolveGoPlatform(targetTriple);
   const sidecarDirectory = resolve(srcTauriRoot, "binaries");
   const sidecarFileName = `local-service-${targetTriple}${targetTriple.includes("windows") ? ".exe" : ""}`;
   const sidecarPath = resolve(sidecarDirectory, sidecarFileName);
@@ -47,6 +84,11 @@ export function buildLocalServiceSidecar() {
   mkdirSync(sidecarDirectory, { recursive: true });
   run("go", ["build", "-trimpath", "-o", sidecarPath, "./services/local-service/cmd/server"], {
     cwd: repoRoot,
+    env: {
+      ...process.env,
+      GOARCH: goarch,
+      GOOS: goos,
+    },
   });
 
   return sidecarPath;
