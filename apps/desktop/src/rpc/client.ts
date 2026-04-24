@@ -48,8 +48,6 @@ type NamedPipeSubscription = {
   unsubscribe: () => Promise<void>;
 };
 
-const NAMED_PIPE_FALLBACK_TIMEOUT_MS = 1_200;
-
 // JsonRpcTransport is the minimal transport contract shared by both runtime modes.
 interface JsonRpcTransport {
   send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>>;
@@ -70,72 +68,17 @@ declare global {
 
 // NamedPipeJsonRpcTransport sends requests through the desktop named-pipe bridge.
 class NamedPipeJsonRpcTransport implements JsonRpcTransport {
-  private readonly httpFallback = new DebugHttpJsonRpcTransport(resolveDebugRpcEndpoint());
-
-  private useHttpFallback = false;
-
   async send<T>(payload: JsonRpcRequest): Promise<JsonRpcEnvelope<T>> {
-    if (this.useHttpFallback) {
-      return this.httpFallback.send<T>(payload);
-    }
-
     const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
     if (!bridge) {
-      this.useHttpFallback = true;
-      return this.httpFallback.send<T>(payload);
-    }
-
-    try {
-      return await this.requestWithNamedPipeTimeout(bridge, payload);
-    } catch (error) {
-      if (!isDesktopTransportUnavailable(error)) {
-        throw error;
-      }
-
-      this.useHttpFallback = true;
-      return this.httpFallback.send<T>(payload);
-    }
-  }
-
-  private async requestWithNamedPipeTimeout<T>(
-    bridge: NonNullable<typeof window.__CIALLOCLAW_NAMED_PIPE__>,
-    payload: JsonRpcRequest,
-  ): Promise<JsonRpcEnvelope<T>> {
-    return new Promise<JsonRpcEnvelope<T>>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        reject(new Error(`named pipe request timed out after ${NAMED_PIPE_FALLBACK_TIMEOUT_MS}ms`));
-      }, NAMED_PIPE_FALLBACK_TIMEOUT_MS);
-
-      void bridge.request<T>(payload).then(
-        (result) => {
-          window.clearTimeout(timeout);
-          resolve(result);
-        },
-        (error: unknown) => {
-          window.clearTimeout(timeout);
-          reject(error);
-        },
+      throw new Error(
+        "Named Pipe transport is not wired. Set VITE_CIALLOCLAW_RPC_TRANSPORT=http to use the debug HTTP transport.",
       );
-    });
-  }
-}
+    }
 
-function isDesktopTransportUnavailable(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
+    return bridge.request<T>(payload);
   }
-
-  const normalizedMessage = error.message.toLowerCase();
-  return [
-    "transport is not wired",
-    "failed to open named pipe",
-    "named pipe",
-    "request timed out",
-    "timed out",
-    "network request failed",
-    "failed to fetch",
-  ].some((fragment) => normalizedMessage.includes(fragment));
 }
 
 // DebugHttpJsonRpcTransport keeps local browser-style development flows available.

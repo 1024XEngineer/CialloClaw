@@ -2242,6 +2242,151 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 	}
 }
 
+func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.T) {
+	modelClient := &selectiveWaitLoopModelClient{
+		stubLoopModelClient: stubLoopModelClient{
+			toolResult: model.ToolCallResult{
+				OutputText: "Concurrent stream finished.",
+			},
+			generateToolWait: make(chan struct{}),
+			generateToolSeen: make(chan struct{}),
+		},
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	startTask := func(sessionID string) string {
+		t.Helper()
+		result, err := server.orchestrator.StartTask(map[string]any{
+			"session_id": sessionID,
+			"source":     "floating_ball",
+			"trigger":    "text_selected_click",
+			"input": map[string]any{
+				"type": "text_selection",
+				"text": "inspect this workspace",
+			},
+		})
+		if err != nil {
+			t.Fatalf("seed task.start for %s: %v", sessionID, err)
+		}
+		return result["task"].(map[string]any)["task_id"].(string)
+	}
+
+	taskA := startTask("sess_pipe_queue_a")
+	taskB := startTask("sess_pipe_queue_b")
+	modelClient.blockedTaskID = taskA
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	defer listener.Close()
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptDone <- err
+			return
+		}
+		server.handleStreamConn(conn)
+		acceptDone <- nil
+	}()
+
+	right, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial loopback: %v", err)
+	}
+	defer func() {
+		_ = right.Close()
+		select {
+		case err := <-acceptDone:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("accept loopback: %v", err)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected loopback stream to shut down")
+		}
+	}()
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	confirmRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-blocked"`),
+		Method:  "agent.task.confirm",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":   taskA,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		}),
+	}
+	if err := encoder.Encode(confirmRequest); err != nil {
+		t.Fatalf("encode blocked confirm request: %v", err)
+	}
+
+	select {
+	case <-modelClient.generateToolSeen:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocked loop task to start model execution")
+	}
+
+	detailRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-detail-queued"`),
+		Method:  "agent.task.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskB,
+		}),
+	}
+	if err := encoder.Encode(detailRequest); err != nil {
+		t.Fatalf("encode queued detail request: %v", err)
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(750 * time.Millisecond)); err != nil {
+		t.Fatalf("set queued response deadline: %v", err)
+	}
+	defer func() {
+		if err := right.SetReadDeadline(time.Time{}); err != nil {
+			t.Fatalf("clear queued response deadline: %v", err)
+		}
+	}()
+
+	queuedResponseSeen := false
+	for index := 0; index < 12; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			break
+		}
+		responseID, _ := envelope["id"].(string)
+		if responseID != "req-task-detail-queued" {
+			continue
+		}
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected queued detail success envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected queued detail response payload, got %+v", envelope)
+		}
+		task, ok := data["task"].(map[string]any)
+		if !ok || task["task_id"] != taskB {
+			t.Fatalf("expected queued detail response for %s, got %+v", taskB, envelope)
+		}
+		queuedResponseSeen = true
+		break
+	}
+
+	close(modelClient.generateToolWait)
+
+	if !queuedResponseSeen {
+		t.Fatal("expected queued task detail request to complete before the blocked loop response")
+	}
+}
+
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	server := newTestServer()
 
