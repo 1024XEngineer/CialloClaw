@@ -100,6 +100,16 @@ function resolveNoteItemSourceNotePath(
   return sourceNotesByTitle.get(item.item.title.trim().toLowerCase())?.path ?? null;
 }
 
+function matchesSourceNotePath(
+  item: NoteListItem,
+  sourceNotePath: string,
+  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByTitle: Map<string, SourceNoteDocument>,
+) {
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+  return matchedPath !== null && normalizeSourceNoteKey(matchedPath) === normalizeSourceNoteKey(sourceNotePath);
+}
+
 /**
  * Renders the note dashboard page and coordinates note selection, feedback, and
  * lightweight conversion actions.
@@ -389,6 +399,63 @@ export function NotePage() {
     );
   }
 
+  async function invalidateNoteBuckets(groups: readonly NotePreviewGroupKey[]) {
+    await Promise.all(
+      buildDashboardNoteBucketInvalidateKeys(dataMode, groups).map((queryKey) =>
+        queryClient.invalidateQueries({
+          queryKey,
+        }),
+      ),
+    );
+  }
+
+  async function refetchAllNoteBuckets() {
+    const [upcomingResult, laterResult, recurringResult, closedResult] = await Promise.all([
+      upcomingQuery.refetch(),
+      laterQuery.refetch(),
+      recurringQuery.refetch(),
+      closedQuery.refetch(),
+    ]);
+
+    return [
+      ...(upcomingResult.data?.items ?? []),
+      ...(laterResult.data?.items ?? []),
+      ...(recurringResult.data?.items ?? []),
+      ...(closedResult.data?.items ?? []),
+    ];
+  }
+
+  async function triggerAutoTaskExecutionForSourceNote(savedNote: SourceNoteDocument) {
+    const latestSourceNotesResult = await sourceNotesQuery.refetch();
+    const latestSourceNotes = latestSourceNotesResult.data?.notes ?? sourceNotes;
+    const latestSourceNotesByPath = new Map(latestSourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note]));
+    const latestSourceNotesByTitle = new Map(latestSourceNotes.map((note) => [note.title.trim().toLowerCase(), note]));
+    const normalizedSavedTitle = savedNote.title.trim().toLowerCase();
+    const refetchedItems = await refetchAllNoteBuckets();
+    const matchedItem = refetchedItems.find(
+      (item) =>
+        !item.sourceNote?.localOnly &&
+        (matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath, latestSourceNotesByTitle) ||
+          item.item.title.trim().toLowerCase() === normalizedSavedTitle),
+    );
+
+    if (!matchedItem) {
+      showFeedback("新便签已保存并完成巡检，但暂时还没有识别成可执行事项。");
+      return;
+    }
+
+    try {
+      const outcome = await convertNoteToTask(matchedItem.item.item_id, dataMode);
+      await invalidateNoteBuckets(outcome.result.refresh_groups);
+      await refetchAllNoteBuckets();
+      setSelectedItemId(matchedItem.item.item_id);
+      showFeedback("新便签已保存，并已触发后端开始执行。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "触发后端执行失败，请稍后重试。";
+      showFeedback(`新便签已保存，但触发后端执行失败：${message}`);
+    }
+  }
+
   async function refreshInspection(reason: string, prefix?: string) {
     if (dataMode !== "rpc") {
       showFeedback("Mock 模式下不会执行真实巡检。");
@@ -522,6 +589,9 @@ export function NotePage() {
         createdSourceNote ? "notes_markdown_created" : "notes_markdown_saved",
         createdSourceNote ? `已创建 ${savedNote.fileName}` : `已保存 ${savedNote.fileName}`,
       );
+      if (createdSourceNote) {
+        await triggerAutoTaskExecutionForSourceNote(savedNote);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "markdown 便签保存失败。";
       setSourceNoteSyncMessage(message);
@@ -563,13 +633,7 @@ export function NotePage() {
   const convertMutation = useMutation({
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
-      await Promise.all(
-        buildDashboardNoteBucketInvalidateKeys(dataMode, outcome.result.refresh_groups).map((queryKey) =>
-          queryClient.invalidateQueries({
-            queryKey,
-          }),
-        ),
-      );
+      await invalidateNoteBuckets(outcome.result.refresh_groups);
       showFeedback("已为这条事项生成任务，正在跳转到任务页。");
       navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
     },
@@ -582,13 +646,7 @@ export function NotePage() {
   const updateMutation = useMutation({
     mutationFn: ({ action, itemId }: { action: NotepadAction; itemId: string }) => updateNote(itemId, action, dataMode),
     onSuccess: async (outcome, variables) => {
-      await Promise.all(
-        buildDashboardNoteBucketInvalidateKeys(dataMode, outcome.result.refresh_groups).map((queryKey) =>
-          queryClient.invalidateQueries({
-            queryKey,
-          }),
-        ),
-      );
+      await invalidateNoteBuckets(outcome.result.refresh_groups);
 
       const feedbackByAction: Record<NotepadAction, string> = {
         cancel: "已取消这条事项。",
