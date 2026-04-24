@@ -283,14 +283,24 @@ func isAllowedDebugOriginHost(host string) bool {
 	}
 }
 
+type streamEnvelopeWriter struct {
+	encoder *json.Encoder
+	writeMu sync.Mutex
+}
+
+func (w *streamEnvelopeWriter) writeEnvelope(envelope any) error {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	return w.encoder.Encode(envelope)
+}
+
 // handleStreamConn serves JSON-RPC requests on a long-lived stream and then
 // replays buffered notifications on the same connection.
 func (s *Server) handleStreamConn(conn net.Conn) {
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
-	var writeMu sync.Mutex
+	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
 
 	for {
 		var request requestEnvelope
@@ -299,7 +309,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				return
 			}
 
-			_ = encoder.Encode(newErrorEnvelope(nil, &rpcError{
+			_ = writer.writeEnvelope(newErrorEnvelope(nil, &rpcError{
 				Code:    errInvalidParams,
 				Message: "INVALID_PARAMS",
 				Detail:  "invalid json-rpc payload",
@@ -308,96 +318,108 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
-		streamedRuntimeCounts := map[string]int{}
-		requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
-		var requestTaskMu sync.RWMutex
-		addRequestTaskID := func(taskID string) {
-			trimmed := strings.TrimSpace(taskID)
-			if trimmed == "" {
-				return
-			}
-			requestTaskMu.Lock()
-			if requestTaskIDs == nil {
-				requestTaskIDs = map[string]bool{}
-			}
-			requestTaskIDs[trimmed] = true
-			requestTaskMu.Unlock()
-		}
-		hasRequestTaskID := func(taskID string) bool {
-			requestTaskMu.RLock()
-			defer requestTaskMu.RUnlock()
-			return requestTaskIDs != nil && requestTaskIDs[taskID]
-		}
-		matchesTaskStart := func(sessionID, traceID string) bool {
-			switch {
-			case requestTraceID != "":
-				return requestTraceID == traceID
-			case requestSessionID != "":
-				return requestSessionID == sessionID
-			default:
-				return false
-			}
-		}
+		// Each request gets its own worker so a long-running shell-ball task cannot
+		// block dashboard or control-panel reads that share the packaged pipe.
+		go s.handleStreamRequest(request, writer)
+	}
+}
 
-		unsubscribeRuntime := func() {}
-		if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
-			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
-				if !isLiveRuntimeMethod(method) {
-					return
-				}
-				notificationTaskID := runtimeNotificationTaskID(taskID, params)
-				if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
-					return
-				}
-				writeMu.Lock()
-				defer writeMu.Unlock()
-				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-					streamedRuntimeCounts[notificationKey(method, notificationTaskID, params)]++
-				}
-			})
-		}
-
-		unsubscribeTaskStart := func() {}
-		if shouldTrackStartedTask(request.Method) {
-			unsubscribeTaskStart = s.orchestrator.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
-				if !matchesTaskStart(sessionID, traceID) {
-					return
-				}
-				addRequestTaskID(taskID)
-			})
-		}
-
-		response := s.dispatch(request)
-		unsubscribeTaskStart()
-		unsubscribeRuntime()
-
-		writeMu.Lock()
-		err := encoder.Encode(response)
-		writeMu.Unlock()
-		if err != nil {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter) {
+	streamedRuntimeCounts := map[string]int{}
+	var streamedRuntimeMu sync.Mutex
+	requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
+	var requestTaskMu sync.RWMutex
+	addRequestTaskID := func(taskID string) {
+		trimmed := strings.TrimSpace(taskID)
+		if trimmed == "" {
 			return
 		}
+		requestTaskMu.Lock()
+		if requestTaskIDs == nil {
+			requestTaskIDs = map[string]bool{}
+		}
+		requestTaskIDs[trimmed] = true
+		requestTaskMu.Unlock()
+	}
+	hasRequestTaskID := func(taskID string) bool {
+		requestTaskMu.RLock()
+		defer requestTaskMu.RUnlock()
+		return requestTaskIDs != nil && requestTaskIDs[taskID]
+	}
+	matchesTaskStart := func(sessionID, traceID string) bool {
+		switch {
+		case requestTraceID != "":
+			return requestTraceID == traceID
+		case requestSessionID != "":
+			return requestSessionID == sessionID
+		default:
+			return false
+		}
+	}
+	markRuntimeNotificationStreamed := func(key string) {
+		streamedRuntimeMu.Lock()
+		streamedRuntimeCounts[key]++
+		streamedRuntimeMu.Unlock()
+	}
+	consumeStreamedRuntimeNotification := func(key string) bool {
+		streamedRuntimeMu.Lock()
+		defer streamedRuntimeMu.Unlock()
+		if streamedRuntimeCounts[key] == 0 {
+			return false
+		}
+		streamedRuntimeCounts[key]--
+		return true
+	}
 
-		for _, taskID := range taskIDsFromResponse(response) {
-			notifications, err := s.orchestrator.DrainNotifications(taskID)
-			if err != nil {
+	unsubscribeRuntime := func() {}
+	if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
+		unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+			if !isLiveRuntimeMethod(method) {
+				return
+			}
+			notificationTaskID := runtimeNotificationTaskID(taskID, params)
+			if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
+				return
+			}
+			if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err == nil {
+				markRuntimeNotificationStreamed(notificationKey(method, notificationTaskID, params))
+			}
+		})
+	}
+
+	unsubscribeTaskStart := func() {}
+	if shouldTrackStartedTask(request.Method) {
+		unsubscribeTaskStart = s.orchestrator.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
+			if !matchesTaskStart(sessionID, traceID) {
+				return
+			}
+			addRequestTaskID(taskID)
+		})
+	}
+
+	response := s.dispatch(request)
+	unsubscribeTaskStart()
+	unsubscribeRuntime()
+
+	if err := writer.writeEnvelope(response); err != nil {
+		return
+	}
+
+	for _, taskID := range taskIDsFromResponse(response) {
+		notifications, err := s.orchestrator.DrainNotifications(taskID)
+		if err != nil {
+			continue
+		}
+
+		for _, notification := range notifications {
+			method := stringValue(notification, "method", "task.updated")
+			params := mapValue(notification, "params")
+			key := notificationKey(method, taskID, params)
+			if isLiveRuntimeMethod(method) && consumeStreamedRuntimeNotification(key) {
 				continue
 			}
-
-			for _, notification := range notifications {
-				method := stringValue(notification, "method", "task.updated")
-				params := mapValue(notification, "params")
-				key := notificationKey(method, taskID, params)
-				if isLiveRuntimeMethod(method) && streamedRuntimeCounts[key] > 0 {
-					streamedRuntimeCounts[key]--
-					continue
-				}
-				writeMu.Lock()
-				err := encoder.Encode(newNotificationEnvelope(method, params))
-				writeMu.Unlock()
-				if err != nil {
-					return
-				}
+			if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
+				return
 			}
 		}
 	}

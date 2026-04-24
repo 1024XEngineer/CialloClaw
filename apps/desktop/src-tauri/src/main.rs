@@ -10,11 +10,11 @@ mod window_context;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -61,7 +61,6 @@ const SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT: &str = "desktop-shell-ball:clipboard-
 const TRAY_ICON_ID: &str = "main-tray";
 const LOCAL_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
-const NAMED_PIPE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
@@ -76,18 +75,7 @@ macro_rules! makelparam {
     };
 }
 
-enum BridgeCommand {
-    Request { payload: Value },
-}
-
-#[derive(Clone)]
-struct BridgeSession {
-    writer_tx: mpsc::Sender<BridgeCommand>,
-}
-
 struct NamedPipeBridgeState {
-    session: Mutex<Option<BridgeSession>>,
-    pending: Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>,
     subscriptions: Mutex<HashMap<String, HashMap<u32, JsonChannel>>>,
     next_subscription_id: AtomicU32,
 }
@@ -95,8 +83,6 @@ struct NamedPipeBridgeState {
 impl Default for NamedPipeBridgeState {
     fn default() -> Self {
         Self {
-            session: Mutex::new(None),
-            pending: Mutex::new(HashMap::new()),
             subscriptions: Mutex::new(HashMap::new()),
             next_subscription_id: AtomicU32::new(1),
         }
@@ -106,42 +92,48 @@ impl Default for NamedPipeBridgeState {
 impl NamedPipeBridgeState {
     fn request(self: &Arc<Self>, payload: Value) -> Result<Value, String> {
         let request_id = extract_request_id(&payload)?;
-        let session = self.ensure_session()?;
-        let (response_tx, response_rx) = mpsc::channel();
+        // Open a fresh client stream per request so one stalled desktop window
+        // cannot poison every later RPC that shares the bridge state.
+        let mut stream = open_named_pipe_stream()?;
+        serde_json::to_writer(&mut stream, &payload)
+            .map_err(|error| format!("failed to serialize json-rpc payload: {error}"))?;
+        stream
+            .write_all(b"\n")
+            .map_err(|error| format!("failed to write named pipe delimiter: {error}"))?;
+        stream
+            .flush()
+            .map_err(|error| format!("failed to flush named pipe payload: {error}"))?;
 
-        self.pending
-            .lock()
-            .map_err(|_| "named pipe pending map lock poisoned".to_string())?
-            .insert(request_id.clone(), response_tx);
+        let mut responses = serde_json::Deserializer::from_reader(BufReader::new(stream)).into_iter::<Value>();
+        while let Some(result) = responses.next() {
+            match result {
+                Ok(message) => {
+                    if let Some(method) = message.get("method").and_then(Value::as_str) {
+                        self.dispatch_notification(method, &message);
+                        continue;
+                    }
 
-        if let Err(error) = session.writer_tx.send(BridgeCommand::Request { payload }) {
-            self.pending
-                .lock()
-                .map_err(|_| "named pipe pending map lock poisoned".to_string())?
-                .remove(&request_id);
-            return Err(format!("failed to queue named pipe request: {error}"));
-        }
-
-        match response_rx.recv_timeout(NAMED_PIPE_RESPONSE_TIMEOUT) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Ok(mut pending) = self.pending.lock() {
-                    pending.remove(&request_id);
+                    if message
+                        .get("id")
+                        .map(normalize_id)
+                        .as_deref()
+                        == Some(request_id.as_str())
+                    {
+                        return Ok(message);
+                    }
                 }
-                Err(format!(
-                    "named pipe response wait timed out after {}ms",
-                    NAMED_PIPE_RESPONSE_TIMEOUT.as_millis()
-                ))
+                Err(error) => {
+                    return Err(format!("failed to decode named pipe response: {error}"));
+                }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
-                "named pipe response wait failed: response channel disconnected".to_string(),
-            ),
         }
+
+        Err(format!(
+            "named pipe response stream ended before response {request_id} was returned"
+        ))
     }
 
     fn subscribe(self: &Arc<Self>, topic: String, channel: JsonChannel) -> Result<u32, String> {
-        self.ensure_session()?;
-
         let subscription_id = self.next_subscription_id.fetch_add(1, Ordering::Relaxed);
         let mut subscriptions = self
             .subscriptions
@@ -171,54 +163,6 @@ impl NamedPipeBridgeState {
         Ok(())
     }
 
-    fn ensure_session(self: &Arc<Self>) -> Result<BridgeSession, String> {
-        let mut session_guard = self
-            .session
-            .lock()
-            .map_err(|_| "named pipe session lock poisoned".to_string())?;
-
-        if let Some(session) = session_guard.clone() {
-            return Ok(session);
-        }
-
-        let stream = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(NAMED_PIPE_PATH)
-            .map_err(|error| format!("failed to open named pipe {NAMED_PIPE_PATH}: {error}"))?;
-
-        let reader = stream
-            .try_clone()
-            .map_err(|error| format!("failed to clone named pipe handle: {error}"))?;
-
-        let writer = stream;
-        let (writer_tx, writer_rx) = mpsc::channel();
-        let state = Arc::clone(self);
-        let writer_state = Arc::clone(&state);
-        std::thread::spawn(move || writer_loop(writer, writer_rx, writer_state));
-        std::thread::spawn(move || reader_loop(reader, state));
-
-        let session = BridgeSession { writer_tx };
-        *session_guard = Some(session.clone());
-        Ok(session)
-    }
-
-    fn dispatch_incoming(&self, message: Value) {
-        if let Some(method) = message.get("method").and_then(Value::as_str) {
-            self.dispatch_notification(method, &message);
-            return;
-        }
-
-        if let Some(id) = message.get("id") {
-            let request_id = normalize_id(id);
-            if let Ok(mut pending) = self.pending.lock() {
-                if let Some(sender) = pending.remove(&request_id) {
-                    let _ = sender.send(Ok(message));
-                }
-            }
-        }
-    }
-
     fn dispatch_notification(&self, topic: &str, message: &Value) {
         let channels = self
             .subscriptions
@@ -232,26 +176,14 @@ impl NamedPipeBridgeState {
             }
         }
     }
+}
 
-    fn handle_disconnect(&self, reason: String) {
-        if let Ok(mut session) = self.session.lock() {
-            *session = None;
-        }
-
-        if let Ok(mut pending) = self.pending.lock() {
-            for (_, sender) in pending.drain() {
-                let _ = sender.send(Err(reason.clone()));
-            }
-        }
-
-        let message = serde_json::json!({
-            "method": "bridge.disconnected",
-            "params": {
-                "reason": reason,
-            }
-        });
-        self.dispatch_notification("bridge.disconnected", &message);
-    }
+fn open_named_pipe_stream() -> Result<std::fs::File, String> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(NAMED_PIPE_PATH)
+        .map_err(|error| format!("failed to open named pipe {NAMED_PIPE_PATH}: {error}"))
 }
 
 struct LocalServiceSidecarState {
@@ -370,12 +302,12 @@ fn start_local_service_sidecar(
 
 /// wait_for_local_service_ready blocks startup until the sidecar publishes the
 /// named pipe bridge, preventing first-load RPCs from racing service boot.
-fn wait_for_local_service_ready(bridge_state: &Arc<NamedPipeBridgeState>) -> Result<(), String> {
+fn wait_for_local_service_ready() -> Result<(), String> {
     let start = Instant::now();
     let mut last_error = String::from("local service did not become ready");
 
     while start.elapsed() < LOCAL_SERVICE_READY_TIMEOUT {
-        match bridge_state.ensure_session() {
+        match open_named_pipe_stream() {
             Ok(_) => return Ok(()),
             Err(error) => {
                 last_error = error;
@@ -520,54 +452,6 @@ fn fetch_workspace_root(state: &Arc<NamedPipeBridgeState>) -> Result<Option<Path
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from))
-}
-
-fn writer_loop(
-    writer: std::fs::File,
-    receiver: mpsc::Receiver<BridgeCommand>,
-    state: Arc<NamedPipeBridgeState>,
-) {
-    let mut writer = BufWriter::new(writer);
-
-    while let Ok(command) = receiver.recv() {
-        let result = match command {
-            BridgeCommand::Request { payload } => (|| -> Result<(), String> {
-                serde_json::to_writer(&mut writer, &payload)
-                    .map_err(|error| format!("failed to serialize json-rpc payload: {error}"))?;
-                writer
-                    .write_all(b"\n")
-                    .map_err(|error| format!("failed to write named pipe delimiter: {error}"))?;
-                writer
-                    .flush()
-                    .map_err(|error| format!("failed to flush named pipe payload: {error}"))?;
-                Ok(())
-            })(),
-        };
-
-        if let Err(error) = result {
-            state.handle_disconnect(error);
-            return;
-        }
-    }
-}
-
-fn reader_loop(reader: std::fs::File, state: Arc<NamedPipeBridgeState>) {
-    let mut responses =
-        serde_json::Deserializer::from_reader(BufReader::new(reader)).into_iter::<Value>();
-
-    while let Some(result) = responses.next() {
-        match result {
-            Ok(message) => state.dispatch_incoming(message),
-            Err(error) => {
-                state.handle_disconnect(format!("failed to decode named pipe response: {error}"));
-                return;
-            }
-        }
-    }
-
-    state.handle_disconnect(
-        "named pipe response stream ended before any json-rpc envelope was returned".to_string(),
-    );
 }
 
 fn extract_request_id(payload: &Value) -> Result<String, String> {
@@ -1429,12 +1313,10 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let sidecar_state = app.state::<Arc<LocalServiceSidecarState>>();
-            let bridge_state = app.state::<Arc<NamedPipeBridgeState>>();
             let sidecar_started = start_local_service_sidecar(app.handle(), sidecar_state.inner())
                 .map_err(std::io::Error::other)?;
             if sidecar_started {
-                wait_for_local_service_ready(bridge_state.inner())
-                    .map_err(std::io::Error::other)?;
+                wait_for_local_service_ready().map_err(std::io::Error::other)?;
             }
             // activity::install_mouse_activity_listener()
             //     .map_err(|error| std::io::Error::other(error))?;
