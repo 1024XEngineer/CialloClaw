@@ -21,8 +21,8 @@ import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
 import { areDesktopSourceNotesAvailable, createNoteSource, loadNoteSourceConfig, loadNoteSourceSnapshot, runNoteSourceInspection, saveNoteSource } from "./noteSource.service";
-import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
-import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey } from "./notePage.types";
+import { buildSourceNoteFallbackItem, convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
+import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NoteEmptyState } from "./components/NoteEmptyState";
 import { NotePreviewCard } from "./components/NotePreviewCard";
@@ -81,6 +81,25 @@ function normalizeSourceNoteKey(value: string) {
   return value.trim().replace(/\\/g, "/").toLowerCase();
 }
 
+function resolveNoteItemSourceNotePath(
+  item: NoteListItem,
+  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByTitle: Map<string, SourceNoteDocument>,
+) {
+  if (item.sourceNote?.path) {
+    return item.sourceNote.path;
+  }
+
+  const resourceMatch = item.experience.relatedResources
+    .map((resource) => sourceNotesByPath.get(normalizeSourceNoteKey(resource.path)))
+    .find((note) => note !== undefined);
+  if (resourceMatch) {
+    return resourceMatch.path;
+  }
+
+  return sourceNotesByTitle.get(item.item.title.trim().toLowerCase())?.path ?? null;
+}
+
 /**
  * Renders the note dashboard page and coordinates note selection, feedback, and
  * lightweight conversion actions.
@@ -118,6 +137,9 @@ export function NotePage() {
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const sourceNotesFingerprintRef = useRef<string | null>(null);
+  const pendingCreatedSourceNotePathRef = useRef<string | null>(null);
+  const noteSourcePathByItemIdRef = useRef(new Map<string, string>());
+  const pinNoteToCanvasRef = useRef<(itemId: string, placement?: { x: number; y: number }) => void>(() => {});
   const skipNextSourceNoteRefreshRef = useRef(false);
   const dragStateRef = useRef<{
     itemId: string;
@@ -214,14 +236,44 @@ export function NotePage() {
     retry: false,
   });
 
-  const upcomingItems = sortNotesByUrgency(upcomingQuery.data?.items ?? []);
-  const laterItems = sortNotesByUrgency(laterQuery.data?.items ?? []);
+  const rpcUpcomingItems = sortNotesByUrgency(upcomingQuery.data?.items ?? []);
+  const rpcLaterItems = sortNotesByUrgency(laterQuery.data?.items ?? []);
   const recurringItems = sortNotesByUrgency(recurringQuery.data?.items ?? []);
   const closedItems = sortClosedNotes(closedQuery.data?.items ?? []);
   const sourceNotesData = sourceNotesQuery.data?.notes;
   const sourceRootsData = sourceNotesQuery.data?.sourceRoots;
   const sourceNotes = useMemo(() => sourceNotesData ?? [], [sourceNotesData]);
   const resolvedSourceRoots = useMemo(() => sourceRootsData ?? taskSourceRoots, [sourceRootsData, taskSourceRoots]);
+  const sourceNotesByPath = useMemo(
+    () => new Map(sourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note])),
+    [sourceNotes],
+  );
+  const sourceNotesByTitle = useMemo(
+    () => new Map(sourceNotes.map((note) => [note.title.trim().toLowerCase(), note])),
+    [sourceNotes],
+  );
+  const representedSourceNotePaths = useMemo(() => {
+    const representedPaths = new Set<string>();
+
+    [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+      if (matchedPath) {
+        representedPaths.add(normalizeSourceNoteKey(matchedPath));
+      }
+    });
+
+    return representedPaths;
+  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
+  const sourceNoteFallbackItems = useMemo(
+    () =>
+      sourceNotes
+        .filter((note) => !representedSourceNotePaths.has(normalizeSourceNoteKey(note.path)))
+        .sort((left, right) => (right.modifiedAtMs ?? 0) - (left.modifiedAtMs ?? 0))
+        .map((note) => buildSourceNoteFallbackItem(note)),
+    [representedSourceNotePaths, sourceNotes],
+  );
+  const upcomingItems = rpcUpcomingItems;
+  const laterItems = useMemo(() => [...sourceNoteFallbackItems, ...rpcLaterItems], [rpcLaterItems, sourceNoteFallbackItems]);
   const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
   const visibleUpcomingItems = useMemo(() => upcomingItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, upcomingItems]);
   const visibleLaterItems = useMemo(() => laterItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, laterItems]);
@@ -240,17 +292,30 @@ export function NotePage() {
   const summary = useMemo(() => buildNoteSummary({ recurring_rule: recurringItems, upcoming: upcomingItems }), [recurringItems, upcomingItems]);
   const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
   const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
+  const noteItemSourcePathById = useMemo(() => {
+    const itemPathMap = new Map<string, string>();
+
+    allItems.forEach((item) => {
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+      if (matchedPath) {
+        itemPathMap.set(item.item.item_id, matchedPath);
+      }
+    });
+
+    return itemPathMap;
+  }, [allItems, sourceNotesByPath, sourceNotesByTitle]);
+  const noteItemIdBySourcePath = useMemo(() => {
+    const pathItemMap = new Map<string, string>();
+
+    noteItemSourcePathById.forEach((path, itemId) => {
+      pathItemMap.set(normalizeSourceNoteKey(path), itemId);
+    });
+
+    return pathItemMap;
+  }, [noteItemSourcePathById]);
   const selectedItem = useMemo(
     () => allItems.find((entry) => entry.item.item_id === selectedItemId) ?? upcomingItems[0] ?? laterItems[0] ?? recurringItems[0] ?? closedItems[0] ?? null,
     [allItems, closedItems, laterItems, recurringItems, selectedItemId, upcomingItems],
-  );
-  const sourceNotesByPath = useMemo(
-    () => new Map(sourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note])),
-    [sourceNotes],
-  );
-  const sourceNotesByTitle = useMemo(
-    () => new Map(sourceNotes.map((note) => [note.title.trim().toLowerCase(), note])),
-    [sourceNotes],
   );
   const selectedSourceNote = useMemo(
     () => (isCreatingSourceNote ? null : sourceNotes.find((note) => note.path === selectedSourceNotePath) ?? null),
@@ -400,14 +465,7 @@ export function NotePage() {
   }
 
   function resolveSourceNotePathForItem(item: NoteListItem) {
-    const resourceMatch = item.experience.relatedResources
-      .map((resource) => sourceNotesByPath.get(normalizeSourceNoteKey(resource.path)))
-      .find((note) => note !== undefined);
-    if (resourceMatch) {
-      return resourceMatch.path;
-    }
-
-    return sourceNotesByTitle.get(item.item.title.trim().toLowerCase())?.path ?? null;
+    return resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
   }
 
   function openSourceStudioForItem(item: NoteListItem) {
@@ -447,10 +505,12 @@ export function NotePage() {
 
     setIsSavingSourceNote(true);
     try {
-      const savedNote = isCreatingSourceNote
+      const createdSourceNote = isCreatingSourceNote;
+      const savedNote = createdSourceNote
         ? await createNoteSource(taskSourceRoots, sourceNoteDraft)
         : await saveNoteSource(taskSourceRoots, selectedSourceNotePath ?? "", sourceNoteDraft);
 
+      pendingCreatedSourceNotePathRef.current = savedNote.path;
       skipNextSourceNoteRefreshRef.current = true;
       await sourceNotesQuery.refetch();
       setIsCreatingSourceNote(false);
@@ -459,8 +519,8 @@ export function NotePage() {
       setSourceNoteBaseline(savedNote.content);
       setSourceNoteSyncMessage(`${savedNote.fileName} 已保存，正在同步巡检结果。`);
       await refreshInspection(
-        isCreatingSourceNote ? "notes_markdown_created" : "notes_markdown_saved",
-        isCreatingSourceNote ? `已创建 ${savedNote.fileName}` : `已保存 ${savedNote.fileName}`,
+        createdSourceNote ? "notes_markdown_created" : "notes_markdown_saved",
+        createdSourceNote ? `已创建 ${savedNote.fileName}` : `已保存 ${savedNote.fileName}`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "markdown 便签保存失败。";
@@ -578,6 +638,11 @@ export function NotePage() {
       return;
     }
 
+    if (selectedItem.sourceNote?.localOnly && action !== "edit" && action !== "open-resource") {
+      showFeedback("这张源便签还没进入正式事项流，先编辑源文件或等待巡检同步。");
+      return;
+    }
+
     if (action === "convert-to-task") {
       convertMutation.mutate(selectedItem.item.item_id);
       return;
@@ -640,6 +705,12 @@ export function NotePage() {
   useEffect(() => {
     sourceNotesFingerprintRef.current = null;
   }, [dataMode, taskSourceRoots]);
+
+  useEffect(() => {
+    noteItemSourcePathById.forEach((path, itemId) => {
+      noteSourcePathByItemIdRef.current.set(itemId, path);
+    });
+  }, [noteItemSourcePathById]);
 
   useEffect(() => {
     if (isCreatingSourceNote) {
@@ -716,11 +787,20 @@ export function NotePage() {
       return;
     }
 
+    if (selectedItemId) {
+      const selectedSourcePath = noteSourcePathByItemIdRef.current.get(selectedItemId);
+      const replacementItemId = selectedSourcePath ? noteItemIdBySourcePath.get(normalizeSourceNoteKey(selectedSourcePath)) : null;
+      if (replacementItemId) {
+        setSelectedItemId(replacementItemId);
+        return;
+      }
+    }
+
     const nextItem = upcomingItems[0] ?? laterItems[0] ?? recurringItems[0] ?? closedItems[0];
     if (nextItem) {
       setSelectedItemId(nextItem.item.item_id);
     }
-  }, [allItems, closedItems, laterItems, recurringItems, selectedItemId, upcomingItems]);
+  }, [allItems, closedItems, laterItems, noteItemIdBySourcePath, recurringItems, selectedItemId, upcomingItems]);
 
   useUnmount(() => {
     if (feedbackTimeoutRef.current) {
@@ -843,8 +923,31 @@ export function NotePage() {
     // toggles and bucket changes must not reshuffle the board order.
     const boardBounds = getBoardLayerBounds();
     setCanvasCards((current) => {
-      const next = current.filter((entry) => noteItemsById.has(entry.itemId));
-      if (next.length !== current.length) {
+      let changed = false;
+      const seenItemIds = new Set<string>();
+      const next: NoteCanvasCard[] = [];
+
+      current.forEach((entry) => {
+        if (noteItemsById.has(entry.itemId)) {
+          seenItemIds.add(entry.itemId);
+          next.push(entry);
+          return;
+        }
+
+        const sourcePath = noteSourcePathByItemIdRef.current.get(entry.itemId);
+        const replacementItemId = sourcePath ? noteItemIdBySourcePath.get(normalizeSourceNoteKey(sourcePath)) : null;
+
+        if (replacementItemId && !seenItemIds.has(replacementItemId)) {
+          changed = true;
+          seenItemIds.add(replacementItemId);
+          next.push({ ...entry, itemId: replacementItemId });
+          return;
+        }
+
+        changed = true;
+      });
+
+      if (changed) {
         if (next.length === 0 && current.length > 0 && defaultBoardItemIds.length > 0 && boardBounds) {
           return defaultBoardItemIds.map((itemId, index) => ({
             itemId,
@@ -866,10 +969,19 @@ export function NotePage() {
     });
 
     if (draggingBoardItemId && !noteItemsById.has(draggingBoardItemId)) {
-      setDraggingBoardItemId(null);
-      dragStateRef.current = null;
+      const sourcePath = noteSourcePathByItemIdRef.current.get(draggingBoardItemId);
+      const replacementItemId = sourcePath ? noteItemIdBySourcePath.get(normalizeSourceNoteKey(sourcePath)) : null;
+      if (replacementItemId) {
+        if (dragStateRef.current?.itemId === draggingBoardItemId) {
+          dragStateRef.current = { ...dragStateRef.current, itemId: replacementItemId };
+        }
+        setDraggingBoardItemId(replacementItemId);
+      } else {
+        setDraggingBoardItemId(null);
+        dragStateRef.current = null;
+      }
     }
-  }, [defaultBoardItemIds, draggingBoardItemId, noteItemsById]);
+  }, [defaultBoardItemIds, draggingBoardItemId, noteItemIdBySourcePath, noteItemsById]);
 
   useEffect(() => {
     if (!boardLayerSize) {
@@ -918,6 +1030,31 @@ export function NotePage() {
       return [...current, { itemId, x: nextPlacement.x, y: nextPlacement.y, zIndex: getNextCanvasZIndex(current) }];
     });
   }
+  pinNoteToCanvasRef.current = pinNoteToCanvas;
+
+  useEffect(() => {
+    const pendingSourceNotePath = pendingCreatedSourceNotePathRef.current;
+    if (!pendingSourceNotePath) {
+      return;
+    }
+
+    const nextItemId = noteItemIdBySourcePath.get(normalizeSourceNoteKey(pendingSourceNotePath));
+    if (!nextItemId) {
+      return;
+    }
+
+    const nextItem = noteItemsById.get(nextItemId);
+    if (!nextItem) {
+      return;
+    }
+
+    setDrawerOpen(true);
+    setExpandedBucket(nextItem.item.bucket);
+    setSelectedItemId(nextItemId);
+    pinNoteToCanvasRef.current(nextItemId);
+    pendingCreatedSourceNotePathRef.current = null;
+    showFeedback("新便签已同步到便签页，并放到了网格里。");
+  }, [noteItemIdBySourcePath, noteItemsById]);
 
   function unpinNoteFromCanvas(itemId: string) {
     setCanvasCards((current) => current.filter((entry) => entry.itemId !== itemId));

@@ -58,6 +58,10 @@ export type NoteDetailExperience = {
 export type NoteListItem = {
   item: TodoItem;
   experience: NoteDetailExperience;
+  sourceNote?: {
+    localOnly: boolean;
+    path: string;
+  } | null;
 };
 
 export type NoteBucketsData = {

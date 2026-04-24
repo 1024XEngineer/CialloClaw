@@ -12,7 +12,7 @@ import type {
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
 import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, runMockUpdateNote } from "./notePage.mock";
-import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome } from "./notePage.types";
+import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 
@@ -47,6 +47,39 @@ function formatAbsoluteTime(value: string) {
     minute: "2-digit",
     month: "numeric",
   });
+}
+
+function formatAbsoluteTimestamp(value: number) {
+  return new Date(value).toLocaleString("zh-CN", {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "numeric",
+  });
+}
+
+function createSourceNoteFallbackId(path: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < path.length; index += 1) {
+    hash ^= path.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `source_note_${(hash >>> 0).toString(16)}`;
+}
+
+function extractSourceNotePreview(content: string) {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const previewLine = lines.find((line) => !/^#+\s*/.test(line)) ?? lines[0] ?? "";
+
+  return previewLine
+    .replace(/^[-*+]\s+\[[ xX]\]\s*/, "")
+    .replace(/^[-*+]\s*/, "")
+    .trim();
 }
 
 function formatRelativeTime(value: string) {
@@ -324,6 +357,93 @@ function mapItems(items: TodoItem[]): NoteListItem[] {
     experience: getMockNoteExperience(item.item_id) ?? createFallbackExperience(item),
     item,
   }));
+}
+
+/**
+ * Builds one renderer-local note card from a markdown source file when the
+ * source note exists on disk but has not been surfaced as a formal notepad
+ * item yet.
+ *
+ * @param note Markdown source note from the desktop bridge.
+ * @returns A later-bucket note card that keeps the source file visible.
+ */
+export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListItem {
+  const itemId = createSourceNoteFallbackId(note.path);
+  const previewText = extractSourceNotePreview(note.content);
+
+  return {
+    experience: {
+      agentSuggestion: {
+        detail: "这张便签已经保存在任务来源目录里。你可以继续编辑它，巡检识别后会切换成正式便签项。",
+        label: "下一步建议",
+      },
+      canConvertToTask: false,
+      detailStatus: "等待巡检同步",
+      detailStatusTone: "normal",
+      effectiveScope: note.sourceRoot,
+      endedAt: null,
+      isRecurringEnabled: false,
+      nextOccurrenceAt: null,
+      noteText: previewText || "这张源便签还没有提炼出正式事项，当前先作为本地便签卡片显示。",
+      noteType: "reminder",
+      plannedAt: null,
+      prerequisite: "当前还没有正式巡检结果，这张卡片直接来自任务来源目录中的 markdown 文件。",
+      previewStatus: "待巡检",
+      recentInstanceStatus: null,
+      relatedResources: [
+        {
+          id: `${itemId}_source`,
+          label: "源 markdown",
+          openAction: "open_file",
+          path: note.path,
+          taskId: null,
+          type: "Markdown 文件",
+          url: null,
+        },
+      ],
+      repeatRule: null,
+      summaryLabel: "源便签",
+      timeHint: note.modifiedAtMs ? `最后修改 ${formatAbsoluteTimestamp(note.modifiedAtMs)}` : "刚创建",
+      title: note.title,
+      typeLabel: "源便签",
+    },
+    item: {
+      agent_suggestion: "等待巡检同步后再进入正式事项流。",
+      bucket: "later",
+      due_at: null,
+      item_id: itemId,
+      linked_task_id: null,
+      note_text: previewText || note.content.trim() || "新建源便签",
+      related_resources: [
+        {
+          label: "源 markdown",
+          open_action: "open_file",
+          open_payload: {
+            path: note.path,
+            task_id: null,
+            url: null,
+          },
+          path: note.path,
+          resource_id: `${itemId}_source`,
+          resource_type: "Markdown 文件",
+        },
+      ],
+      status: "normal",
+      title: note.title,
+      type: "note",
+      ended_at: null,
+      effective_scope: note.sourceRoot,
+      next_occurrence_at: null,
+      prerequisite: "等待巡检把源文件识别成正式事项。",
+      recent_instance_status: null,
+      recurring_enabled: false,
+      repeat_rule: null,
+    },
+    sourceNote: {
+      localOnly: true,
+      path: note.path,
+    },
+  };
 }
 
 async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
