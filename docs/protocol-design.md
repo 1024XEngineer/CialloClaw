@@ -106,9 +106,14 @@
 - `agent.mirror.*`：镜子和长期记忆视图。
 - `agent.security.*`：安全卫士、授权、审计、恢复。
 - `agent.settings.*`：设置中心。
+- `agent.screen.*`：屏幕感知与场景推荐分析。
 - `agent.plugin.*`：插件扩展能力方法组，负责插件列表、详情与运行态查询。
-- 场景感知信号：当前不单列 `agent.screen.*` 方法组，而是并入 `agent.input.*`、`agent.task.*` 与 `agent.recommendation.*` 的 `context / scene` 字段。
-- 多模型与 Skill 安装：当前仍属于路线图能力，但 `/packages/protocol/rpc/methods.ts` 尚未冻结 `agent.model.* / agent.skill.*` 的正式方法名。
+- `agent.model.* / agent.skill.*`：扩展能力方法组，当前多数为 planned。
+
+补充说明：
+
+- 当前仓库实现里，部分场景感知信号也会通过 `agent.input.*`、`agent.task.*` 与 `agent.recommendation.*` 的 `context / scene` 字段并入主链。
+- 多模型与 Skill 安装当前仍主要停留在路线图阶段，正式方法与协议资产后续仍需继续冻结。
 
 ---
 
@@ -498,6 +503,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.confirm`
 - `agent.recommendation.get`
 - `agent.recommendation.feedback.submit`
+- `agent.screen.analyze`
 
 #### B. 任务状态 / 结果交付 / 巡检
 
@@ -520,6 +526,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 #### C. 仪表盘 / 镜子 / 安全卫士
 
 - `agent.dashboard.overview.get`
+- `agent.dashboard.input.start`
 - `agent.dashboard.module.get`
 - `agent.mirror.overview.get`
 - `agent.security.summary.get`
@@ -545,8 +552,14 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.mirror.memory.manage`
 - `agent.plugin.enable`
 - `agent.plugin.disable`
+- `agent.model.list`
+- `agent.model.activate`
+- `agent.skill.install`
+- `agent.skill.list`
 
-多模型切换、Skill 安装等能力仍在路线图中，但当前仓库尚未在 `/packages/protocol/rpc/methods.ts` 预留正式方法名；在方法名冻结前，文档不再提前声明 `agent.model.* / agent.skill.*` 细分接口。
+补充说明：
+
+- 上述多模型与 Skill 方法当前仍以 planned 为准；实际冻结顺序仍以后续 `/packages/protocol` 真源为准。
 
 ### 7.3 原子功能与方法映射说明
 
@@ -557,7 +570,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **意图确认与纠偏** 统一使用 `agent.task.confirm`，用于采纳系统猜测或覆盖为用户修正后的意图。
 - 气泡置顶 / 删除 / 恢复：优先作为前端局部能力，必要时再引出设置或历史管理接口
 - **主动推荐与反馈** 统一使用 `agent.recommendation.get` 和 `agent.recommendation.feedback.submit`。
-- **屏幕截图、剪贴板、鼠标停留等场景感知信号** 当前并入 `agent.input.submit` / `agent.task.start` 的 `context` 字段，以及 `agent.recommendation.get` 的 `scene + context` 组合，不单独冻结 `agent.screen.analyze`。
+- **屏幕截图、剪贴板、鼠标停留等场景感知信号** 统一使用 `agent.screen.analyze`，用于判断是否刷新推荐，不直接替代 `agent.task.start` 创建正式任务。
 - **任务成果列表、产物打开与最终交付打开** 统一使用 `agent.task.artifact.*` 与 `agent.delivery.open`。
 - 长结果自动分流：由交付内核决定，不新增方法
 - 一键中断：复用 `agent.task.control`
@@ -1344,18 +1357,107 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.1.9 场景感知信号并入稳定入口
+### 8.1.9 `agent.screen.analyze`
 
-当前仓库没有单独冻结 `agent.screen.analyze` 方法。屏幕截图、剪贴板、鼠标停留、页面可见文本等场景信号，统一通过以下稳定边界进入系统：
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户在某个页面持续停留，需要系统判断是否应主动给出帮助时
+  - 前端已采集到截图、剪贴板、鼠标停留等场景信号，需要统一做一次场景分析时
+- **系统处理**：
+  - 结合页面信息、屏幕截图、剪贴板内容、鼠标位置和最近行为做轻量场景判断
+  - 返回当前是否需要刷新推荐，以及推荐文案和触发原因
+- **入参**：页面信息、屏幕截图、剪贴板内容、鼠标信息、行为信号
+- **出参**：推荐结果
 
-- `agent.input.submit`：承接悬停输入、语音提交等轻入口，并在 `context` 内携带 `page / screen / behavior / clipboard` 信号。
-- `agent.task.start`：承接文本选中、文件拖拽、错误信息等正式任务入口，并复用相同的 `context` 结构。
-- `agent.recommendation.get`：当桌面端只需要刷新推荐而不创建正式任务时，通过 `scene + context` 请求后端返回候选推荐。
+### agent.screen.analyze 入参说明
 
-补充约束：
+| 字段                        | 中文说明 |
+| --------------------------- | -------- |
+| `request_meta.trace_id`     | 请求链路追踪 ID |
+| `request_meta.client_time`  | 前端发起时间 |
+| `page.app_name`             | 当前宿主应用名称 |
+| `page.url`                  | 当前页面 URL |
+| `screen.image_url`          | 当前截图文件路径或可解析地址 |
+| `clipboard.context`         | 当前剪贴板上下文内容 |
+| `clipboard.mime_type`       | 剪贴板内容 MIME 类型 |
+| `mouse.isactive`            | 鼠标当前是否处于活跃状态；字段名保持与协议示例一致 |
+| `mouse.position.x`          | 鼠标横坐标 |
+| `mouse.position.y`          | 鼠标纵坐标 |
+| `behavior.dwell_millis`     | 当前场景停留时长，单位毫秒 |
+| `behavior.last_action`      | 最近一次关键动作，例如 `copy` |
 
-- 场景感知信号属于入口上下文或推荐上下文，不单独形成新的正式 `agent.screen.*` RPC 方法。
-- 若某次感知最终进入正式执行，仍需回到 `task` 主链，通过 `agent.input.submit` 或 `agent.task.start` 创建或续接任务。
+### agent.screen.analyze 入参示例
+
+```json
+{
+   "jsonrpc": "2.0",
+   "id": "req_input_001",
+   "method": "agent.screen.analyze",
+   "params": {
+      "request_meta": {
+        "trace_id": "trace_001",
+        "client_time": "2026-04-07T10:20:00+08:00"
+      },
+      "page": {
+        "app_name": "Chrome",
+        "url": "https://example.com/release"
+      },
+      "screen": {
+        "image_url": "C://.tem/example/screenshot.png"
+      },
+      "clipboard": {
+        "context": "translate this paragraph",
+        "mime_type": "text/plain"
+      },
+      "mouse": {
+        "isactive": true,
+        "position": {
+          "x": 100,
+          "y": 200
+        }
+      },
+      "behavior": {
+        "dwell_millis": 18000,
+        "last_action": "copy"
+      }
+   }
+}
+```
+
+### agent.screen.analyze 出参说明
+
+| 字段                                 | 中文说明 |
+| ------------------------------------ | -------- |
+| `data.recommendation.should_refresh` | 当前是否应刷新推荐内容 |
+| `data.recommendation.content`        | 给前端展示的推荐文案；当 `should_refresh = true` 时应可直接展示 |
+| `data.recommendation.reason`         | 触发本次推荐的原因标识 |
+| `meta.server_time`                   | 服务端响应时间 |
+
+### agent.screen.analyze 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_xxx",
+  "result": {
+    "data": {
+      "recommendation": {
+        "should_refresh": true,
+        "content": "需要帮忙翻译这段话吗？",
+        "reason": "copy_behavior"
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-09T10:00:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+补充说明：
+
+- 当前实现里，部分屏幕/页面/剪贴板信号也会进入 `agent.input.submit`、`agent.task.start` 和 `agent.recommendation.get` 的上下文字段；这属于实现侧复用，不影响本文保留 `agent.screen.analyze` 的原始设计口径。
 
 
 ## 8.2 任务状态 / 任务巡检
@@ -2575,19 +2677,79 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.3.2 仪表盘首页交互通过既有接口组合完成
+### 8.3.2 `agent.dashboard.input.start`
 
-当前仓库没有单独冻结 `agent.dashboard.input.start` 方法。仪表盘首页的焦点摘要、模块概览、召唤提示与推荐候选由以下稳定接口组合提供：
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户通过中心球语音输入并完成转写时
+  - 用户通过中心球轻量文本输入框提交跳转指令时
+- **系统处理**：
+  - 接收用户输入文本
+  - 识别目标页面并解析跳转路由
+  - 返回是否匹配成功及目标页面信息
+- **入参**：会话 ID、输入模式、输入文本
+- **出参**：是否匹配成功、目标页面、目标路由、识别置信度
 
-- `agent.dashboard.overview.get`
-- `agent.dashboard.module.get`
-- `agent.recommendation.get`
+### agent.dashboard.input.start 入参说明
 
-补充约束：
+| 字段         | 中文说明                         |
+| ------------ | -------------------------------- |
+| `session_id` | 当前会话标识                     |
+| `input_mode` | 输入模式，`voice / text`         |
+| `input_text` | 用户最终文本，语音输入需先完成转写 |
 
-- 首页语音或文本输入若需要创建或续接正式任务，仍回到 `agent.input.submit` 或 `agent.task.start`。
-- 仪表盘内部导航由前端本地路由与既有查询结果完成，不新增“输入即跳页”的专用 RPC 方法。
-- 若后续需要冻结首页导航输入协议，必须先在 `/packages/protocol/rpc/methods.ts` 中登记方法名，再补本文档详细定义。
+### agent.dashboard.input.start 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_dashboard_input_start_001",
+  "method": "agent.dashboard.input.start",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_dashboard_input_start_001",
+      "client_time": "2026-04-07T11:00:30+08:00"
+    },
+    "session_id": "sess_001",
+    "input_mode": "voice",
+    "input_text": "打开安全卫士页面"
+  }
+}
+```
+
+### agent.dashboard.input.start 出参说明
+
+| 字段               | 中文说明             |
+| ------------------ | -------------------- |
+| `data.matched`     | 是否成功匹配目标页面 |
+| `data.target_page` | 目标页面编码         |
+| `data.target_url`  | 目标路由             |
+| `data.confidence`  | 识别置信度           |
+
+### agent.dashboard.input.start 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_dashboard_input_start_001",
+  "result": {
+    "data": {
+      "matched": true,
+      "target_page": "security_guard",
+      "target_url": "app://dashboard/security",
+      "confidence": 0.96
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:00:31+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+补充说明：
+
+- 当前桌面实现中，仪表盘首页的数据获取主要仍由 `agent.dashboard.overview.get`、`agent.dashboard.module.get` 与 `agent.recommendation.get` 组合承接；本文保留 `agent.dashboard.input.start` 原始设计说明，供后续协议冻结时继续对齐。
 
 ---
 
