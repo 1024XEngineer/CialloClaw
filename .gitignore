@@ -24,3 +24,5 @@ services/local-service/internal/rpc/workspace/
 
 apps/.temp/*
 !apps/.temp/.gitkeep
+apps/site/.astro/
+apps/site/.vercel/
