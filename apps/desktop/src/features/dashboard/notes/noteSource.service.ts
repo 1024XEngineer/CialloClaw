@@ -3,8 +3,6 @@ import type {
   AgentTaskInspectorRunResult,
   RequestMeta,
 } from "@cialloclaw/protocol";
-import { isRpcChannelUnavailable } from "@/rpc/fallback";
-import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
 import {
   canUseDesktopSourceNotes,
   createDesktopSourceNote,
@@ -13,6 +11,9 @@ import {
   type DesktopSourceNoteDocument,
   type DesktopSourceNoteSnapshot,
 } from "@/platform/desktopSourceNotes";
+import { isRpcChannelUnavailable } from "@/rpc/fallback";
+import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
+import { loadSettings } from "@/services/settingsService";
 import type { SourceNoteDocument, SourceNoteSnapshot } from "./notePage.types";
 
 const NOTE_SOURCE_TIMEOUT_MS = 10_000;
@@ -52,6 +53,31 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
+function loadCachedTaskSources() {
+  return loadSettings().settings.task_automation.task_sources
+    .map((source) => source.trim())
+    .filter(Boolean);
+}
+
+function isAbsoluteWindowsPath(value: string) {
+  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+}
+
+function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSources: string[]) {
+  if (cachedTaskSources.length === 0) {
+    return false;
+  }
+
+  if (remoteTaskSources.length === 0) {
+    return true;
+  }
+
+  const remoteRequiresWorkspaceRoot = remoteTaskSources.every((source) => /^workspace(?:[\\/]|$)/i.test(source.trim()));
+  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteWindowsPath(source));
+
+  return remoteRequiresWorkspaceRoot && cachedUsesAbsolutePaths;
+}
+
 /**
  * Reports whether the renderer can use the desktop markdown-note bridge.
  */
@@ -64,10 +90,23 @@ export function areDesktopSourceNotesAvailable() {
  */
 export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGetResult> {
   try {
-    return await withTimeout(
+    const remoteConfig = await withTimeout(
       getTaskInspectorConfig({ request_meta: createRequestMeta("note_source_config") }),
       "任务来源配置加载",
     );
+    const cachedTaskSources = loadCachedTaskSources();
+
+    // The notes page should honor the persisted task-source list shown in the
+    // desktop settings snapshot when the backend still falls back to the
+    // workspace-relative default.
+    if (shouldPreferCachedTaskSources(remoteConfig.task_sources, cachedTaskSources)) {
+      return {
+        ...remoteConfig,
+        task_sources: cachedTaskSources,
+      };
+    }
+
+    return remoteConfig;
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       throw new Error("当前无法读取任务来源配置，请稍后重试。");

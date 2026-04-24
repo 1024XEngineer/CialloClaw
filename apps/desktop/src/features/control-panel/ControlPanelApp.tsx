@@ -772,6 +772,7 @@ export function ControlPanelApp() {
     setIsSaving(true);
     try {
       const result = await saveControlPanelData(draft, {
+        confirmedInspector: panelData.inspector,
         saveInspector: inspectorDirty,
         saveSettings: settingsDirty,
       });
