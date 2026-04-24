@@ -48,13 +48,11 @@ unsafe extern "system" fn mouse_activity_hook(
     l_param: LPARAM,
 ) -> LRESULT {
     if n_code >= 0 && should_record_mouse_activity(w_param.0 as u32) {
-      let snapshot = MouseActivitySnapshotPayload::now();
+        let snapshot = MouseActivitySnapshotPayload::now();
 
-      if let Ok(mut state) = LAST_MOUSE_ACTIVITY.lock() {
-          *state = Some(snapshot.clone());
-      }
-
-      println!("mouse activity at {}", snapshot.updated_at);
+        if let Ok(mut state) = LAST_MOUSE_ACTIVITY.lock() {
+            *state = Some(snapshot);
+        }
     }
 
     CallNextHookEx(None, n_code, w_param, l_param)

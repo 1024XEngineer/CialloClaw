@@ -6,6 +6,8 @@ export type DesktopWindowContextPayload = {
   title: string | null;
   url: string | null;
   browser_kind: "chrome" | "edge" | "other_browser" | "non_browser";
+  window_switch_count?: number | null;
+  page_switch_count?: number | null;
 };
 
 /**

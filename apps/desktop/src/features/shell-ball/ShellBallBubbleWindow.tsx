@@ -19,9 +19,9 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
   const { rootRef } = useShellBallWindowMetrics({
     role: "bubble",
     visible: snapshot.visibility.bubble,
-    // Keep the validation pass simple: the detached bubble window should not
-    // compete with the orb for pointer ownership at all.
-    clickThrough: true,
+    // The helper bubble window mirrors the ball snapshot so inline approval
+    // controls can receive pointer events whenever the bubble region is active.
+    clickThrough: snapshot.bubbleRegion.clickThrough,
   });
 
   return (
@@ -39,8 +39,14 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
       <ShellBallBubbleZone
         visualState={resolvedVisualState}
         bubbleItems={visibleBubbleItems}
+        onAllowApprovalBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("allow_approval", bubbleId);
+        }}
         onDeleteBubble={(bubbleId) => {
           void emitShellBallBubbleAction("delete", bubbleId);
+        }}
+        onDenyApprovalBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("deny_approval", bubbleId);
         }}
         onPinBubble={(bubbleId) => {
           void emitShellBallBubbleAction("pin", bubbleId);

@@ -573,6 +573,72 @@ body[data-app-window="shell-ball"],
   inset-inline-end: 0.42rem;
 }
 
+.shell-ball-bubble-message__approval-actions {
+  display: flex;
+  gap: 0.34rem;
+  justify-content: flex-end;
+  margin-top: 0.48rem;
+}
+
+.shell-ball-bubble-message__approval-action {
+  align-items: center;
+  appearance: none;
+  border: 1px solid rgba(132, 118, 99, 0.18);
+  border-radius: 999px;
+  color: var(--shell-ball-copy);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  justify-content: center;
+  line-height: 1;
+  min-height: 1.22rem;
+  padding: 0.2rem 0.54rem;
+  text-transform: uppercase;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.shell-ball-bubble-message__approval-action:hover:not(:disabled) {
+  color: var(--shell-ball-ink);
+  transform: translateY(-1px);
+}
+
+.shell-ball-bubble-message__approval-action:focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(255, 251, 244, 0.92),
+    0 0 0 4px rgba(106, 145, 200, 0.22);
+  outline: 0;
+}
+
+.shell-ball-bubble-message__approval-action:disabled {
+  cursor: progress;
+  opacity: 0.72;
+  transform: none;
+}
+
+.shell-ball-bubble-message__approval-action--allow {
+  background: rgba(106, 145, 200, 0.14);
+  border-color: rgba(106, 145, 200, 0.26);
+}
+
+.shell-ball-bubble-message__approval-action--allow:hover:not(:disabled) {
+  background: rgba(106, 145, 200, 0.22);
+}
+
+.shell-ball-bubble-message__approval-action--deny {
+  background: rgba(193, 141, 70, 0.14);
+  border-color: rgba(193, 141, 70, 0.22);
+}
+
+.shell-ball-bubble-message__approval-action--deny:hover:not(:disabled) {
+  background: rgba(193, 141, 70, 0.2);
+}
+
 .shell-ball-bubble-zone[data-state="waiting_auth"] {
   --shell-ball-bubble-accent: rgba(193, 141, 70, 0.22);
 }

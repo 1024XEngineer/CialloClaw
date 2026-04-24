@@ -877,8 +877,14 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
                 <ShellBallBubbleZone
                   visualState={snapshot.visualState}
                   bubbleItems={visibleBubbleItems}
+                  onAllowApprovalBubble={(bubbleId) => {
+                    handleCoordinatorBubbleAction({ action: "allow_approval", bubbleId, source: "bubble" });
+                  }}
                   onDeleteBubble={(bubbleId) => {
                     handleCoordinatorBubbleAction({ action: "delete", bubbleId, source: "bubble" });
+                  }}
+                  onDenyApprovalBubble={(bubbleId) => {
+                    handleCoordinatorBubbleAction({ action: "deny_approval", bubbleId, source: "bubble" });
                   }}
                   onPinBubble={(bubbleId) => {
                     handleCoordinatorBubbleAction({ action: "pin", bubbleId, source: "bubble" });
