@@ -447,12 +447,14 @@ impl NamedPipeBridgeState {
 /// host can keep it alive during runtime and terminate it during shutdown.
 struct LocalServiceSidecarState {
     child: Mutex<Option<CommandChild>>,
+    last_failure: Mutex<Option<String>>,
 }
 
 impl Default for LocalServiceSidecarState {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
+            last_failure: Mutex::new(None),
         }
     }
 }
@@ -471,6 +473,7 @@ impl LocalServiceSidecarState {
             .lock()
             .map_err(|_| "local service sidecar lock poisoned".to_string())?;
         *guard = Some(child);
+        self.clear_last_failure();
         Ok(())
     }
 
@@ -493,6 +496,22 @@ impl LocalServiceSidecarState {
         }
 
         Ok(())
+    }
+
+    fn record_failure(&self, failure: String) {
+        if let Ok(mut guard) = self.last_failure.lock() {
+            *guard = Some(failure);
+        }
+    }
+
+    fn clear_last_failure(&self) {
+        if let Ok(mut guard) = self.last_failure.lock() {
+            *guard = None;
+        }
+    }
+
+    fn last_failure(&self) -> Option<String> {
+        self.last_failure.lock().ok().and_then(|guard| guard.clone())
     }
 }
 
@@ -633,23 +652,45 @@ fn start_local_service_sidecar(
     let sidecar_app_handle = app.clone();
     let tracked_state = Arc::clone(sidecar_state);
     tauri::async_runtime::spawn(async move {
-        // Drain sidecar process events so stdout/stderr cannot block the child,
-        // and release the tracked handle once the process exits.
+        // Drain sidecar events so stdout/stderr cannot block the child, while
+        // also preserving the last packaged-runtime failure for startup errors.
         while let Some(event) = rx.recv().await {
             match event {
-                CommandEvent::Terminated(payload) => {
-                    append_local_service_log(
-                        &sidecar_app_handle,
-                        &format!("local service sidecar terminated: {:?}", payload),
-                    );
-                    tracked_state.clear();
-                    break;
+                CommandEvent::Stdout(line) => {
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if !line.is_empty() {
+                        append_local_service_log(
+                            &sidecar_app_handle,
+                            &format!("local service sidecar stdout: {line}"),
+                        );
+                    }
+                }
+                CommandEvent::Stderr(line) => {
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if !line.is_empty() {
+                        tracked_state.record_failure(format!("stderr: {line}"));
+                        append_local_service_log(
+                            &sidecar_app_handle,
+                            &format!("local service sidecar stderr: {line}"),
+                        );
+                    }
                 }
                 CommandEvent::Error(error) => {
+                    tracked_state.record_failure(format!("event error: {error}"));
                     append_local_service_log(
                         &sidecar_app_handle,
                         &format!("local service sidecar error: {error}"),
                     );
+                }
+                CommandEvent::Terminated(payload) => {
+                    let failure = format!("terminated: {payload:?}");
+                    tracked_state.record_failure(failure.clone());
+                    append_local_service_log(
+                        &sidecar_app_handle,
+                        &format!("local service sidecar {failure}"),
+                    );
+                    tracked_state.clear();
+                    break;
                 }
                 _ => {}
             }
@@ -690,9 +731,34 @@ fn wait_for_local_service_ready(
     ))
 }
 
+/// ensure_local_service_ready keeps the packaged Go sidecar aligned with the
+/// configured named-pipe bridge before any desktop command issues formal RPC
+/// traffic. The bridge already carries the currently selected pipe name, so
+/// lazy request-time restarts reuse the same scoped transport as startup.
+fn ensure_local_service_ready(
+    app: &tauri::AppHandle,
+    sidecar_state: &Arc<LocalServiceSidecarState>,
+    bridge_state: &Arc<NamedPipeBridgeState>,
+) -> Result<(), String> {
+    let named_pipe_path = bridge_state.pipe_name()?;
+    let sidecar_started = start_local_service_sidecar(app, sidecar_state, &named_pipe_path)?;
+    if !sidecar_started {
+        return Ok(());
+    }
+
+    wait_for_local_service_ready(app, bridge_state).map_err(|error| {
+        if let Some(last_failure) = sidecar_state.last_failure() {
+            format!("{error}; last sidecar failure: {last_failure}")
+        } else {
+            error
+        }
+    })
+}
+
 #[tauri::command]
 async fn named_pipe_request(
     app: tauri::AppHandle,
+    sidecar_state: tauri::State<'_, Arc<LocalServiceSidecarState>>,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     payload: Value,
 ) -> Result<Value, String> {
@@ -710,7 +776,7 @@ async fn named_pipe_request(
             "named pipe request started: method={request_method} id={request_id} mode={request_mode}"
         ),
     );
-
+    ensure_local_service_ready(&app, sidecar_state.inner(), state.inner())?;
     let state = Arc::clone(state.inner());
     let result = tauri::async_runtime::spawn_blocking(move || state.request(payload))
         .await
@@ -738,10 +804,13 @@ async fn named_pipe_request(
 
 #[tauri::command]
 async fn named_pipe_subscribe(
+    app: tauri::AppHandle,
+    sidecar_state: tauri::State<'_, Arc<LocalServiceSidecarState>>,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     topic: String,
     on_event: JsonChannel,
 ) -> Result<u32, String> {
+    ensure_local_service_ready(&app, sidecar_state.inner(), state.inner())?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || state.subscribe(topic, on_event))
         .await
