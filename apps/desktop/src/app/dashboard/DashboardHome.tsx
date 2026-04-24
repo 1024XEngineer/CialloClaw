@@ -161,10 +161,8 @@ export function DashboardHome({
     "dashboard",
     useCallback((action) => {
       if (action.type === "open_control_panel") {
-        void (async () => {
-          await openControlPanelFromTray();
-          await closeDesktopWindow("dashboard");
-        })();
+        void openControlPanelFromTray();
+        void closeDesktopWindow("dashboard");
       }
 
       if (action.type === "open_dashboard") {
