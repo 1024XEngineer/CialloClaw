@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -262,12 +263,81 @@ func setDebugCORSOrigin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	host := strings.ToLower(parsed.Hostname())
-	if host != "localhost" && host != "127.0.0.1" {
+	// Packaged Tauri webviews do not use a plain localhost origin on every
+	// platform. We still keep this debug HTTP surface loopback-only by allowing
+	// localhost and reserved *.localhost hosts such as tauri.localhost.
+	if !isAllowedDebugOriginHost(host) {
 		return
 	}
 
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
+}
+
+func isAllowedDebugOriginHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	switch normalized {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return strings.HasSuffix(normalized, ".localhost")
+	}
+}
+
+type streamEnvelopeWriter struct {
+	encoder *json.Encoder
+	writeMu sync.Mutex
+}
+
+func (w *streamEnvelopeWriter) writeEnvelope(envelope any) error {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	return w.encoder.Encode(envelope)
+}
+
+type streamTaskCoordinator struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newStreamTaskCoordinator() *streamTaskCoordinator {
+	return &streamTaskCoordinator{locks: map[string]*sync.Mutex{}}
+}
+
+func (c *streamTaskCoordinator) withTaskLocks(taskIDs map[string]bool, fn func()) {
+	if c == nil || len(taskIDs) == 0 {
+		fn()
+		return
+	}
+
+	orderedTaskIDs := make([]string, 0, len(taskIDs))
+	for taskID := range taskIDs {
+		orderedTaskIDs = append(orderedTaskIDs, taskID)
+	}
+	sort.Strings(orderedTaskIDs)
+
+	locks := make([]*sync.Mutex, 0, len(orderedTaskIDs))
+	c.mu.Lock()
+	for _, taskID := range orderedTaskIDs {
+		lock := c.locks[taskID]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			c.locks[taskID] = lock
+		}
+		locks = append(locks, lock)
+	}
+	c.mu.Unlock()
+
+	for _, lock := range locks {
+		lock.Lock()
+	}
+	defer func() {
+		for index := len(locks) - 1; index >= 0; index-- {
+			locks[index].Unlock()
+		}
+	}()
+
+	fn()
 }
 
 // handleStreamConn serves JSON-RPC requests on a long-lived stream and then
@@ -276,8 +346,8 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
-	var writeMu sync.Mutex
+	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
+	taskCoordinator := newStreamTaskCoordinator()
 
 	for {
 		var request requestEnvelope
@@ -286,7 +356,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				return
 			}
 
-			_ = encoder.Encode(newErrorEnvelope(nil, &rpcError{
+			_ = writer.writeEnvelope(newErrorEnvelope(nil, &rpcError{
 				Code:    errInvalidParams,
 				Message: "INVALID_PARAMS",
 				Detail:  "invalid json-rpc payload",
@@ -295,37 +365,62 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
-		streamedRuntimeCounts := map[string]int{}
-		requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
-		var requestTaskMu sync.RWMutex
-		addRequestTaskID := func(taskID string) {
-			trimmed := strings.TrimSpace(taskID)
-			if trimmed == "" {
-				return
-			}
-			requestTaskMu.Lock()
-			if requestTaskIDs == nil {
-				requestTaskIDs = map[string]bool{}
-			}
-			requestTaskIDs[trimmed] = true
-			requestTaskMu.Unlock()
-		}
-		hasRequestTaskID := func(taskID string) bool {
-			requestTaskMu.RLock()
-			defer requestTaskMu.RUnlock()
-			return requestTaskIDs != nil && requestTaskIDs[taskID]
-		}
-		matchesTaskStart := func(sessionID, traceID string) bool {
-			switch {
-			case requestTraceID != "":
-				return requestTraceID == traceID
-			case requestSessionID != "":
-				return requestSessionID == sessionID
-			default:
-				return false
-			}
-		}
+		// Each request gets its own worker so a long-running shell-ball task cannot
+		// block dashboard or control-panel reads that share the packaged pipe.
+		// Requests for the same task still serialize so they cannot race the shared
+		// notification drain that replays task.updated and delivery.ready envelopes.
+		go s.handleStreamRequest(request, writer, taskCoordinator)
+	}
+}
 
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, taskCoordinator *streamTaskCoordinator) {
+	streamedRuntimeCounts := map[string]int{}
+	var streamedRuntimeMu sync.Mutex
+	requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
+	var requestTaskMu sync.RWMutex
+	addRequestTaskID := func(taskID string) {
+		trimmed := strings.TrimSpace(taskID)
+		if trimmed == "" {
+			return
+		}
+		requestTaskMu.Lock()
+		if requestTaskIDs == nil {
+			requestTaskIDs = map[string]bool{}
+		}
+		requestTaskIDs[trimmed] = true
+		requestTaskMu.Unlock()
+	}
+	hasRequestTaskID := func(taskID string) bool {
+		requestTaskMu.RLock()
+		defer requestTaskMu.RUnlock()
+		return requestTaskIDs != nil && requestTaskIDs[taskID]
+	}
+	matchesTaskStart := func(sessionID, traceID string) bool {
+		switch {
+		case requestTraceID != "":
+			return requestTraceID == traceID
+		case requestSessionID != "":
+			return requestSessionID == sessionID
+		default:
+			return false
+		}
+	}
+	markRuntimeNotificationStreamed := func(key string) {
+		streamedRuntimeMu.Lock()
+		streamedRuntimeCounts[key]++
+		streamedRuntimeMu.Unlock()
+	}
+	consumeStreamedRuntimeNotification := func(key string) bool {
+		streamedRuntimeMu.Lock()
+		defer streamedRuntimeMu.Unlock()
+		if streamedRuntimeCounts[key] == 0 {
+			return false
+		}
+		streamedRuntimeCounts[key]--
+		return true
+	}
+
+	taskCoordinator.withTaskLocks(requestTaskIDs, func() {
 		unsubscribeRuntime := func() {}
 		if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
 			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
@@ -336,10 +431,8 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
 					return
 				}
-				writeMu.Lock()
-				defer writeMu.Unlock()
-				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-					streamedRuntimeCounts[notificationKey(method, notificationTaskID, params)]++
+				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err == nil {
+					markRuntimeNotificationStreamed(notificationKey(method, notificationTaskID, params))
 				}
 			})
 		}
@@ -358,10 +451,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
 
-		writeMu.Lock()
-		err := encoder.Encode(response)
-		writeMu.Unlock()
-		if err != nil {
+		if err := writer.writeEnvelope(response); err != nil {
 			return
 		}
 
@@ -375,19 +465,15 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				method := stringValue(notification, "method", "task.updated")
 				params := mapValue(notification, "params")
 				key := notificationKey(method, taskID, params)
-				if isLiveRuntimeMethod(method) && streamedRuntimeCounts[key] > 0 {
-					streamedRuntimeCounts[key]--
+				if isLiveRuntimeMethod(method) && consumeStreamedRuntimeNotification(key) {
 					continue
 				}
-				writeMu.Lock()
-				err := encoder.Encode(newNotificationEnvelope(method, params))
-				writeMu.Unlock()
-				if err != nil {
+				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
 					return
 				}
 			}
 		}
-	}
+	})
 }
 
 // dispatch is the single RPC dispatch path that validates protocol shape,

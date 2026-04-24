@@ -14,10 +14,14 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 #[cfg(windows)]
 use once_cell::sync::Lazy;
@@ -55,6 +59,8 @@ const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
 const SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT: &str = "desktop-shell-ball:clipboard-snapshot";
 const TRAY_ICON_ID: &str = "main-tray";
+const LOCAL_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
@@ -152,6 +158,8 @@ impl NamedPipeBridgeState {
         Ok(())
     }
 
+    // The desktop host keeps one shared stream open so subscribed windows keep
+    // receiving task and delivery notifications between regular RPC responses.
     fn ensure_session(self: &Arc<Self>) -> Result<BridgeSession, String> {
         let mut session_guard = self
             .session
@@ -162,12 +170,7 @@ impl NamedPipeBridgeState {
             return Ok(session);
         }
 
-        let stream = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(NAMED_PIPE_PATH)
-            .map_err(|error| format!("failed to open named pipe {NAMED_PIPE_PATH}: {error}"))?;
-
+        let stream = open_named_pipe_stream()?;
         let reader = stream
             .try_clone()
             .map_err(|error| format!("failed to clone named pipe handle: {error}"))?;
@@ -235,11 +238,222 @@ impl NamedPipeBridgeState {
     }
 }
 
+fn open_named_pipe_stream() -> Result<std::fs::File, String> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(NAMED_PIPE_PATH)
+        .map_err(|error| format!("failed to open named pipe {NAMED_PIPE_PATH}: {error}"))
+}
+
+struct LocalServiceSidecarState {
+    child: Mutex<Option<CommandChild>>,
+    last_failure: Mutex<Option<String>>,
+}
+
+impl Default for LocalServiceSidecarState {
+    fn default() -> Self {
+        Self {
+            child: Mutex::new(None),
+            last_failure: Mutex::new(None),
+        }
+    }
+}
+
+impl LocalServiceSidecarState {
+    fn is_running(&self) -> Result<bool, String> {
+        self.child
+            .lock()
+            .map(|child| child.is_some())
+            .map_err(|_| "local service sidecar lock poisoned".to_string())
+    }
+
+    fn store(&self, child: CommandChild) -> Result<(), String> {
+        let mut guard = self
+            .child
+            .lock()
+            .map_err(|_| "local service sidecar lock poisoned".to_string())?;
+        *guard = Some(child);
+        self.clear_last_failure();
+        Ok(())
+    }
+
+    fn clear(&self) {
+        if let Ok(mut guard) = self.child.lock() {
+            *guard = None;
+        }
+    }
+
+    fn stop(&self) -> Result<(), String> {
+        let mut guard = self
+            .child
+            .lock()
+            .map_err(|_| "local service sidecar lock poisoned".to_string())?;
+
+        if let Some(child) = guard.take() {
+            child
+                .kill()
+                .map_err(|error| format!("failed to stop local service sidecar: {error}"))?;
+        }
+
+        Ok(())
+    }
+
+    fn record_failure(&self, failure: String) {
+        if let Ok(mut guard) = self.last_failure.lock() {
+            *guard = Some(failure);
+        }
+    }
+
+    fn clear_last_failure(&self) {
+        if let Ok(mut guard) = self.last_failure.lock() {
+            *guard = None;
+        }
+    }
+
+    fn last_failure(&self) -> Option<String> {
+        self.last_failure
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+}
+
+/// resolve_required_path normalizes a host-side filesystem path before it is
+/// forwarded to the bundled Go service as a CLI argument.
+fn resolve_required_path(path: PathBuf, label: &str) -> Result<String, String> {
+    let resolved = path.to_string_lossy().trim().to_string();
+    if resolved.is_empty() {
+        return Err(format!("failed to resolve {label}"));
+    }
+    Ok(resolved)
+}
+
+/// start_local_service_sidecar boots the packaged Go service before the desktop
+/// renderer starts issuing JSON-RPC requests against the local transport.
+fn start_local_service_sidecar(
+    app: &tauri::AppHandle,
+    sidecar_state: &Arc<LocalServiceSidecarState>,
+) -> Result<bool, String> {
+    if sidecar_state.is_running()? {
+        return Ok(true);
+    }
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data dir: {error}"))?;
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("failed to create app data dir: {error}"))?;
+    let data_dir_arg = resolve_required_path(data_dir, "app data dir")?;
+
+    let sidecar_command = match app.shell().sidecar("cialloclaw-service") {
+        Ok(command) => command,
+        Err(error) => {
+            if cfg!(debug_assertions) {
+                eprintln!("local service sidecar is unavailable in this debug session: {error}");
+                return Ok(false);
+            }
+
+            return Err(format!("failed to resolve local service sidecar: {error}"));
+        }
+    };
+
+    let (mut rx, child) = sidecar_command
+        .args(["--data-dir", data_dir_arg.as_str()])
+        .spawn()
+        .map_err(|error| format!("failed to start local service sidecar: {error}"))?;
+    sidecar_state.store(child)?;
+    eprintln!("local service sidecar spawned with data_dir={data_dir_arg}");
+
+    let tracked_state = Arc::clone(sidecar_state);
+    tauri::async_runtime::spawn(async move {
+        // Drain sidecar events so the service process cannot block on an
+        // unread stdout/stderr pipe, and capture packaged-runtime failures.
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line) => {
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if !line.is_empty() {
+                        eprintln!("local service sidecar stdout: {line}");
+                    }
+                }
+                CommandEvent::Stderr(line) => {
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if !line.is_empty() {
+                        tracked_state.record_failure(format!("stderr: {line}"));
+                        eprintln!("local service sidecar stderr: {line}");
+                    }
+                }
+                CommandEvent::Error(error) => {
+                    tracked_state.record_failure(format!("event error: {error}"));
+                    eprintln!("local service sidecar event error: {error}");
+                }
+                CommandEvent::Terminated(payload) => {
+                    let failure = format!("terminated: {payload:?}");
+                    tracked_state.record_failure(failure.clone());
+                    eprintln!("local service sidecar {failure}");
+                    tracked_state.clear();
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    Ok(true)
+}
+
+/// ensure_local_service_ready keeps the packaged Go sidecar aligned with the
+/// named-pipe bridge before any desktop command issues formal RPC traffic.
+fn ensure_local_service_ready(
+    app: &tauri::AppHandle,
+    sidecar_state: &Arc<LocalServiceSidecarState>,
+    bridge_state: &Arc<NamedPipeBridgeState>,
+) -> Result<(), String> {
+    let sidecar_started = start_local_service_sidecar(app, sidecar_state)?;
+    if !sidecar_started {
+        return Ok(());
+    }
+
+    wait_for_local_service_ready(bridge_state).map_err(|error| {
+        if let Some(last_failure) = sidecar_state.last_failure() {
+            format!("{error}; last sidecar failure: {last_failure}")
+        } else {
+            error
+        }
+    })
+}
+
+/// wait_for_local_service_ready blocks startup until the sidecar publishes the
+/// named pipe bridge, preventing first-load RPCs from racing service boot.
+fn wait_for_local_service_ready(bridge_state: &Arc<NamedPipeBridgeState>) -> Result<(), String> {
+    let start = Instant::now();
+    let mut last_error = String::from("local service did not become ready");
+
+    while start.elapsed() < LOCAL_SERVICE_READY_TIMEOUT {
+        match bridge_state.ensure_session() {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_error = error;
+                thread::sleep(LOCAL_SERVICE_READY_RETRY_DELAY);
+            }
+        }
+    }
+
+    Err(format!(
+        "timed out waiting for local service readiness: {last_error}"
+    ))
+}
+
 #[tauri::command]
 async fn named_pipe_request(
+    app: tauri::AppHandle,
+    sidecar_state: tauri::State<'_, Arc<LocalServiceSidecarState>>,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     payload: Value,
 ) -> Result<Value, String> {
+    ensure_local_service_ready(&app, sidecar_state.inner(), state.inner())?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || state.request(payload))
         .await
@@ -248,10 +462,13 @@ async fn named_pipe_request(
 
 #[tauri::command]
 async fn named_pipe_subscribe(
+    app: tauri::AppHandle,
+    sidecar_state: tauri::State<'_, Arc<LocalServiceSidecarState>>,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     topic: String,
     on_event: JsonChannel,
 ) -> Result<u32, String> {
+    ensure_local_service_ready(&app, sidecar_state.inner(), state.inner())?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || state.subscribe(topic, on_event))
         .await
@@ -673,7 +890,8 @@ unsafe extern "system" fn shell_ball_clipboard_keyboard_hook(
         let ctrl_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
         let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
 
-        if ctrl_down && (keyboard_info.vkCode == b'C' as u32 || keyboard_info.vkCode == b'X' as u32) {
+        if ctrl_down && (keyboard_info.vkCode == b'C' as u32 || keyboard_info.vkCode == b'X' as u32)
+        {
             schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_COPY_DELAY_MS);
         }
 
@@ -715,9 +933,14 @@ fn install_shell_ball_clipboard_hooks(app: &tauri::AppHandle) -> Result<(), Stri
     if keyboard_hook.is_none() {
         unsafe {
             *keyboard_hook = Some(
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(shell_ball_clipboard_keyboard_hook), None, 0)
-                    .map_err(|error| format!("failed to install clipboard keyboard hook: {error}"))?
-                    .0 as isize,
+                SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(shell_ball_clipboard_keyboard_hook),
+                    None,
+                    0,
+                )
+                .map_err(|error| format!("failed to install clipboard keyboard hook: {error}"))?
+                .0 as isize,
             );
         }
     }
@@ -735,11 +958,8 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
         MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球").build(app)?;
     let hide_shell_ball =
         MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "隐藏悬浮球").build(app)?;
-    let open_control_panel = MenuItemBuilder::with_id(
-        TRAY_MENU_OPEN_CONTROL_PANEL_ID,
-        "打开控制面板",
-    )
-    .build(app)?;
+    let open_control_panel =
+        MenuItemBuilder::with_id(TRAY_MENU_OPEN_CONTROL_PANEL_ID, "打开控制面板").build(app)?;
     let quit_app = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "关闭程序").build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .items(&[
@@ -805,10 +1025,12 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
 static SHELL_BALL_CLIPBOARD_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
-static SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> =
+    Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
-static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> =
+    Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
 static SHELL_BALL_CLIPBOARD_STATE: Lazy<Mutex<ClipboardMonitorState>> =
@@ -1268,12 +1490,18 @@ async fn shell_ball_read_selection_snapshot(
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
+        .manage(Arc::new(LocalServiceSidecarState::default()))
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            activity::install_mouse_activity_listener()
-                .map_err(|error| std::io::Error::other(error))?;
+            let sidecar_state = app.state::<Arc<LocalServiceSidecarState>>();
+            let bridge_state = app.state::<Arc<NamedPipeBridgeState>>();
+            ensure_local_service_ready(app.handle(), sidecar_state.inner(), bridge_state.inner())
+                .map_err(std::io::Error::other)?;
+            // activity::install_mouse_activity_listener()
+            //     .map_err(|error| std::io::Error::other(error))?;
             install_shell_ball_clipboard_hooks(app.handle())
                 .map_err(|error| std::io::Error::other(error))?;
             selection::install_selection_listener(app.handle())
@@ -1300,6 +1528,13 @@ fn main() {
             shell_ball_apply_window_frame,
             shell_ball_read_selection_snapshot
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+            let sidecar_state = app_handle.state::<Arc<LocalServiceSidecarState>>();
+            let _ = sidecar_state.stop();
+        }
+    });
 }
