@@ -37,10 +37,7 @@ import {
   shouldShowShellBallFileDropOverlay,
   shouldShowShellBallSelectionIndicator,
 } from "./ShellBallApp";
-import { ShellBallBubbleWindow } from "./ShellBallBubbleWindow";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
-import { ShellBallInputWindow } from "./ShellBallInputWindow";
-import { ShellBallVoiceWindow } from "./ShellBallVoiceWindow";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
@@ -527,22 +524,22 @@ function withSourceModuleRuntime<T>(
 }
 
 function withTrayControllerRuntime<T>(
-  openOrFocusDesktopWindow: (label: "dashboard" | "control-panel") => Promise<string>,
-  callback: (mod: { openControlPanelFromTray: () => Promise<string>; calls: Array<"dashboard" | "control-panel"> }) => Promise<T> | T,
+  invokeDesktopCommand: (command: string) => Promise<void>,
+  callback: (mod: { openControlPanelFromTray: () => Promise<void>; calls: string[] }) => Promise<T> | T,
 ) {
   const NodeModule = require("node:module") as any;
   const originalLoad = NodeModule._load;
   const modulePath = resolve(desktopRoot, ".cache/shell-ball-tests/platform/trayController.js");
-  const calls: Array<"dashboard" | "control-panel"> = [];
+  const calls: string[] = [];
 
   delete require.cache[modulePath];
 
   NodeModule._load = function loadTrayController(request: string, parent: unknown, isMain: boolean) {
-    if (request === "@/platform/windowController") {
+    if (request === "@tauri-apps/api/core") {
       return {
-        openOrFocusDesktopWindow(label: "dashboard" | "control-panel") {
-          calls.push(label);
-          return openOrFocusDesktopWindow(label);
+        invoke(command: string) {
+          calls.push(command);
+          return invokeDesktopCommand(command);
         },
       };
     }
@@ -551,7 +548,7 @@ function withTrayControllerRuntime<T>(
   };
 
   const loaded = require(modulePath) as {
-    openControlPanelFromTray: () => Promise<string>;
+    openControlPanelFromTray: () => Promise<void>;
   };
 
   const finalize = () => {
@@ -811,24 +808,24 @@ test("shell-ball demo fixtures preserve the frozen seven-state contract", () => 
   });
 });
 
-test("shell-ball desktop host declares bubble, input, and voice helper windows", () => {
-  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-bubble.html")), true);
-  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-input.html")), true);
-  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-voice.html")), true);
-  assert.equal(existsSync(resolve(desktopRoot, "src/app/shell-ball-voice/main.tsx")), true);
+test("shell-ball desktop host no longer creates bubble, input, and voice helper windows", () => {
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-bubble.html")), false);
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-input.html")), false);
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-voice.html")), false);
+  assert.equal(existsSync(resolve(desktopRoot, "src/app/shell-ball-voice/main.tsx")), false);
 
   const viteConfig = readFileSync(resolve(desktopRoot, "vite.config.ts"), "utf8");
   const tauriConfig = readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8");
 
-  assert.match(viteConfig, /"shell-ball-bubble"/);
-  assert.match(viteConfig, /"shell-ball-input"/);
-  assert.match(viteConfig, /"shell-ball-voice"/);
-  assert.match(tauriConfig, /"label": "shell-ball-bubble"/);
-  assert.match(tauriConfig, /"label": "shell-ball-input"/);
-  assert.match(tauriConfig, /"label": "shell-ball-voice"/);
-  assert.match(tauriConfig, /"url": "shell-ball-bubble\.html"/);
-  assert.match(tauriConfig, /"url": "shell-ball-input\.html"/);
-  assert.match(tauriConfig, /"url": "shell-ball-voice\.html"/);
+  assert.doesNotMatch(viteConfig, /"shell-ball-bubble"/);
+  assert.doesNotMatch(viteConfig, /"shell-ball-input"/);
+  assert.doesNotMatch(viteConfig, /"shell-ball-voice"/);
+  assert.doesNotMatch(tauriConfig, /"label": "shell-ball-bubble"/);
+  assert.doesNotMatch(tauriConfig, /"label": "shell-ball-input"/);
+  assert.doesNotMatch(tauriConfig, /"label": "shell-ball-voice"/);
+  assert.doesNotMatch(tauriConfig, /"url": "shell-ball-bubble\.html"/);
+  assert.doesNotMatch(tauriConfig, /"url": "shell-ball-input\.html"/);
+  assert.doesNotMatch(tauriConfig, /"url": "shell-ball-voice\.html"/);
 });
 
 test("shell-ball desktop host declares detached pinned bubble windows", () => {
@@ -868,12 +865,10 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
 
   assert.deepEqual(parsedCapabilityConfig.windows, [
     "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
     "shell-ball-bubble-pinned-*",
     "dashboard",
     "control-panel",
+    "onboarding",
   ]);
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-create"), true);
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-position"), true);
@@ -899,22 +894,16 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-unminimize"), true);
 });
 
-test("shell-ball tray hide and show paths cover restored helper windows", () => {
+test("shell-ball tray hide and show paths target the merged shell-ball host", () => {
   const mainSource = readFileSync(
     resolve(desktopRoot, "src-tauri/src/main.rs"),
     "utf8",
   );
 
-  assert.match(mainSource, /const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";/);
-  assert.match(mainSource, /const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";/);
-  assert.match(
-    mainSource,
-    /let shell_ball_labels = \\[\s\S]*SHELL_BALL_WINDOW_LABEL,[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\];/,
-  );
-  assert.match(
-    mainSource,
-    /for label in \\[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\] \{/,
-  );
+  assert.doesNotMatch(mainSource, /const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";/);
+  assert.doesNotMatch(mainSource, /const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";/);
+  assert.match(mainSource, /if let Some\(window\) = app\.get_webview_window\(SHELL_BALL_WINDOW_LABEL\) \{/);
+  assert.doesNotMatch(mainSource, /SHELL_BALL_BUBBLE_WINDOW_LABEL/);
 });
 
 test("shell-ball pinned window labels and capabilities stay deterministic", () => {
@@ -1432,11 +1421,11 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelAppSource, /关闭控制面板/);
 });
 
-test("tray controller opens the control panel through the desktop window API", async () => {
-  await withTrayControllerRuntime(async () => "control-panel", async ({ openControlPanelFromTray, calls }) => {
+test("tray controller opens the control panel through the desktop host command", async () => {
+  await withTrayControllerRuntime(async () => undefined, async ({ openControlPanelFromTray, calls }) => {
     await openControlPanelFromTray();
 
-    assert.deepEqual(calls, ["control-panel"]);
+    assert.deepEqual(calls, ["desktop_open_or_focus_control_panel"]);
   });
 });
 
@@ -3564,17 +3553,6 @@ test("shell-ball app drops page-shell copy while preserving the floating shell s
   assert.doesNotMatch(markup, /Shell-ball demo switcher/);
 });
 
-test("shell-ball bubble window owns the bubble zone rendering", () => {
-  const markup = renderToStaticMarkup(
-    createElement(ShellBallBubbleWindow, {
-      visualState: "hover_input",
-    }),
-  );
-
-  assert.match(markup, /shell-ball-bubble-zone/);
-  assert.doesNotMatch(markup, /shell-ball-input-bar/);
-});
-
 test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", () => {
   const { useShellBallCoordinator } = withShellBallModuleRuntime("useShellBallCoordinator.ts", {
     react: {
@@ -3680,126 +3658,6 @@ test("shell-ball bubble zone keeps the latest message visible on feed updates", 
   assert.equal(effects.length, 1);
   effects[0]?.();
   assert.equal(scrollElement.scrollTop, scrollElement.scrollHeight);
-});
-
-test("shell-ball bubble window resolves bubble items from the helper-window snapshot", () => {
-  const helperSnapshot = createShellBallWindowSnapshot({
-    visualState: "processing",
-    inputValue: "",
-    voicePreview: null,
-    bubbleItems: [
-      {
-        bubble: {
-          bubble_id: "msg-helper-1",
-          task_id: "task-helper-1",
-          type: "status",
-          text: "Drafting your update.",
-          pinned: false,
-          hidden: false,
-          created_at: "2026-04-11T10:04:00.000Z",
-        },
-        role: "agent",
-        desktop: {
-          lifecycleState: "visible",
-        },
-      },
-    ],
-  });
-  helperSnapshot.bubbleRegion = getShellBallBubbleRegionState(helperSnapshot.bubbleItems);
-  let capturedProps: Record<string, unknown> | null = null;
-
-  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
-    react: require("react"),
-    "./useShellBallCoordinator": {
-      useShellBallHelperWindowSnapshot() {
-        return helperSnapshot;
-      },
-    },
-    "./useShellBallWindowMetrics": {
-      useShellBallWindowMetrics() {
-        return { rootRef: { current: null } as { current: HTMLDivElement | null } };
-      },
-    },
-    "./components/ShellBallBubbleZone": {
-      ShellBallBubbleZone(props: Record<string, unknown>) {
-        capturedProps = { ...(capturedProps ?? {}), ...props };
-        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
-      },
-    },
-  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
-
-  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, null));
-
-  assert.notEqual(capturedProps, null);
-  const resolvedProps = capturedProps as unknown as Record<string, unknown>;
-
-  assert.deepEqual(resolvedProps.visualState, "processing");
-  assert.deepEqual(resolvedProps.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
-  assert.equal(typeof resolvedProps.onDeleteBubble, "function");
-  assert.equal(typeof resolvedProps.onPinBubble, "function");
-});
-
-test("shell-ball bubble window does not depend on only visualState to render its body", () => {
-  const helperSnapshot = createShellBallWindowSnapshot({
-    visualState: "idle",
-    inputValue: "",
-    voicePreview: null,
-    bubbleItems: [
-      {
-        bubble: {
-          bubble_id: "msg-helper-2",
-          task_id: "task-helper-2",
-          type: "result",
-          text: "Open the dashboard.",
-          pinned: false,
-          hidden: false,
-          created_at: "2026-04-11T10:05:00.000Z",
-        },
-        role: "user",
-        desktop: {
-          lifecycleState: "visible",
-        },
-      },
-    ],
-  });
-  helperSnapshot.bubbleRegion = getShellBallBubbleRegionState(helperSnapshot.bubbleItems);
-  let capturedProps: Record<string, unknown> | null = null;
-
-  const { ShellBallBubbleWindow: RuntimeShellBallBubbleWindow } = withShellBallModuleRuntime("ShellBallBubbleWindow.tsx", {
-    react: require("react"),
-    "./useShellBallCoordinator": {
-      useShellBallHelperWindowSnapshot() {
-        return helperSnapshot;
-      },
-    },
-    "./useShellBallWindowMetrics": {
-      useShellBallWindowMetrics(input: Record<string, unknown>) {
-        capturedProps = { ...(capturedProps ?? {}), metricsInput: input };
-        return { rootRef: { current: null } as { current: HTMLDivElement | null } };
-      },
-    },
-    "./components/ShellBallBubbleZone": {
-      ShellBallBubbleZone(props: Record<string, unknown>) {
-        capturedProps = { ...(capturedProps ?? {}), ...props };
-        return createElement("section", { className: "shell-ball-bubble-zone-stub" });
-      },
-    },
-  }, (moduleExports) => moduleExports as { ShellBallBubbleWindow: typeof import("./ShellBallBubbleWindow").ShellBallBubbleWindow });
-
-  renderToStaticMarkup(createElement(RuntimeShellBallBubbleWindow, { visualState: "voice_locked" }));
-
-  assert.notEqual(capturedProps, null);
-  const resolvedProps = capturedProps as unknown as Record<string, unknown>;
-
-  assert.deepEqual(resolvedProps.visualState, "voice_locked");
-  assert.deepEqual(resolvedProps.bubbleItems, getShellBallVisibleBubbleItems(helperSnapshot.bubbleItems));
-  assert.deepEqual(resolvedProps.metricsInput, {
-    role: "bubble",
-    visible: true,
-    clickThrough: helperSnapshot.bubbleRegion.clickThrough,
-  });
-  assert.equal(typeof resolvedProps.onDeleteBubble, "function");
-  assert.equal(typeof resolvedProps.onPinBubble, "function");
 });
 
 test("shell-ball bubble zone renders a real message list without placeholder chrome", () => {
@@ -5547,7 +5405,7 @@ test("shell-ball replays task.updated notifications that arrive before submit re
   );
 
   assert.match(coordinatorSource, /const queuedTaskUpdatedNotificationsRef = useRef\(new Map<string, QueuedTaskUpdatedNotification>\(\)\);/);
-  assert.equal(reactRuntime.getVisualState(), "waiting_auth");
+  assert.equal(useShellBallStore.getState().visualState, "waiting_auth");
 });
 
 test("shell-ball ignores untracked approval.pending notifications without a pending submit", async () => {
@@ -6520,37 +6378,6 @@ test("shell-ball bubble window styles stay transparent, faded, and motion-ready"
   assert.match(markup, /shell-ball-bubble-zone__bottom-anchor/);
 });
 
-test("shell-ball input window owns the input rendering", () => {
-  const markup = renderToStaticMarkup(
-    createElement(ShellBallInputWindow, {
-      mode: "interactive",
-      voicePreview: null,
-      value: "draft",
-      onValueChange: () => {},
-      onAttachFile: () => {},
-      onSubmit: () => {},
-      onFocusChange: () => {},
-    }),
-  );
-
-  assert.match(markup, /shell-ball-input-bar/);
-  assert.doesNotMatch(markup, /shell-ball-bubble-zone/);
-});
-
-test("shell-ball voice window owns lock and cancel hint rendering", () => {
-  const voiceWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallVoiceWindow.tsx"), "utf8");
-  const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
-  const voiceHintsSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallVoiceHints.tsx"), "utf8");
-
-  assert.equal(typeof ShellBallVoiceWindow, "function");
-  assert.match(voiceWindowSource, /useShellBallHelperWindowSnapshot\(\{ role: "voice" \}\)/);
-  assert.match(voiceWindowSource, /role: "voice",\s*visible: snapshot\.visibility\.voice,\s*clickThrough: true/);
-  assert.match(voiceWindowSource, /hintMode=\{snapshot\.voiceHintMode\}/);
-  assert.doesNotMatch(mascotSource, /shell-ball-mascot__voice-hint--cancel/);
-  assert.doesNotMatch(voiceHintsSource, />锁定</);
-  assert.doesNotMatch(voiceHintsSource, />取消</);
-});
-
 test("shell-ball speech recognition treats no-speech as a silent retryable interruption", () => {
   assert.equal(shouldLogShellBallSpeechRecognitionError("no-speech"), false);
   assert.equal(shouldLogShellBallSpeechRecognitionError("network"), true);
@@ -7102,19 +6929,6 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
     ),
     true,
   );
-});
-
-test("shell-ball input window skips window-focus pointer handling for the resize grip", () => {
-  const inputWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallInputWindow.tsx"), "utf8");
-  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
-
-  assert.match(inputWindowSource, /target\.closest\('\[data-shell-ball-input-resize-handle="true"\]'\)/);
-  assert.match(inputWindowSource, /clickThrough:\s*snapshot\.inputInteraction\.clickThrough/);
-  assert.match(inputWindowSource, /if \(isResizingRef\.current\) \{[\s\S]*return;[\s\S]*\}/);
-  assert.match(inputWindowSource, /function handlePointerLeave\(\) \{[\s\S]*void emitShellBallInputHover\(false\);[\s\S]*\}/);
-  assert.doesNotMatch(inputWindowSource, /activeElement\.blur\(\)/);
-  assert.match(coordinatorSource, /function handleCoordinatorInputHoverChange\(active: boolean\) \{/);
-  assert.match(coordinatorSource, /handlersRef\.current\.onInputHoverChange\(active\);/);
 });
 
 test("shell-ball resize drag keeps pointer capture and releases resize state on cleanup", () => {

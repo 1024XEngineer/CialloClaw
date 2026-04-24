@@ -2,7 +2,8 @@
  * ControlPanelApp renders the desktop settings surface with a sidebar-driven
  * layout while preserving the existing draft, inspection, and save flows.
  */
-import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Window } from "@tauri-apps/api/window";
 import {
   BrainCircuit,
   CircleHelp,
@@ -26,7 +27,16 @@ import {
 } from "@/services/controlPanelService";
 import { loadSettings } from "@/services/settingsService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
+import {
+  advanceDesktopOnboarding,
+  setDesktopOnboardingPresentation,
+  startDesktopOnboarding,
+} from "@/features/onboarding/onboardingService";
+import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
+import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
+import { showShellBallWindow } from "@/platform/shellBallWindowController";
 import "./controlPanel.css";
 
 type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models";
@@ -57,6 +67,7 @@ type SidebarItemProps = {
 
 type SettingsCardProps = {
   children: ReactNode;
+  className?: string;
   description?: string;
   title: string;
 };
@@ -365,9 +376,9 @@ function SidebarItem({ active, item, onSelect }: SidebarItemProps) {
   );
 }
 
-function SettingsCard({ children, description, title }: SettingsCardProps) {
+function SettingsCard({ children, className, description, title }: SettingsCardProps) {
   return (
-    <section className="control-panel-shell__card">
+    <section className={className ? `control-panel-shell__card ${className}` : "control-panel-shell__card"}>
       <div className="control-panel-shell__card-header">
         <div className="control-panel-shell__title-row">
           <Heading as="h2" size="4" className="control-panel-shell__card-title">
@@ -535,6 +546,8 @@ function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPane
  * @returns The desktop control panel window.
  */
 export function ControlPanelApp() {
+  const onboardingSession = useDesktopOnboardingSession();
+  const autoAdvancedControlPanelStepRef = useRef(false);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
@@ -616,6 +629,69 @@ export function ControlPanelApp() {
     }
   };
 
+  useEffect(() => {
+    if (onboardingSession?.isOpen !== true) {
+      autoAdvancedControlPanelStepRef.current = false;
+      return;
+    }
+
+    if (onboardingSession.step === "tray_hint" && !autoAdvancedControlPanelStepRef.current) {
+      autoAdvancedControlPanelStepRef.current = true;
+      setActiveSection("models");
+      void Window.getByLabel("dashboard").then((windowHandle) => {
+        void windowHandle?.close();
+      });
+      void advanceDesktopOnboarding("control_panel_api_key");
+      return;
+    }
+
+    if (onboardingSession.step === "control_panel_api_key") {
+      autoAdvancedControlPanelStepRef.current = true;
+      setActiveSection("models");
+    }
+  }, [onboardingSession]);
+
+  useDesktopOnboardingActions(
+    "control-panel",
+    (action) => {
+      if (action.type === "close_control_panel") {
+        void requestCurrentDesktopWindowClose();
+      }
+    },
+  );
+
+  useEffect(() => {
+    if (onboardingSession?.isOpen !== true) {
+      return;
+    }
+
+    if (onboardingSession.step === "control_panel_api_key" && draft?.settings.models.provider_api_key_configured) {
+      void advanceDesktopOnboarding("done");
+    }
+  }, [draft?.settings.models.provider_api_key_configured, onboardingSession]);
+
+  useEffect(() => {
+    if (
+      onboardingSession?.isOpen !== true ||
+      (onboardingSession.step !== "control_panel_api_key" && onboardingSession.step !== "done")
+    ) {
+      return;
+    }
+
+    void (async () => {
+      const presentation = await buildDesktopOnboardingPresentation({
+        anchors: [],
+        placement: onboardingSession.step === "control_panel_api_key" ? "top-right" : "center",
+        step: onboardingSession.step,
+        windowLabel: "control-panel",
+      });
+
+      if (presentation !== null) {
+        await setDesktopOnboardingPresentation(presentation);
+      }
+    })();
+  }, [onboardingSession]);
+
   if (!draft || !panelData) {
     return (
       <main className="app-shell control-panel-shell" data-appearance={systemAppearance}>
@@ -678,6 +754,14 @@ export function ControlPanelApp() {
   const handleReset = () => {
     setDraft(panelData);
     setSaveFeedback("已恢复为上次载入的设置快照。");
+  };
+
+  const handleReplayOnboarding = () => {
+    void (async () => {
+      await showShellBallWindow("ball");
+      await startDesktopOnboarding("manual", "control-panel");
+      await requestCurrentDesktopWindowClose();
+    })();
   };
 
   const handleSave = async () => {
@@ -1194,7 +1278,8 @@ export function ControlPanelApp() {
       case "models":
         return (
           <>
-            <SettingsCard title="模型路由" description="配置 provider、接口地址和默认模型。">
+            <div>
+              <SettingsCard title="模型路由" description="配置 provider、接口地址和默认模型。">
               <ControlLine label="Provider" hint="当前任务默认使用的模型提供商。">
                 <TextField.Root
                   className="control-panel-shell__input"
@@ -1273,7 +1358,8 @@ export function ControlPanelApp() {
                   }))
                 }
               />
-            </SettingsCard>
+              </SettingsCard>
+            </div>
 
             <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
               <InfoRow label="当前模型" value={draft.settings.models.model} />
@@ -1420,6 +1506,15 @@ export function ControlPanelApp() {
             </div>
 
             <div className="control-panel-shell__action-buttons">
+              <Button
+                className="control-panel-shell__button control-panel-shell__button--ghost"
+                variant="soft"
+                color="gray"
+                onClick={handleReplayOnboarding}
+                disabled={isSaving || isRunningInspection}
+              >
+                重新查看新手引导
+              </Button>
               <Button
                 className="control-panel-shell__button control-panel-shell__button--secondary"
                 variant="soft"

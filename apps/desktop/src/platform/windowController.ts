@@ -56,3 +56,15 @@ export async function openOrFocusDesktopWindow(label: DesktopWindowLabel) {
 
   return label;
 }
+
+// closeDesktopWindow closes an existing desktop window when a flow needs to
+// leave the current surface entirely instead of just hiding it.
+export async function closeDesktopWindow(label: DesktopWindowLabel) {
+  const windowHandle = await Window.getByLabel(label);
+
+  if (windowHandle === null) {
+    return;
+  }
+
+  await windowHandle.close();
+}

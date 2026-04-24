@@ -33,8 +33,21 @@ import {
   shellBallWindowLabels,
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
-import { setShellBallInteractiveRegions, setShellBallPressLock } from "../../platform/shellBallWindow";
+import {
+  setShellBallAlwaysOnTop,
+  setShellBallInteractiveRegions,
+  setShellBallPressLock,
+} from "../../platform/shellBallWindow";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
+import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
+import {
+  advanceDesktopOnboarding,
+  setDesktopOnboardingPresentation,
+  shouldAutoStartDesktopOnboarding,
+  startDesktopOnboarding,
+} from "@/features/onboarding/onboardingService";
+import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
+import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -217,6 +230,7 @@ async function animateShellBallDashboardWindow(input: {
 
 export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   void isDev;
+  const onboardingSession = useDesktopOnboardingSession();
   const {
     visualState,
     inputValue,
@@ -437,6 +451,39 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, [handlePressCancel]);
 
   useEffect(() => {
+    if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    if (!shouldAutoStartDesktopOnboarding()) {
+      return;
+    }
+
+    if (onboardingSession !== null) {
+      return;
+    }
+
+    void startDesktopOnboarding("first_launch");
+  }, [onboardingSession]);
+
+  useDesktopOnboardingActions(
+    "shell-ball",
+    useCallback((action) => {
+      if (action.type === "open_dashboard") {
+        void openOrFocusDesktopWindow("dashboard");
+      }
+
+       if (action.type === "show_shell_ball") {
+         void showShellBallWindow("ball");
+       }
+    }, []),
+  );
+
+  useEffect(() => {
+    void setShellBallAlwaysOnTop(true);
+  }, []);
+
+  useEffect(() => {
     const wasVoiceActive =
       previousVisualStateRef.current === "voice_listening" || previousVisualStateRef.current === "voice_locked";
     const isVoiceActive = visualState === "voice_listening" || visualState === "voice_locked";
@@ -447,7 +494,16 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     previousVisualStateRef.current = visualState;
-  }, [freezeBallWindowPointerDrag, visualState]);
+
+    if (
+      onboardingSession?.isOpen === true &&
+      onboardingSession.step === "shell_ball_hold_voice" &&
+      !wasVoiceActive &&
+      isVoiceActive
+    ) {
+      void advanceDesktopOnboarding("shell_ball_double_click");
+    }
+  }, [freezeBallWindowPointerDrag, onboardingSession, visualState]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -631,8 +687,37 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       return;
     }
 
+    if (onboardingSession?.isOpen === true && onboardingSession.step === "shell_ball_double_click") {
+      void advanceDesktopOnboarding("dashboard_overview");
+    }
+
     void openOrFocusDesktopWindow("dashboard");
   }
+
+  useEffect(() => {
+    if (
+      onboardingSession?.isOpen !== true ||
+      (onboardingSession.step !== "welcome" &&
+        onboardingSession.step !== "shell_ball_intro" &&
+        onboardingSession.step !== "shell_ball_hold_voice" &&
+        onboardingSession.step !== "shell_ball_double_click")
+    ) {
+      return;
+    }
+
+    void (async () => {
+      const presentation = await buildDesktopOnboardingPresentation({
+        anchors: [],
+        placement: "center",
+        step: onboardingSession.step,
+        windowLabel: "shell-ball",
+      });
+
+      if (presentation !== null) {
+        await setDesktopOnboardingPresentation(presentation);
+      }
+    })();
+  }, [mascotRef, onboardingSession]);
 
   const handleSurfaceTextDrop = useCallback((text: string) => {
     handleDroppedText(text);

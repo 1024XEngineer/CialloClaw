@@ -40,14 +40,17 @@ body {
 html[data-app-window="shell-ball"],
 html[data-app-window="shell-ball-bubble"],
 html[data-app-window="shell-ball-input"],
+html[data-app-window="onboarding"],
 html[data-app-window="shell-ball-voice"],
 body[data-app-window="shell-ball"],
 body[data-app-window="shell-ball-bubble"],
 body[data-app-window="shell-ball-input"],
+body[data-app-window="onboarding"],
 body[data-app-window="shell-ball-voice"],
 #root[data-app-window="shell-ball"],
 #root[data-app-window="shell-ball-bubble"],
 #root[data-app-window="shell-ball-input"],
+#root[data-app-window="onboarding"],
 #root[data-app-window="shell-ball-voice"] {
   background: transparent;
 }
@@ -55,10 +58,12 @@ body[data-app-window="shell-ball-voice"],
 html[data-app-window="shell-ball"],
 html[data-app-window="shell-ball-bubble"],
 html[data-app-window="shell-ball-input"],
+html[data-app-window="onboarding"],
 html[data-app-window="shell-ball-voice"],
 body[data-app-window="shell-ball"],
 body[data-app-window="shell-ball-bubble"],
 body[data-app-window="shell-ball-input"],
+body[data-app-window="onboarding"],
 body[data-app-window="shell-ball-voice"] {
   overflow: hidden;
 }
@@ -66,6 +71,7 @@ body[data-app-window="shell-ball-voice"] {
 body[data-app-window="shell-ball"],
 body[data-app-window="shell-ball-bubble"],
 body[data-app-window="shell-ball-input"],
+body[data-app-window="onboarding"],
 body[data-app-window="shell-ball-voice"] {
   min-height: 0;
 }
@@ -73,6 +79,7 @@ body[data-app-window="shell-ball-voice"] {
 #root[data-app-window="shell-ball"],
 #root[data-app-window="shell-ball-bubble"],
 #root[data-app-window="shell-ball-input"],
+#root[data-app-window="onboarding"],
 #root[data-app-window="shell-ball-voice"] {
   display: grid;
   min-height: 0;

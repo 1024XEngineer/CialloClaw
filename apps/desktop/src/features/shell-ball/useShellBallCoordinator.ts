@@ -34,8 +34,6 @@ import {
   type ShellBallBubbleVisibilityPhase,
   type ShellBallIntentDecisionPayload,
   shellBallWindowSyncEvents,
-  type ShellBallHelperWindowRole,
-  type ShellBallPendingFileActionPayload,
   type ShellBallPinnedWindowDetachedPayload,
   type ShellBallPinnedWindowReadyPayload,
   type ShellBallPrimaryAction,
@@ -70,11 +68,6 @@ type ShellBallCoordinatorInput = {
   onPrimaryClick: () => void;
 };
 
-type ShellBallHelperSnapshotInput = {
-  role: ShellBallHelperWindowRole;
-  windowLabel?: string;
-};
-
 type QueuedApprovalPendingNotification = {
   approvalRequest: ApprovalRequest;
   taskId: string;
@@ -86,7 +79,6 @@ type QueuedDeliveryReadyNotification = {
 };
 
 type QueuedTaskUpdatedNotification = TaskUpdatedNotification;
-
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -785,18 +777,18 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onPrimaryClick: input.onPrimaryClick,
   };
 
-  function allocateBubbleTurnIndex() {
+  const allocateBubbleTurnIndex = useCallback(() => {
     bubbleTurnIndexRef.current += 1;
     return bubbleTurnIndexRef.current;
-  }
+  }, []);
 
-  function bindTaskToBubbleTurn(taskId: string, turnIndex: number) {
+  const bindTaskToBubbleTurn = useCallback((taskId: string, turnIndex: number) => {
     shellBallTaskTurnIndexRef.current.set(taskId, turnIndex);
-  }
+  }, []);
 
-  function getTaskBubbleTurnIndex(taskId: string) {
+  const getTaskBubbleTurnIndex = useCallback((taskId: string) => {
     return shellBallTaskTurnIndexRef.current.get(taskId);
-  }
+  }, []);
 
   const appendApprovalPendingBubble = useCallback((input: QueuedApprovalPendingNotification) => {
     const bubbleKey = `${input.taskId}:${input.approvalRequest.approval_id}`;
@@ -869,7 +861,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     });
     revealBubbleRegionRef.current();
     void autoOpenShellBallDeliveryResultRef.current(input.taskId, input.deliveryResult);
-  }, []);
+  }, [allocateBubbleTurnIndex, bindTaskToBubbleTurn, getTaskBubbleTurnIndex]);
 
   const registerShellBallTask = useCallback((
     taskId: string,
@@ -977,7 +969,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       ]),
     );
     revealBubbleRegion();
-  }, [revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, bindTaskToBubbleTurn, getTaskBubbleTurnIndex, revealBubbleRegion]);
 
   /**
    * Shell-ball only resolves and executes the formal delivery-open flow after
@@ -1172,7 +1164,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     } finally {
       finishPendingTaskRegistration();
     }
-  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
    * Submits clipboard text through the formal shell-ball text input path while
@@ -1268,7 +1260,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     } finally {
       finishPendingTaskRegistration();
     }
-  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
    * Shortcut keywords such as `截屏` and `窗口` still enter the formal task
@@ -1380,7 +1372,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       handlersRef.current.onInputFocusChange(false);
       revealBubbleRegion();
     }
-  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
    * Maps the shell-ball screenshot keyword to the formal visual-task pipeline.
@@ -1695,7 +1687,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       });
       revealBubbleRegion();
     }
-  }, [registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, bindTaskToBubbleTurn, getTaskBubbleTurnIndex, registerShellBallTask, revealBubbleRegion]);
 
   const handleBubbleAction = useCallback((payload: ShellBallBubbleActionPayload) => {
     if (payload.action === "allow_approval" || payload.action === "deny_approval") {
@@ -1816,7 +1808,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         finishPendingTaskRegistration();
         handlersRef.current.onFinalizedSpeechHandled();
       });
-  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, input.finalizedSpeechPayload, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, input.finalizedSpeechPayload, registerShellBallTask, revealBubbleRegion]);
 
   useEffect(() => {
     const clearTaskSubscription = subscribeTaskUpdated((payload) => {
@@ -2007,9 +1999,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           detachedPinnedBubbleIdsRef.current.add(payload.bubbleId);
         },
       ),
-      currentWindow.listen<{ active: boolean }>(shellBallWindowSyncEvents.bubbleHover, ({ payload }) => {
-        handleCoordinatorBubbleHoverChange(payload.active);
-      }),
       currentWindow.listen<ShellBallIntentDecisionPayload>(shellBallWindowSyncEvents.intentDecision, ({ payload }) => {
         void handleIntentDecision(payload);
       }),
@@ -2039,7 +2028,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         cleanup();
       }
     };
-  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handleCoordinatorBubbleHoverChange, registerShellBallTask]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, registerShellBallTask]);
 
   const handlePrimaryAction = useCallback(async (action: ShellBallPrimaryAction) => {
     switch (action) {
@@ -2225,7 +2214,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         handlersRef.current.onPrimaryClick();
         break;
     }
-  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
 
   return {
     snapshot,
@@ -2242,19 +2231,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   };
 }
 
-export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {
+export function useShellBallPinnedBubbleSnapshot() {
   const [snapshot, setSnapshot] = useState(createDefaultShellBallWindowSnapshot);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
 
-    const targetLabel = role === "pinned" ? currentWindow.label : shellBallWindowLabels[role];
+    const targetLabel = currentWindow.label;
 
-    if (role === "pinned" && getShellBallPinnedBubbleIdFromLabel(targetLabel) === null) {
-      return;
-    }
-
-    if (role !== "pinned" && currentWindow.label !== targetLabel) {
+    if (getShellBallPinnedBubbleIdFromLabel(targetLabel) === null) {
       return;
     }
 
@@ -2273,76 +2258,23 @@ export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapsh
 
         cleanup = unlisten;
 
-        if (role === "pinned") {
-          const bubbleId = getShellBallPinnedBubbleIdFromLabel(targetLabel);
+        const bubbleId = getShellBallPinnedBubbleIdFromLabel(targetLabel);
 
-          if (bubbleId !== null) {
-            void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pinnedWindowReady, {
-              windowLabel: targetLabel,
-              bubbleId,
-            });
-          }
-
-          return;
+        if (bubbleId !== null) {
+          void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pinnedWindowReady, {
+            windowLabel: targetLabel,
+            bubbleId,
+          });
         }
-
-        void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.helperReady, { role });
       });
 
     return () => {
       disposed = true;
       cleanup?.();
     };
-  }, [role]);
+  }, []);
 
   return snapshot;
-}
-
-export async function emitShellBallInputHover(active: boolean) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputHover, { active });
-}
-
-export async function emitShellBallBubbleHover(active: boolean) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.bubbleHover, { active });
-}
-
-export async function emitShellBallInputFocus(focused: boolean) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputFocus, {
-    focused,
-  });
-}
-
-export async function emitShellBallInputDraft(value: string) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.inputDraft, { value });
-}
-
-export async function emitShellBallInputRequestFocus(token: number) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.input, shellBallWindowSyncEvents.inputRequestFocus, { token });
-}
-
-export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction, source: ShellBallHelperWindowRole) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.primaryAction, {
-    action,
-    source,
-  });
-}
-
-export async function emitShellBallPendingFileAction(payload: ShellBallPendingFileActionPayload) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.pendingFileAction, payload);
-}
-
-export async function emitShellBallIntentDecision(
-  decision: ShellBallIntentDecisionPayload["decision"],
-  taskId: string,
-  source: ShellBallIntentDecisionPayload["source"],
-  correctedIntent?: ShellBallIntentDecisionPayload["correctedIntent"],
-) {
-  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.intentDecision, {
-    correctedIntent,
-    decision,
-    source,
-    taskId,
-  });
 }
 
 export async function emitShellBallBubbleAction(

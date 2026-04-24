@@ -95,7 +95,7 @@ export function ShellBallSurface({
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
-  inputFocused = false,
+  inputFocused: _inputFocused = false,
   motionConfig,
   onDragStart,
   onDragMove,
