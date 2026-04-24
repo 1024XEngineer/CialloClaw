@@ -70,6 +70,7 @@ type Service struct {
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
+	modelMu        sync.RWMutex
 	runtimeMu      sync.RWMutex
 	runtimeNextID  uint64
 	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
@@ -273,7 +274,7 @@ func (s *Service) Snapshot() map[string]any {
 		"delivery_type":           s.delivery.DefaultResultType(),
 		"memory_backend":          s.memory.RetrievalBackend(),
 		"risk_level":              s.risk.DefaultLevel(),
-		"model":                   s.model.Descriptor(),
+		"model":                   s.currentModelDescriptor(),
 		"tool_count":              len(s.tools.Names()),
 		"primary_worker":          primaryWorker,
 		"pending_approvals":       pendingTotal,
@@ -2835,13 +2836,6 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	if modelSettingsRequireRestart(normalizedParams, secretUpdatedKeys) {
-		// The active model service is still constructed at bootstrap time, so
-		// provider/credential/base-url/model changes must surface as restart
-		// required until hot-reload semantics are implemented across the runtime.
-		applyMode = "restart_required"
-		needRestart = true
-	}
 	if modelSecretTouched {
 		if _, ok := effectiveSettings["models"]; !ok {
 			effectiveSettings["models"] = map[string]any{}
@@ -2856,30 +2850,19 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 	}
 	effectiveSettings = outwardSettingsUpdatePatch(effectiveSettings)
 	updatedKeys = outwardSettingsUpdateKeys(updatedKeys, secretUpdatedKeys)
+	if modelSettingsTouched(updatedKeys) {
+		applyMode = "next_task_effective"
+		needRestart = false
+		if err := s.reloadRuntimeModelFromSettings(); err != nil {
+			return nil, err
+		}
+	}
 	return map[string]any{
 		"updated_keys":       updatedKeys,
 		"effective_settings": effectiveSettings,
 		"apply_mode":         applyMode,
 		"need_restart":       needRestart,
 	}, nil
-}
-
-func modelSettingsRequireRestart(normalizedParams map[string]any, secretUpdatedKeys []string) bool {
-	for _, key := range secretUpdatedKeys {
-		if key == "models.api_key" || key == "models.delete_api_key" {
-			return true
-		}
-	}
-	models := cloneMap(mapValue(normalizedParams, "models"))
-	if len(models) == 0 {
-		return false
-	}
-	for _, key := range []string{"provider", "base_url", "model"} {
-		if _, ok := models[key]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
@@ -3894,18 +3877,15 @@ func (s *Service) providerForSettingsUpdate(models map[string]any) string {
 }
 
 func (s *Service) defaultSettingsProvider() string {
-	if s.model == nil {
+	if s.currentModel() == nil {
 		return ""
 	}
-	return strings.TrimSpace(s.model.Provider())
+	return strings.TrimSpace(s.currentModel().Provider())
 }
 
 func providerFromSettings(models map[string]any, fallback string) string {
 	provider := firstNonEmptyString(stringValue(models, "provider", ""), fallback)
-	if provider == "openai" {
-		return model.OpenAIResponsesProvider
-	}
-	return provider
+	return model.CanonicalProviderName(provider)
 }
 
 func matchesTaskGroup(task runengine.TaskRecord, group string) bool {

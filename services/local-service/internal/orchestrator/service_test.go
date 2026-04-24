@@ -11193,7 +11193,8 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	_, err := service.SettingsUpdate(map[string]any{
+	defaultProvider := service.defaultSettingsProvider()
+	result, err := service.SettingsUpdate(map[string]any{
 		"models": map[string]any{
 			"provider":              "anthropic",
 			"budget_auto_downgrade": true,
@@ -11210,11 +11211,17 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	if stored.Value != "anthropic-secret-key" {
 		t.Fatalf("unexpected stored anthropic secret: %+v", stored)
 	}
-	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", service.model.Provider()+"_api_key")
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected provider secret update to be next_task_effective, got %+v", result)
+	}
+	if service.currentModel() == nil || service.currentModel().Provider() != "anthropic" {
+		t.Fatalf("expected runtime model provider to switch for future tasks, got %+v", service.currentModel())
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", defaultProvider+"_api_key")
 	if !errors.Is(err, storage.ErrSecretNotFound) {
 		t.Fatalf("expected default provider secret to remain unset, got %v", err)
 	}
-	result, err := service.SettingsGet(map[string]any{"scope": "models"})
+	result, err = service.SettingsGet(map[string]any{"scope": "models"})
 	if err != nil {
 		t.Fatalf("settings get failed: %v", err)
 	}

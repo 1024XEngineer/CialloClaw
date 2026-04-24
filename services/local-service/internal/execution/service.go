@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
@@ -41,6 +42,7 @@ type Service struct {
 	screen              tools.ScreenCaptureClient
 	lifecycle           *tools.ScreenLifecycleManager
 	artifactStore       storage.ArtifactStore
+	modelMu             sync.RWMutex
 	model               *model.Service
 	loop                *agentloop.Runtime
 	audit               *audit.Service
@@ -1913,7 +1915,8 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 // The loop stops when the model returns a final answer or when the turn budget
 // is exhausted, in which case the normal fallback output is returned.
 func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Request, inputText string) (generationTrace, bool, error) {
-	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
+	modelService := s.currentModel()
+	if !isAgentLoopIntent(request.Intent) || modelService == nil || !modelService.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
 	runtimeInput := inputText
@@ -1942,7 +1945,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 			}
 			return s.steeringPoller(taskID)
 		},
-		GenerateToolCalls: s.model.GenerateToolCalls,
+		GenerateToolCalls: modelService.GenerateToolCalls,
 		ExecuteTool: func(execCtx context.Context, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 			return s.executeAgentLoopTool(execCtx, request, call, loopRound)
 		},
@@ -2549,28 +2552,31 @@ func firstNonEmpty(primary, fallback string) string {
 // single loop execution. The value is read from model-facing runtime settings so
 // the execution layer stays configurable without introducing a parallel config path.
 func (s *Service) agentLoopMaxTurns() int {
-	if s.model == nil {
-		return 4
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopMaxToolIterations
 	}
-	return s.model.MaxToolIterations()
+	return modelService.MaxToolIterations()
 }
 
 // agentLoopCompressionChars resolves the planner-input size budget that should
 // trigger lightweight observation compaction.
 func (s *Service) agentLoopCompressionChars() int {
-	if s.model == nil {
-		return 2400
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopContextCompressChars
 	}
-	return s.model.ContextCompressChars()
+	return modelService.ContextCompressChars()
 }
 
 // agentLoopKeepRecent returns how many recent observations stay verbatim when
 // older tool results are compacted.
 func (s *Service) agentLoopKeepRecent() int {
-	if s.model == nil {
-		return 4
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopContextKeepRecent
 	}
-	return s.model.ContextKeepRecent()
+	return modelService.ContextKeepRecent()
 }
 
 func (s *Service) agentLoopTimeout() time.Duration {
@@ -2578,17 +2584,19 @@ func (s *Service) agentLoopTimeout() time.Duration {
 }
 
 func (s *Service) agentLoopPlannerRetryBudget() int {
-	if s.model == nil {
-		return 1
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopPlannerRetryBudget
 	}
-	return s.model.PlannerRetryBudget()
+	return modelService.PlannerRetryBudget()
 }
 
 func (s *Service) agentLoopToolRetryBudget() int {
-	if s.model == nil {
-		return 1
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopToolRetryBudget
 	}
-	return s.model.ToolRetryBudget()
+	return modelService.ToolRetryBudget()
 }
 
 type noopAgentLoopHook struct{}
