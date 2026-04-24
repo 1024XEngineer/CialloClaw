@@ -7,7 +7,7 @@ import { useUnmount } from "ahooks";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, UIEvent } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, CircleDashed, FilePlus2, NotebookPen, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { NotepadAction } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +22,7 @@ import { buildNoteSummary, describeNotePreview, getNoteBucketLabel, getNoteStatu
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
 import { areDesktopSourceNotesAvailable, createNoteSource, loadNoteSourceConfig, loadNoteSourceSnapshot, runNoteSourceInspection, saveNoteSource } from "./noteSource.service";
 import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
-import type { NoteDetailAction, NoteListItem } from "./notePage.types";
+import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NoteEmptyState } from "./components/NoteEmptyState";
 import { NotePreviewCard } from "./components/NotePreviewCard";
@@ -47,14 +47,35 @@ type NoteDrawerDragPreview = {
 
 const NOTE_CANVAS_CARD_WIDTH = 360;
 const NOTE_CANVAS_CARD_HEIGHT = 280;
+const NOTE_CANVAS_GRID_SIZE = 28;
 const SOURCE_NOTE_POLL_INTERVAL_MS = 2_500;
 const NEW_SOURCE_NOTE_TEMPLATE = "";
 const NOTE_CANVAS_SEED_POSITIONS = [
-  { x: 150, y: 110 },
-  { x: 540, y: 120 },
-  { x: 920, y: 140 },
-  { x: 330, y: 360 },
+  { x: 56, y: 48 },
+  { x: 448, y: 56 },
+  { x: 840, y: 84 },
+  { x: 280, y: 320 },
 ];
+
+function snapCanvasCoordinate(value: number, max: number) {
+  return Math.min(max, Math.max(0, Math.round(value / NOTE_CANVAS_GRID_SIZE) * NOTE_CANVAS_GRID_SIZE));
+}
+
+function clampCanvasPlacement(
+  placement: { x: number; y: number },
+  bounds: { height: number; width: number },
+  cardSize = { height: NOTE_CANVAS_CARD_HEIGHT, width: NOTE_CANVAS_CARD_WIDTH },
+) {
+  const maxX = Math.max(0, bounds.width - cardSize.width);
+  const maxY = Math.max(0, bounds.height - cardSize.height);
+  const clampedX = Math.min(maxX, Math.max(0, placement.x));
+  const clampedY = Math.min(maxY, Math.max(0, placement.y));
+
+  return {
+    x: snapCanvasCoordinate(clampedX, maxX),
+    y: snapCanvasCoordinate(clampedY, maxY),
+  };
+}
 
 function normalizeSourceNoteKey(value: string) {
   return value.trim().replace(/\\/g, "/").toLowerCase();
@@ -80,6 +101,7 @@ export function NotePage() {
   const [boardSeeded, setBoardSeeded] = useState(false);
   const [isBoardDropTarget, setIsBoardDropTarget] = useState(false);
   const [isRailDropTarget, setIsRailDropTarget] = useState(false);
+  const [activeRailDropBucket, setActiveRailDropBucket] = useState<NotePreviewGroupKey | null>(null);
   const [isCompactBoard, setIsCompactBoard] = useState<boolean>(() => (typeof window !== "undefined" ? window.matchMedia("(max-width: 720px)").matches : false));
   const [drawerDragPreview, setDrawerDragPreview] = useState<NoteDrawerDragPreview | null>(null);
   const [draggingBoardItemId, setDraggingBoardItemId] = useState<string | null>(null);
@@ -454,20 +476,6 @@ export function NotePage() {
 
   function getNextCanvasZIndex(cards: NoteCanvasCard[]) {
     return cards.reduce((max, entry) => Math.max(max, entry.zIndex), 0) + 1;
-  }
-
-  function clampCanvasPlacement(
-    placement: { x: number; y: number },
-    bounds: { height: number; width: number },
-    cardSize = { height: NOTE_CANVAS_CARD_HEIGHT, width: NOTE_CANVAS_CARD_WIDTH },
-  ) {
-    const maxX = Math.max(0, bounds.width - cardSize.width);
-    const maxY = Math.max(0, bounds.height - cardSize.height);
-
-    return {
-      x: Math.min(maxX, Math.max(0, placement.x)),
-      y: Math.min(maxY, Math.max(0, placement.y)),
-    };
   }
 
   /**
@@ -1002,7 +1010,11 @@ export function NotePage() {
 
     const boardBounds = getBoardLayerBounds();
     if (boardBounds) {
-      const droppedOverBoard = event.clientX >= boardBounds.left && event.clientX <= boardBounds.right && event.clientY >= boardBounds.top && event.clientY <= boardBounds.bottom;
+      const droppedOverBoard =
+        event.clientX >= boardBounds.left &&
+        event.clientX <= boardBounds.right &&
+        event.clientY >= boardBounds.top &&
+        event.clientY <= boardBounds.bottom;
       if (droppedOverBoard) {
         pinNoteToCanvas(
           itemId,
@@ -1015,7 +1027,7 @@ export function NotePage() {
             { height: dragState.height, width: dragState.width },
           ),
         );
-        showFeedback("已放到画布。拖回左栏即可收回。");
+        showFeedback("已放到网格里，可以继续拖动调整位置。");
       }
     }
 
@@ -1062,22 +1074,37 @@ export function NotePage() {
       return;
     }
 
+    const boardBounds = getBoardLayerBounds();
     const deltaX = event.clientX - dragState.startClientX;
     const deltaY = event.clientY - dragState.startClientY;
     const nextX = Math.min(dragState.maxX, Math.max(dragState.minX, dragState.originX + deltaX));
     const nextY = Math.min(dragState.maxY, Math.max(dragState.minY, dragState.originY + deltaY));
+    const nextPlacement =
+      boardBounds
+        ? clampCanvasPlacement(
+            { x: nextX, y: nextY },
+            { height: boardBounds.height, width: boardBounds.width },
+          )
+        : { x: nextX, y: nextY };
 
     if (railRef.current) {
       const railRect = railRef.current.getBoundingClientRect();
-      const overRail = event.clientX >= railRect.left && event.clientX <= railRect.right && event.clientY >= railRect.top && event.clientY <= railRect.bottom;
+      const overRail =
+        event.clientX >= railRect.left &&
+        event.clientX <= railRect.right &&
+        event.clientY >= railRect.top &&
+        event.clientY <= railRect.bottom;
       setIsRailDropTarget(overRail);
+      // Returning a board card to the sidebar should point back to the formal
+      // source bucket instead of creating a new local grouping.
+      setActiveRailDropBucket(overRail ? noteItemsById.get(itemId)?.item.bucket ?? null : null);
     }
 
     if (!dragState.moved && Math.hypot(deltaX, deltaY) > 4) {
       dragState.moved = true;
     }
 
-    setCanvasCards((current) => current.map((entry) => (entry.itemId === itemId ? { ...entry, x: nextX, y: nextY } : entry)));
+    setCanvasCards((current) => current.map((entry) => (entry.itemId === itemId ? { ...entry, x: nextPlacement.x, y: nextPlacement.y } : entry)));
   }
 
   function finishBoardCardDrag(itemId: string, event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1092,10 +1119,18 @@ export function NotePage() {
 
     if (railRef.current) {
       const railRect = railRef.current.getBoundingClientRect();
-      const droppedOverRail = event.clientX >= railRect.left && event.clientX <= railRect.right && event.clientY >= railRect.top && event.clientY <= railRect.bottom;
+      const droppedOverRail =
+        event.clientX >= railRect.left &&
+        event.clientX <= railRect.right &&
+        event.clientY >= railRect.top &&
+        event.clientY <= railRect.bottom;
       if (droppedOverRail) {
+        const returnedItem = noteItemsById.get(itemId);
         unpinNoteFromCanvas(itemId);
-        showFeedback("已放回左侧抽屉。");
+        if (drawerOpen && returnedItem) {
+          setExpandedBucket(returnedItem.item.bucket);
+        }
+        showFeedback(drawerOpen ? "已放回侧边栏对应分组。" : "已收回侧边栏，对应分组里可以继续查看。");
       }
     }
 
@@ -1111,6 +1146,7 @@ export function NotePage() {
     dragStateRef.current = null;
     setDraggingBoardItemId((current) => (current === itemId ? null : current));
     setIsRailDropTarget(false);
+    setActiveRailDropBucket(null);
   }
 
   function handleBoardCardClick(itemId: string) {
@@ -1178,187 +1214,53 @@ export function NotePage() {
         </header>
 
         <section className="note-preview-page__frame">
-          <section className="note-preview-page__summary-shell">
-            <div className="note-preview-page__summary-copy">
-              <p className="note-preview-page__eyebrow">Notepad Collaboration</p>
-              <div className="note-preview-page__title-row">
-                <NotebookPen className="note-preview-page__title-icon" />
-                <div>
-                  <h1>便签</h1>
-                  <p>便签协作负责整理未来安排、重复规则与尚未开始但需要记住的事情。正式进入执行后，再转交给 Agent 生成任务。</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="note-preview-page__summary-grid">
-              <div className="note-preview-page__summary-item">
-                <span>今天待处理</span>
-                <strong>{summary.dueToday}</strong>
-              </div>
-              <div className="note-preview-page__summary-item">
-                <span>已逾期</span>
-                <strong>{summary.overdue}</strong>
-              </div>
-              <div className="note-preview-page__summary-item">
-                <span>重复事项今日落地</span>
-                <strong>{summary.recurringToday}</strong>
-              </div>
-              <div className="note-preview-page__summary-item">
-                <span>适合交给 Agent</span>
-                <strong>{summary.readyForAgent}</strong>
-              </div>
-            </div>
-
-            <div className="note-preview-page__summary-notice">
-              <div className="note-preview-page__summary-notice-copy">
-                <CircleDashed className="h-4 w-4" />
-                <span>{pageNotice}</span>
-              </div>
-
-              <div className="note-preview-page__summary-notice-actions">
-                <Button className="note-preview-page__summary-action" onClick={openCreateSourceNoteStudio} size="sm" type="button" variant="ghost">
-                  <FilePlus2 className="h-4 w-4" />
-                  新建便签
-                </Button>
-                <Button
-                  className="note-preview-page__summary-action"
-                  disabled={isRunningInspection}
-                  onClick={() => void refreshInspection("notes_page_manual_run")}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  <ScanSearch className="h-4 w-4" />
-                  {isRunningInspection ? "巡检中..." : "立即巡检"}
-                </Button>
-              </div>
-            </div>
-          </section>
-
           <section className={cn("note-preview-page__workspace", !drawerOpen && "is-drawer-collapsed")}>
-            <aside className={cn("note-preview-page__rail", !drawerOpen && "is-collapsed", isRailDropTarget && "is-drop-target")} ref={railRef}>
-              {drawerOpen ? (
-                <>
-                  <NotePreviewSection
-                    activeItemId={selectedItem?.item.item_id ?? null}
-                    draggableToCanvas
-                    emptyLabel={upcomingQuery.isPending && !upcomingQuery.data ? "加载中" : "这组便签已全部放到画布。"}
-                    isExpanded={expandedBucket === "upcoming"}
-                    items={visibleUpcomingItems}
-                    onCanvasDragEnd={handleDrawerCardDragEnd}
-                    onCanvasDragMove={handleDrawerCardDragMove}
-                    onCanvasDragStart={handleDrawerCardDragStart}
-                    onSelect={openNoteDetail}
-                    onToggle={() => toggleBucket("upcoming")}
-                    title="近期"
-                    trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : visibleUpcomingItems.length}</span>}
-                  />
-
-                  <NotePreviewSection
-                    activeItemId={selectedItem?.item.item_id ?? null}
-                    draggableToCanvas
-                    emptyLabel={laterQuery.isPending && !laterQuery.data ? "加载中" : "这组便签已全部放到画布。"}
-                    isExpanded={expandedBucket === "later"}
-                    items={visibleLaterItems}
-                    onCanvasDragEnd={handleDrawerCardDragEnd}
-                    onCanvasDragMove={handleDrawerCardDragMove}
-                    onCanvasDragStart={handleDrawerCardDragStart}
-                    onSelect={openNoteDetail}
-                    onToggle={() => toggleBucket("later")}
-                    title="后续"
-                    trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : visibleLaterItems.length}</span>}
-                  />
-
-                  <NotePreviewSection
-                    activeItemId={selectedItem?.item.item_id ?? null}
-                    draggableToCanvas
-                    emptyLabel={recurringQuery.isPending && !recurringQuery.data ? "加载中" : "这组便签已全部放到画布。"}
-                    isExpanded={expandedBucket === "recurring_rule"}
-                    items={visibleRecurringItems}
-                    onCanvasDragEnd={handleDrawerCardDragEnd}
-                    onCanvasDragMove={handleDrawerCardDragMove}
-                    onCanvasDragStart={handleDrawerCardDragStart}
-                    onSelect={openNoteDetail}
-                    onToggle={() => toggleBucket("recurring_rule")}
-                    title="重复"
-                    trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : visibleRecurringItems.length}</span>}
-                  />
-
-                  <article className={cn("dashboard-card note-preview-shell", expandedBucket === "closed" ? "is-expanded" : "is-collapsed")}>
-                    <button aria-expanded={expandedBucket === "closed"} className="note-preview-shell__bucket-toggle" onClick={() => toggleBucket("closed")} type="button">
-                      <p className="dashboard-card__kicker">已结束</p>
-                      <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : visibleClosedItems.length}</span>
-                    </button>
-
-                    {expandedBucket === "closed" ? (
-                      <div className="note-preview-shell__bucket-body">
-                        <div className="note-preview-shell__body-toolbar">
-                          <p className="note-preview-shell__body-copy">默认展示近 3 天；滚到最底部时，会继续补出更早记录。</p>
-                        </div>
-
-                        <div className="note-preview-finished-groups" onScroll={handleClosedGroupsScroll}>
-                          {closedGroups.length > 0 ? (
-                            closedGroups.map((group) => (
-                              <section key={group.key} className="note-preview-finished-group">
-                                <div>
-                                  <p className="note-preview-finished-group__title">{group.title}</p>
-                                  <p className="note-preview-finished-group__description">{group.description}</p>
-                                </div>
-                                <div className="note-preview-shell__list">
-                                  {group.items.map((entry) => (
-                                    <NotePreviewCard
-                                      draggableToCanvas
-                                      key={entry.item.item_id}
-                                      isActive={entry.item.item_id === selectedItem?.item.item_id}
-                                      item={entry}
-                                      onCanvasDragEnd={handleDrawerCardDragEnd}
-                                      onCanvasDragMove={handleDrawerCardDragMove}
-                                      onCanvasDragStart={handleDrawerCardDragStart}
-                                      onSelect={openNoteDetail}
-                                    />
-                                  ))}
-                                </div>
-                              </section>
-                            ))
-                          ) : closedQuery.isPending && !closedQuery.data ? (
-                            <div className="note-preview-shell__empty">加载中</div>
-                          ) : !showMoreClosed && hasOlderClosedItems ? (
-                            <div className="note-preview-shell__empty-stack">
-                              <div className="note-preview-shell__empty">当前只有更早时间的已结束记录。</div>
-                              <button className="note-preview-shell__toggle" onClick={() => setShowMoreClosed(true)} type="button">
-                                加载更早记录
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="note-preview-shell__empty">无</div>
-                          )}
-
-                          {!showMoreClosed && hasOlderClosedItems && closedGroups.length > 0 ? <div className="note-preview-finished-groups__sentinel" aria-hidden="true" /> : null}
-                        </div>
-                      </div>
-                    ) : null}
-                  </article>
-                </>
-              ) : (
-                <div className="note-preview-page__rail-dropzone">
-                  <span className="note-preview-page__rail-dropzone-kicker">抽屉已收起</span>
-                  <p className="note-preview-page__rail-dropzone-title">拖回这里</p>
-                  <p className="note-preview-page__rail-dropzone-copy">把画布便签拖到这里，就能收回左侧抽屉。</p>
-                </div>
-              )}
-            </aside>
-
-            <button className={cn("note-preview-page__drawer-handle", !drawerOpen && "is-collapsed")} onClick={() => setDrawerOpen((current) => !current)} type="button">
-              {drawerOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
-              <span>{drawerOpen ? "收起抽屉" : "展开抽屉"}</span>
-            </button>
-
             <section className={cn("note-preview-page__board", isBoardDropTarget && "is-drop-target")}>
               <div aria-hidden="true" className="note-preview-page__board-scene" />
-              <div className="note-preview-page__board-heading">
-                <div className="note-preview-page__board-heading-copy">
-                  <span className="note-preview-page__board-chip">画布</span>
-                  <p>画布 {boardItems.length} 张，抽取当前展开分组与近期便签做展示。</p>
+
+              <div className="note-preview-page__board-topbar">
+                <div className="note-preview-page__board-heading">
+                  <div className="note-preview-page__board-heading-copy">
+                    <span className="note-preview-page__board-chip">便签桌面</span>
+                    <p>{pageNotice}</p>
+                  </div>
+
+                  <div className="note-preview-page__board-summary">
+                    <span className="note-preview-page__board-stat">
+                      <strong>{summary.dueToday}</strong>
+                      <span>今日待处理</span>
+                    </span>
+                    <span className="note-preview-page__board-stat">
+                      <strong>{summary.overdue}</strong>
+                      <span>已逾期</span>
+                    </span>
+                    <span className="note-preview-page__board-stat">
+                      <strong>{summary.recurringToday}</strong>
+                      <span>今日重复</span>
+                    </span>
+                    <span className="note-preview-page__board-stat">
+                      <strong>{summary.readyForAgent}</strong>
+                      <span>适合转任务</span>
+                    </span>
+                  </div>
+                </div>
+
+                <div className="note-preview-page__board-actions">
+                  <Button className="note-preview-page__board-action note-preview-page__board-action--primary" onClick={openCreateSourceNoteStudio} size="sm" type="button" variant="ghost">
+                    <FilePlus2 className="h-4 w-4" />
+                    新建便签
+                  </Button>
+                  <Button
+                    className="note-preview-page__board-action"
+                    disabled={isRunningInspection}
+                    onClick={() => void refreshInspection("notes_page_manual_run")}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <ScanSearch className="h-4 w-4" />
+                    {isRunningInspection ? "巡检中..." : "立即巡检"}
+                  </Button>
                 </div>
               </div>
 
@@ -1372,6 +1274,131 @@ export function NotePage() {
                   )}
               </div>
             </section>
+
+            <aside className={cn("note-preview-page__rail-shell", !drawerOpen && "is-collapsed")}>
+              <aside className={cn("note-preview-page__rail", !drawerOpen && "is-collapsed", isRailDropTarget && "is-drop-target")} ref={railRef}>
+                {drawerOpen ? (
+                  <>
+                    <NotePreviewSection
+                      activeItemId={selectedItem?.item.item_id ?? null}
+                      bucketKey="upcoming"
+                      draggableToCanvas
+                      emptyLabel={upcomingQuery.isPending && !upcomingQuery.data ? "加载中" : "这组便签已全部放到网格。"}
+                      isDropTarget={activeRailDropBucket === "upcoming"}
+                      isExpanded={expandedBucket === "upcoming"}
+                      items={visibleUpcomingItems}
+                      onCanvasDragEnd={handleDrawerCardDragEnd}
+                      onCanvasDragMove={handleDrawerCardDragMove}
+                      onCanvasDragStart={handleDrawerCardDragStart}
+                      onSelect={openNoteDetail}
+                      onToggle={() => toggleBucket("upcoming")}
+                      title="近期"
+                      trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : visibleUpcomingItems.length}</span>}
+                    />
+
+                    <NotePreviewSection
+                      activeItemId={selectedItem?.item.item_id ?? null}
+                      bucketKey="later"
+                      draggableToCanvas
+                      emptyLabel={laterQuery.isPending && !laterQuery.data ? "加载中" : "这组便签已全部放到网格。"}
+                      isDropTarget={activeRailDropBucket === "later"}
+                      isExpanded={expandedBucket === "later"}
+                      items={visibleLaterItems}
+                      onCanvasDragEnd={handleDrawerCardDragEnd}
+                      onCanvasDragMove={handleDrawerCardDragMove}
+                      onCanvasDragStart={handleDrawerCardDragStart}
+                      onSelect={openNoteDetail}
+                      onToggle={() => toggleBucket("later")}
+                      title="后续"
+                      trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : visibleLaterItems.length}</span>}
+                    />
+
+                    <NotePreviewSection
+                      activeItemId={selectedItem?.item.item_id ?? null}
+                      bucketKey="recurring_rule"
+                      draggableToCanvas
+                      emptyLabel={recurringQuery.isPending && !recurringQuery.data ? "加载中" : "这组便签已全部放到网格。"}
+                      isDropTarget={activeRailDropBucket === "recurring_rule"}
+                      isExpanded={expandedBucket === "recurring_rule"}
+                      items={visibleRecurringItems}
+                      onCanvasDragEnd={handleDrawerCardDragEnd}
+                      onCanvasDragMove={handleDrawerCardDragMove}
+                      onCanvasDragStart={handleDrawerCardDragStart}
+                      onSelect={openNoteDetail}
+                      onToggle={() => toggleBucket("recurring_rule")}
+                      title="重复"
+                      trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : visibleRecurringItems.length}</span>}
+                    />
+
+                    <article className={cn("dashboard-card note-preview-shell", activeRailDropBucket === "closed" && "is-drop-target", expandedBucket === "closed" ? "is-expanded" : "is-collapsed")}>
+                      <button aria-expanded={expandedBucket === "closed"} className="note-preview-shell__bucket-toggle" onClick={() => toggleBucket("closed")} type="button">
+                        <p className="dashboard-card__kicker">已结束</p>
+                        <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : visibleClosedItems.length}</span>
+                      </button>
+
+                      {expandedBucket === "closed" ? (
+                        <div className="note-preview-shell__bucket-body">
+                          <div className="note-preview-shell__body-toolbar">
+                            <p className="note-preview-shell__body-copy">默认展示近 3 天；滚到最底部时，会继续补出更早记录。</p>
+                          </div>
+
+                          <div className="note-preview-finished-groups" onScroll={handleClosedGroupsScroll}>
+                            {closedGroups.length > 0 ? (
+                              closedGroups.map((group) => (
+                                <section key={group.key} className="note-preview-finished-group">
+                                  <div>
+                                    <p className="note-preview-finished-group__title">{group.title}</p>
+                                    <p className="note-preview-finished-group__description">{group.description}</p>
+                                  </div>
+                                  <div className="note-preview-shell__list">
+                                    {group.items.map((entry) => (
+                                      <NotePreviewCard
+                                        draggableToCanvas
+                                        key={entry.item.item_id}
+                                        isActive={entry.item.item_id === selectedItem?.item.item_id}
+                                        item={entry}
+                                        onCanvasDragEnd={handleDrawerCardDragEnd}
+                                        onCanvasDragMove={handleDrawerCardDragMove}
+                                        onCanvasDragStart={handleDrawerCardDragStart}
+                                        onSelect={openNoteDetail}
+                                      />
+                                    ))}
+                                  </div>
+                                </section>
+                              ))
+                            ) : closedQuery.isPending && !closedQuery.data ? (
+                              <div className="note-preview-shell__empty">加载中</div>
+                            ) : !showMoreClosed && hasOlderClosedItems ? (
+                              <div className="note-preview-shell__empty-stack">
+                                <div className="note-preview-shell__empty">当前只有更早时间的已结束记录。</div>
+                                <button className="note-preview-shell__toggle" onClick={() => setShowMoreClosed(true)} type="button">
+                                  加载更早记录
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="note-preview-shell__empty">暂无记录</div>
+                            )}
+
+                            {!showMoreClosed && hasOlderClosedItems && closedGroups.length > 0 ? <div className="note-preview-finished-groups__sentinel" aria-hidden="true" /> : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  </>
+                ) : (
+                  <div className="note-preview-page__rail-dropzone">
+                    <span className="note-preview-page__rail-dropzone-kicker">侧边栏已收起</span>
+                    <p className="note-preview-page__rail-dropzone-title">拖回这里</p>
+                    <p className="note-preview-page__rail-dropzone-copy">放手后会回到原本分组。</p>
+                  </div>
+                )}
+              </aside>
+
+              <button className={cn("note-preview-page__drawer-handle", !drawerOpen && "is-collapsed")} onClick={() => setDrawerOpen((current) => !current)} type="button">
+                {drawerOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+                <span>{drawerOpen ? "收起侧边栏" : "展开侧边栏"}</span>
+              </button>
+            </aside>
           </section>
         </section>
 

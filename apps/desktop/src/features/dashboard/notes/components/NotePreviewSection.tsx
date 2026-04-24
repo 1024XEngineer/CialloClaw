@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
 import { cn } from "@/utils/cn";
-import type { NoteListItem } from "../notePage.types";
+import type { NoteListItem, NotePreviewGroupKey } from "../notePage.types";
 import { NotePreviewCard } from "./NotePreviewCard";
 
 type NotePreviewSectionProps = {
   activeItemId: string | null;
+  bucketKey: NotePreviewGroupKey;
   draggableToCanvas?: boolean;
   emptyLabel?: string;
   errorMessage?: string | null;
+  isDropTarget?: boolean;
   isExpanded: boolean;
   items: NoteListItem[];
   onCanvasDragEnd?: (itemId: string, event: PointerEvent) => void;
@@ -31,9 +33,38 @@ type NotePreviewSectionProps = {
   variant?: "default" | "hint";
 };
 
-export function NotePreviewSection({ activeItemId, draggableToCanvas = false, emptyLabel = "无", errorMessage, isExpanded, items, onCanvasDragEnd, onCanvasDragMove, onCanvasDragStart, onSelect, onToggle, title, trailing, variant = "default" }: NotePreviewSectionProps) {
+/**
+ * Renders one drawer bucket and highlights the matching group when a board
+ * card is dragged back toward the sidebar.
+ */
+export function NotePreviewSection({
+  activeItemId,
+  bucketKey,
+  draggableToCanvas = false,
+  emptyLabel = "暂无便签",
+  errorMessage,
+  isDropTarget = false,
+  isExpanded,
+  items,
+  onCanvasDragEnd,
+  onCanvasDragMove,
+  onCanvasDragStart,
+  onSelect,
+  onToggle,
+  title,
+  trailing,
+  variant = "default",
+}: NotePreviewSectionProps) {
   return (
-    <article className={cn("dashboard-card note-preview-shell", variant === "hint" && "note-preview-shell--hint", isExpanded ? "is-expanded" : "is-collapsed")}>
+    <article
+      className={cn(
+        "dashboard-card note-preview-shell",
+        variant === "hint" && "note-preview-shell--hint",
+        isDropTarget && "is-drop-target",
+        isExpanded ? "is-expanded" : "is-collapsed",
+      )}
+      data-note-bucket={bucketKey}
+    >
       <button aria-expanded={isExpanded} className="note-preview-shell__bucket-toggle" onClick={onToggle} type="button">
         <p className="dashboard-card__kicker">{title}</p>
         {trailing}
