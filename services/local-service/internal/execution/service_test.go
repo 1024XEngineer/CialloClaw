@@ -663,6 +663,40 @@ func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentLoopRequestsClarificationWhenPlannerReturnsEmptyOutput(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID:  "req_loop_need_input",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "",
+		}},
+	}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_need_input",
+		RunID:        "run_loop_need_input",
+		Title:        "Loop need input",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "你好"},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop clarification",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.LoopStopReason != string(agentloop.StopReasonNeedUserInput) {
+		t.Fatalf("expected need_user_input stop reason, got %+v", result)
+	}
+	if !strings.Contains(result.Content, "请补充你的目标") {
+		t.Fatalf("expected clarification fallback output, got %+v", result)
+	}
+	if !strings.Contains(result.BubbleText, "请补充你的目标") {
+		t.Fatalf("expected clarification bubble text, got %+v", result)
+	}
+}
+
 func TestPersistAgentLoopRuntimeKeepsResumeSegmentsAndEventsDistinct(t *testing.T) {
 	store := &recordingLoopRuntimeStore{}
 	service := (&Service{}).WithLoopRuntimeStore(store)
@@ -1405,6 +1439,12 @@ func TestExecuteAgentLoopDoesNotDuplicateQueuedSteeringOnFirstRound(t *testing.T
 func TestRunStatusFromStopReasonTreatsToolRetryExhaustedAsFailed(t *testing.T) {
 	if status := runStatusFromStopReason(agentloop.StopReasonToolRetryExhausted); status != "failed" {
 		t.Fatalf("expected tool retry exhausted to map to failed, got %q", status)
+	}
+}
+
+func TestRunStatusFromStopReasonTreatsNeedUserInputAsWaitingInput(t *testing.T) {
+	if status := runStatusFromStopReason(agentloop.StopReasonNeedUserInput); status != "waiting_input" {
+		t.Fatalf("expected need_user_input to map to waiting_input, got %q", status)
 	}
 }
 
@@ -2756,6 +2796,14 @@ func TestFallbackOutputRequestsClarificationWhenIntentMissing(t *testing.T) {
 	}
 	if strings.Contains(output, "总结结果") {
 		t.Fatalf("expected unknown intent fallback not to pretend summarize, got %s", output)
+	}
+}
+
+func TestFallbackOutputRequestsClarificationForAgentLoopWhenGoalIsUnderspecified(t *testing.T) {
+	output := fallbackOutput(Request{Intent: map[string]any{"name": defaultAgentLoopIntentName}}, "你好")
+
+	if !strings.Contains(output, "请补充你的目标") {
+		t.Fatalf("expected agent_loop fallback to request clarification, got %s", output)
 	}
 }
 

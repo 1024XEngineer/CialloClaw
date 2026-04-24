@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
@@ -487,7 +488,11 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 	response["task"] = taskMap(task)
 	response["bubble_message"] = bubble
-	response["delivery_result"] = deliveryResult
+	if len(deliveryResult) > 0 {
+		response["delivery_result"] = deliveryResult
+	} else {
+		response["delivery_result"] = nil
+	}
 	return response, nil
 }
 
@@ -938,7 +943,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	return map[string]any{
 		"task":            taskMap(updatedTask),
 		"bubble_message":  resultBubble,
-		"delivery_result": deliveryResult,
+		"delivery_result": optionalFormalDeliveryResult(deliveryResult),
 	}, nil
 }
 
@@ -6667,6 +6672,13 @@ func cloneMap(values map[string]any) map[string]any {
 	return result
 }
 
+func optionalFormalDeliveryResult(deliveryResult map[string]any) any {
+	if len(deliveryResult) == 0 {
+		return nil
+	}
+	return deliveryResult
+}
+
 // cloneMapSlice recursively copies a []map[string]any payload.
 func cloneMapSlice(values []map[string]any) []map[string]any {
 	if len(values) == 0 {
@@ -6876,6 +6888,13 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, err)
 		return failedTask, failureBubble, nil, nil, nil
 	}
+	if executionResult.LoopStopReason == string(agentloop.StopReasonNeedUserInput) {
+		waitingTask, waitingBubble, ok := s.reopenTaskForUserInput(processingTask, taskIntent, executionResult)
+		if !ok {
+			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+		}
+		return waitingTask, waitingBubble, nil, nil, nil
+	}
 
 	resultBubble := s.delivery.BuildBubbleMessage(
 		processingTask.TaskID,
@@ -6892,6 +6911,20 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// reopenTaskForUserInput keeps the current task open when the agent loop stops
+// because the user's goal is still underspecified. The same task/session stays
+// alive so follow-up input can continue the mainline instead of creating a fake
+// completed delivery record.
+func (s *Service) reopenTaskForUserInput(task runengine.TaskRecord, taskIntent map[string]any, executionResult execution.Result) (runengine.TaskRecord, map[string]any, bool) {
+	clarificationText := firstNonEmptyString(
+		firstNonEmptyString(executionResult.BubbleText, stringValue(executionResult.DeliveryResult, "preview_text", "")),
+		"请补充你的目标。",
+	)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.ReopenWaitingInput(task.TaskID, task.Title, taskIntent, bubble)
+	return updatedTask, bubble, ok
 }
 
 // attachFormalCitations upgrades execution-side citation seeds into protocol-facing

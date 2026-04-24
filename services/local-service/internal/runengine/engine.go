@@ -594,6 +594,49 @@ func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[strin
 	return record.clone(), true
 }
 
+// ReopenWaitingInput keeps a task open when execution determined that more user
+// input is required. The reset clears completed delivery state so follow-up
+// submissions continue the same task instead of creating a fake finished result.
+func (e *Engine) ReopenWaitingInput(taskID, title string, intent map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Title = firstNonEmpty(title, record.Title)
+	record.Intent = cloneMap(intent)
+	record.Status = "waiting_input"
+	record.CurrentStep = "collect_input"
+	record.UpdatedAt = e.now()
+	record.FinishedAt = nil
+	record.DeliveryResult = nil
+	record.Artifacts = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.PendingExecution = nil
+	record.ApprovalRequest = nil
+	record.Authorization = nil
+	record.ImpactScope = nil
+	record.StorageWritePlan = nil
+	record.ArtifactPlans = nil
+	record.MemoryReadPlans = nil
+	record.MemoryWritePlans = nil
+	record.MirrorReferences = nil
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+		record.SecuritySummary,
+	)
+	record.Timeline = advanceTimeline(record.Timeline, "collect_input", "pending", "等待用户补充输入")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // SetPresentation updates task-facing presentation fields without changing the
 // state-machine conclusion.
 func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, deliveryResult map[string]any, artifacts []map[string]any) (TaskRecord, bool) {

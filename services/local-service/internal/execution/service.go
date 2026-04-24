@@ -132,6 +132,7 @@ type Result struct {
 	Artifacts       []map[string]any
 	ExtensionAssets []map[string]any
 	BubbleText      string
+	LoopStopReason  string
 	RecoveryPoint   map[string]any
 	ModelInvocation map[string]any
 	AuditRecord     map[string]any
@@ -165,6 +166,7 @@ type generationTrace struct {
 	AuditRecord      map[string]any
 	GenerationOutput map[string]any
 	BudgetFailure    map[string]any
+	LoopStopReason   string
 }
 
 // NewService builds the execution service.
@@ -323,6 +325,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		AuditRecord:     cloneMap(trace.AuditRecord),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
 		BudgetFailure:   cloneMap(trace.BudgetFailure),
+		LoopStopReason:  trace.LoopStopReason,
 		ToolInput: map[string]any{
 			"intent_name":     effectiveIntentName(request.Intent),
 			"delivery_type":   deliveryType,
@@ -1976,6 +1979,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		ToolCalls:       runtimeResult.ToolCalls,
 		ModelInvocation: cloneMap(runtimeResult.ModelInvocation),
 		AuditRecord:     cloneMap(runtimeResult.AuditRecord),
+		LoopStopReason:  string(runtimeResult.StopReason),
 	}, true, nil
 }
 
@@ -2276,11 +2280,7 @@ func fallbackOutput(request Request, inputText string) string {
 	case "":
 		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
 	case defaultAgentLoopIntentName:
-		highlights := extractHighlights(normalized, 3)
-		if len(highlights) == 0 {
-			return "我已经理解了当前输入，但还需要更多信息才能继续执行。"
-		}
-		return "初步处理结果：\n- " + strings.Join(highlights, "\n- ")
+		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
 	case "rewrite":
 		return "改写结果：\n" + normalized
 	case "translate":
@@ -2929,7 +2929,7 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 	case agentloop.StopReasonNeedAuthorization:
 		return "waiting_auth"
 	case agentloop.StopReasonNeedUserInput:
-		return "confirming_intent"
+		return "waiting_input"
 	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted:
 		return "failed"
 	default:

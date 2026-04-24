@@ -73,9 +73,6 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	if intentName == "screen_analyze" {
 		requiresConfirm = false
 	}
-	if !requiresConfirm && len(explicitIntent) == 0 {
-		requiresConfirm = requiresConfirmation(snapshot, intentName)
-	}
 
 	directDeliveryType := directDeliveryTypeForSnapshot(snapshot, intentName)
 	resultPreview := previewForDeliveryType(directDeliveryType)
@@ -94,15 +91,12 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 }
 
 // defaultIntent chooses the minimum default route when the client does not provide
-// an explicit intent payload. The current correction path no longer classifies
-// free-form requests into summarize / translate / explain via keyword matching.
-// Instead, non-trivial inputs fall back to the generic agent loop path.
+// an explicit intent payload. Free-form requests always fall back to the
+// generic agent loop path so clarification stays in the main execution flow
+// instead of growing an intent-side phrase router.
 func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[string]any {
 	if screenIntent, ok := screenAnalyzeIntent(snapshot); ok {
 		return screenIntent
-	}
-	if shouldConfirmTextGoal(snapshot) {
-		return map[string]any{}
 	}
 
 	return intentPayload(defaultAgentLoopIntent)
@@ -208,37 +202,6 @@ func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 		}
 		return "hover_input"
 	}
-}
-
-func requiresConfirmation(snapshot contextsvc.TaskContextSnapshot, intentName string) bool {
-	switch {
-	case intentName == "":
-		return true
-	case intentName == defaultAgentLoopIntent:
-		return false
-	case snapshot.InputType == "file":
-		return true
-	case snapshot.InputType == "text_selection":
-		return intentName != "translate"
-	case isLongContent(snapshot.Text):
-		return intentName == "summarize" || intentName == "rewrite"
-	default:
-		return false
-	}
-}
-
-func shouldConfirmTextGoal(snapshot contextsvc.TaskContextSnapshot) bool {
-	if snapshot.InputType != "text" {
-		return false
-	}
-	trimmed := strings.TrimSpace(snapshot.Text)
-	if trimmed == "" {
-		return false
-	}
-	if isLongContent(trimmed) || isQuestionText(trimmed) {
-		return false
-	}
-	return utf8.RuneCountInString(trimmed) <= 4
 }
 
 func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
