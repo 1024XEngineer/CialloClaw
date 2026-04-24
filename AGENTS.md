@@ -30,6 +30,7 @@
 
 - 先读当前 `AGENTS.md`
 - 再根据改动范围读取对应子目录中的 `AGENTS.md`
+- 若改动落在 `services/local-service` 或会新增 / 修改后端实现，除边界与流程外，还必须同步读取 `services/local-service/AGENTS.md` 中的后端代码风格、英文注释规范与改动前后自检要求，并按其约束执行
 - 先结合 `docs/work-priority-plan.md` 判断当前任务属于哪个优先级分组，以及是否命中文档中的现有任务项
 - 若命中 `docs/work-priority-plan.md` 中的现有任务项，开始实现前必须先定位对应勾选项、验收标准和协作边界，不得跳过分工文档直接开工
 - 再按任务范围读取对应真源或设计文档；只读与当前任务直接相关的部分
@@ -186,6 +187,7 @@
 - 修改根目录 schema / 数据 / 协议相关文档或共享真源前，必须先定位对应真源文档，不得只依据局部实现或单侧目录规则判断
 - 修改 `apps/desktop` 及其子目录前，必须补读 `apps/desktop/AGENTS.md`
 - 修改 `services/local-service` 及其子目录前，必须补读 `services/local-service/AGENTS.md`
+- `services/local-service/AGENTS.md` 中关于后端代码风格、英文注释、状态机 / 治理逻辑说明、失败路径解释与改动后自检的要求，视为根目录规则在后端域的强制补充，不得只依据根目录 `AGENTS.md` 开工
 - 任务跨越前后端时，必须同时遵守根目录与对应子目录 `AGENTS.md`
 
 ------

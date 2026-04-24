@@ -379,6 +379,12 @@ type countingTaskRunStore struct {
 	getCalls        int
 }
 
+type stubStrongholdProvider struct {
+	descriptor storage.StrongholdDescriptor
+	store      storage.SecretStore
+	err        error
+}
+
 type countingTaskStore struct {
 	base      storage.TaskStore
 	listCalls int
@@ -429,6 +435,20 @@ func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structure
 	s.loadCalls++
 	s.legacyLoadCalls++
 	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
+}
+
+func (s *stubStrongholdProvider) Open(context.Context) (storage.SecretStore, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.store == nil {
+		s.store = storage.UnavailableSecretStore{}
+	}
+	return s.store, nil
+}
+
+func (s *stubStrongholdProvider) Descriptor() storage.StrongholdDescriptor {
+	return s.descriptor
 }
 
 func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
@@ -814,6 +834,14 @@ func replaceSecretStore(t *testing.T, service *storage.Service, store storage.Se
 	serviceValue := reflect.ValueOf(service).Elem()
 	field := serviceValue.FieldByName("secretStore")
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceStrongholdProvider(t *testing.T, service *storage.Service, provider storage.StrongholdProvider) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("stronghold")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(provider))
 }
 
 // TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
@@ -11294,6 +11322,98 @@ func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
 	}
 	if _, exists := effectiveSettings["models"]; exists {
 		t.Fatalf("expected unrelated settings update to avoid attaching model metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestSettingsGetUsesStrongholdDescriptorAndOmitsLegacyDataLog(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings stronghold descriptor")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	replaceStrongholdProvider(t, service.storage, &stubStrongholdProvider{descriptor: storage.StrongholdDescriptor{
+		Backend:     "stronghold_sqlite_fallback",
+		Available:   true,
+		Fallback:    true,
+		Initialized: true,
+	}})
+	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       service.defaultSettingsProvider() + "_api_key",
+		Value:     "secret-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store failed: %v", err)
+	}
+
+	result, err := service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	settings := result["settings"].(map[string]any)
+	if _, exists := settings["data_log"]; exists {
+		t.Fatalf("expected settings.get to omit legacy data_log output, got %+v", settings)
+	}
+	models := settings["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected provider_api_key_configured to come from secret availability, got %+v", credentials)
+	}
+	stronghold := credentials["stronghold"].(map[string]any)
+	if stronghold["backend"] != "stronghold_sqlite_fallback" || stronghold["fallback"] != true || stronghold["formal_store"] != false {
+		t.Fatalf("expected fallback stronghold descriptor in settings.get, got %+v", stronghold)
+	}
+}
+
+func TestSettingsUpdateIgnoresReadonlyCredentialMetadataAndOmitsLegacyDataLog(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings readonly credential metadata")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	replaceStrongholdProvider(t, service.storage, &stubStrongholdProvider{descriptor: storage.StrongholdDescriptor{
+		Backend:     "stronghold",
+		Available:   true,
+		Fallback:    false,
+		Initialized: true,
+	}})
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"credentials": map[string]any{
+				"budget_auto_downgrade":       false,
+				"base_url":                    "https://example.invalid/v1",
+				"model":                       "claude-test",
+				"provider_api_key_configured": true,
+				"stronghold":                  map[string]any{"backend": "forged"},
+			},
+		},
+		"data_log": map[string]any{
+			"provider_api_key_configured": true,
+			"stronghold":                  map[string]any{"backend": "legacy-forged"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	if _, exists := effectiveSettings["data_log"]; exists {
+		t.Fatalf("expected settings.update to omit legacy data_log output, got %+v", effectiveSettings)
+	}
+	models := effectiveSettings["models"].(map[string]any)
+	if models["provider"] != "anthropic" || models["base_url"] != "https://example.invalid/v1" || models["model"] != "claude-test" || models["budget_auto_downgrade"] != false {
+		t.Fatalf("expected effective_settings to flatten models credentials, got %+v", models)
+	}
+	if models["provider_api_key_configured"] != false {
+		t.Fatalf("expected readonly provider_api_key_configured to ignore request input, got %+v", models)
+	}
+	stronghold := models["stronghold"].(map[string]any)
+	if stronghold["backend"] != "stronghold" || stronghold["formal_store"] != true {
+		t.Fatalf("expected stronghold metadata to come from backend descriptor, got %+v", stronghold)
+	}
+	updatedKeys := result["updated_keys"].([]string)
+	for _, key := range updatedKeys {
+		if key == "models.provider_api_key_configured" || key == "models.stronghold" {
+			t.Fatalf("expected readonly stronghold metadata to stay out of updated keys, got %+v", updatedKeys)
+		}
 	}
 }
 
