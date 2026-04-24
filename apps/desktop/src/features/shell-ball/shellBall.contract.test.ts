@@ -5158,6 +5158,228 @@ test("shell-ball replays approval.pending notifications that arrive before submi
   assert.match(approvalBubble?.bubble.text ?? "", /Waiting for approval/i);
 });
 
+test("shell-ball replays delivery.ready notifications that arrive before submit resolves", async () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  let deliveryReadyListener: ((payload: {
+    task_id: string;
+    delivery_result: {
+      type: string;
+      title: string;
+      preview_text: string;
+      payload: {
+        path: string | null;
+        task_id: string | null;
+        url: string | null;
+      };
+    };
+  }) => void) | null = null;
+  let resolveSubmit: ((value: {
+    task: {
+      task_id: string;
+    };
+    bubble_message: null;
+    delivery_result: null;
+  }) => void) | null = null;
+  const openTaskDeliveryCalls: string[] = [];
+  const openTaskDetailCalls: string[] = [];
+  const reactRuntime = createImmediateShellBallReactRuntime();
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"),
+    {
+      react: reactRuntime.react,
+      "@tauri-apps/api/window": {
+        getCurrentWindow() {
+          return {
+            label: shellBallWindowLabels.ball,
+            listen() {
+              return Promise.resolve(() => {});
+            },
+            onMoved() {
+              return Promise.resolve(() => {});
+            },
+            onResized() {
+              return Promise.resolve(() => {});
+            },
+            outerPosition() {
+              return Promise.resolve({ toLogical: () => ({ x: 0, y: 0 }) });
+            },
+            outerSize() {
+              return Promise.resolve({ toLogical: () => ({ width: 124, height: 104 }) });
+            },
+            scaleFactor() {
+              return Promise.resolve(1);
+            },
+          };
+        },
+      },
+      "@/rpc/subscriptions": {
+        subscribeApprovalPending() {
+          return () => {};
+        },
+        subscribeDeliveryReady(callback: typeof deliveryReadyListener) {
+          deliveryReadyListener = callback;
+          return () => {};
+        },
+        subscribeTaskUpdated() {
+          return () => {};
+        },
+      },
+      "@/services/agentInputService": {
+        submitTextInput() {
+          return new Promise((resolve) => {
+            resolveSubmit = resolve as typeof resolveSubmit;
+          });
+        },
+      },
+      "@/features/dashboard/tasks/taskOutput.service": {
+        openTaskDeliveryForTask(taskId: string) {
+          openTaskDeliveryCalls.push(taskId);
+          return Promise.resolve({ task_id: taskId });
+        },
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
+          return {
+            feedback: "open task detail",
+            mode: "task_detail" as const,
+            path: null,
+            taskId: "task-screen-delivery-race",
+            url: null,
+          };
+        },
+        performTaskOpenExecution(plan: {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        }, options?: {
+          onOpenTaskDetail?: (input: {
+            plan: {
+              feedback: string;
+              mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+              path: string | null;
+              taskId: string | null;
+              url: string | null;
+            };
+            taskId: string;
+          }) => Promise<string | void> | string | void;
+        }) {
+          if (plan.mode === "task_detail" && plan.taskId && options?.onOpenTaskDetail) {
+            return Promise.resolve(options.onOpenTaskDetail({ plan, taskId: plan.taskId })).then(
+              (feedback) => typeof feedback === "string" && feedback.trim() !== "" ? feedback : plan.feedback,
+            );
+          }
+
+          return Promise.resolve(plan.feedback);
+        },
+      },
+      "@/features/dashboard/shared/dashboardTaskDetailNavigation": {
+        requestDashboardTaskDetailOpen(taskId: string) {
+          openTaskDetailCalls.push(taskId);
+          return Promise.resolve();
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME: { width: 240, height: 140 },
+        closeShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        emitToShellBallWindowLabel() {
+          return Promise.resolve();
+        },
+        getShellBallPinnedBubbleIdFromLabel(): string | null {
+          return null;
+        },
+        getShellBallPinnedBubbleWindowAnchor() {
+          return { x: 0, y: 0 };
+        },
+        getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
+          return `shell-ball-bubble-pinned-${bubbleId}`;
+        },
+        openShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        setShellBallPinnedBubbleWindowVisible() {
+          return Promise.resolve();
+        },
+        shellBallWindowLabels,
+      },
+      "./useShellBallWindowMetrics": {
+        getShellBallBubbleAnchor() {
+          return { x: 0, y: 0 };
+        },
+      },
+    },
+    async (moduleExports) => {
+      const { useShellBallCoordinator } = moduleExports as {
+        useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator;
+      };
+
+      const { handlePrimaryAction } = useShellBallCoordinator({
+        visualState: "hover_input",
+        regionActive: false,
+        inputValue: "截图",
+        inputFocused: true,
+        finalizedSpeechPayload: null,
+        voicePreview: null,
+        voiceHintMode: "hidden",
+        setInputValue: () => {},
+        onFinalizedSpeechHandled: () => {},
+        onRegionEnter: () => {},
+        onRegionLeave: () => {},
+        onInputHoverChange: () => {},
+        onInputFocusChange: () => {},
+        onSubmitText: async () => null,
+        onAttachFile: () => {},
+        onPrimaryClick: () => {},
+      });
+
+      const submitPromise = handlePrimaryAction("submit");
+      await flushAsyncEffects();
+
+      deliveryReadyListener?.({
+        task_id: "task-screen-delivery-race",
+        delivery_result: {
+          type: "workspace_document",
+          title: "summary.docx",
+          preview_text: "summary.docx",
+          payload: {
+            path: "C:\\output\\summary.docx",
+            task_id: "task-screen-delivery-race",
+            url: null,
+          },
+        },
+      });
+
+      resolveSubmit?.({
+        task: {
+          task_id: "task-screen-delivery-race",
+        },
+        bubble_message: null,
+        delivery_result: null,
+      });
+
+      await submitPromise;
+      await flushAsyncEffects();
+      await flushAsyncEffects();
+    },
+  );
+
+  assert.match(coordinatorSource, /const queuedDeliveryReadyNotificationsRef = useRef\(new Map<string, QueuedDeliveryReadyNotification\[]>\(\)\);/);
+  assert.match(coordinatorSource, /queuedDeliveryNotifications\.forEach\(\(notification\) => \{\s*appendDeliveryReadyBubble\(notification\);/);
+  assert.deepEqual(openTaskDeliveryCalls, ["task-screen-delivery-race"]);
+  assert.deepEqual(openTaskDetailCalls, ["task-screen-delivery-race"]);
+  const deliveryBubble = reactRuntime.getBubbleItems().find((item) => item.bubble.task_id === "task-screen-delivery-race" && item.bubble.type === "result");
+  assert.ok(deliveryBubble);
+  assert.match(deliveryBubble?.bubble.text ?? "", /summary\.docx/i);
+});
+
 test("shell-ball ignores untracked approval.pending notifications without a pending submit", async () => {
   let approvalPendingListener: ((payload: {
     task_id: string;

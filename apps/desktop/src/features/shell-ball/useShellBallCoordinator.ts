@@ -80,6 +80,11 @@ type QueuedApprovalPendingNotification = {
   taskId: string;
 };
 
+type QueuedDeliveryReadyNotification = {
+  deliveryResult: DeliveryResult;
+  taskId: string;
+};
+
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -711,6 +716,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   // Keep them task-scoped until the submit result binds the formal task id to
   // this shell-ball turn, then replay them into the local bubble timeline.
   const queuedApprovalPendingNotificationsRef = useRef(new Map<string, QueuedApprovalPendingNotification[]>());
+  // Delivery notifications can also arrive before the submit response exposes
+  // the formal task id locally. Buffer them with the same task-scoped replay
+  // path so shell-ball still shows the result bubble and open flow.
+  const queuedDeliveryReadyNotificationsRef = useRef(new Map<string, QueuedDeliveryReadyNotification[]>());
   // Only shell-ball submissions that are still waiting for their formal task id
   // are allowed to buffer approval notifications. This keeps unrelated desktop
   // approvals from lingering in shell-ball memory forever.
@@ -720,6 +729,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
   const activeShellBallTaskIdRef = useRef<string | null>(null);
   const revealBubbleRegionRef = useRef<() => void>(() => {});
+  const autoOpenShellBallDeliveryResultRef = useRef<(taskId: string, deliveryResult: DeliveryResult | null | undefined) => Promise<void>>(
+    () => Promise.resolve(),
+  );
   const syncPinnedBubbleWindowAnchorRef = useRef<(bubbleId: string) => Promise<void>>(() => Promise.resolve());
   const syncAnchoredPinnedBubbleWindowsRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const handleBubbleActionRef = useRef<(payload: ShellBallBubbleActionPayload) => void>(() => {});
@@ -813,6 +825,46 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     revealBubbleRegionRef.current();
   }, []);
 
+  const appendDeliveryReadyBubble = useCallback((input: QueuedDeliveryReadyNotification) => {
+    const bubbleText = input.deliveryResult.preview_text.trim() || input.deliveryResult.title;
+    const bubbleKey = `${input.taskId}:${input.deliveryResult.type}:${bubbleText}`;
+
+    if (deliveryReadyBubbleKeysRef.current.has(bubbleKey)) {
+      return;
+    }
+
+    deliveryReadyBubbleKeysRef.current.add(bubbleKey);
+
+    setBubbleItems((currentItems) => {
+      if (
+        currentItems.some(
+          (item) =>
+            item.bubble.task_id === input.taskId &&
+            item.bubble.type === "result" &&
+            item.role === "agent",
+        )
+      ) {
+        return currentItems;
+      }
+
+      const turnIndex = getTaskBubbleTurnIndex(input.taskId) ?? allocateBubbleTurnIndex();
+      bindTaskToBubbleTurn(input.taskId, turnIndex);
+
+      return sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallDeliveryResultBubbleItem({
+          createdAt: new Date().toISOString(),
+          deliveryResult: input.deliveryResult,
+          taskId: input.taskId,
+          turnIndex,
+          turnPhase: 2,
+        }),
+      ]);
+    });
+    revealBubbleRegionRef.current();
+    void autoOpenShellBallDeliveryResultRef.current(input.taskId, input.deliveryResult);
+  }, []);
+
   const registerShellBallTask = useCallback((taskId: string, turnIndex?: number) => {
     shellBallTaskIdsRef.current.add(taskId);
     activeShellBallTaskIdRef.current = taskId;
@@ -827,7 +879,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     queuedNotifications.forEach((notification) => {
       appendApprovalPendingBubble(notification);
     });
-  }, [appendApprovalPendingBubble]);
+
+    const queuedDeliveryNotifications = queuedDeliveryReadyNotificationsRef.current.get(taskId) ?? [];
+    queuedDeliveryReadyNotificationsRef.current.delete(taskId);
+
+    queuedDeliveryNotifications.forEach((notification) => {
+      appendDeliveryReadyBubble(notification);
+    });
+  }, [appendApprovalPendingBubble, appendDeliveryReadyBubble]);
 
   const beginPendingShellBallTaskRegistration = useCallback(() => {
     pendingShellBallTaskRegistrationsRef.current += 1;
@@ -843,6 +902,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
       if (pendingShellBallTaskRegistrationsRef.current === 0) {
         queuedApprovalPendingNotificationsRef.current.clear();
+        queuedDeliveryReadyNotificationsRef.current.clear();
       }
     };
   }, []);
@@ -943,6 +1003,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       });
     }
   }, [appendShellBallAutoOpenFeedback]);
+  autoOpenShellBallDeliveryResultRef.current = autoOpenShellBallDeliveryResult;
 
   const scheduleBubbleRegionHide = useCallback(() => {
     clearBubbleVisibilityTimers();
@@ -1770,48 +1831,25 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   useEffect(() => {
     return subscribeDeliveryReady((payload) => {
       if (!shellBallTaskIdsRef.current.has(payload.task_id)) {
-        return;
-      }
-
-      const bubbleText = payload.delivery_result.preview_text.trim() || payload.delivery_result.title;
-      const bubbleKey = `${payload.task_id}:${payload.delivery_result.type}:${bubbleText}`;
-
-      if (deliveryReadyBubbleKeysRef.current.has(bubbleKey)) {
-        return;
-      }
-
-      deliveryReadyBubbleKeysRef.current.add(bubbleKey);
-
-      setBubbleItems((currentItems) => {
-        if (
-          currentItems.some(
-            (item) =>
-              item.bubble.task_id === payload.task_id &&
-              item.bubble.type === "result" &&
-              item.role === "agent",
-          )
-        ) {
-          return currentItems;
+        if (pendingShellBallTaskRegistrationsRef.current === 0) {
+          return;
         }
 
-        const turnIndex = getTaskBubbleTurnIndex(payload.task_id) ?? allocateBubbleTurnIndex();
-        bindTaskToBubbleTurn(payload.task_id, turnIndex);
+        const queuedNotifications = queuedDeliveryReadyNotificationsRef.current.get(payload.task_id) ?? [];
+        queuedNotifications.push({
+          deliveryResult: payload.delivery_result,
+          taskId: payload.task_id,
+        });
+        queuedDeliveryReadyNotificationsRef.current.set(payload.task_id, queuedNotifications);
+        return;
+      }
 
-        return sortShellBallBubbleItemsByTimestamp([
-          ...currentItems,
-          createShellBallDeliveryResultBubbleItem({
-            createdAt: new Date().toISOString(),
-            deliveryResult: payload.delivery_result,
-            taskId: payload.task_id,
-            turnIndex,
-            turnPhase: 2,
-          }),
-        ]);
+      appendDeliveryReadyBubble({
+        deliveryResult: payload.delivery_result,
+        taskId: payload.task_id,
       });
-      revealBubbleRegion();
-      void autoOpenShellBallDeliveryResult(payload.task_id, payload.delivery_result);
     });
-  }, [autoOpenShellBallDeliveryResult, revealBubbleRegion]);
+  }, [appendDeliveryReadyBubble]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
