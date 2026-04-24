@@ -1,0 +1,21 @@
+---
+import { DOC_LINKS } from "@/lib/constants";
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">Docs and developer entry</p>
+    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Start from the source-of-truth documents, not from guesses.</h2>
+    <p class="mt-5 text-lg leading-8 text-white/70">The website should send contributors toward the same architecture, protocol, dashboard, control panel, and issue sources that guide implementation inside the repository.</p>
+  </div>
+
+  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+    {DOC_LINKS.map((item) => (
+      <a class="focus-ring glass-card rounded-[1.75rem] p-6 transition hover:border-white/18 hover:bg-white/10" href={item.href}>
+        <p class="text-xs tracking-[0.24em] text-cc-cyan uppercase">Read next</p>
+        <h3 class="mt-4 font-display text-2xl font-semibold text-white">{item.label}</h3>
+        <p class="mt-4 text-sm leading-7 text-white/68">{item.description}</p>
+      </a>
+    ))}
+  </div>
+</section>

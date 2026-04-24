@@ -1,0 +1,54 @@
+---
+export const prerender = true;
+
+import "../styles/global.css";
+
+import Hero from "@/components/astro/Hero.astro";
+import ProductStory from "@/components/astro/ProductStory.astro";
+import HowItWorks from "@/components/astro/HowItWorks.astro";
+import CapabilityGrid from "@/components/astro/CapabilityGrid.astro";
+import TrustAndSafety from "@/components/astro/TrustAndSafety.astro";
+import DocsEntry from "@/components/astro/DocsEntry.astro";
+import FAQ from "@/components/astro/FAQ.astro";
+import Footer from "@/components/astro/Footer.astro";
+import SiteHead from "@/components/layout/SiteHead.astro";
+import SiteHeader from "@/components/layout/SiteHeader.astro";
+import { ReleaseCards } from "@/components/release/ReleaseCards";
+
+const pageTitle = "CialloClaw | Desktop Collaboration Agent";
+const pageDescription =
+  "CialloClaw is a Windows-first desktop collaboration Agent built around floating-ball entry, task-centric orchestration, governed execution, and formal delivery results.";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <SiteHead title={pageTitle} description={pageDescription} path="/" />
+  </head>
+  <body>
+    <div class="site-shell site-noise">
+      <SiteHeader />
+      <main>
+        <Hero />
+        <ProductStory />
+        <HowItWorks />
+        <CapabilityGrid />
+        <TrustAndSafety />
+
+        <section id="download" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+          <div class="mb-10 max-w-3xl">
+            <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">Download</p>
+            <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Windows downloads and release channels live here.</h2>
+            <p class="mt-5 text-lg leading-8 text-white/70">The final implementation syncs Stable and Tip Preview from GitHub Releases on the server side. This first slice keeps the section in place so the product story is already complete.</p>
+          </div>
+
+          <ReleaseCards client:idle />
+        </section>
+
+        <DocsEntry />
+        <FAQ />
+      </main>
+      <Footer />
+    </div>
+  </body>
+</html>

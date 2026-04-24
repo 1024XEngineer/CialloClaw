@@ -1,0 +1,24 @@
+---
+import { PRIMARY_NAV_ITEMS } from "@/lib/constants";
+---
+
+<header class="sticky top-0 z-30 border-b border-white/8 bg-slate-950/55 backdrop-blur-xl">
+  <div class="section-frame flex items-center justify-between gap-6 px-4 py-4 lg:px-0">
+    <a class="focus-ring inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/6 px-4 py-2 text-sm font-medium" href="/">
+      <span class="flex h-8 w-8 items-center justify-center rounded-full bg-linear-to-br from-cc-cyan via-white to-cc-violet text-slate-950 shadow-cc-glow">C</span>
+      <span class="font-display text-base tracking-[0.18em] text-white/92 uppercase">CialloClaw</span>
+    </a>
+
+    <nav aria-label="Primary" class="hidden items-center gap-3 lg:flex">
+      {PRIMARY_NAV_ITEMS.map((item) => (
+        <a class="focus-ring rounded-full px-4 py-2 text-sm text-white/72 transition hover:bg-white/8 hover:text-white" href={item.href}>
+          {item.label}
+        </a>
+      ))}
+    </nav>
+
+    <a class="focus-ring inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950 transition hover:scale-[1.02]" href="#download">
+      Download
+    </a>
+  </div>
+</header>

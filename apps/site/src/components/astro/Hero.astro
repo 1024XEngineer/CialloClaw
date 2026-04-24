@@ -1,0 +1,100 @@
+---
+const trustPills = [
+  "Windows first",
+  "Local-first harness",
+  "Task-centric",
+  "Low interruption",
+];
+
+const nearbySignals = ["selected text", "dragged files", "current errors", "hover input", "voice hold"];
+---
+
+<section class="section-frame relative px-4 pb-18 pt-10 lg:px-0 lg:pb-28 lg:pt-18">
+  <div class="grid items-center gap-12 lg:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
+    <div>
+      <div class="mb-5 flex flex-wrap gap-3">
+        {trustPills.map((pill) => (
+          <span class="rounded-full border border-white/12 bg-white/7 px-4 py-2 text-xs font-medium tracking-[0.24em] text-cc-cyan uppercase">
+            {pill}
+          </span>
+        ))}
+      </div>
+
+      <p class="text-sm font-medium tracking-[0.28em] text-cc-peach uppercase">Desktop collaboration Agent</p>
+      <h1 class="mt-4 max-w-4xl font-display text-5xl leading-none font-semibold tracking-tight text-white sm:text-6xl lg:text-7xl">
+        A tiny desktop Agent that stays near your work instead of pulling you into a chat tab.
+      </h1>
+      <p class="mt-6 max-w-2xl text-lg leading-8 text-white/72 sm:text-xl">
+        CialloClaw lives at the edge of your desktop with a floating ball entry point. It picks up the task from your current page,
+        file, document, error, or note, confirms intent, moves the task through the Agent loop, and delivers the result through
+        <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">delivery_result</code>,
+        <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">artifact</code>, and
+        <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">citation</code>.
+      </p>
+
+      <div class="mt-8 flex flex-wrap gap-4">
+        <a class="focus-ring inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-base font-semibold text-slate-950 transition hover:scale-[1.02]" href="#download">
+          Download for Windows
+        </a>
+        <a class="focus-ring inline-flex items-center justify-center rounded-full border border-white/12 bg-white/6 px-6 py-3 text-base font-semibold text-white transition hover:bg-white/10" href="/docs">
+          Read docs
+        </a>
+        <a class="focus-ring inline-flex items-center justify-center rounded-full border border-white/12 bg-white/6 px-6 py-3 text-base font-semibold text-white transition hover:bg-white/10" href="https://github.com/1024XEngineer/CialloClaw">
+          View GitHub
+        </a>
+      </div>
+
+      <div class="mt-10 flex flex-wrap gap-3 text-sm text-white/56">
+        <span>Nearby signals:</span>
+        {nearbySignals.map((signal) => (
+          <span class="rounded-full border border-white/8 bg-slate-950/45 px-3 py-1.5 text-white/76">{signal}</span>
+        ))}
+      </div>
+    </div>
+
+    <div class="relative">
+      <div class="glass-card relative overflow-hidden rounded-[2rem] border border-white/10 p-6 lg:p-8">
+        <div class="absolute inset-x-0 top-0 h-40 bg-linear-to-b from-cc-cyan/10 via-cc-violet/10 to-transparent"></div>
+
+        <div class="relative flex items-start justify-between gap-4">
+          <div>
+            <p class="text-xs tracking-[0.28em] text-cc-cyan uppercase">Live nearby</p>
+            <h2 class="mt-3 font-display text-3xl font-semibold text-white">From floating ball to formal delivery</h2>
+          </div>
+          <div class="relative flex h-20 w-20 items-center justify-center rounded-full border border-white/16 bg-slate-950/60 shadow-cc-glow">
+            <div class="h-12 w-12 rounded-full bg-linear-to-br from-cc-cyan via-white to-cc-violet"></div>
+            <div class="absolute h-20 w-20 rounded-full border border-cc-cyan/30"></div>
+          </div>
+        </div>
+
+        <div class="mt-8 grid gap-4">
+          <div class="rounded-[1.5rem] border border-white/8 bg-white/6 p-4">
+            <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">Capture</p>
+            <p class="mt-2 text-sm leading-7 text-white/72">Start from selected text, files, current errors, hover input, or voice without rebuilding context from scratch.</p>
+          </div>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div class="rounded-[1.5rem] border border-white/8 bg-white/6 p-4">
+              <p class="text-xs tracking-[0.24em] text-cc-violet uppercase">Govern</p>
+              <p class="mt-2 text-sm leading-7 text-white/72">Risky actions surface approval_request, authorization_record, audit_record, and recovery_point checkpoints.</p>
+            </div>
+            <div class="rounded-[1.5rem] border border-white/8 bg-white/6 p-4">
+              <p class="text-xs tracking-[0.24em] text-cc-mint uppercase">Deliver</p>
+              <p class="mt-2 text-sm leading-7 text-white/72">Long outputs do not disappear into a bubble. They return as artifacts you can open, inspect, and reuse.</p>
+            </div>
+          </div>
+
+          <div class="rounded-[1.75rem] border border-white/10 bg-slate-950/58 p-5">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-xs tracking-[0.22em] text-white/56 uppercase">Task flow</p>
+                <p class="mt-2 text-base font-medium text-white">input → task → run/step/event → delivery_result</p>
+              </div>
+              <span class="rounded-full bg-emerald-400/16 px-3 py-1 text-xs font-medium text-emerald-100">low interruption</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

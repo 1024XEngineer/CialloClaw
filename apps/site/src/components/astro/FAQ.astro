@@ -1,0 +1,19 @@
+---
+import { FAQ_ITEMS } from "@/lib/constants";
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">FAQ</p>
+    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Questions new users are likely to ask first.</h2>
+  </div>
+
+  <div class="grid gap-4">
+    {FAQ_ITEMS.map((item) => (
+      <details class="glass-card rounded-[1.5rem] p-6 open:bg-white/10">
+        <summary class="cursor-pointer list-none text-lg font-semibold text-white marker:hidden">{item.question}</summary>
+        <p class="mt-4 max-w-4xl text-sm leading-7 text-white/68">{item.answer}</p>
+      </details>
+    ))}
+  </div>
+</section>

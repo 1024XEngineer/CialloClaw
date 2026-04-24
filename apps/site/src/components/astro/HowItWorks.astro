@@ -1,0 +1,54 @@
+---
+const workflowSteps = [
+  {
+    title: "Capture",
+    text: "Pick up the task from selected text, dragged files, error snippets, hover input, or voice hold near the floating ball.",
+  },
+  {
+    title: "Confirm",
+    text: "Clarify intent before acting. The product favors lightweight confirmation over jumping straight into blind execution.",
+  },
+  {
+    title: "Plan",
+    text: "Move the request into a task-centric Agent loop that can organize the work through task, run, step, and event tracking.",
+  },
+  {
+    title: "Govern",
+    text: "Route risky actions through approval_request, authorization_record, audit_record, and recovery_point protections.",
+  },
+  {
+    title: "Deliver",
+    text: "Return formal outputs through delivery_result, artifact, and citation instead of leaving long results in temporary UI state.",
+  },
+  {
+    title: "Review",
+    text: "Inspect task progress, trust summaries, artifacts, and recovery signals through the dashboard and control panel surfaces.",
+  },
+];
+---
+
+<section id="workflow" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="grid gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:items-start">
+    <div>
+      <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">How it works</p>
+      <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">A task moves through the Agent loop with explicit checkpoints.</h2>
+      <p class="mt-5 max-w-2xl text-lg leading-8 text-white/70">
+        The website should explain the formal flow without inventing competing objects. That means the public story remains clear while the internal architecture stays aligned with the repository source of truth.
+      </p>
+    </div>
+
+    <ol class="grid gap-4">
+      {workflowSteps.map((step, index) => (
+        <li class="glass-card grid gap-4 rounded-[1.75rem] p-5 md:grid-cols-[auto_1fr] md:items-start">
+          <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/8 font-display text-lg font-semibold text-white">
+            {index + 1}
+          </div>
+          <div>
+            <h3 class="text-2xl font-semibold text-white">{step.title}</h3>
+            <p class="mt-3 text-sm leading-7 text-white/68">{step.text}</p>
+          </div>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>

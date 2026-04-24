@@ -1,0 +1,44 @@
+---
+const capabilities = [
+  {
+    title: "Floating ball entry",
+    description: "Single click, double click, hover, long press, selected text, and dragged files all start from the nearby desktop entry point.",
+  },
+  {
+    title: "Agent loop",
+    description: "Tasks do not end at a one-shot answer. The loop can observe, plan, act, reflect, and continue with visible state transitions.",
+  },
+  {
+    title: "Dashboard",
+    description: "Review what the Agent is doing now, where it paused, what it produced, and when you need to step in.",
+  },
+  {
+    title: "Control panel",
+    description: "Configure providers, models, budget, memory, floating ball presence, and other low-frequency controls from a dedicated surface.",
+  },
+  {
+    title: "Artifacts and citations",
+    description: "Long-form results are saved as formal outputs you can open and inspect rather than getting lost in transient UI state.",
+  },
+  {
+    title: "Local-first harness",
+    description: "The local-service harness keeps orchestration, governance, audit, recovery, and persistence inside the controlled local architecture.",
+  },
+];
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="text-sm tracking-[0.28em] text-cc-mint uppercase">Key capabilities</p>
+    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">The product surface stays cute and lightweight, but the execution model stays explicit.</h2>
+  </div>
+
+  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+    {capabilities.map((capability) => (
+      <article class="glass-card rounded-[1.75rem] p-6">
+        <h3 class="font-display text-2xl font-semibold text-white">{capability.title}</h3>
+        <p class="mt-4 text-sm leading-7 text-white/68">{capability.description}</p>
+      </article>
+    ))}
+  </div>
+</section>

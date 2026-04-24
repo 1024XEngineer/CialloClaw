@@ -1,0 +1,81 @@
+---
+export const prerender = true;
+
+import "../../styles/global.css";
+import Footer from "@/components/astro/Footer.astro";
+import SiteHead from "@/components/layout/SiteHead.astro";
+import SiteHeader from "@/components/layout/SiteHeader.astro";
+
+const docs = [
+  {
+    id: "architecture-overview",
+    title: "Architecture overview",
+    href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/architecture-overview.md",
+    description: "System positioning, layered boundaries, task-centric flow, and governance architecture.",
+  },
+  {
+    id: "product-interaction-design",
+    title: "Product interaction design",
+    href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/product-interaction-design.md",
+    description: "Floating ball entry, hover input, voice hold, selected text, and desktop collaboration semantics.",
+  },
+  {
+    id: "dashboard-design",
+    title: "Dashboard design",
+    href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/dashboard-design.md",
+    description: "Task overview, trust summary, memory, safety, and visibility expectations for the dashboard.",
+  },
+  {
+    id: "control-panel-settings",
+    title: "Control panel settings",
+    href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/control-panel-settings.md",
+    description: "Provider, model, memory, automation, floating ball, and budget control surfaces.",
+  },
+  {
+    id: "protocol-design",
+    title: "Protocol design",
+    href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/protocol-design.md",
+    description: "Formal JSON-RPC boundaries, methods, notifications, and stable contracts.",
+  },
+  {
+    id: "issue-332",
+    title: "Issue #332 website requirements",
+    href: "https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828",
+    description: "The original request for a lively website with draggable elements, mascot interaction, custom cursor, and release sync.",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <SiteHead
+      title="CialloClaw Docs Entry"
+      description="Entry page for the source-of-truth CialloClaw architecture, product, dashboard, settings, protocol, and website requirement documents."
+      path="/docs"
+    />
+  </head>
+  <body>
+    <div class="site-shell site-noise">
+      <SiteHeader />
+      <main class="section-frame px-4 py-16 lg:px-0 lg:py-24">
+        <div class="mb-12 max-w-3xl">
+          <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">Docs entry</p>
+          <h1 class="mt-4 font-display text-5xl font-semibold text-white">Use the same source-of-truth docs that guide the product codebase.</h1>
+          <p class="mt-5 text-lg leading-8 text-white/72">This first docs page is intentionally a focused index rather than a duplicate documentation system. It points contributors and users to the project documents that define product language, architecture, and engineering boundaries.</p>
+        </div>
+
+        <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {docs.map((doc) => (
+            <a id={doc.id} class="focus-ring glass-card rounded-[1.75rem] p-6 transition hover:border-white/16 hover:bg-white/10" href={doc.href}>
+              <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">Source of truth</p>
+              <h2 class="mt-4 font-display text-2xl font-semibold text-white">{doc.title}</h2>
+              <p class="mt-4 text-sm leading-7 text-white/68">{doc.description}</p>
+            </a>
+          ))}
+        </div>
+      </main>
+      <Footer />
+    </div>
+  </body>
+</html>

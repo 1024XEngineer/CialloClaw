@@ -1,0 +1,45 @@
+---
+const storyCards = [
+  {
+    title: "Not a chat-first tool",
+    text: "CialloClaw is designed around the task in your current desktop scene, not around keeping a full-screen conversation open all day.",
+  },
+  {
+    title: "Less prompt rebuilding",
+    text: "The product starts from what you already have: selected text, dragged files, notes, error messages, and the active task context.",
+  },
+  {
+    title: "Visible progress",
+    text: "The system keeps task progress, risk state, and delivery paths visible through task, run, step, event, and artifact projections.",
+  },
+  {
+    title: "Formal outputs",
+    text: "Results are routed through delivery_result, artifact, and citation instead of getting trapped in temporary UI bubbles.",
+  },
+];
+---
+
+<section id="product" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">What is CialloClaw</p>
+    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Built for desktop scenes, task continuity, and low-disruption collaboration.</h2>
+    <p class="mt-5 text-lg leading-8 text-white/70">
+      The official product language stays task-centric. The website explains it in user-facing terms, but the underlying system still revolves around
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">task</code> as the formal object, with
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">run</code>,
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">step</code>,
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">event</code>, and
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">tool_call</code> kept as execution-compatible structures behind the scenes.
+    </p>
+  </div>
+
+  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+    {storyCards.map((card) => (
+      <article class="glass-card rounded-[1.75rem] p-6">
+        <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">Product story</p>
+        <h3 class="mt-4 font-display text-2xl font-semibold text-white">{card.title}</h3>
+        <p class="mt-4 text-sm leading-7 text-white/68">{card.text}</p>
+      </article>
+    ))}
+  </div>
+</section>
