@@ -265,8 +265,10 @@ function loadDashboardSettingsMutationModule(rpcMethods?: {
 }) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsMutation.js");
+    const snapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
 
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[snapshotModulePath];
 
     return requireFn(modulePath) as {
       updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc" | "mock") => Promise<{
@@ -290,6 +292,43 @@ function loadDashboardSettingsMutationModule(rpcMethods?: {
               lifecycle: string;
             };
           };
+        };
+      }>;
+    };
+  }, rpcMethods);
+}
+
+function loadDashboardSettingsSnapshotModule(rpcMethods?: {
+  getSettingsDetailed?: (params: unknown) => Promise<unknown>;
+}) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
+
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      loadDashboardSettingsSnapshot: (
+        source?: "rpc" | "mock",
+        scope?: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "models",
+      ) => Promise<{
+        source: string;
+        settings: {
+          general: {
+            download: {
+              ask_before_save_each_file: boolean;
+            };
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+          };
+          models: {
+            provider: string;
+          };
+        };
+        rpcContext: {
+          serverTime: string | null;
+          warnings: string[];
         };
       }>;
     };
@@ -473,7 +512,7 @@ function createTask(overrides: Partial<Task> = {}): Task {
 
   return {
     task_id: "task_dashboard_001",
-    session_id: null,
+    session_id,
     title: "Review dashboard safety state",
     status: "waiting_auth",
     source_type: "hover_input",
@@ -1275,6 +1314,167 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
   }
 });
 
+test("dashboard settings snapshot merges scoped memory payloads onto the local baseline", async () => {
+  const requestedScopes: string[] = [];
+  const { loadDashboardSettingsSnapshot } = loadDashboardSettingsSnapshotModule({
+    getSettingsDetailed: async (params) => {
+      const request = params as {
+        request_meta?: {
+          trace_id?: string;
+          client_time?: string;
+        };
+        scope?: string;
+      };
+      requestedScopes.push(request.scope ?? "missing");
+      assert.match(request.request_meta?.trace_id ?? "", /^trace_dashboard_settings_/);
+      assert.match(request.request_meta?.client_time ?? "", /^\d{4}-\d{2}-\d{2}T/);
+
+      return {
+        data: {
+          settings: {
+            memory: {
+              enabled: false,
+              lifecycle: "session",
+              work_summary_interval: {
+                unit: "week",
+                value: 1,
+              },
+              profile_refresh_interval: {
+                unit: "month",
+                value: 1,
+              },
+            },
+          },
+        },
+        meta: {
+          server_time: "2026-04-24T09:30:00Z",
+        },
+        warnings: [],
+      };
+    },
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const snapshot = await loadDashboardSettingsSnapshot("rpc", "memory");
+
+    assert.deepEqual(requestedScopes, ["memory"]);
+    assert.equal(snapshot.source, "rpc");
+    assert.equal(snapshot.settings.memory.enabled, false);
+    assert.equal(snapshot.settings.memory.lifecycle, "session");
+    assert.equal(snapshot.settings.general.download.ask_before_save_each_file, true);
+    assert.equal(snapshot.settings.models.provider, "openai");
+    assert.equal(snapshot.rpcContext.serverTime, "2026-04-24T09:30:00Z");
+    assert.deepEqual(snapshot.rpcContext.warnings, []);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard settings mutation reloads only the touched memory scope after rpc writes", async () => {
+  const requestedScopes: string[] = [];
+  const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
+    updateSettings: async () => ({
+      apply_mode: "immediate",
+      need_restart: false,
+      updated_keys: ["memory.enabled", "memory.lifecycle"],
+      effective_settings: {
+        memory: {
+          enabled: false,
+          lifecycle: "session",
+        },
+      },
+    }),
+    getSettingsDetailed: async (params) => {
+      requestedScopes.push((params as { scope?: string }).scope ?? "missing");
+
+      return {
+        data: {
+          settings: {
+            memory: {
+              enabled: false,
+              lifecycle: "session",
+              work_summary_interval: {
+                unit: "week",
+                value: 1,
+              },
+              profile_refresh_interval: {
+                unit: "month",
+                value: 1,
+              },
+            },
+          },
+        },
+        meta: {
+          server_time: "2026-04-24T09:35:00Z",
+        },
+        warnings: [],
+      };
+    },
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const result = await updateDashboardSettings({
+      memory: {
+        enabled: false,
+        lifecycle: "session",
+      },
+    });
+
+    assert.deepEqual(requestedScopes, ["memory"]);
+    assert.equal(result.source, "rpc");
+    assert.equal(result.snapshot.settings.memory.enabled, false);
+    assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("dashboard settings mutation keeps fallback snapshots read-only when the RPC transport is unavailable", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
@@ -1903,8 +2103,8 @@ test("conversation session reuse expires after the backend freshness window", ()
   const originalDate = globalThis.Date;
 
   class FreshFakeDate extends Date {
-    constructor(...args: ConstructorParameters<typeof Date>) {
-      super(args.length === 0 ? FreshFakeDate.now() : args[0]);
+    constructor(value?: string | number | Date) {
+      super(value ?? FreshFakeDate.now());
     }
 
     static now() {
@@ -1935,8 +2135,8 @@ test("conversation session reuse expires after the backend freshness window", ()
     Object.defineProperty(globalThis, "Date", {
       configurable: true,
       value: class ExpiredFakeDate extends Date {
-        constructor(...args: ConstructorParameters<typeof Date>) {
-          super(args.length === 0 ? ExpiredFakeDate.now() : args[0]);
+        constructor(value?: string | number | Date) {
+          super(value ?? ExpiredFakeDate.now());
         }
 
         static now() {
