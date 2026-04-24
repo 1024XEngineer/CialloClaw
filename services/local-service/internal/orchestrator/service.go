@@ -292,6 +292,13 @@ func (s *Service) RunEngine() *runengine.Engine {
 // waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
+		return nil, err
+	} else if handled {
+		return response, nil
+	} else if strings.TrimSpace(resolvedSessionID) != "" {
+		params = withResolvedSessionID(params, resolvedSessionID)
+	}
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
@@ -398,6 +405,13 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+		return nil, err
+	} else if handled {
+		return response, nil
+	} else if strings.TrimSpace(resolvedSessionID) != "" {
+		params = withResolvedSessionID(params, resolvedSessionID)
+	}
 	if handledResponse, handled, err := s.handleScreenAnalyzeStart(params, snapshot, explicitIntent); err != nil {
 		return nil, err
 	} else if handled {
@@ -1336,7 +1350,10 @@ func (s *Service) TaskToolCallsList(params map[string]any) (map[string]any, erro
 	}
 	if s.storage == nil || s.storage.ToolCallStore() == nil {
 		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
-		return map[string]any{"items": paginateTaskToolCallItems(compatibilityItems, limit, offset), "page": pageMap(limit, offset, len(compatibilityItems))}, nil
+		return map[string]any{
+			"items": paginateTaskToolCallItems(compatibilityItems, limit, offset),
+			"page":  pageMap(limit, offset, len(compatibilityItems)),
+		}, nil
 	}
 	items, total, err := s.storage.ToolCallStore().ListToolCalls(context.Background(), taskID, runID, limit, offset)
 	if err != nil {
@@ -1344,7 +1361,10 @@ func (s *Service) TaskToolCallsList(params map[string]any) (map[string]any, erro
 	}
 	if total == 0 {
 		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
-		return map[string]any{"items": paginateTaskToolCallItems(compatibilityItems, limit, offset), "page": pageMap(limit, offset, len(compatibilityItems))}, nil
+		return map[string]any{
+			"items": paginateTaskToolCallItems(compatibilityItems, limit, offset),
+			"page":  pageMap(limit, offset, len(compatibilityItems)),
+		}, nil
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -1402,9 +1422,6 @@ func normalizeTaskToolCallMap(value map[string]any) map[string]any {
 		createdAt = candidate
 	}
 	errorCode := value["error_code"]
-	if errorCode == nil {
-		errorCode = nil
-	}
 	return map[string]any{
 		"tool_call_id": stringValue(value, "tool_call_id", ""),
 		"run_id":       stringValue(value, "run_id", ""),
@@ -3003,6 +3020,7 @@ func cleanupExpiredScreenTemps(screenClient tools.ScreenCaptureClient, reason st
 func taskMap(record runengine.TaskRecord) map[string]any {
 	result := map[string]any{
 		"task_id":          record.TaskID,
+		"session_id":       taskSessionValue(record.SessionID),
 		"title":            record.Title,
 		"source_type":      record.SourceType,
 		"status":           record.Status,
@@ -3018,6 +3036,13 @@ func taskMap(record runengine.TaskRecord) map[string]any {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
 	}
 	return result
+}
+
+func taskSessionValue(sessionID string) any {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	return strings.TrimSpace(sessionID)
 }
 
 func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, bool, error) {
@@ -7325,10 +7350,12 @@ func (s *Service) persistExecutionDeliveryResult(task runengine.TaskRecord, task
 }
 
 func executionToolCallEventLevel(toolCall tools.ToolCallRecord) string {
-	if toolCall.Status == tools.ToolCallStatusFailed || toolCall.Status == tools.ToolCallStatusTimeout {
+	switch toolCall.Status {
+	case tools.ToolCallStatusFailed, tools.ToolCallStatusTimeout:
 		return "error"
+	default:
+		return "info"
 	}
-	return "info"
 }
 
 func executionToolCallEventPayload(taskID string, toolCall tools.ToolCallRecord) map[string]any {
@@ -7336,8 +7363,14 @@ func executionToolCallEventPayload(taskID string, toolCall tools.ToolCallRecord)
 		"task_id":      taskID,
 		"tool_call_id": toolCall.ToolCallID,
 		"tool_name":    toolCall.ToolName,
+		"status":       string(toolCall.Status),
 		"tool_status":  string(toolCall.Status),
+		"input":        cloneMapOrEmpty(toolCall.Input),
+		"output":       cloneMapOrEmpty(toolCall.Output),
 		"duration_ms":  toolCall.DurationMS,
+	}
+	if strings.TrimSpace(toolCall.StepID) != "" {
+		payload["step_id"] = toolCall.StepID
 	}
 	if toolCall.ErrorCode != nil {
 		payload["error_code"] = *toolCall.ErrorCode

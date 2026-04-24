@@ -1,10 +1,11 @@
-// 该文件维护任务主对象的本地示例状态。 
+// This module keeps a minimal local task example for desktop state wiring.
 import { create } from "zustand";
 import type { Task } from "@cialloclaw/protocol";
 
-// seededTask 定义当前模块的基础变量。
+// seededTask provides the default task shown before live RPC data is loaded.
 const seededTask: Task = {
   task_id: "task_demo_001",
+  session_id: null,
   title: "整理拖入的规划笔记并输出重点摘要",
   source_type: "dragged_file",
   status: "confirming_intent",
@@ -21,7 +22,7 @@ const seededTask: Task = {
   finished_at: null,
 };
 
-// TaskState 描述当前模块状态。
+// TaskState describes the local task collection and selection state.
 type TaskState = {
   tasks: Task[];
   activeTaskId: string | null;
@@ -29,7 +30,7 @@ type TaskState = {
   setActiveTaskId: (taskId: string | null) => void;
 };
 
-// useTaskStore 暴露当前模块的状态容器。
+// useTaskStore exposes the desktop task state container.
 export const useTaskStore = create<TaskState>((set) => ({
   tasks: [seededTask],
   activeTaskId: seededTask.task_id,

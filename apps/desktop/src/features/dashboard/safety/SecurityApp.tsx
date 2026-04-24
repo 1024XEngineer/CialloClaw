@@ -35,6 +35,7 @@ import { JsonRpcClientError } from "@/rpc/client";
 import { subscribeApprovalPending, subscribeTask } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
   isDashboardSafetyApprovalSnapshotOnly,
   resolveDashboardSafetyNavigationRoute,
@@ -60,7 +61,6 @@ import {
   type SecurityRestorePointListData,
   type SecurityRespondOutcome,
 } from "./securityService";
-import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
 import "./securityPage.css";
 import "./securityBoard.css";
@@ -1156,12 +1156,7 @@ export function SecurityApp() {
 
   const openTaskDetail = useCallback(
     (taskId: string) => {
-      navigate(resolveDashboardModuleRoutePath("tasks"), {
-        state: {
-          focusTaskId: taskId,
-          openDetail: true,
-        },
-      });
+      navigateToDashboardTaskDetail(navigate, taskId);
     },
     [navigate],
   );

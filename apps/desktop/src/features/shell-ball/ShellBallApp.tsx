@@ -236,6 +236,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePressEnd,
     handlePressCancel,
     handleSubmitText,
+    handleSubmitVoiceText,
     handleAttachFile,
     handleDroppedFiles: handleAppendPendingFiles,
     handleDroppedText,
@@ -245,6 +246,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
+    getCurrentConversationSessionId,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
@@ -300,6 +302,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onInputHoverChange: handleInputHoverChange,
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
+    onSubmitVoiceText: handleSubmitVoiceText,
+    getCurrentConversationSessionId,
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
@@ -817,8 +821,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }
 
       setSelectionPrompt(null);
-      focusInlineInputField();
-      handleCoordinatorSelectedTextPrompt(selectionPrompt.text);
+      void handleCoordinatorSelectedTextPrompt(selectionPrompt);
       return;
     }
 
@@ -834,7 +837,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     handlePrimaryClick();
-  }, [clipboardPrompt, focusInlineInputField, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
+  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
 
   const handleDockAwareRegionEnter = useCallback(() => {
     setEdgeDockRevealed(true);

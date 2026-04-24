@@ -108,6 +108,10 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	if len(notifications) < 3 {
 		t.Fatalf("expected lifecycle notifications to be queued, got %d", len(notifications))
 	}
+	first := notifications[0]
+	if first.Method != "task.updated" || first.Params["session_id"] != "sess_test" {
+		t.Fatalf("expected task.updated notification to include session_id, got %+v", first)
+	}
 }
 
 // TestEngineExecutionProgressAndToolCall verifies that execution-stage timeline

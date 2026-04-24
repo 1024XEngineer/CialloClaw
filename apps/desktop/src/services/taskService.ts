@@ -1,6 +1,7 @@
 import type {
   DeliveryPreference,
   InputContext,
+  PageContext,
   RequestMeta,
   RequestSource,
   Task,
@@ -8,15 +9,13 @@ import type {
 import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
+import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
 
 type StartTaskContext = {
   context?: InputContext;
   delivery?: DeliveryPreference;
-  pageContext?: {
-    app_name: string;
-    title: string;
-    url: string;
-  };
+  pageContext?: PageContext;
+  sessionId?: string;
   source?: RequestSource;
 };
 
@@ -38,20 +37,42 @@ function normalizeTaskInputText(value: string | undefined) {
   return trimmed === "" ? undefined : trimmed;
 }
 
+function resolveTaskPageContext(pageContext: PageContext | undefined) {
+  const normalizedAppName = pageContext?.app_name?.trim();
+  const normalizedTitle = pageContext?.title?.trim();
+  const normalizedUrl = pageContext?.url?.trim();
+
+  if (normalizedAppName && normalizedTitle && normalizedUrl) {
+    return {
+      app_name: normalizedAppName,
+      title: normalizedTitle,
+      url: normalizedUrl,
+    };
+  }
+
+  return DEFAULT_TASK_PAGE_CONTEXT;
+}
+
+function resolveTaskSessionId(sessionId: string | undefined) {
+  return sessionId?.trim() || getCurrentConversationSessionId();
+}
+
 export async function startTaskFromSelectedText(text: string, context: StartTaskContext = {}) {
   const normalizedText = text.trim();
+  const resolvedSessionId = resolveTaskSessionId(context.sessionId);
   if (normalizedText === "") {
     throw new Error("selected text is empty");
   }
 
-  return startTask({
+  const result = await startTask({
     request_meta: createRequestMeta("text_selected_click"),
+    ...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
     source: context.source ?? "floating_ball",
     trigger: "text_selected_click",
     input: {
       type: "text_selection",
       text: normalizedText,
-      page_context: context.pageContext ?? DEFAULT_TASK_PAGE_CONTEXT,
+      page_context: resolveTaskPageContext(context.pageContext),
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -59,25 +80,29 @@ export async function startTaskFromSelectedText(text: string, context: StartTask
       fallback: "task_detail",
     },
   });
+  rememberConversationSessionFromTask(result.task);
+  return result;
 }
 
 export async function startTaskFromFiles(files: string[], context: StartTaskContext = {}, text?: string) {
   const normalizedFiles = files.map((file) => file.trim()).filter(Boolean);
+  const resolvedSessionId = resolveTaskSessionId(context.sessionId);
   if (normalizedFiles.length === 0) {
     throw new Error("dropped files are empty");
   }
 
   const normalizedText = normalizeTaskInputText(text);
 
-  return startTask({
+  const result = await startTask({
     request_meta: createRequestMeta("file_drop"),
+    ...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
     source: context.source ?? "floating_ball",
     trigger: "file_drop",
     input: {
       type: "file",
       ...(normalizedText === undefined ? {} : { text: normalizedText }),
       files: normalizedFiles,
-      page_context: context.pageContext ?? DEFAULT_TASK_PAGE_CONTEXT,
+      page_context: resolveTaskPageContext(context.pageContext),
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -85,22 +110,26 @@ export async function startTaskFromFiles(files: string[], context: StartTaskCont
       fallback: "task_detail",
     },
   });
+  rememberConversationSessionFromTask(result.task);
+  return result;
 }
 
 export async function startTaskFromErrorSignal(errorMessage: string, context: StartTaskContext = {}) {
   const normalizedMessage = errorMessage.trim();
+  const resolvedSessionId = resolveTaskSessionId(context.sessionId);
   if (normalizedMessage === "") {
     throw new Error("error signal is empty");
   }
 
-  return startTask({
+  const result = await startTask({
     request_meta: createRequestMeta("error_detected"),
+    ...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
     source: context.source ?? "floating_ball",
     trigger: "error_detected",
     input: {
       type: "error",
       error_message: normalizedMessage,
-      page_context: context.pageContext ?? DEFAULT_TASK_PAGE_CONTEXT,
+      page_context: resolveTaskPageContext(context.pageContext),
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -108,6 +137,8 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
       fallback: "task_detail",
     },
   });
+  rememberConversationSessionFromTask(result.task);
+  return result;
 }
 
 export async function bootstrapTask(title: string) {

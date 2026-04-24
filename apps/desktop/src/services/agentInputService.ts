@@ -4,12 +4,14 @@ import {
   recordMirrorConversationStart,
   recordMirrorConversationSuccess,
 } from "./mirrorMemoryService";
+import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
 
-type SubmitTextInputParams = {
+export type SubmitTextInputParams = {
   text: string;
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  sessionId?: string;
   options?: {
     confirm_required?: boolean;
     preferred_delivery?: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
@@ -30,6 +32,7 @@ function createRequestMeta(): AgentInputSubmitParams["request_meta"] {
 
 export function createTextInputSubmitParams(input: SubmitTextInputParams): AgentInputSubmitParams | null {
   const normalizedText = input.text.trim();
+  const normalizedSessionId = input.sessionId?.trim() || getCurrentConversationSessionId();
 
   if (normalizedText === "") {
     return null;
@@ -37,6 +40,7 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
 
   return {
     request_meta: createRequestMeta(),
+    ...(normalizedSessionId ? { session_id: normalizedSessionId } : {}),
     source: input.source,
     trigger: input.trigger,
     input: {
@@ -65,6 +69,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
 
   try {
     const result = await rpcMethods.submitInput(params);
+    rememberConversationSessionFromTask(result.task);
     recordMirrorConversationSuccess(params, result);
     return result;
   } catch (error) {
