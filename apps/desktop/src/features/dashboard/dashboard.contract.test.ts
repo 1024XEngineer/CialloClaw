@@ -226,11 +226,6 @@ function loadSettingsServiceModule() {
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js")) as {
       loadSettings: () => {
         settings: {
-          data_log: {
-            provider: string;
-            budget_auto_downgrade: boolean;
-            provider_api_key_configured: boolean;
-          };
           models: {
             provider: string;
             budget_auto_downgrade: boolean;
@@ -376,8 +371,10 @@ function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMe
         snapshot: {
           source: string;
           settings: {
-            data_log: {
-              budget_auto_downgrade: boolean;
+            models: {
+              credentials: {
+                budget_auto_downgrade: boolean;
+              };
             };
             general: {
               download: {
@@ -1280,6 +1277,7 @@ test("task page keeps waiting-auth anchors and waiting-input escape hatches", ()
 test("settings service normalizes legacy stored snapshots before returning and saving", () => {
   const { loadSettings, saveSettings } = loadSettingsServiceModule();
   const originalWindow = globalThis.window;
+  const legacyModelsAlias = "data" + "_log";
   const storage = new Map<string, string>();
   const localStorage = {
     getItem(key: string) {
@@ -1344,20 +1342,24 @@ test("settings service normalizes legacy stored snapshots before returning and s
             remind_before_deadline: true,
             remind_when_stale: false,
           },
-          data_log: {
+          models: {
             provider: "openai",
             budget_auto_downgrade: true,
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4.1-mini",
           },
         },
       }),
     );
 
     const loaded = loadSettings();
-    assert.equal(loaded.settings.data_log.provider_api_key_configured, false);
+    assert.equal(loaded.settings.models.provider_api_key_configured, false);
 
     saveSettings(loaded as never);
 
-    assert.equal(JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}").settings.data_log.provider_api_key_configured, false);
+    const persisted = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}");
+    assert.equal(persisted.settings.models.provider_api_key_configured, false);
+    assert.equal(Reflect.has(persisted.settings, legacyModelsAlias), false);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -1367,9 +1369,10 @@ test("settings service normalizes legacy stored snapshots before returning and s
   }
 });
 
-test("settings service keeps RPC data_log fields authoritative over stale desktop model aliases", () => {
+test("settings service ignores stale legacy settings aliases when models are already stored", () => {
   const { loadSettings, saveSettings } = loadSettingsServiceModule();
   const originalWindow = globalThis.window;
+  const legacyModelsAlias = "data" + "_log";
   const storage = new Map<string, string>();
   const localStorage = {
     getItem(key: string) {
@@ -1394,7 +1397,7 @@ test("settings service keeps RPC data_log fields authoritative over stale deskto
       "cialloclaw.settings",
       JSON.stringify({
         settings: {
-          data_log: {
+          [legacyModelsAlias]: {
             provider: "anthropic",
             budget_auto_downgrade: false,
             provider_api_key_configured: true,
@@ -1411,22 +1414,19 @@ test("settings service keeps RPC data_log fields authoritative over stale deskto
     );
 
     const loaded = loadSettings();
-    assert.equal(loaded.settings.data_log.provider, "anthropic");
-    assert.equal(loaded.settings.data_log.budget_auto_downgrade, false);
-    assert.equal(loaded.settings.data_log.provider_api_key_configured, true);
-    assert.equal(loaded.settings.models.provider, "anthropic");
-    assert.equal(loaded.settings.models.budget_auto_downgrade, false);
-    assert.equal(loaded.settings.models.provider_api_key_configured, true);
+    assert.equal(Reflect.has(loaded.settings as object, legacyModelsAlias), false);
+    assert.equal(loaded.settings.models.provider, "openai");
+    assert.equal(loaded.settings.models.budget_auto_downgrade, true);
+    assert.equal(loaded.settings.models.provider_api_key_configured, false);
     assert.equal(loaded.settings.models.base_url, "https://local-router.invalid/v1");
     assert.equal(loaded.settings.models.model, "gpt-local");
 
     saveSettings(loaded as never);
 
     const persisted = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}");
-    assert.equal(persisted.settings.data_log.provider, "anthropic");
-    assert.equal(persisted.settings.data_log.provider_api_key_configured, true);
-    assert.equal(persisted.settings.models.provider, "anthropic");
-    assert.equal(persisted.settings.models.provider_api_key_configured, true);
+    assert.equal(Reflect.has(persisted.settings, legacyModelsAlias), false);
+    assert.equal(persisted.settings.models.provider, "openai");
+    assert.equal(persisted.settings.models.provider_api_key_configured, false);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -1462,7 +1462,7 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
   try {
     const result = await updateDashboardSettings(
       {
-        data_log: {
+        models: {
           budget_auto_downgrade: false,
         },
         general: {
@@ -1482,18 +1482,18 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
     assert.equal(result.applyMode, "immediate");
     assert.equal(result.needRestart, false);
     assert.equal(result.persisted, true);
-    assert.deepEqual(result.updatedKeys.sort(), ["data_log", "general", "memory"]);
+    assert.deepEqual(result.updatedKeys.sort(), ["general", "memory", "models"]);
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.memory.lifecycle, "session");
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, false);
-    assert.equal(result.snapshot.settings.data_log.budget_auto_downgrade, false);
+    assert.equal(result.snapshot.settings.models.credentials.budget_auto_downgrade, false);
 
     const persisted = loadSettings();
 
     assert.equal(persisted.settings.memory.enabled, false);
     assert.equal(persisted.settings.memory.lifecycle, "session");
     assert.equal(persisted.settings.general.download.ask_before_save_each_file, false);
-    assert.equal(persisted.settings.data_log.budget_auto_downgrade, false);
+    assert.equal(persisted.settings.models.budget_auto_downgrade, false);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");

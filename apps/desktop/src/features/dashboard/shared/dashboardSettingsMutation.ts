@@ -9,28 +9,71 @@ import {
   type DashboardSettingsSource,
 } from "./dashboardSettingsSnapshot";
 
+type DashboardModelPatch = AgentSettingsUpdateParams["models"] | Partial<DesktopSettings["settings"]["models"]>;
+
 export type DashboardSettingsPatch = Pick<
   AgentSettingsUpdateParams,
-  "general" | "floating_ball" | "memory" | "task_automation" | "models"
+  "general" | "floating_ball" | "memory" | "task_automation"
 > & {
-  data_log?: DesktopSettings["settings"]["data_log"];
+  models?: DashboardModelPatch;
 };
 
-function normalizeDashboardModelPatch(patch: DashboardSettingsPatch) {
-  if (patch.models) {
-    return patch.models as Partial<DesktopSettings["settings"]["models"]>;
-  }
-  if (!patch.data_log) {
+function normalizeDashboardModelPatch(modelPatch: DashboardModelPatch | undefined) {
+  if (!modelPatch) {
     return undefined;
   }
+
+  const formalCredentials =
+    "credentials" in modelPatch && typeof modelPatch.credentials === "object" && modelPatch.credentials !== null
+      ? modelPatch.credentials
+      : undefined;
+  const providerApiKeyConfigured =
+    "provider_api_key_configured" in modelPatch ? modelPatch.provider_api_key_configured : undefined;
+  const stronghold = "stronghold" in modelPatch ? modelPatch.stronghold : undefined;
+
   return {
-    provider: patch.data_log.provider,
-    budget_auto_downgrade: patch.data_log.budget_auto_downgrade,
-    provider_api_key_configured: patch.data_log.provider_api_key_configured,
-    stronghold: patch.data_log.stronghold,
-    base_url: patch.data_log.base_url,
-    model: patch.data_log.model,
+    ...(modelPatch.provider === undefined ? {} : { provider: modelPatch.provider }),
+    ...(formalCredentials?.budget_auto_downgrade === undefined && modelPatch.budget_auto_downgrade === undefined
+      ? {}
+      : {
+          budget_auto_downgrade: formalCredentials?.budget_auto_downgrade ?? modelPatch.budget_auto_downgrade,
+        }),
+    ...(formalCredentials?.provider_api_key_configured === undefined && providerApiKeyConfigured === undefined
+      ? {}
+      : {
+          provider_api_key_configured: formalCredentials?.provider_api_key_configured ?? providerApiKeyConfigured,
+        }),
+    ...(formalCredentials?.stronghold === undefined && stronghold === undefined
+      ? {}
+      : { stronghold: formalCredentials?.stronghold ?? stronghold }),
+    ...(formalCredentials?.base_url === undefined && modelPatch.base_url === undefined
+      ? {}
+      : { base_url: formalCredentials?.base_url ?? modelPatch.base_url }),
+    ...(formalCredentials?.model === undefined && modelPatch.model === undefined
+      ? {}
+      : { model: formalCredentials?.model ?? modelPatch.model }),
   } satisfies Partial<DesktopSettings["settings"]["models"]>;
+}
+
+function buildRpcModelPatch(modelPatch: DashboardModelPatch | undefined): AgentSettingsUpdateParams["models"] | undefined {
+  const normalizedModelPatch = normalizeDashboardModelPatch(modelPatch);
+
+  if (!modelPatch || !normalizedModelPatch) {
+    return undefined;
+  }
+
+  return {
+    ...(normalizedModelPatch.provider === undefined ? {} : { provider: normalizedModelPatch.provider }),
+    ...(normalizedModelPatch.budget_auto_downgrade === undefined
+      ? {}
+      : { budget_auto_downgrade: normalizedModelPatch.budget_auto_downgrade }),
+    ...(normalizedModelPatch.base_url === undefined ? {} : { base_url: normalizedModelPatch.base_url }),
+    ...(normalizedModelPatch.model === undefined ? {} : { model: normalizedModelPatch.model }),
+    ...("api_key" in modelPatch && typeof modelPatch.api_key === "string" ? { api_key: modelPatch.api_key } : {}),
+    ...("delete_api_key" in modelPatch && typeof modelPatch.delete_api_key === "boolean"
+      ? { delete_api_key: modelPatch.delete_api_key }
+      : {}),
+  };
 }
 
 export type DashboardSettingsMutationResult = {
@@ -53,19 +96,8 @@ function mergeSettingsSnapshot(
   current: DesktopSettings["settings"],
   patch: DashboardSettingsPatch,
 ): DesktopSettings["settings"] {
-  const modelPatch = normalizeDashboardModelPatch(patch);
-  const dataLogPatch = patch.data_log ??
-    (modelPatch
-      ? {
-          provider: modelPatch.provider ?? current.data_log.provider,
-          budget_auto_downgrade: modelPatch.budget_auto_downgrade ?? current.data_log.budget_auto_downgrade,
-          provider_api_key_configured:
-            modelPatch.provider_api_key_configured ?? current.data_log.provider_api_key_configured,
-          stronghold: modelPatch.stronghold ?? current.data_log.stronghold,
-          base_url: modelPatch.base_url ?? current.data_log.base_url,
-          model: modelPatch.model ?? current.data_log.model,
-        }
-      : undefined);
+  const modelPatch = normalizeDashboardModelPatch(patch.models);
+
   return {
     ...current,
     general: patch.general
@@ -108,12 +140,6 @@ function mergeSettingsSnapshot(
           },
         }
       : current.task_automation,
-    data_log: dataLogPatch
-      ? {
-          ...current.data_log,
-          ...dataLogPatch,
-        }
-      : current.data_log,
     models: modelPatch
       ? {
           ...current.models,
@@ -130,7 +156,7 @@ function buildRpcSettingsPatch(patch: DashboardSettingsPatch): AgentSettingsUpda
     floating_ball: patch.floating_ball,
     memory: patch.memory,
     task_automation: patch.task_automation,
-    models: normalizeDashboardModelPatch(patch),
+    models: buildRpcModelPatch(patch.models),
   };
 }
 
@@ -163,7 +189,7 @@ function inferDashboardSettingsRefreshScope(patch: DashboardSettingsPatch): Dash
   if (patch.task_automation) {
     touchedScopes.add("task_automation");
   }
-  if (patch.models || patch.data_log) {
+  if (patch.models) {
     touchedScopes.add("models");
   }
 
@@ -174,9 +200,13 @@ function inferDashboardSettingsRefreshScope(patch: DashboardSettingsPatch): Dash
   return touchedScopes.values().next().value ?? "all";
 }
 
-// Dashboard modules need the same settings mutation rule as the control panel:
-// use JSON-RPC when available, but keep the local snapshot authoritative for
-// immediate rendering and mock-mode operation.
+/**
+ * Updates dashboard-facing settings while keeping the local desktop snapshot in sync.
+ *
+ * @param patch The changed settings groups to persist.
+ * @param source The preferred settings transport.
+ * @returns The refreshed dashboard settings snapshot and persistence metadata.
+ */
 export async function updateDashboardSettings(
   patch: DashboardSettingsPatch,
   source: DashboardSettingsSource = "rpc",
@@ -228,6 +258,13 @@ export async function updateDashboardSettings(
   }
 }
 
+/**
+ * Formats one user-facing feedback string for a completed settings mutation.
+ *
+ * @param result The mutation result returned by `updateDashboardSettings`.
+ * @param subject The UI subject label that changed.
+ * @returns A localized feedback string for toast or inline status UI.
+ */
 export function formatDashboardSettingsMutationFeedback(result: DashboardSettingsMutationResult, subject: string) {
   if (!result.persisted) {
     return `${subject}未保存，当前仅显示本地快照。`;

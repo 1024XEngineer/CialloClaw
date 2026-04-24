@@ -146,12 +146,6 @@ function mergeProtocolSettings(
             },
           }
         : base.task_automation,
-      data_log: patch.data_log
-        ? {
-            ...base.data_log,
-            ...patch.data_log,
-          }
-        : base.data_log,
       models: patch.models
         ? {
             ...base.models,
