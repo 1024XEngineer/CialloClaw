@@ -1,0 +1,37 @@
+---
+import { CuteCursor, ClickSparkPreview } from "@/components/interactive/CuteCursor";
+import { DraggableSticker } from "@/components/interactive/DraggableSticker";
+import { FloatingBallDemo } from "@/components/interactive/FloatingBallDemo";
+import { MascotIsland } from "@/components/interactive/MascotIsland";
+---
+
+<CuteCursor client:load />
+<MascotIsland client:idle />
+<DraggableSticker client:visible />
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">Interactive layer</p>
+    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Playful motion is used as a supporting layer, not as a distraction.</h2>
+    <p class="mt-5 text-lg leading-8 text-white/70">The website picks up the issue #332 direction with a mascot island, a draggable sticker, a custom pointer layer for desktop devices, and a floating ball concept panel. Reduced-motion users still get the full content without extra animation pressure.</p>
+  </div>
+
+  <div class="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+    <FloatingBallDemo client:visible />
+
+    <div class="glass-card rounded-[2rem] p-6">
+      <p class="text-xs uppercase tracking-[0.24em] text-cc-violet">Interaction notes</p>
+      <h3 class="mt-4 font-display text-3xl font-semibold text-white">Website interactions stay lightweight and honest.</h3>
+      <ul class="mt-5 grid gap-3 text-sm leading-7 text-white/68">
+        <li>Custom cursor is only enabled on pointer-fine devices and is disabled for reduced motion.</li>
+        <li>Drag behavior is local website state only, with no persistence beyond the sticker position.</li>
+        <li>The floating ball panel is clearly framed as a concept demo rather than a fake runtime action.</li>
+        <li>Clicks use short-lived spark feedback so the page feels alive without covering the reading flow.</li>
+      </ul>
+
+      <div class="mt-6">
+        <ClickSparkPreview client:load />
+      </div>
+    </div>
+  </div>
+</section>

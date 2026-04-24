@@ -105,6 +105,33 @@ img {
   outline-color: var(--cc-peach);
 }
 
+@media (pointer: fine) {
+  body.has-cute-cursor,
+  body.has-cute-cursor a,
+  body.has-cute-cursor button,
+  body.has-cute-cursor summary {
+    cursor: none;
+  }
+}
+
+@media (pointer: coarse) {
+  body {
+    cursor: auto;
+  }
+}
+
+@keyframes site-spark {
+  from {
+    opacity: 0.85;
+    transform: translate(var(--spark-x, 0), var(--spark-y, 0)) translate(-50%, -50%) scale(0.65);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(var(--spark-x, 0), var(--spark-y, 0)) translate(-50%, -50%) scale(1.8);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
