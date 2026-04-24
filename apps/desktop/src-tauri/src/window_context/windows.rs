@@ -41,6 +41,8 @@ static LAST_EXTERNAL_WINDOW_CONTEXT: Lazy<Mutex<Option<CachedWindowContext>>> =
     Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_URL_REFRESH_STATE: Lazy<Mutex<UrlRefreshState>> =
     Lazy::new(|| Mutex::new(UrlRefreshState::default()));
+static WINDOW_CONTEXT_ACTIVITY_STATE: Lazy<Mutex<WindowContextActivityState>> =
+    Lazy::new(|| Mutex::new(WindowContextActivityState::default()));
 
 #[derive(Clone)]
 struct CachedWindowContext {
@@ -53,6 +55,14 @@ struct UrlRefreshState {
     in_flight_fingerprint: Option<String>,
     last_completed_fingerprint: Option<String>,
     last_completed_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct WindowContextActivityState {
+    window_switch_count: u32,
+    page_switch_count: u32,
+    last_window_fingerprint: Option<String>,
+    last_page_fingerprint: Option<String>,
 }
 
 struct ComGuard {
@@ -90,7 +100,7 @@ impl Drop for ComGuard {
 pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>, String> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
-        return Ok(read_cached_window_context());
+        return Ok(read_cached_window_context().map(with_window_context_activity_counts));
     }
 
     if is_shell_ball_cluster_window(hwnd) {
@@ -98,9 +108,11 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
     }
 
     let context = read_window_context_for_hwnd(hwnd);
+    record_window_switch(&context);
+    record_page_switch(&context);
     cache_window_context(hwnd, &context);
     schedule_window_context_url_refresh(hwnd, &context);
-    Ok(Some(context))
+    Ok(Some(with_window_context_activity_counts(context)))
 }
 
 /// Installs the Windows foreground-window listener used to keep a cached copy
@@ -137,6 +149,7 @@ pub fn install_window_context_listener(app: &AppHandle) -> Result<(), String> {
     }
 
     if let Some((hwnd, current_context)) = read_current_external_window_context() {
+        record_window_switch(&current_context);
         cache_window_context(hwnd, &current_context);
         schedule_window_context_url_refresh(hwnd, &current_context);
     }
@@ -168,6 +181,8 @@ fn read_lightweight_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowCo
         title,
         url: None,
         browser_kind: browser_kind.to_string(),
+        window_switch_count: None,
+        page_switch_count: None,
     })
 }
 
@@ -178,10 +193,67 @@ fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
         title: None,
         url: None,
         browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
+        window_switch_count: None,
+        page_switch_count: None,
     });
 
     context.url = read_url_for_window_context(hwnd, &context);
     context
+}
+
+fn with_window_context_activity_counts(
+    mut context: ActiveWindowContextPayload,
+) -> ActiveWindowContextPayload {
+    if let Ok(activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
+        context.window_switch_count = Some(activity_state.window_switch_count);
+        context.page_switch_count = Some(activity_state.page_switch_count);
+    }
+
+    context
+}
+
+fn record_window_switch(context: &ActiveWindowContextPayload) {
+    let fingerprint = format!(
+        "{}|{}|{}",
+        context.app_name,
+        context.title.clone().unwrap_or_default(),
+        context.process_path.clone().unwrap_or_default()
+    );
+
+    if let Ok(mut activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
+        if activity_state
+            .last_window_fingerprint
+            .as_deref()
+            .is_some_and(|current| current != fingerprint.as_str())
+        {
+            activity_state.window_switch_count =
+                activity_state.window_switch_count.saturating_add(1);
+        }
+
+        activity_state.last_window_fingerprint = Some(fingerprint);
+    }
+}
+
+fn record_page_switch(context: &ActiveWindowContextPayload) {
+    let fingerprint = format!(
+        "{}|{}|{}",
+        context.app_name,
+        context.title.clone().unwrap_or_default(),
+        context.url.clone().unwrap_or_default()
+    );
+
+    if let Ok(mut activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
+        if activity_state
+            .last_page_fingerprint
+            .as_deref()
+            .is_some_and(|current| current != fingerprint.as_str())
+        {
+            activity_state.page_switch_count =
+                activity_state.page_switch_count.saturating_add(1);
+        }
+
+        activity_state.last_page_fingerprint = Some(fingerprint);
+    }
 }
 
 fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
@@ -197,7 +269,11 @@ fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
     LAST_EXTERNAL_WINDOW_CONTEXT
         .lock()
         .ok()
-        .and_then(|cached| cached.as_ref().map(|value| value.context.clone()))
+        .and_then(|cached| {
+            cached
+                .as_ref()
+                .map(|value| with_window_context_activity_counts(value.context.clone()))
+        })
 }
 
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
@@ -208,12 +284,13 @@ fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
 
     let hwnd = HWND(cached.hwnd as *mut core::ffi::c_void);
     if hwnd.0.is_null() {
-        return Some(cached.context);
+        return Some(with_window_context_activity_counts(cached.context));
     }
 
     let context = read_window_context_for_hwnd(hwnd);
+    record_page_switch(&context);
     cache_window_context(hwnd, &context);
-    Some(context)
+    Some(with_window_context_activity_counts(context))
 }
 
 fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
@@ -283,6 +360,7 @@ unsafe extern "system" fn window_context_foreground_hook(
     }
 
     if let Ok(context) = read_lightweight_window_context_for_hwnd(hwnd) {
+        record_window_switch(&context);
         cache_window_context(hwnd, &context);
         schedule_window_context_url_refresh(hwnd, &context);
     }
@@ -327,6 +405,7 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
         let url = read_url_for_window_context(hwnd, &context);
         let mut next_context = context.clone();
         next_context.url = url;
+        record_page_switch(&next_context);
         cache_window_context(hwnd, &next_context);
 
         if let Ok(mut state) = WINDOW_CONTEXT_URL_REFRESH_STATE.lock() {

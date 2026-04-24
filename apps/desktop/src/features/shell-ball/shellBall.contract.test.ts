@@ -2455,6 +2455,118 @@ test("task-entry services keep rpc transport failures visible and forward file d
   );
 });
 
+test("submitTextInput enriches formal context with desktop snapshots before rpc submit", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_001",
+                session_id: null,
+                title: "Inspect current screen",
+                source_type: "screen_capture",
+                status: "waiting_auth",
+                intent: null,
+                current_step: "waiting_auth",
+                risk_level: "yellow",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            return Promise.resolve({
+              app_name: "Chrome",
+              browser_kind: "chrome",
+              page_switch_count: 1,
+              process_path: null,
+              title: "Build Dashboard",
+              url: "https://example.com/build",
+              window_switch_count: 2,
+            });
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            context?: Record<string, unknown>;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "帮我看看这个页面",
+          source: "floating_ball",
+          trigger: "hover_text_input",
+          inputMode: "text",
+          context: {
+            screen: {
+              summary: "release validation failed on current screen",
+            },
+          },
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    page: {
+      app_name: "Chrome",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
+      window_title: "Build Dashboard",
+    },
+    screen: {
+      summary: "release validation failed on current screen",
+      screen_summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      window_title: "Build Dashboard",
+    },
+    behavior: {
+      last_action: "hover_text_input",
+      dwell_millis: 5000,
+      window_switch_count: 2,
+      page_switch_count: 1,
+    },
+  });
+});
+
 test("shell-ball text drop helpers only accept non-file drags and extract plain text", () => {
   assert.equal(
     shouldAcceptShellBallTextDrop({
@@ -5750,33 +5862,49 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
-test("shell-ball screenshot command stays local and stores captures in apps temp", () => {
+test("shell-ball screenshot command routes through the formal screen task path", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
-  const screenPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopScreen.ts"), "utf8");
-  const rootGitIgnoreSource = readFileSync(resolve(desktopRoot, "../../.gitignore"), "utf8");
 
   assert.match(coordinatorSource, /const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";/);
   assert.match(coordinatorSource, /shouldHandleShellBallScreenshotCommand\(/);
-  assert.match(coordinatorSource, /const screenshot = await captureDesktopScreenshot\(\);/);
-  assert.match(coordinatorSource, /Screenshot saved to \$\{screenshot\.relative_path\}/);
-  assert.match(screenPlatformSource, /invoke<DesktopScreenCapturePayload>\("desktop_capture_screenshot"\)/);
-  assert.match(rootGitIgnoreSource, /apps\/\.temp\/\*/);
+  assert.match(coordinatorSource, /const submitShellBallScreenShortcut = useCallback\(async \(input: \{/);
+  assert.match(coordinatorSource, /promptText: SHELL_BALL_SCREENSHOT_PROMPT_TEXT/);
+  assert.match(coordinatorSource, /summary: SHELL_BALL_SCREENSHOT_SUMMARY/);
+  assert.match(coordinatorSource, /last_action: "review_screen"/);
+  assert.match(coordinatorSource, /void autoOpenShellBallDeliveryResult\(result\.task\.task_id, result\.delivery_result\);/);
+  assert.doesNotMatch(coordinatorSource, /captureDesktopScreenshot/);
+  assert.doesNotMatch(coordinatorSource, /Screenshot saved to/);
 });
 
-test("shell-ball window command stays local and replies with active window context", () => {
+test("shell-ball window command routes through the formal screen task path", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
-  const windowContextPlatformSource = readFileSync(resolve(desktopRoot, "src/platform/desktopWindowContext.ts"), "utf8");
-  const windowContextHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
 
   assert.match(coordinatorSource, /const SHELL_BALL_WINDOW_COMMAND = "窗口";/);
   assert.match(coordinatorSource, /shouldHandleShellBallWindowCommand\(/);
-  assert.match(coordinatorSource, /const context = await getActiveWindowContext\(\);/);
-  assert.match(coordinatorSource, /createShellBallWindowContextReply\(context\.app_name, context\.title, context\.url\)/);
-  assert.match(coordinatorSource, /URL: get failed/);
-  assert.match(windowContextPlatformSource, /invoke<DesktopWindowContextPayload \| null>\("desktop_get_active_window_context"\)/);
-  assert.match(windowContextHostSource, /BROWSER_KIND_CHROME \| BROWSER_KIND_EDGE \| BROWSER_KIND_OTHER_BROWSER => \{/);
-  assert.doesNotMatch(windowContextHostSource, /read_chrome_url_via_mcp/);
-  assert.match(windowContextHostSource, /looks_like_address_bar_name/);
+  assert.match(coordinatorSource, /promptText: SHELL_BALL_WINDOW_PROMPT_TEXT/);
+  assert.match(coordinatorSource, /summary: SHELL_BALL_WINDOW_SUMMARY/);
+  assert.match(coordinatorSource, /last_action: "review_window"/);
+  assert.match(coordinatorSource, /void autoOpenShellBallDeliveryResult\(result\.task\.task_id, result\.delivery_result\);/);
+  assert.doesNotMatch(coordinatorSource, /getActiveWindowContext/);
+  assert.doesNotMatch(coordinatorSource, /createShellBallWindowContextReply/);
+});
+
+test("shell-ball coordinator subscribes to formal task and approval updates", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /subscribeTaskUpdated\(\(payload\) => \{/);
+  assert.match(coordinatorSource, /subscribeApprovalPending\(\(payload\) => \{/);
+  assert.match(coordinatorSource, /syncShellBallVisualStateFromTaskStatus\(payload\.status\)/);
+  assert.match(coordinatorSource, /createShellBallApprovalPendingReply\(payload\.approval_request\)/);
+});
+
+test("desktop tauri setup enables mouse activity tracking for dwell context", () => {
+  const mainSource = readFileSync(resolve(desktopRoot, "src-tauri/src/main.rs"), "utf8");
+  const activitySource = readFileSync(resolve(desktopRoot, "src-tauri/src/activity/windows.rs"), "utf8");
+
+  assert.match(mainSource, /activity::install_mouse_activity_listener\(\)/);
+  assert.match(activitySource, /SetWindowsHookExW\(WH_MOUSE_LL, Some\(mouse_activity_hook\), None, 0\)/);
+  assert.doesNotMatch(activitySource, /println!\("mouse activity at /);
 });
 
 test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
