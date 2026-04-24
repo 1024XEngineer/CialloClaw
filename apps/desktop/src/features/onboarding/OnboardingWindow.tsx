@@ -250,16 +250,8 @@ export function OnboardingWindow() {
       }
   };
 
-  const shouldShowVeil =
-    session.step === "welcome"
-    || session.step === "shell_ball_intro"
-    || session.step === "shell_ball_hold_voice"
-    || session.step === "shell_ball_double_click";
-
   return (
     <main className="desktop-onboarding-window">
-      {shouldShowVeil ? <div className="desktop-onboarding-window__veil" aria-hidden="true" /> : null}
-
       <section
         ref={cardRef}
         className={cn("desktop-onboarding-window__card", `desktop-onboarding-window__card--${activePresentation.placement}`)}
