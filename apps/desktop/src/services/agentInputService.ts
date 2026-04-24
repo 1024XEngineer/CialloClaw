@@ -262,12 +262,13 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
 export type SubmitTextInputResult = AgentInputSubmitResult;
 
 async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
+  const enrichVisualContext = shouldEnrichVisualContext(params);
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
-    readDesktopWindowContext(),
+    // Fetch the foreground window snapshot only for explicit visual requests.
+    // Ordinary text submits should not pay the host-side URL lookup cost.
+    enrichVisualContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
   ]);
-
-  const enrichVisualContext = shouldEnrichVisualContext(params);
   const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
   const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
