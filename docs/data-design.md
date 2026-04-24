@@ -111,7 +111,7 @@
 
 ## 5. 核心实体与关系
 
-### 5.1 对外 API 契约对象
+### 5.1 对外 API 契约对象与聚合视图
 
 - `Task`
 - `TaskStep`
@@ -129,7 +129,12 @@
 - `MirrorReference`
 - `SettingsSnapshot`
 - `SettingItem`
-- `AsyncJob`
+- `AsyncJob`（预留）
+
+补充说明：
+
+- `BubbleMessage`、`ImpactScope`、`TokenCostSummary`、`SettingsSnapshot`、`SettingItem` 属于协议层聚合视图，不对应独立持久化主表。
+- `AsyncJob` 当前仅保留在协议类型层，尚未接入 stable RPC 方法或结构化存储真源，不能误写成已落地的一等数据表。
 
 ### 5.2 后端执行与兼容对象
 
@@ -172,7 +177,7 @@
 - RecurringRule 描述重复规则，不直接等同于任务实例。
 - TodoItem 可关联一个或多个 RecurringRule，也可在人工确认后转换为 Task。
 - `notes` 详情补强继续挂在既有 `todo_items / recurring_rules` 语义上推进，不新增独立 `note_details` 或平行读模型真源表。
-- owner-5 为 notes 详情预留的底座字段优先落在既有对象扩展上：`todo_items` 侧承接 `note_text / prerequisite / planned_at / source_bucket / previous_bucket / previous_due_at / previous_status / ended_at / related_resources`，`recurring_rules` 侧承接 `repeat_rule_text / next_occurrence_at / recent_instance_status / effective_scope / recurring_enabled`。
+- notes 详情当前已经通过 `TodoItem` 协议投影稳定暴露 `note_text / prerequisite / related_resources / linked_task_id` 等字段；底层仍继续在既有 `todo_items / recurring_rules` 上承接 `planned_at / repeat_rule_text / next_occurrence_at / recent_instance_status / effective_scope` 等补强语义。
 - notes 动作底座（complete / cancel / restore / toggle-recurring / delete）应直接更新既有 `todo_items / recurring_rules` 生命周期，不得绕过它们直接改写 `tasks`。
 - MemorySummary、MemoryCandidate、RetrievalHit 通过引用关联 Task 与 Run，不混存原始运行态。
 - SkillManifest、BlueprintDefinition、PromptTemplateVersion、PluginManifest 与具体 Run 之间必须可追踪，便于 Trace / Eval、回放和问题定位。
@@ -225,7 +230,7 @@
 
 ### 6.2 任务巡检转任务
 - 主要表：`todo_items / recurring_rules / tasks / task_steps`
-- 关键字段：`todo_items.bucket / status / due_at / source_path`，`recurring_rules.rule_type / cron_expr / reminder_strategy`
+- 关键字段：`todo_items.bucket / status / due_at / source_path`，`recurring_rules.rule_type / cron_expr / interval_* / reminder_strategy / repeat_rule_text / next_occurrence_at`
 - 作用：把巡检来源事项与正式任务分层管理。
 
 ### 6.3 任务执行与结果交付
@@ -289,9 +294,11 @@
 - `todo_items.bucket`：事项桶位，区分 `upcoming / later / recurring_rule / closed` 这类用户可见分组。
 - `todo_items.status`：事项状态，不得直接映射成 `task.status`。
 - `todo_items.source_bucket / previous_bucket / previous_due_at / previous_status`：记录事项最近一次关闭前的可恢复位置、计划时间和状态，用于重启后仍可正确 restore。
+- `todo_items.note_text / prerequisite / planned_at / ended_at / related_resources_json / linked_task_id`：承接 notes 详情补强字段，并投影到当前稳定 `TodoItem` 协议对象。
 - `todo_items.linked_task_id`：事项被升级为正式任务后才允许写入，用于建立来源追踪。
 - `todo_items.source_path / source_line`：用于把巡检结果精确回链到 Markdown 来源。
-- `recurring_rules.rule_type / cron_expr / interval_*`：用于描述重复规则与提醒策略，不直接等价于任务实例。
+- `recurring_rules.rule_type / cron_expr / interval_*`：用于描述规则引擎侧的重复规则计算输入，不直接等价于前端展示文本。
+- `recurring_rules.repeat_rule_text / next_occurrence_at / recent_instance_status / effective_scope / enabled`：用于支撑前端便签详情与 `TodoItem.repeat_rule / next_occurrence_at / recent_instance_status / effective_scope / recurring_enabled` 投影。
 - `recurring_rules.reminder_strategy`：定义到期前提醒、错过提醒、静默巡检等策略，是巡检规则的一部分，而不是任务执行逻辑。
 
 ### 7A.3 runs / steps

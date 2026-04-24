@@ -47,6 +47,12 @@ type stubModelClient struct {
 	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
 }
 
+type stubToolCallingModelClient struct {
+	output                 string
+	toolCalls              []model.ToolCallResult
+	generateToolCallsCount int
+}
+
 type failingExecutionBackend struct {
 	err error
 }
@@ -492,6 +498,32 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 	}, nil
 }
 
+func (s *stubToolCallingModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_text_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
+}
+
+func (s *stubToolCallingModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	s.generateToolCallsCount++
+	if len(s.toolCalls) == 0 {
+		return model.ToolCallResult{
+			RequestID:  "req_tool_final",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: s.output,
+		}, nil
+	}
+	result := s.toolCalls[0]
+	s.toolCalls = s.toolCalls[1:]
+	return result, nil
+}
+
 func timePointer(value time.Time) *time.Time {
 	return &value
 }
@@ -914,16 +946,57 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.T) {
+func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
+
+	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	for index, testCase := range testCases {
+		t.Run(testCase, func(t *testing.T) {
+			result, err := service.SubmitInput(map[string]any{
+				"session_id": fmt.Sprintf("sess_short_text_%02d", index),
+				"source":     "floating_ball",
+				"trigger":    "hover_text_input",
+				"input": map[string]any{
+					"type": "text",
+					"text": testCase,
+				},
+			})
+			if err != nil {
+				t.Fatalf("submit input failed: %v", err)
+			}
+
+			task := result["task"].(map[string]any)
+			if task["status"] != "waiting_input" {
+				t.Fatalf("expected short free text clarification to keep task open, got %v", task["status"])
+			}
+			intentValue, ok := task["intent"].(map[string]any)
+			if !ok || intentValue["name"] != "agent_loop" {
+				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
+			}
+			if result["delivery_result"] != nil {
+				t.Fatalf("expected short free text clarification not to finalize delivery_result, got %+v", result["delivery_result"])
+			}
+			bubble := result["bubble_message"].(map[string]any)
+			if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+				t.Fatalf("expected short free text clarification bubble, got %+v", bubble)
+			}
+		})
+	}
+}
+
+func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T) {
 	service := newTestService()
 
 	result, err := service.SubmitInput(map[string]any{
-		"session_id": "sess_unknown_text",
+		"session_id": "sess_confirm_free_text",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -932,21 +1005,14 @@ func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.
 
 	task := result["task"].(map[string]any)
 	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected unknown short text to remain in confirming_intent, got %v", task["status"])
+		t.Fatalf("expected explicit confirm_required to preserve confirming_intent, got %v", task["status"])
 	}
 	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || len(intentValue) != 0 {
-		t.Fatalf("expected unknown short text task to keep empty intent payload, got %+v", task["intent"])
-	}
-	bubble := result["bubble_message"].(map[string]any)
-	if bubble["text"] != "我还不确定你想如何处理这段内容，请确认目标。" {
-		t.Fatalf("expected neutral confirmation prompt, got %v", bubble["text"])
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected explicit confirm_required to keep agent_loop intent, got %+v", task["intent"])
 	}
 	if result["delivery_result"] != nil {
-		t.Fatalf("expected no delivery result before intent is confirmed, got %+v", result["delivery_result"])
-	}
-	if _, ok := service.runEngine.GetTask(task["task_id"].(string)); !ok {
-		t.Fatal("expected task to remain available in runtime")
+		t.Fatalf("expected explicit confirmation flow to defer delivery_result, got %+v", result["delivery_result"])
 	}
 }
 
@@ -1171,6 +1237,9 @@ func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T
 		"input": map[string]any{
 			"type": "text",
 			"text": "ok",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1524,8 +1593,8 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	}
 }
 
-func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
-	service := newTestService()
+func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
 
 	startResult, err := service.SubmitInput(map[string]any{
 		"session_id": "sess_unknown_confirm",
@@ -1534,6 +1603,9 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1550,15 +1622,26 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected task to remain in confirming_intent when no corrected intent is provided, got %v", task["status"])
+	if task["status"] != "waiting_input" {
+		t.Fatalf("expected confirmed task to stay open when agent_loop needs more input, got %v", task["status"])
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected confirmed task to keep agent_loop intent, got %+v", task["intent"])
 	}
 	bubble := confirmResult["bubble_message"].(map[string]any)
-	if bubble["text"] != "请先明确告诉我你希望执行的处理方式。" {
-		t.Fatalf("expected clarification bubble, got %v", bubble["text"])
+	if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+		t.Fatalf("expected agent_loop clarification bubble, got %v", bubble["text"])
 	}
 	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected no delivery result while intent is still missing, got %+v", confirmResult["delivery_result"])
+		t.Fatalf("expected clarification flow not to finalize delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(task["task_id"].(string))
+	if !ok {
+		t.Fatal("expected reopened waiting_input task to remain in runtime")
+	}
+	if record.FinishedAt != nil {
+		t.Fatal("expected reopened waiting_input task to keep finished_at nil")
 	}
 }
 
@@ -1572,6 +1655,9 @@ func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testi
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1616,6 +1702,9 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {

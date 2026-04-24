@@ -250,29 +250,48 @@ function createRequestMeta(): RequestMeta {
 }
 
 /**
+ * Reads the latest formal control-panel snapshot from the RPC boundary.
+ *
+ * The local desktop snapshot only provides a compatibility merge baseline for
+ * aliased fields; the returned view model is still sourced from formal RPC data.
+ *
+ * @param timeoutMs Optional timeout guard for the RPC reads.
+ * @returns The latest control-panel settings, inspector config, and security summary.
+ */
+async function loadControlPanelRpcSnapshot(
+  timeoutMs: number = CONTROL_PANEL_RPC_TIMEOUT_MS,
+): Promise<Pick<ControlPanelData, "inspector" | "securitySummary" | "settings">> {
+  const requestMeta = createRequestMeta();
+  const localSettings = loadSettings().settings;
+  const [settingsResult, inspectorResult, securityResult] = await Promise.all([
+    withRpcTimeout(getSettings({ request_meta: requestMeta, scope: "all" }), timeoutMs, "设置读取"),
+    withRpcTimeout(getTaskInspectorConfig({ request_meta: createRequestMeta() }), timeoutMs, "巡检设置读取"),
+    withRpcTimeout(getSecuritySummary({ request_meta: createRequestMeta() }), timeoutMs, "安全摘要读取"),
+  ]);
+
+  const effectiveSettings = projectInspectorToTaskAutomation(
+    mergeProtocolSettings(localSettings, settingsResult.settings),
+    inspectorResult,
+  );
+
+  return {
+    settings: effectiveSettings,
+    inspector: inspectorResult,
+    securitySummary: securityResult.summary,
+  };
+}
+
+/**
  * loadControlPanelData hydrates the control panel from the formal RPC boundary.
  */
 export async function loadControlPanelData(): Promise<ControlPanelData> {
   try {
-    const requestMeta = createRequestMeta();
-    const localSettings = loadSettings().settings;
-    const [settingsResult, inspectorResult, securityResult] = await Promise.all([
-      getSettings({ request_meta: requestMeta, scope: "all" }),
-      getTaskInspectorConfig({ request_meta: createRequestMeta() }),
-      getSecuritySummary({ request_meta: createRequestMeta() }),
-    ]);
-
-    const effectiveSettings = projectInspectorToTaskAutomation(
-      mergeProtocolSettings(localSettings, settingsResult.settings),
-      inspectorResult,
-    );
-    saveSettings({ settings: effectiveSettings });
+    const snapshot = await loadControlPanelRpcSnapshot();
+    saveSettings({ settings: snapshot.settings });
 
     return {
-      settings: effectiveSettings,
-      inspector: inspectorResult,
+      ...snapshot,
       providerApiKeyInput: "",
-      securitySummary: securityResult.summary,
       source: "rpc",
       warnings: [],
     };
@@ -288,6 +307,8 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
 /**
  * saveControlPanelData persists only the dirty settings groups requested by
  * the caller so unrelated RPC writes do not block the entire settings surface.
+ * The save path applies effective update payloads directly; formal readback
+ * stays on the open/load path instead of adding extra save-time RPC reads.
  */
 export async function saveControlPanelData(
   data: ControlPanelData,

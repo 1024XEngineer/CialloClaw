@@ -379,6 +379,44 @@
   margin-bottom: 1.35rem;
 }
 
+.control-panel-shell__error-banner {
+  align-items: start;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-accent-outline);
+  border-radius: 22px;
+  box-shadow: var(--cp-card-shadow);
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 1rem;
+  padding: 1.1rem 1.2rem;
+}
+
+.control-panel-shell__error-banner-copy {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.control-panel-shell__error-banner-title,
+.control-panel-shell__error-banner-text,
+.control-panel-shell__error-banner-note {
+  margin: 0;
+}
+
+.control-panel-shell__error-banner-title {
+  color: var(--cp-ink);
+}
+
+.control-panel-shell__error-banner-text {
+  color: var(--cp-copy);
+  line-height: 1.5;
+}
+
+.control-panel-shell__error-banner-note {
+  color: var(--cp-muted);
+  line-height: 1.5;
+}
+
 .control-panel-shell__hero-title {
   font-size: clamp(2.15rem, 3vw, 3.05rem);
   font-weight: 700;
@@ -885,6 +923,10 @@
   }
 
   .control-panel-shell__action-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .control-panel-shell__error-banner {
     grid-template-columns: 1fr;
   }
 }

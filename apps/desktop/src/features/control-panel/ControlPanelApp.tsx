@@ -25,6 +25,7 @@ import {
   type ControlPanelData,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
+import { loadSettings } from "@/services/settingsService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -280,6 +281,51 @@ function getApplyModeCopy(applyMode: string, needRestart: boolean) {
   }
 
   return "设置已即时生效。";
+}
+
+function buildLocalInspectorFallback(settings: ControlPanelData["settings"]): ControlPanelData["inspector"] {
+  return {
+    task_sources: settings.task_automation.task_sources,
+    inspection_interval: settings.task_automation.inspection_interval,
+    inspect_on_file_change: settings.task_automation.inspect_on_file_change,
+    inspect_on_startup: settings.task_automation.inspect_on_startup,
+    remind_before_deadline: settings.task_automation.remind_before_deadline,
+    remind_when_stale: settings.task_automation.remind_when_stale,
+  };
+}
+
+/**
+ * Keeps the control-panel shell renderable when the RPC bootstrap fails by
+ * falling back to the last persisted local snapshot under an explicit error banner.
+ */
+function buildLocalControlPanelSnapshot(): ControlPanelData {
+  const settings = loadSettings().settings;
+
+  return {
+    settings,
+    inspector: buildLocalInspectorFallback(settings),
+    providerApiKeyInput: "",
+    securitySummary: {
+      security_status: "execution_error",
+      pending_authorizations: 0,
+      latest_restore_point: null,
+      token_cost_summary: {
+        current_task_tokens: 0,
+        current_task_cost: 0,
+        today_tokens: 0,
+        today_cost: 0,
+        single_task_limit: 0,
+        daily_limit: 0,
+        budget_auto_downgrade: settings.models.budget_auto_downgrade,
+      },
+    },
+    source: "rpc",
+    warnings: [],
+  };
+}
+
+function shouldSurfaceRpcErrorBanner(message: string) {
+  return message.includes("暂时不可用") || message.includes("重新获取最新配置失败");
 }
 
 function resolveControlPanelAppearance(
@@ -558,7 +604,10 @@ export function ControlPanelApp() {
           return;
         }
 
+        const fallbackData = buildLocalControlPanelSnapshot();
         setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
+        setPanelData((current) => current ?? fallbackData);
+        setDraft((current) => current ?? fallbackData);
       }
     })();
 
@@ -572,6 +621,7 @@ export function ControlPanelApp() {
 
     try {
       const nextData = await loadControlPanelData();
+      setLoadError(null);
       setPanelData(nextData);
       setDraft(nextData);
     } catch (error) {
@@ -668,6 +718,7 @@ export function ControlPanelApp() {
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
   const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
+  const hasRpcLoadError = loadError !== null;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -726,6 +777,7 @@ export function ControlPanelApp() {
       });
       const nextPanelData = applyControlPanelSaveResult(panelData, result);
       const nextDraft = applyControlPanelSaveResult(draft, result);
+      setLoadError(null);
       setPanelData(nextPanelData);
       setDraft(nextDraft);
       setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
@@ -737,7 +789,11 @@ export function ControlPanelApp() {
         setDraft(nextDraft);
       }
 
-      setSaveFeedback(error instanceof Error ? error.message : "保存控制面板设置失败。");
+      const errorMessage = error instanceof Error ? error.message : "保存控制面板设置失败。";
+      if (shouldSurfaceRpcErrorBanner(errorMessage)) {
+        setLoadError(errorMessage);
+      }
+      setSaveFeedback(errorMessage);
     } finally {
       setIsSaving(false);
     }
@@ -1308,16 +1364,27 @@ export function ControlPanelApp() {
             <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
               <InfoRow label="当前模型" value={draft.settings.models.model} />
               <InfoRow label="API Key 状态" value={providerApiKeyStatus} />
-              <InfoRow label="安全状态" value={draft.securitySummary.security_status} />
-              <InfoRow label="待确认授权" value={draft.securitySummary.pending_authorizations} />
-              <InfoRow label="今日成本" value={`¥${draft.securitySummary.token_cost_summary.today_cost.toFixed(2)}`} />
+              <InfoRow label="安全状态" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.security_status} />
+              <InfoRow label="待确认授权" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.pending_authorizations} />
+              <InfoRow
+                label="今日成本"
+                value={hasRpcLoadError ? "暂不可用" : `¥${draft.securitySummary.token_cost_summary.today_cost.toFixed(2)}`}
+              />
               <InfoRow
                 label="单任务上限"
-                value={`${draft.securitySummary.token_cost_summary.single_task_limit.toLocaleString("zh-CN")} tokens`}
+                value={
+                  hasRpcLoadError
+                    ? "暂不可用"
+                    : `${draft.securitySummary.token_cost_summary.single_task_limit.toLocaleString("zh-CN")} tokens`
+                }
               />
               <InfoRow
                 label="当日上限"
-                value={`${draft.securitySummary.token_cost_summary.daily_limit.toLocaleString("zh-CN")} tokens`}
+                value={
+                  hasRpcLoadError
+                    ? "暂不可用"
+                    : `${draft.securitySummary.token_cost_summary.daily_limit.toLocaleString("zh-CN")} tokens`
+                }
               />
             </SettingsCard>
           </>
@@ -1382,6 +1449,30 @@ export function ControlPanelApp() {
 
         <section className="control-panel-shell__content">
           <header className="control-panel-shell__hero">
+            {hasRpcLoadError ? (
+              <section className="control-panel-shell__error-banner" aria-live="polite">
+                <div className="control-panel-shell__error-banner-copy">
+                  <Text as="p" size="2" weight="medium" className="control-panel-shell__error-banner-title">
+                    设置服务连接失败
+                  </Text>
+                  <Text as="p" size="2" className="control-panel-shell__error-banner-text">
+                    {loadError}
+                  </Text>
+                  <Text as="p" size="1" className="control-panel-shell__error-banner-note">
+                    当前仍展示上一次成功同步的本地快照，重新连接后请刷新页面以回显正式设置。
+                  </Text>
+                </div>
+
+                <Button
+                  className="control-panel-shell__button control-panel-shell__button--secondary"
+                  variant="soft"
+                  onClick={() => void handleReload()}
+                >
+                  重新加载
+                </Button>
+              </section>
+            ) : null}
+
             <div className="control-panel-shell__hero-heading">
               <Text as="p" size="1" className="control-panel-shell__eyebrow">
                 {activeMeta.group}

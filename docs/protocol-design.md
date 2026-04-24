@@ -110,6 +110,11 @@
 - `agent.plugin.*`：插件扩展能力方法组，负责插件列表、详情与运行态查询。
 - `agent.model.* / agent.skill.*`：扩展能力方法组，当前多数为 planned。
 
+补充说明：
+
+- 当前仓库实现里，部分场景感知信号也会通过 `agent.input.*`、`agent.task.*` 与 `agent.recommendation.*` 的 `context / scene` 字段并入主链。
+- 多模型与 Skill 安装当前仍主要停留在路线图阶段，正式方法与协议资产后续仍需继续冻结。
+
 ---
 
 ## 4. 通用结构与阅读说明
@@ -551,6 +556,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.model.activate`
 - `agent.skill.install`
 - `agent.skill.list`
+
+补充说明：
+
+- 上述多模型与 Skill 方法当前仍以 planned 为准；实际冻结顺序仍以后续 `/packages/protocol` 真源为准。
 
 ### 7.3 原子功能与方法映射说明
 
@@ -1446,6 +1455,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 }
 ```
 
+补充说明：
+
+- 当前实现里，部分屏幕/页面/剪贴板信号也会进入 `agent.input.submit`、`agent.task.start` 和 `agent.recommendation.get` 的上下文字段；这属于实现侧复用，不影响本文保留 `agent.screen.analyze` 的原始设计口径。
+
 
 ## 8.2 任务状态 / 任务巡检
 
@@ -2080,6 +2093,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `loop.round.completed`
 - `loop.completed`
 - `loop.failed`
+- `task.session_queued`
+- `task.session_resumed`
+- `mirror.overview.updated`
 
 其中 `loop.*` 事件服务于 Agent Loop / ReAct 运行时观察，不替代正式 `task` 对象本身；当前 query 读侧仍以 `task` 为主对象、以 `agent.task.events.list` 为事件补充视图。
 
@@ -2730,6 +2746,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   }
 }
 ```
+
+补充说明：
+
+- 当前桌面实现中，仪表盘首页的数据获取主要仍由 `agent.dashboard.overview.get`、`agent.dashboard.module.get` 与 `agent.recommendation.get` 组合承接；本文保留 `agent.dashboard.input.start` 原始设计说明，供后续协议冻结时继续对齐。
 
 ---
 
@@ -4218,6 +4238,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
+- `task.steered`：运行中补充要求已经写入任务链
+- `task.session_queued`：同一 `session` 下的新任务进入串行等待
+- `task.session_resumed`：队列中的任务重新恢复执行
+- `mirror.overview.updated`：镜子概览摘要刷新，前端可按 `revision` 触发回拉
+- `loop.*`：Agent Loop / ReAct 运行时通知集合，用于调试与任务详情观察
 - `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）
 - `plugin.metric.updated`：插件指标变化
 - `plugin.task.updated`：插件关联任务变化

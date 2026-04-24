@@ -1675,6 +1675,8 @@ test("control panel saves full floating-ball ownership through the real rpc sett
   };
   let updateSettingsRequest: Record<string, unknown> | null = null;
   let inspectorUpdateCount = 0;
+  let settingsReadCount = 0;
+  let inspectorReadCount = 0;
   let remoteSettings = {
     general: {
       language: "zh-CN",
@@ -1752,6 +1754,7 @@ test("control panel saves full floating-ball ownership through the real rpc sett
         scope?: string;
       };
 
+      settingsReadCount += 1;
       assert.equal(request.scope, "all");
       assert.match(request.request_meta?.trace_id ?? "", /^trace_control_panel_/);
 
@@ -1759,7 +1762,10 @@ test("control panel saves full floating-ball ownership through the real rpc sett
         settings: remoteSettings,
       };
     },
-    getTaskInspectorConfig: async () => inspectorConfig,
+    getTaskInspectorConfig: async () => {
+      inspectorReadCount += 1;
+      return inspectorConfig;
+    },
     updateSettings: async (params) => {
       const request = params as {
         request_meta?: {
@@ -1942,6 +1948,8 @@ test("control panel saves full floating-ball ownership through the real rpc sett
 
     assert.ok(updateSettingsRequest);
     assert.equal(inspectorUpdateCount, 0);
+    assert.equal(settingsReadCount, 1);
+    assert.equal(inspectorReadCount, 1);
     assert.equal(result.source, "rpc");
     assert.equal(result.needRestart, false);
     assert.equal(result.effectiveSettings.general.voice_type, "voice_nebula");
@@ -1968,6 +1976,8 @@ test("control panel saves full floating-ball ownership through the real rpc sett
     assert.equal(persisted.settings.memory.profile_refresh_interval.unit, "day");
 
     const reloaded = await loadControlPanelData();
+    assert.equal(settingsReadCount, 2);
+    assert.equal(inspectorReadCount, 2);
     assert.equal(reloaded.source, "rpc");
     assert.equal(reloaded.settings.general.voice_type, "voice_nebula");
     assert.equal(reloaded.settings.general.download.ask_before_save_each_file, false);
