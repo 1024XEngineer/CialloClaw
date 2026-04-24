@@ -32,7 +32,13 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
-const SHELL_BALL_WINDOW_LABELS: [&str; 5] = ["shell-ball", "shell-ball-bubble", "shell-ball-input", "shell-ball-voice", "onboarding"];
+const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
+    "shell-ball",
+    "shell-ball-bubble",
+    "shell-ball-input",
+    "shell-ball-voice",
+    "onboarding",
+];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
@@ -163,10 +169,14 @@ fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPa
         return None;
     }
 
-    read_lightweight_window_context_for_hwnd(hwnd).ok().map(|context| (hwnd, context))
+    read_lightweight_window_context_for_hwnd(hwnd)
+        .ok()
+        .map(|context| (hwnd, context))
 }
 
-fn read_lightweight_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowContextPayload, String> {
+fn read_lightweight_window_context_for_hwnd(
+    hwnd: HWND,
+) -> Result<ActiveWindowContextPayload, String> {
     let process_path = get_process_path(hwnd);
     let app_name = process_path
         .as_deref()
@@ -187,15 +197,16 @@ fn read_lightweight_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowCo
 }
 
 fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
-    let mut context = read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
-        app_name: "unknown".to_string(),
-        process_path: None,
-        title: None,
-        url: None,
-        browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
-        window_switch_count: None,
-        page_switch_count: None,
-    });
+    let mut context =
+        read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
+            app_name: "unknown".to_string(),
+            process_path: None,
+            title: None,
+            url: None,
+            browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
+            window_switch_count: None,
+            page_switch_count: None,
+        });
 
     context.url = read_url_for_window_context(hwnd, &context);
     context
@@ -247,8 +258,8 @@ fn record_page_switch_internal(
     prefer_lightweight_match: bool,
 ) {
     let fingerprint = create_page_switch_fingerprint(context);
-    let lightweight_fingerprint = prefer_lightweight_match
-        .then(|| create_page_switch_lightweight_fingerprint(context));
+    let lightweight_fingerprint =
+        prefer_lightweight_match.then(|| create_page_switch_lightweight_fingerprint(context));
 
     if let Ok(mut activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
         if activity_state
@@ -261,8 +272,7 @@ fn record_page_switch_internal(
                         .map_or(true, |lightweight| current != lightweight)
             })
         {
-            activity_state.page_switch_count =
-                activity_state.page_switch_count.saturating_add(1);
+            activity_state.page_switch_count = activity_state.page_switch_count.saturating_add(1);
         }
 
         activity_state.last_page_fingerprint = Some(fingerprint);
@@ -278,9 +288,7 @@ fn create_page_switch_fingerprint(context: &ActiveWindowContextPayload) -> Strin
     )
 }
 
-fn create_page_switch_lightweight_fingerprint(
-    context: &ActiveWindowContextPayload,
-) -> String {
+fn create_page_switch_lightweight_fingerprint(context: &ActiveWindowContextPayload) -> String {
     format!(
         "{}|{}|",
         context.app_name,
@@ -298,14 +306,11 @@ fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
 }
 
 fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
-    LAST_EXTERNAL_WINDOW_CONTEXT
-        .lock()
-        .ok()
-        .and_then(|cached| {
-            cached
-                .as_ref()
-                .map(|value| with_window_context_activity_counts(value.context.clone()))
-        })
+    LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok().and_then(|cached| {
+        cached
+            .as_ref()
+            .map(|value| with_window_context_activity_counts(value.context.clone()))
+    })
 }
 
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
@@ -415,9 +420,9 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
         if state.in_flight_fingerprint.as_deref() == Some(fingerprint.as_str()) {
             false
         } else if state.last_completed_fingerprint.as_deref() == Some(fingerprint.as_str())
-            && state
-                .last_completed_at
-                .is_some_and(|instant| instant.elapsed() < Duration::from_millis(WINDOW_CONTEXT_URL_DEBOUNCE_MS))
+            && state.last_completed_at.is_some_and(|instant| {
+                instant.elapsed() < Duration::from_millis(WINDOW_CONTEXT_URL_DEBOUNCE_MS)
+            })
         {
             false
         } else {
@@ -465,10 +470,7 @@ fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> St
     )
 }
 
-fn read_url_for_window_context(
-    hwnd: HWND,
-    context: &ActiveWindowContextPayload,
-) -> Option<String> {
+fn read_url_for_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) -> Option<String> {
     match context.browser_kind.as_str() {
         BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => {
             read_browser_url_via_uia(hwnd)
@@ -488,7 +490,8 @@ fn classify_browser_kind(app_name: &str) -> &'static str {
 
 fn get_process_path(hwnd: HWND) -> Option<String> {
     let process_handle = open_process(hwnd)?;
-    let path = get_module_file_name(process_handle).or_else(|| get_query_process_image_name(process_handle));
+    let path = get_module_file_name(process_handle)
+        .or_else(|| get_query_process_image_name(process_handle));
 
     unsafe {
         let _ = CloseHandle(process_handle);
@@ -533,7 +536,12 @@ fn get_query_process_image_name(process: HANDLE) -> Option<String> {
     let mut size = buffer.len() as u32;
 
     if unsafe {
-        QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut size)
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
     }
     .is_err()
         || size == 0
@@ -568,7 +576,8 @@ fn get_window_title(hwnd: HWND) -> Option<String> {
 
 fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
     let _com_guard = ComGuard::initialize().ok()?;
-    let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
     let root_element = unsafe { automation.ElementFromHandle(hwnd).ok()? };
     let edit_control_type = VARIANT::from(UIA_EditControlTypeId.0);
     let condition: IUIAutomationCondition = unsafe {
@@ -576,7 +585,8 @@ fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
             .CreatePropertyCondition(UIA_ControlTypePropertyId, &edit_control_type)
             .ok()?
     };
-    let matches: IUIAutomationElementArray = unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok()? };
+    let matches: IUIAutomationElementArray =
+        unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok()? };
     let length = unsafe { matches.Length().ok()? };
 
     for index in 0..length {
@@ -593,7 +603,8 @@ fn read_element_url_candidate(element: &IUIAutomationElement) -> Option<String> 
     let name: BSTR = unsafe { element.CurrentName().ok()? };
     let normalized_name = name.to_string().trim().to_string();
 
-    let value_pattern: IUIAutomationValuePattern = unsafe { element.GetCurrentPatternAs(UIA_ValuePatternId).ok()? };
+    let value_pattern: IUIAutomationValuePattern =
+        unsafe { element.GetCurrentPatternAs(UIA_ValuePatternId).ok()? };
     let value = unsafe { value_pattern.CurrentValue().ok()? }.to_string();
     let trimmed_value = value.trim();
     if looks_like_url(trimmed_value) {

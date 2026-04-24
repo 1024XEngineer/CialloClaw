@@ -153,18 +153,35 @@ fn resolve_source_root(raw_source: &str, roots: &LocalPathRoots) -> Result<PathB
     let resolved = if candidate.is_absolute() {
         candidate
     } else if let Some(workspace_relative_path) = strip_workspace_prefix(trimmed) {
-        let workspace_root = roots
-            .workspace_root()
-            .ok_or_else(|| "workspace root is unavailable for task source resolution".to_string())?;
+        let workspace_root = roots.workspace_root().ok_or_else(|| {
+            "workspace root is unavailable for task source resolution".to_string()
+        })?;
         workspace_root.join(workspace_relative_path)
     } else {
-        let repo_root = roots
-            .repo_root()
-            .ok_or_else(|| "repository root is unavailable for task source resolution".to_string())?;
+        let repo_root = roots.repo_root().ok_or_else(|| {
+            "repository root is unavailable for task source resolution".to_string()
+        })?;
         repo_root.join(candidate)
     };
 
     Ok(resolved.canonicalize().unwrap_or(resolved))
+}
+
+/// Reports whether any configured source still depends on the trusted
+/// workspace root for path resolution.
+pub(crate) fn sources_require_workspace_root(raw_sources: &[String]) -> bool {
+    raw_sources
+        .iter()
+        .any(|raw_source| source_requires_workspace_root(raw_source))
+}
+
+fn source_requires_workspace_root(raw_source: &str) -> bool {
+    let trimmed = raw_source.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    !PathBuf::from(trimmed).is_absolute() && strip_workspace_prefix(trimmed).is_some()
 }
 
 fn strip_workspace_prefix(raw_path: &str) -> Option<&str> {
@@ -178,8 +195,12 @@ fn strip_workspace_prefix(raw_path: &str) -> Option<&str> {
 }
 
 fn collect_markdown_files(root: &Path, result: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = fs::read_dir(root)
-        .map_err(|error| format!("failed to read task source directory {}: {error}", root.display()))?;
+    let entries = fs::read_dir(root).map_err(|error| {
+        format!(
+            "failed to read task source directory {}: {error}",
+            root.display()
+        )
+    })?;
 
     for entry in entries {
         let entry = entry.map_err(|error| {
@@ -189,9 +210,9 @@ fn collect_markdown_files(root: &Path, result: &mut Vec<PathBuf>) -> Result<(), 
             )
         })?;
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            format!("failed to read file type for {}: {error}", path.display())
-        })?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to read file type for {}: {error}", path.display()))?;
 
         if file_type.is_dir() {
             collect_markdown_files(&path, result)?;
@@ -217,8 +238,12 @@ fn build_source_note_document(
     note_path: &Path,
     source_root: &Path,
 ) -> Result<DesktopSourceNoteDocument, String> {
-    let content = fs::read_to_string(note_path)
-        .map_err(|error| format!("failed to read source note {}: {error}", note_path.display()))?;
+    let content = fs::read_to_string(note_path).map_err(|error| {
+        format!(
+            "failed to read source note {}: {error}",
+            note_path.display()
+        )
+    })?;
     let file_name = note_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -363,4 +388,52 @@ fn match_source_root<'a>(target: &Path, roots: &'a [PathBuf]) -> Result<&'a Path
                 target.display()
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_source_root, sources_require_workspace_root};
+    use crate::local_path::LocalPathRoots;
+    use std::env;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn resolve_source_root_accepts_absolute_paths_without_trusted_roots() {
+        let absolute = unique_temp_path("你好").join("notes");
+        let resolved = resolve_source_root(
+            absolute.to_string_lossy().as_ref(),
+            &LocalPathRoots::new(None, None),
+        )
+        .expect("resolve absolute path without workspace root");
+
+        assert_eq!(resolved, absolute);
+    }
+
+    #[test]
+    fn sources_require_workspace_root_only_for_workspace_relative_sources() {
+        let absolute = unique_temp_path("absolute-source")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(!sources_require_workspace_root(&[
+            absolute,
+            "notes/manual".to_string(),
+        ]));
+        assert!(sources_require_workspace_root(&[
+            "workspace/notes".to_string()
+        ]));
+        assert!(sources_require_workspace_root(&[
+            "workspace\\notes".to_string()
+        ]));
+    }
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("read system time")
+            .as_nanos();
+
+        env::temp_dir().join(format!("cialloclaw-source-note-{unique}-{name}"))
+    }
 }

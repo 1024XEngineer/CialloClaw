@@ -4,9 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-    GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, DIB_RGB_COLORS, HGDIOBJ, SRCCOPY,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+    SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
@@ -47,8 +47,18 @@ pub fn capture_screenshot() -> Result<ScreenCapturePayload, String> {
 
     let capture_result = (|| {
         unsafe {
-            BitBlt(memory_dc, 0, 0, width, height, Some(screen_dc), 0, 0, SRCCOPY)
-                .map_err(|error| format!("failed to copy desktop pixels: {error}"))?;
+            BitBlt(
+                memory_dc,
+                0,
+                0,
+                width,
+                height,
+                Some(screen_dc),
+                0,
+                0,
+                SRCCOPY,
+            )
+            .map_err(|error| format!("failed to copy desktop pixels: {error}"))?;
         }
 
         let mut bitmap_info = BITMAPINFO {
@@ -112,7 +122,8 @@ pub fn capture_screenshot() -> Result<ScreenCapturePayload, String> {
 
 fn next_screenshot_paths() -> Result<(PathBuf, String), String> {
     let temp_dir = apps_temp_dir()?;
-    fs::create_dir_all(&temp_dir).map_err(|error| format!("failed to create screenshot temp dir: {error}"))?;
+    fs::create_dir_all(&temp_dir)
+        .map_err(|error| format!("failed to create screenshot temp dir: {error}"))?;
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

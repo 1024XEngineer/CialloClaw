@@ -1,5 +1,6 @@
 // settingsService centralizes desktop settings persistence.
 import type { SettingsSnapshot } from "@cialloclaw/protocol";
+import { syncDesktopSettingsSnapshot } from "../platform/desktopSettingsSnapshot";
 import { loadStoredValue, saveStoredValue } from "../platform/storage";
 
 // SETTINGS_KEY is the single storage key for the desktop snapshot.
@@ -218,5 +219,7 @@ export function loadSettings(): DesktopSettings {
  * @param settings The desktop settings snapshot to store locally.
  */
 export function saveSettings(settings: DesktopSettings) {
-  saveStoredValue(SETTINGS_KEY, normalizeSettingsSnapshot(settings));
+  const normalizedSettings = normalizeSettingsSnapshot(settings);
+  saveStoredValue(SETTINGS_KEY, normalizedSettings);
+  void syncDesktopSettingsSnapshot(toProtocolSettingsSnapshot(normalizedSettings.settings));
 }

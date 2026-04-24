@@ -15,6 +15,7 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -58,9 +59,10 @@ const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
-const LOCAL_PATH_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
-static LOCAL_PATH_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
+const DESKTOP_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
+static DESKTOP_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+const DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS: u64 = 1_500;
 
 #[cfg(windows)]
 macro_rules! makelparam {
@@ -96,8 +98,83 @@ impl Default for NamedPipeBridgeState {
     }
 }
 
+/// DesktopSettingsSnapshotState keeps the latest formal settings payload inside
+/// the desktop host so platform bridges can reuse one startup fetch instead of
+/// re-requesting settings on every local action.
+struct DesktopSettingsSnapshotState {
+    settings: Mutex<Option<Value>>,
+}
+
+impl Default for DesktopSettingsSnapshotState {
+    fn default() -> Self {
+        Self {
+            settings: Mutex::new(None),
+        }
+    }
+}
+
+impl DesktopSettingsSnapshotState {
+    fn seed(&self, settings: Value) -> Result<(), String> {
+        validate_desktop_settings_snapshot(&settings)?;
+        let mut snapshot = self
+            .settings
+            .lock()
+            .map_err(|_| "desktop settings snapshot lock poisoned".to_string())?;
+        if snapshot.is_none() {
+            *snapshot = Some(settings);
+        }
+        Ok(())
+    }
+
+    fn replace(&self, settings: Value) -> Result<(), String> {
+        validate_desktop_settings_snapshot(&settings)?;
+        let mut snapshot = self
+            .settings
+            .lock()
+            .map_err(|_| "desktop settings snapshot lock poisoned".to_string())?;
+        *snapshot = Some(settings);
+        Ok(())
+    }
+
+    fn workspace_root(&self) -> Result<Option<PathBuf>, String> {
+        let snapshot = self
+            .settings
+            .lock()
+            .map_err(|_| "desktop settings snapshot lock poisoned".to_string())?;
+
+        Ok(snapshot
+            .as_ref()
+            .and_then(read_workspace_root_from_settings_snapshot))
+    }
+
+    fn has_snapshot(&self) -> Result<bool, String> {
+        let snapshot = self
+            .settings
+            .lock()
+            .map_err(|_| "desktop settings snapshot lock poisoned".to_string())?;
+
+        Ok(snapshot.is_some())
+    }
+}
+
 impl NamedPipeBridgeState {
     fn request(self: &Arc<Self>, payload: Value) -> Result<Value, String> {
+        self.request_internal(payload, None)
+    }
+
+    fn request_with_timeout(
+        self: &Arc<Self>,
+        payload: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        self.request_internal(payload, Some(timeout))
+    }
+
+    fn request_internal(
+        self: &Arc<Self>,
+        payload: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, String> {
         let request_id = extract_request_id(&payload)?;
         let session = self.ensure_session()?;
         let (response_tx, response_rx) = mpsc::channel();
@@ -115,9 +192,32 @@ impl NamedPipeBridgeState {
             return Err(format!("failed to queue named pipe request: {error}"));
         }
 
-        response_rx
-            .recv()
-            .map_err(|error| format!("named pipe response wait failed: {error}"))?
+        match timeout {
+            Some(timeout) => response_rx.recv_timeout(timeout).map_err(|error| {
+                if let Ok(mut pending) = self.pending.lock() {
+                    pending.remove(&request_id);
+                }
+
+                match error {
+                    mpsc::RecvTimeoutError::Timeout => {
+                        format!(
+                            "named pipe response wait timed out after {}ms",
+                            timeout.as_millis()
+                        )
+                    }
+                    mpsc::RecvTimeoutError::Disconnected => {
+                        "named pipe response wait failed: channel disconnected".to_string()
+                    }
+                }
+            })?,
+            None => response_rx.recv().map_err(|error| {
+                if let Ok(mut pending) = self.pending.lock() {
+                    pending.remove(&request_id);
+                }
+
+                format!("named pipe response wait failed: {error}")
+            })?,
+        }
     }
 
     fn subscribe(self: &Arc<Self>, topic: String, channel: JsonChannel) -> Result<u32, String> {
@@ -291,12 +391,14 @@ async fn desktop_get_active_window_context(
 
 #[tauri::command]
 async fn desktop_open_local_path(
-    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
     path: String,
 ) -> Result<(), String> {
-    let state = Arc::clone(state.inner());
+    let bridge_state = Arc::clone(bridge_state.inner());
+    let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&state);
+        let roots = build_local_path_roots(&bridge_state, &settings_snapshot_state);
         local_path::open_local_path(&path, &roots)
     })
     .await
@@ -305,12 +407,14 @@ async fn desktop_open_local_path(
 
 #[tauri::command]
 async fn desktop_reveal_local_path(
-    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
     path: String,
 ) -> Result<(), String> {
-    let state = Arc::clone(state.inner());
+    let bridge_state = Arc::clone(bridge_state.inner());
+    let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&state);
+        let roots = build_local_path_roots(&bridge_state, &settings_snapshot_state);
         local_path::reveal_local_path(&path, &roots)
     })
     .await
@@ -319,12 +423,14 @@ async fn desktop_reveal_local_path(
 
 #[tauri::command]
 async fn desktop_load_source_notes(
-    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
     sources: Vec<String>,
 ) -> Result<source_notes::DesktopSourceNoteSnapshot, String> {
-    let state = Arc::clone(state.inner());
+    let bridge_state = Arc::clone(bridge_state.inner());
+    let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&state);
+        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
         source_notes::load_source_notes(&sources, &roots)
     })
     .await
@@ -333,13 +439,15 @@ async fn desktop_load_source_notes(
 
 #[tauri::command]
 async fn desktop_create_source_note(
-    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
     sources: Vec<String>,
     content: String,
 ) -> Result<source_notes::DesktopSourceNoteDocument, String> {
-    let state = Arc::clone(state.inner());
+    let bridge_state = Arc::clone(bridge_state.inner());
+    let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&state);
+        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
         source_notes::create_source_note(&sources, &roots, &content)
     })
     .await
@@ -348,69 +456,260 @@ async fn desktop_create_source_note(
 
 #[tauri::command]
 async fn desktop_save_source_note(
-    state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
     sources: Vec<String>,
     path: String,
     content: String,
 ) -> Result<source_notes::DesktopSourceNoteDocument, String> {
-    let state = Arc::clone(state.inner());
+    let bridge_state = Arc::clone(bridge_state.inner());
+    let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&state);
+        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
         source_notes::save_source_note(&sources, &roots, &path, &content)
     })
     .await
     .map_err(|error| format!("desktop source note save task failed: {error}"))?
 }
 
-fn build_local_path_roots(state: &Arc<NamedPipeBridgeState>) -> local_path::LocalPathRoots {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+#[tauri::command]
+fn desktop_sync_settings_snapshot(
+    state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    settings: Value,
+) -> Result<(), String> {
+    state.replace(settings)
+}
+
+fn build_local_path_roots(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+) -> local_path::LocalPathRoots {
+    let repo_root = build_repo_root();
+    let workspace_root = resolve_workspace_root(
+        bridge_state,
+        settings_snapshot_state,
+        repo_root.as_ref(),
+        true,
+    )
+    .or_else(|| repo_root.as_ref().map(|root| root.join("workspace")));
+
+    local_path::LocalPathRoots::new(workspace_root, repo_root)
+}
+
+fn build_source_note_roots(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    sources: &[String],
+) -> local_path::LocalPathRoots {
+    let repo_root = build_repo_root();
+    let workspace_root = if source_notes::sources_require_workspace_root(sources) {
+        resolve_workspace_root(
+            bridge_state,
+            settings_snapshot_state,
+            repo_root.as_ref(),
+            true,
+        )
+        .or_else(|| repo_root.as_ref().map(|root| root.join("workspace")))
+    } else {
+        None
+    };
+
+    local_path::LocalPathRoots::new(workspace_root, repo_root)
+}
+
+fn build_repo_root() -> Option<PathBuf> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
-        .ok();
-    let workspace_root = fetch_workspace_root(state)
+        .ok()
+}
+
+fn resolve_workspace_root_from_snapshot(
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    repo_root: Option<&PathBuf>,
+) -> Option<PathBuf> {
+    settings_snapshot_state
+        .workspace_root()
         .ok()
         .flatten()
         .and_then(|workspace_root| {
             if workspace_root.is_absolute() {
                 Some(workspace_root)
             } else {
-                repo_root.as_ref().map(|root| root.join(workspace_root))
+                repo_root.map(|root| root.join(workspace_root))
             }
         })
-        .or_else(|| repo_root.as_ref().map(|root| root.join("workspace")));
-
-    local_path::LocalPathRoots::new(workspace_root, repo_root)
 }
 
-fn fetch_workspace_root(state: &Arc<NamedPipeBridgeState>) -> Result<Option<PathBuf>, String> {
-    let request_id = format!(
-        "desktop_local_path_settings_{}",
-        LOCAL_PATH_SETTINGS_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
-    );
-    let response = state.request(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": "agent.settings.get",
-        "params": {
-            "scope": "general",
-            "request_meta": {
-                "trace_id": "trace_desktop_local_path_settings",
-                "client_time": LOCAL_PATH_SETTINGS_CLIENT_TIME,
-            }
-        }
-    }))?;
+/// The desktop host prefers the cached settings snapshot, but it may still be
+/// empty during the first few local actions if startup prefetch raced the pipe.
+/// In that case, perform one bounded refresh and keep the result for later calls.
+fn resolve_workspace_root(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    repo_root: Option<&PathBuf>,
+    allow_refresh: bool,
+) -> Option<PathBuf> {
+    let workspace_root = resolve_workspace_root_from_snapshot(settings_snapshot_state, repo_root);
+    if workspace_root.is_some() || !allow_refresh {
+        return workspace_root;
+    }
 
-    Ok(response
+    let should_refresh = settings_snapshot_state.has_snapshot().ok() == Some(false);
+    if should_refresh {
+        let _ = refresh_desktop_settings_snapshot(
+            bridge_state,
+            settings_snapshot_state,
+            Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
+        );
+    }
+
+    resolve_workspace_root_from_snapshot(settings_snapshot_state, repo_root)
+}
+
+fn refresh_desktop_settings_snapshot(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    timeout: Duration,
+) -> Result<(), String> {
+    let settings = fetch_settings_snapshot_with(bridge_state, |state, payload| {
+        state.request_with_timeout(payload, timeout)
+    })?;
+    settings_snapshot_state.seed(settings)
+}
+
+fn fetch_settings_snapshot_with<F>(
+    state: &Arc<NamedPipeBridgeState>,
+    request: F,
+) -> Result<Value, String>
+where
+    F: FnOnce(&Arc<NamedPipeBridgeState>, Value) -> Result<Value, String>,
+{
+    let request_id = format!(
+        "desktop_settings_snapshot_{}",
+        DESKTOP_SETTINGS_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let response = request(
+        state,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "agent.settings.get",
+            "params": {
+                "scope": "all",
+                "request_meta": {
+                    "trace_id": "trace_desktop_settings_snapshot",
+                    "client_time": DESKTOP_SETTINGS_CLIENT_TIME,
+                }
+            }
+        }),
+    )?;
+
+    response
         .get("result")
         .and_then(|result| result.get("data"))
         .and_then(|data| data.get("settings"))
-        .and_then(|settings| settings.get("general"))
+        .cloned()
+        .ok_or_else(|| "desktop settings snapshot response missing settings payload".to_string())
+}
+
+fn validate_desktop_settings_snapshot(settings: &Value) -> Result<(), String> {
+    if settings.is_object() {
+        Ok(())
+    } else {
+        Err("desktop settings snapshot must be a JSON object".to_string())
+    }
+}
+
+fn read_workspace_root_from_settings_snapshot(settings: &Value) -> Option<PathBuf> {
+    settings
+        .get("general")
         .and_then(|general| general.get("download"))
         .and_then(|download| download.get("workspace_path"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|path| !path.is_empty())
-        .map(PathBuf::from))
+        .map(PathBuf::from)
+}
+
+fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
+    let bridge_state = Arc::clone(app.state::<Arc<NamedPipeBridgeState>>().inner());
+    let settings_snapshot_state =
+        Arc::clone(app.state::<Arc<DesktopSettingsSnapshotState>>().inner());
+
+    std::thread::spawn(move || {
+        if let Err(error) = refresh_desktop_settings_snapshot(
+            &bridge_state,
+            &settings_snapshot_state,
+            Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
+        ) {
+            eprintln!("failed to prefetch desktop settings snapshot: {error}");
+        }
+    });
+}
+
+#[cfg(test)]
+mod desktop_settings_snapshot_tests {
+    use super::{read_workspace_root_from_settings_snapshot, DesktopSettingsSnapshotState};
+    use serde_json::json;
+    use std::env;
+
+    #[test]
+    fn read_workspace_root_from_settings_snapshot_reads_workspace_path() {
+        let workspace_root = env::temp_dir().join("desktop-settings-snapshot");
+        let snapshot = json!({
+            "general": {
+                "download": {
+                    "workspace_path": workspace_root.to_string_lossy().to_string(),
+                }
+            }
+        });
+
+        assert_eq!(
+            read_workspace_root_from_settings_snapshot(&snapshot),
+            Some(workspace_root)
+        );
+    }
+
+    #[test]
+    fn seed_does_not_override_newer_settings_snapshot() {
+        let initial_root = env::temp_dir().join("desktop-settings-initial");
+        let newer_root = env::temp_dir().join("desktop-settings-newer");
+        let state = DesktopSettingsSnapshotState::default();
+
+        state
+            .seed(json!({
+                "general": {
+                    "download": {
+                        "workspace_path": initial_root.to_string_lossy().to_string(),
+                    }
+                }
+            }))
+            .expect("seed initial settings");
+        state
+            .replace(json!({
+                "general": {
+                    "download": {
+                        "workspace_path": newer_root.to_string_lossy().to_string(),
+                    }
+                }
+            }))
+            .expect("replace settings snapshot");
+        state
+            .seed(json!({
+                "general": {
+                    "download": {
+                        "workspace_path": initial_root.to_string_lossy().to_string(),
+                    }
+                }
+            }))
+            .expect("seed stale snapshot");
+
+        assert_eq!(
+            state.workspace_root().expect("read workspace root"),
+            Some(newer_root)
+        );
+    }
 }
 
 fn writer_loop(
@@ -712,7 +1011,8 @@ unsafe extern "system" fn shell_ball_clipboard_keyboard_hook(
         let ctrl_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
         let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
 
-        if ctrl_down && (keyboard_info.vkCode == b'C' as u32 || keyboard_info.vkCode == b'X' as u32) {
+        if ctrl_down && (keyboard_info.vkCode == b'C' as u32 || keyboard_info.vkCode == b'X' as u32)
+        {
             schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_COPY_DELAY_MS);
         }
 
@@ -754,9 +1054,14 @@ fn install_shell_ball_clipboard_hooks(app: &tauri::AppHandle) -> Result<(), Stri
     if keyboard_hook.is_none() {
         unsafe {
             *keyboard_hook = Some(
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(shell_ball_clipboard_keyboard_hook), None, 0)
-                    .map_err(|error| format!("failed to install clipboard keyboard hook: {error}"))?
-                    .0 as isize,
+                SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(shell_ball_clipboard_keyboard_hook),
+                    None,
+                    0,
+                )
+                .map_err(|error| format!("failed to install clipboard keyboard hook: {error}"))?
+                .0 as isize,
             );
         }
     }
@@ -774,11 +1079,8 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
         MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球").build(app)?;
     let hide_shell_ball =
         MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "隐藏悬浮球").build(app)?;
-    let open_control_panel = MenuItemBuilder::with_id(
-        TRAY_MENU_OPEN_CONTROL_PANEL_ID,
-        "打开控制面板",
-    )
-    .build(app)?;
+    let open_control_panel =
+        MenuItemBuilder::with_id(TRAY_MENU_OPEN_CONTROL_PANEL_ID, "打开控制面板").build(app)?;
     let quit_app = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "关闭程序").build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .items(&[
@@ -844,10 +1146,12 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
 static SHELL_BALL_CLIPBOARD_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
-static SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> =
+    Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
-static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> =
+    Lazy::new(|| Mutex::new(None));
 
 #[cfg(windows)]
 static SHELL_BALL_CLIPBOARD_STATE: Lazy<Mutex<ClipboardMonitorState>> =
@@ -1220,7 +1524,9 @@ fn onboarding_set_interactive_regions(
     regions: Vec<ShellBallInteractiveRect>,
 ) -> Result<(), String> {
     if window.label() != ONBOARDING_WINDOW_LABEL {
-        return Err("onboarding_set_interactive_regions is only available to the onboarding window".into());
+        return Err(
+            "onboarding_set_interactive_regions is only available to the onboarding window".into(),
+        );
     }
 
     let hwnd = window
@@ -1428,6 +1734,7 @@ async fn shell_ball_read_selection_snapshot(
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
+        .manage(Arc::new(DesktopSettingsSnapshotState::default()))
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             activity::install_mouse_activity_listener()
@@ -1438,6 +1745,7 @@ fn main() {
                 .map_err(|error| std::io::Error::other(error))?;
             window_context::install_window_context_listener(app.handle())
                 .map_err(|error| std::io::Error::other(error))?;
+            prefetch_desktop_settings_snapshot(app);
 
             Ok(install_system_tray(app)?)
         })
@@ -1456,6 +1764,7 @@ fn main() {
             desktop_open_or_focus_control_panel,
             desktop_open_local_path,
             desktop_reveal_local_path,
+            desktop_sync_settings_snapshot,
             desktop_load_source_notes,
             desktop_create_source_note,
             desktop_save_source_note,
