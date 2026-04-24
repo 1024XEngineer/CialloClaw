@@ -893,283 +893,396 @@ flowchart LR
 ## 4.2 任务编排与运行层模块
 
 ### 模块定位
-任务编排与运行层负责真正的任务运行、前馈决策、执行循环和正式交付，是系统的“主编排层”。
+任务编排与运行层负责把“前端提交的事实”收敛成“可执行、可暂停、可恢复、可交付”的正式任务主链。当前编排主体不是 AI 自由发挥，而是 `orchestrator.Service` 与 `runengine.Engine` 共同维护的一条固定主流程：
+
+1. 先捕获并归一上下文；
+2. 再做入口判断与计划骨架生成；
+3. 再创建或续接正式 `task`；
+4. 再经过会话串行、治理判断与受控执行；
+5. 最后把执行结果、通知、交付和恢复结论重新回流到正式对象链。
+
+AI 参与的环节只发生在“轻量建议”和“受控执行”中，不直接拥有状态机、授权流、队列或正式交付语义。
+
+### 层内子模块图
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px'}}}%%
+flowchart LR
+    REQ[标准请求<br/>task/session/trace 锚点] --> ORCH[任务编排器]
+
+    subgraph B1[前馈准备]
+        direction TB
+        CTX[上下文归一与准备器<br/>TaskContextSnapshot]
+        PLAN[入口判断与规划器<br/>Suggestion / ContinuationDecision]
+        ASSET[资产路由与 Prompt 组装器<br/>Skill / Blueprint / Prompt refs]
+    end
+
+    subgraph B2[运行控制]
+        direction TB
+        RUN[运行控制器<br/>runengine.TaskRecord]
+        LANE[会话续接与串行器]
+        HANDOFF[记忆计划与交付交接协调器]
+    end
+
+    subgraph B3[执行桥接]
+        direction TB
+        EXECREQ[execution.Request]
+        EXEC[受控执行循环<br/>execution / agentloop]
+        EXECRES[execution.Result / loop.*]
+    end
+
+    ORCH --> CTX --> PLAN --> ASSET --> RUN
+    ORCH --> LANE --> RUN
+    RUN --> HANDOFF
+    RUN --> EXECREQ --> EXEC --> EXECRES --> RUN
+    EXECRES --> HANDOFF
+
+    GOV[治理与交付层结论] -.->|approval / review / recovery| RUN
+    GOV -.->|deny / replan / blocked| ORCH
+    EXECRES -.->|trace / hitl trigger| ORCH
+    RUN -.->|task.updated / delivery.ready / task.steered| RESP[本地接入层回流]
+```
+
+### 编排主体与边界
+
+- **主编排者是后端代码，不是模型本身**：`orchestrator.Service` 决定调用顺序、层间交接和异常分流，`runengine.Engine` 决定正式状态推进和通知回放。
+- **AI 只参与受控决策点**：当前代码里 AI 主要参与 `task_continuation` 分类、`intent` 的轻量建议，以及 `execution.Service` 内的 Prompt 生成和执行循环，不直接写 `task.status`。
+- **入口规划不是完整工作流引擎**：当前 `intent.Service` 只生成入口级 `Suggestion` 和计划骨架；真正的复杂推理、工具调用和 ReAct/Agent Loop 在执行阶段发生。
+- **正式状态推进点只有 `runengine.Engine`**：创建任务、确认意图、进入执行、等待授权、等待补充输入、阻断、失败、完成、队列恢复都必须回到 `TaskRecord` 收口。
 
 ### 组成
-- 任务编排内核
-- 上下文管理内核
-- 入口判断与规划内核
-- Skill / Blueprint 路由内核
-- Prompt 组装内核
-- 任务状态机
-- 记忆管理内核
-- 结果交付内核
-- 子任务协调器
-- 插件系统与插件管理器
+- 任务编排器
+- 上下文归一与准备器
+- 入口判断与规划器
+- 资产路由与 Prompt 组装器
+- 运行控制器
+- 会话续接与串行器
+- 记忆计划与交付交接协调器
+- 执行分段与子任务协调器
+- 插件运行态协调器
+- 反馈回流与边界收敛器
 
-### 说明
-- `task` 是对外主对象；
-- `run / step / event / tool_call` 是执行兼容对象；
-- 子任务协调器负责上下文隔离，不等同于普通 worker。
+### 关键中间产物
+
+- `TaskContextSnapshot`：上下文归一后的稳定快照，是入口判断和执行请求的共同输入基线。
+- `taskContinuationDecision`：续接现有任务还是新开任务的决策结果。
+- `Suggestion`：入口判断与规划器输出的轻量建议，包含 `Intent`、`RequiresConfirm`、`TaskTitle`、`DirectDeliveryType` 等字段。
+- `runengine.CreateTaskInput`：把 `Suggestion`、快照和交付偏好折叠成正式建任务输入。
+- `runengine.TaskRecord`：桥接 `task` 与 `run` 的核心运行态结构，保存时间线、审批对象、通知队列、记忆计划、交付结果等。
+- `execution.Request / execution.Result`：进入受控执行循环前后的标准桥接件。
+- `NotificationRecord`：等待本地接入层回放的有序通知批次。
 
 ### 输入
-- 接口接入层的任务请求；
-- 上下文来源、记忆召回、技能与模板命中；
-- 能力接入层返回的工具和模型结果；
-- 治理与反馈层返回的审查、授权、熔断、恢复结论。
+- 本地接入层下发的标准任务请求；
+- `TaskContextSnapshot` 候选上下文；
+- 能力与存储层返回的模型、工具、worker、检索结果；
+- 治理与交付层返回的审批、审查、熔断、恢复和人工复核结论。
 
 ### 输出
-- `task / bubble_message / delivery_result / artifact`；
-- `run / step / event / tool_call`；
-- 给治理层、数据层和接口层的标准化对象。
+- 正式 `task` 投影；
+- 执行兼容对象 `run / step / event / tool_call`；
+- `delivery_result / artifact / citation` 的交接请求；
+- `approval_request / authorization_record / recovery_point` 的交接请求；
+- 给本地接入层回放的有序通知。
 
 ### 关键接口
-- `orchestrator.startTask()`
-- `orchestrator.confirmIntent()`
-- `orchestrator.resumeAfterApproval()`
-- `runEngine.advance()`
-- `deliveryEngine.buildDeliveryResult()`
-- `memoryEngine.injectAndPersist()`
-- `pluginManager.dispatchPluginTask()`
+- `orchestrator.SubmitInput()`
+- `orchestrator.StartTask()`
+- `orchestrator.ConfirmTask()`
+- `orchestrator.TaskControl()`
+- `runengine.CreateTask()`
+- `runengine.ConfirmTask()`
+- `runengine.BeginExecution()`
+- `runengine.EmitRuntimeNotification()`
 
 ### 边界
-- 内核层可以调用能力接入层和治理层，但不能反向依赖平台具体实现；
-- 内核层中只有统一对象模型，没有页面视角对象模型；
-- 所有 worker、插件、子任务输出必须包装成标准对象链回流。
+- 本层可以调用能力与存储层和治理与交付层，但不能反向依赖平台具体实现；
+- 本层只维护统一任务语义，不引入页面视角对象模型；
+- 所有 worker、插件、子执行分支输出都必须包装成标准对象链回流。
 
 ### 异常处理
-- 前馈不收敛：进入澄清或低风险降级路径；
-- 执行失败：交由状态机、恢复和反馈层处理；
-- 子任务失败：只影响当前子链路，不直接污染主任务对象；
-- 交付构建失败：回退到保底交付出口并记录失败上下文。
+- 前馈不收敛：进入澄清、确认或等待补充输入；
+- 会话冲突：进入 `session_queue` 排队，不并行污染同一 `session`；
+- 执行失败：由运行控制器收敛到失败态，再交给治理与交付层补审计与恢复结果；
+- 人工复核命中：回到重新规划或恢复执行路径，而不是静默吞掉失败。
 
 ### 联调重点
 - `task` 与 `run` 是否稳定映射；
 - 前馈决策是否在关键调用前执行，而不是只在任务开始时执行一次；
-- 反馈结果是否能重新进入编排循环；
-- 同一 `session` 下的 Agent Loop 是否保持串行，排队任务能否在前序任务结束后自动恢复；
-- worker / plugin / subagent 输出是否全部回到了统一对象链。
+- 同一 `session` 的排队、续接、暂停、恢复、取消是否都回到了统一状态机；
+- 审批、重规划、需要补充输入、Doom Loop 与恢复结果是否都能重新进入编排循环；
+- worker / plugin / sidecar 输出是否全部回到了统一对象链。
 
 ### 当前实现对齐补充
 - `context.Service` 的稳定输出是 `TaskContextSnapshot`，职责是把页面、选区、文件、错误和行为信号归一化，而不是直接推进 `task.status`。
 - `intent.Service` 当前仍是轻量建议层，其产物是 `Suggestion`；是否创建任务、是否等待确认、是否直接执行，仍由编排层与运行态收敛。
-- `runengine.TaskRecord` 是当前后端桥接 `task` 与 `run` 的核心运行态结构，用于承接主对象投影、治理摘要与通知排队。
-- `agentloop.Runtime` 负责输出 `loop.*` 生命周期事件、工具调用结果和停止原因，但不是系统总编排器；任务状态仍需回到 `runengine` 收口。
-- `recommendation`、`taskinspector` 和 `perception` 已形成辅助链路能力，但默认不直接改写任务主状态机；升级为正式任务时仍需回到统一任务入口。
+- `runengine.TaskRecord` 是当前后端桥接 `task` 与 `run` 的核心运行态结构，用于承接主对象投影、治理摘要、通知队列和会话排队。
+- `execution.Request / execution.Result` 是执行桥接件，不是正式业务对象；正式状态仍需回到 `runengine` 收口。
+- `task.updated / delivery.ready / approval.pending / loop.* / task.steered / task.session_resumed` 是本层最重要的反馈线出口。
 
-### 4.2.1 任务编排内核
+### 4.2.1 任务编排器
 
 #### 模块定位
-任务编排内核是主链路总调度器，负责协调任务从创建到完成的全过程。
+任务编排器由 `orchestrator.Service` 承担，是这一层的总调度器。它负责把不同入口方法统一收敛到一条固定主流程，而不是把每个入口各写一套独立流程。
 
-#### 职责
-- 任务创建；
-- 子步骤拆解；
-- 状态迁移；
-- 执行重试；
-- 人工确认转移；
-- 事件写入；
-- 协调前馈层、执行层和反馈层的调用顺序。
+#### 核心职责
+- 收口 `SubmitInput / StartTask / ConfirmTask / TaskControl`；
+- 判断创建新任务还是续接现有任务；
+- 把 `Suggestion` 折叠成正式 `CreateTaskInput`；
+- 协调会话排队、治理判断、执行启动与结果回流；
+- 把控制动作翻译成状态机可接受的正式迁移。
 
-#### 输入
-- 标准任务请求；
-- 当前上下文；
-- 风险判定；
-- 工具和模型结果。
+#### 内部处理细节
+1. 先调用 `context.Capture()` 生成 `TaskContextSnapshot`。
+2. 再调用 `maybeContinueExistingTask()` 判定是继续未完成任务还是创建新任务。
+3. 对新任务调用 `intent.Suggest()` 生成 `Suggestion`，并据此决定 `status / current_step / delivery_type`。
+4. 用 `runengine.CreateTask()` 或 `runengine.ConfirmTask()` 建立正式 `task -> run` 映射。
+5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态。
+6. 若同一 `session` 已有活动任务，调用 `queueTaskIfSessionBusy()` 进入排队。
+7. 若存在高风险动作或策略拦截，再进入 `handleTaskGovernanceDecision()`。
+8. 只有在前述步骤都通过后，才调用 `executeTask()` 真正开始执行。
 
-#### 输出
-- `task` 主对象；
-- `run / step / event`；
-- 对交付层和治理层的过程信号。
+#### 关键中间产物
+- `taskContinuationDecision`
+- `runengine.CreateTaskInput`
+- 统一 RPC 响应包：`task / bubble_message / delivery_result`
+
+#### 对上下游的影响
+- 上游看到的是统一的 `task` 主对象，而不是编排器内部条件分支。
+- 下游的上下文准备器、规划器、运行控制器、治理层都以编排器输出的标准对象为输入。
 
 #### 异常处理
-- 编排失败：写入失败事件并退出到失败态；
-- 规划与执行冲突：回退到意图确认或 HITL；
-- 重试上限超出：交由 Doom Loop 和状态机处理。
+- 续接候选任务失效：回退成新任务创建；
+- 规划与执行冲突：回退到确认或人工复核；
+- 排队恢复失败：保留当前任务并记录错误，不隐式创建新任务。
 
-### 4.2.2 上下文管理内核
+### 4.2.2 上下文归一与准备器
 
 #### 模块定位
-Context Manager 负责在每次关键模型调用前组装 context window，决定注入什么、裁剪什么。
+上下文归一与准备器由 `context.Service` 承担，负责把前端和平台层传来的杂乱现场信号压平成统一快照。它输出的是“运行前快照”，不是已经可直接喂给模型的最终 Prompt。
 
-#### 职责
-- 当前窗口上下文；
-- 选中文本；
-- 拖入文件；
-- 用户授权的屏幕媒体输入；
-- 剪贴板；
-- 任务文件变化；
-- 多来源上下文归一化；
-- token 预算裁剪；
-- 历史上下文摘要继承；
-- Agent Loop 观察历史裁剪与轻量压缩；
-- 当前任务、工具描述、历史摘要与规则片段注入。
+#### 核心职责
+- 把 `input.*` 和 `context.*` 合并成一份稳定结构；
+- 把文本、选区、错误、文件、页面、窗口、屏幕、行为、剪贴板等来源统一命名；
+- 为后续记忆查询、入口判断和执行请求提供同一份基线快照。
 
-#### 输入
-- 前端对象上下文；
-- 文件和页面上下文；
-- 记忆摘要；
-- AGENTS 规则与 Prompt 模板；
-- LSP 与诊断信息。
+#### 上下文范围
+- 请求入口上下文：`source / trigger / input_type / input_mode / text`
+- 近场对象上下文：`selection_text / error_text / files`
+- 页面与窗口上下文：`page_title / page_url / app_name / window_title / visible_text`
+- 屏幕与行为上下文：`screen_summary / hover_target / last_action / dwell_millis / copy_count / switch_count`
+- 系统补充上下文：`clipboard_text`
 
-#### 输出
-- 用于关键模型调用的 context window；
-- Trace 中的上下文裁剪记录；
-- 给意图规划内核的结构化上下文摘要。
+#### 关键中间产物
+- `TaskContextSnapshot`
+- 基于快照生成的 `memory query`、`task title subject`、`screen subject`
+
+#### 对规划器和运行控制器的影响
+- 规划器根据快照决定 `Intent`、`TaskTitle`、`RequiresConfirm` 和交付类型。
+- 运行控制器把同一快照写入 `TaskRecord.Snapshot`，用于续接、排队恢复、人工复核后的重规划和 Trace 摘要。
 
 #### 异常处理
-- 输入源缺失：降级为最小上下文；
-- token 预算超限：优先裁剪历史与低权重片段；
-- Agent Loop 观察历史过长：保留最近观测并压缩更早轮次摘要；
-- 记忆召回失败：保留主上下文，不中断编排。
+- 输入源缺失：降级为最小快照；
+- 字段冲突：优先采用已规范的 `input.* / context.*` 合并规则；
+- 快照不完整：允许继续走确认或等待补充输入，不直接报错。
 
-### 4.2.3 入口判断与规划内核
+### 4.2.3 入口判断与规划器
 
 #### 模块定位
-入口判断与规划内核负责把输入转成“可执行的计划骨架”，并决定当前请求是直接进入 Agent Loop / ReAct、先澄清，还是先等待用户确认。
+入口判断与规划器由 `intent.Service` 和任务续接分类器共同承担，负责把“收到什么输入”转换成“当前任务主链应该怎样进入”。它产出的是入口级计划骨架，不是完整的执行工作流。
 
-#### 职责
-- 输入归一化；
-- 入口判断与目标澄清；
-- 执行动作候选生成；
-- 前置确认信息组织；
-- 短链路澄清问题生成；
-- 执行步骤拆解；
-- 依赖关系组织；
-- 验证方式与回滚计划生成。
+#### 核心职责
+- 判定当前输入是“等待补充输入”“确认意图”“直接执行”还是“续接现有任务”；
+- 生成任务标题、任务来源类型、默认交付方式和确认文案；
+- 为 `screen_analyze` 之类特殊入口补齐无需确认的快捷路径；
+- 只在必要时触发模型参与的续接分类，不让模型接管状态机。
 
-#### 输出
-- 当前入口判断结果；
-- Blueprint 候选；
-- 规划步骤；
-- 用户确认所需信息。
+#### 具体判断方式
+- **确定性规则**：空输入直接进入 `waiting_input`；显式 `intent` 优先。
+- **轻量建议**：`intent.Suggest()` 输出 `Suggestion`，包含 `IntentConfirmed / RequiresConfirm / TaskTitle / DirectDeliveryType` 等字段。
+- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification。
+- **执行阶段分工**：入口规划只决定“以什么意图、什么交付类型、是否要确认进入主链”；真正的 ReAct/Agent Loop 计划在执行阶段发生。
+
+#### 关键中间产物
+- `Suggestion`
+- `taskContinuationDecision`
+- `pending confirmation bubble text`
+
+#### 运行控制器如何承接
+- 编排器把 `Suggestion` 转成 `CreateTaskInput`；
+- 运行控制器据此种下 `Status`、`CurrentStep`、`PreferredDelivery / FallbackDelivery` 和首条 `Timeline`；
+- 若 `RequiresConfirm = true`，先停在 `confirming_intent`，等待后续 `agent.task.confirm`；
+- 若 `RequiresConfirm = false`，直接进入治理判断与执行。
 
 #### 异常处理
 - 低置信度：进入确认或澄清；
-- 高风险规划：预先请求治理层介入。
+- 特定能力不可用：如屏幕能力不可用时，降级为 `agent_loop` 继续处理；
+- 续接分类失败：回退到启发式判断，再不行则新开任务。
 
-### 4.2.4 Skill / Blueprint 路由内核
-
-#### 模块定位
-该模块负责在执行前选择合适的可复用知识和计划模板。
-
-#### 职责
-- Skill 注册表管理；
-- Skill 版本选择；
-- Blueprint 选择与装配；
-- 面向常见任务的流程模板复用；
-- 任务类型与执行骨架映射；
-- few-shot / Prompt 片段按任务类型绑定。
-
-#### 输出
-- Skill 命中记录；
-- Blueprint 选择结果；
-- 前馈层命中 Trace。
-
-### 4.2.5 Prompt 组装内核
+### 4.2.4 资产路由与 Prompt 组装器
 
 #### 模块定位
-该模块负责把角色、工具、约束、上下文、规则和模板拼成可执行 Prompt。
+这是一个逻辑子模块，不完全等同于当前仓库中的单独 package。它负责在正式执行前把 Skill、Blueprint、Prompt 模板、AGENTS 规则和架构约束装配到执行桥接件中。
 
-#### 职责
-- 角色定义模块；
-- 工具说明模块；
-- 任务约束模块；
-- 输出格式模块；
-- 架构规则与 AGENTS 片段注入；
-- 当前任务上下文与历史摘要拼装；
-- Prompt 模板版本记录与命中追踪。
+#### 核心职责
+- 决定本轮执行需要引用哪些技能资产和模板资产；
+- 组装任务 continuation classifier Prompt 与正式执行 Prompt；
+- 把资产命中结果登记进 Trace / Eval，而不是只留在临时字符串里。
+
+#### 当前实现落点
+- `task_continuation.go` 负责 continuation classifier Prompt；
+- `execution/service.go` 中的 `buildPrompt()` 负责正式执行 Prompt；
+- `storage` 中的 `skill_manifest / blueprint_definition / prompt_template_version` 负责资产真源；
+- `traceeval` 负责记录资产引用和版本命中。
+
+#### 关键中间产物
+- Prompt 文本
+- 资产引用：`skill_manifest / blueprint_definition / prompt_template_version`
+- `execution.Request` 中的执行约束与交付偏好
 
 #### 异常处理
-- 模板缺失：回退到默认模板并记录 Trace；
-- 上下文过长：交由 Context Manager 优先裁剪。
+- 模板缺失：回退到默认 Prompt，并在 Trace 中记录；
+- 资产读取失败：不阻断主链，但必须降级并带上可观测记录；
+- 约束过长：由上下文准备器优先裁剪，而不是让 Prompt 无限膨胀。
 
-### 4.2.6 任务状态机
+### 4.2.5 运行控制器
 
 #### 模块定位
-状态机负责把 task/run/step 维持在可解释、可恢复、可审计的状态迁移中。
+运行控制器由 `runengine.Engine` 承担，是正式状态推进点。它不决定用户意图，但决定任务何时进入执行、何时等待授权、何时排队、何时失败、何时重新打开等待输入，以及何时完成交付。
 
-#### 职责
-- `run / step` 生命周期管理；
-- 可恢复状态推进；
-- 失败重试与中断处理；
-- 授权等待态；
-- 完成态与交付态归档；
-- ReAct 循环轮次控制；
-- 配置化 `max_tool_iterations` 停止条件；
-- 同一 `session` 下的串行排队与恢复；
-- 停止条件、熔断条件与升级条件判定。
+#### 核心职责
+- 维护 `TaskRecord` 这一条正式运行态主记录；
+- 建立 `task_id -> run_id -> timeline` 稳定映射；
+- 种下和更新 `ApprovalRequest / PendingExecution / Authorization / ArtifactPlans / Notifications`；
+- 记录 `LatestEvent / LatestToolCall / LoopStopReason`；
+- 统一产出 `task.updated / delivery.ready / tool_call.completed / loop.*` 等通知。
+
+#### 关键中间产物
+- `runengine.TaskRecord`
+- `NotificationRecord`
+- `PendingExecutionPlan`
+- `TaskStepRecord` 时间线
+
+#### 如何承接规划器产物
+- `CreateTaskInput` 决定初始 `Status / CurrentStep / Timeline / Snapshot / Intent`；
+- `ConfirmTask()` 把确认后的意图和标题写回同一任务；
+- `BeginExecution()` 把任务真正推进到运行态；
+- `CompleteTask()`、`ReopenWaitingInput()`、`ReopenIntentConfirmation()`、`FailTaskExecution()` 等接口负责后续收敛。
+
+#### 反馈线
+- 把执行结果回写成 `delivery_result / artifact / citation` 投影；
+- 把运行事件回写成 `LatestEvent / LatestToolCall`；
+- 把通知缓存到 `TaskRecord.Notifications`，等待本地接入层按序 drain。
 
 #### 异常处理
-- 未知状态迁移：阻断并记录错误；
-- 非法恢复：要求恢复引擎或人工介入确认。
+- 未知状态迁移：直接阻断并记录错误；
+- 非法恢复或越级控制：要求治理层或人工复核先介入；
+- 通知 drain 失败：保留在运行态缓存，避免丢失正式事件。
 
-### 4.2.7 记忆管理内核
+### 4.2.6 会话续接与串行器
 
 #### 模块定位
-该模块负责记忆注入、记忆召回和记忆沉淀的完整闭环。
+该子模块负责把“桌面连续补充”收敛到同一 `session` 语义下，决定是续接、排队还是新开任务。它解决的是协作连续性问题，不是模型推理问题。
 
-#### 职责
-- 短期记忆维护；
-- 长期偏好存储；
-- 阶段总结；
-- 任务与记忆引用关系管理；
-- 记忆写入与 RAG 检索协调；
-- 记忆候选过滤、去重、排序与摘要回填；
-- 在每次关键模型调用前提供可注入记忆片段。
+#### 核心职责
+- 显式 `session_id` 与隐式最近活动 `session` 的复用；
+- 未完成任务候选收集与 15 分钟续接窗口判断；
+- 同一 `session` 的单通道串行执行；
+- `session_queue` 排队、自动恢复、追加 steering message；
+- 暂停 / 恢复 / 取消等控制动作的 lane 级收敛。
+
+#### 关键中间产物
+- `taskContinuationContext`
+- `taskContinuationDecision`
+- `task.session_resumed / task.steered` 通知
+
+#### 运行控制器如何承接
+- 若 lane 忙，则运行控制器把任务转入 `blocked + session_queue`；
+- 当前序任务完成后，通过 `NextQueuedTaskForSession()` 和 `ResumeQueuedTask()` 恢复；
+- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`。
 
 #### 异常处理
-- 写入失败：不影响主任务完成，但必须进 Trace；
-- 命中为空：可降级为无记忆注入。
+- 候选任务状态不允许续接：直接新开任务；
+- 隐式会话过期：不复用旧 lane；
+- 队列恢复失败：保留阻断态并生成正式错误，而不是静默丢失任务。
 
-### 4.2.8 结果交付内核
+### 4.2.7 记忆计划与交付交接协调器
 
 #### 模块定位
-该模块负责构建正式交付出口，而不是只把一段文本回给前端。
+该子模块负责在“真正执行前”和“执行完成后”分别挂接记忆与交付的计划对象。它负责的是**交接与计划**，不是最终的记忆持久化或交付发布拥有者。
 
-#### 职责
-- 短结果回写气泡；
-- 长结果生成文档/文件；
-- 结构化结果写入 workspace；
-- artifact 与 citation 发布；
-- 统一 DeliveryResult 出口；
-- 交付前审查与交付后通知协同。
+#### 核心职责
+- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划；
+- 在执行完成后，把 `delivery_result / artifact / citation` 的后续写入和查询补全交给治理与交付层、能力与存储层；
+- 保证即使进程重启，也能说明“这个任务原本打算读什么记忆、写什么交付”。
+
+#### 关键中间产物
+- `MemoryReadPlans`
+- `ArtifactPlans`
+- `StorageWritePlan`
+- `citation_seed`
+
+#### 对其它层的影响
+- 规划器和执行器都以这些计划为前置约束；
+- 治理与交付层据此构造正式交付与记忆沉淀；
+- 存储层据此做 artifact、citation、memory 的真正落盘。
 
 #### 异常处理
-- 交付通道失败：回退到次优出口；
-- 文件落盘失败：仍保留结果摘要和交付失败说明。
+- 计划登记失败：不直接终止任务，但必须进入 Trace；
+- 后续交付写入失败：保留结果摘要和失败说明，避免任务看似“成功但无交付”。
 
-### 4.2.9 子任务协调器
-
-#### 模块定位
-该模块负责 SubAgent 生命周期与上下文隔离，防止主 Agent 被长任务噪音污染。
-
-#### 职责
-- SubAgent 启停与输入输出协议；
-- 子任务上下文隔离；
-- 长任务噪音隔离；
-- 并行子任务调度；
-- 子任务失败隔离与结果汇总；
-- 面向专业化 Prompt 的子执行单元装配。
-
-### 4.2.10 插件系统与插件管理器
+### 4.2.8 执行分段与子任务协调器
 
 #### 模块定位
-该模块负责插件的注册、权限、健康状态、事件回传和仪表盘可见性。
+该子模块负责把一次任务执行拆成“首次执行、恢复执行、重启执行”等分段，并隔离长执行分支带来的噪音。当前仓库中它主要体现为 `execution.Request` 的 `AttemptIndex / SegmentKind / SteeringMessages`，而不是独立的子任务树服务。
 
-#### 职责
-- 插件注册信息、能力声明、权限边界、版本与健康状态统一纳入插件注册表；
-- 插件运行态必须能稳定回链到正式 `PluginManifest`，而不是只保留 runtime cache；
-- 插件输出的运行指标、事件、结果摘要统一写入事件流，再由后端汇总为可供前端仪表盘消费的结构化数据；
-- 插件系统优先满足单机可维护、低复杂度、可审计。
+#### 核心职责
+- 为一次任务执行标记 `initial / resume / restart` 分段；
+- 隔离长任务的 steering message 和重试上下文；
+- 把执行尝试和人类复核后的继续执行放回同一主任务，而不是分叉出新的正式主对象；
+- 为后续真正的一等子任务能力预留边界。
+
+#### 关键中间产物
+- `AttemptIndex`
+- `SegmentKind`
+- `SteeringMessages`
+
+#### 异常处理
+- 分段信息失真：回退为安全的 `initial` 段；
+- 重试路径有副作用：禁止自动升级到人类复核后继续执行的快捷路径。
+
+### 4.2.9 插件运行态协调器
+
+#### 模块定位
+该子模块负责把插件运行态、健康状态、权限边界和事件回传并入正式任务链与观测链。它关注的是“插件怎样纳入主链”，而不是前端怎样画插件 UI。
+
+#### 核心职责
+- 插件注册信息、能力声明、权限边界、版本与健康状态统一纳入注册表；
+- 插件输出的运行指标、事件、结果摘要统一写入事件流；
+- 插件命中资产版本进入 Trace / Eval；
+- 仪表盘、任务详情和安全摘要消费的永远是正式事件与正式查询视图。
 
 #### 当前实现约束
-- 插件运行态、插件目录查询与任务详情 runtime 观察已进入正式可见层能力；当前代码侧已经具备 `agent.plugin.runtime.list / agent.plugin.list / agent.plugin.detail.get` 的查询装配。
-- task detail / dashboard 当前已经能够消费运行态摘要与正式事件流；后续仍应以正式任务详情、仪表盘和安全摘要的承接体验为主，不在本模块文档里提前冻结超出当前协议稿范围的附加执行接口语义。
+- 当前代码已具备 `agent.plugin.runtime.list / agent.plugin.list / agent.plugin.detail.get` 的查询装配；
+- 插件运行态与任务详情 runtime 观察已经进入正式可见层；
+- 后续仍应以正式任务详情、仪表盘和安全摘要承接为主，不在本模块文档里提前冻结超出当前协议稿范围的附加执行接口。
 
 #### 异常处理
 - 插件启动失败：写入正式插件错误事件；
-- 插件权限不足：直接拒绝并进入安全或日志链路。
+- 插件权限不足：直接拒绝并进入安全或审计链路。
+
+### 4.2.10 当前实现边界与反馈回流
+
+#### 当前实现边界
+- 资产路由与 Prompt 组装当前仍是逻辑切面，尚未独立成单独 service；
+- 入口规划只解决“怎样入链”，不直接替代执行期 Planner；
+- 记忆与交付在本层只负责挂计划与交接，不在本层完成最终拥有。
+
+#### 反馈回流主线
+- **治理到运行控制器**：授权通过、策略拒绝、恢复结果、人工复核结果都会重新改写 `TaskRecord`。
+- **执行到运行控制器**：`execution.Result`、`tool_call.completed`、`loop.*`、`need_user_input` 都会触发状态收敛。
+- **运行控制器到本地接入层**：通过 `TaskRecord.Notifications` 有序回放 `task.updated / delivery.ready / task.steered / task.session_resumed`。
+- **人工复核到规划器**：`replan` 会调用 `ReopenIntentConfirmation()` 回到确认阶段，`approve` 才会恢复执行。
 
 ---
 
