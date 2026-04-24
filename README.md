@@ -77,6 +77,7 @@ scripts/
 - `docs/dashboard-design.md` - 仪表盘展示设计文档
 - `docs/control-panel-settings.md` - 控制面板设置设计文档
 - `docs/product-interaction-design.md` - 产品交互设计汇总文档
+- `docs/site-deployment-guide.md` - 官网构建、Release 同步与 Vercel 部署说明
 
 产品设计文档统一存放在 `docs/` 下并使用英文文件名；若发生重命名、替换或真源迁移，必须删除旧版本，只保留一份正式文档真源。
 
@@ -106,6 +107,12 @@ go test ./...
 go run ./services/local-service/cmd/server
 pnpm --dir apps/desktop dev
 ```
+
+## 官网入口
+
+- 官网工程位于 `apps/site`
+- 本地开发可使用 `corepack pnpm --dir apps/site dev`
+- 官网部署与 Release 同步说明见 `docs/site-deployment-guide.md`
 
 ## 说明
 
