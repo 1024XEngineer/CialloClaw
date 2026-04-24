@@ -502,7 +502,7 @@ export function ControlPanelApp() {
     void (async () => {
       const presentation = await buildDesktopOnboardingPresentation({
         anchors: [],
-        placement: onboardingSession.step === "control_panel_api_key" ? "top-left" : "center",
+        placement: onboardingSession.step === "control_panel_api_key" ? "top-right" : "center",
         step: onboardingSession.step,
         windowLabel: "control-panel",
       });

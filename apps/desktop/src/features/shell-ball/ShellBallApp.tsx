@@ -708,7 +708,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     void (async () => {
       const presentation = await buildDesktopOnboardingPresentation({
         anchors: [],
-        placement: onboardingSession.step === "welcome" ? "center" : undefined,
+        placement: "center",
         step: onboardingSession.step,
         windowLabel: "shell-ball",
       });

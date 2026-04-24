@@ -20,6 +20,7 @@ html[data-app-window="onboarding"] .radix-themes {
 }
 
 .desktop-onboarding-window__card {
+  animation: desktop-onboarding-card-enter 200ms ease-out;
   backdrop-filter: blur(18px);
   background: rgba(255, 250, 245, 0.94);
   border: 1px solid rgba(202, 176, 149, 0.32);
@@ -35,10 +36,38 @@ html[data-app-window="onboarding"] .radix-themes {
   z-index: 2;
 }
 
+@keyframes desktop-onboarding-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .desktop-onboarding-window__card--center {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+}
+
+.desktop-onboarding-window__card--center {
+  animation-name: desktop-onboarding-card-enter-center;
+}
+
+@keyframes desktop-onboarding-card-enter-center {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 
 .desktop-onboarding-window__card--top-left {

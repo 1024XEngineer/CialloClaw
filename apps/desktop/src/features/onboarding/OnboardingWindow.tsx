@@ -50,7 +50,7 @@ function getOnboardingCopy(step: string) {
       };
     case "dashboard_overview":
       return {
-        body: "主界面包含 4 个子页面，你可以从这里快速切换；当前也支持 Ctrl / Cmd + 1 2 3 4 快速跳页。",
+        body: "界面包含 4 个子页面，你可以从这里快速切换；中心的球长按可触发语音；当前也支持同时按下 Ctrl 和数字键 1/2/3/4/5 快速跳页。",
         primaryLabel: "下一步",
         secondaryLabel: "上一步",
         stepLabel: "第 4 步 / 6",
@@ -253,6 +253,7 @@ export function OnboardingWindow() {
   return (
     <main className="desktop-onboarding-window">
       <section
+        key={`${activePresentation.step}-${activePresentation.placement}`}
         ref={cardRef}
         className={cn("desktop-onboarding-window__card", `desktop-onboarding-window__card--${activePresentation.placement}`)}
         aria-label={copy.title}
