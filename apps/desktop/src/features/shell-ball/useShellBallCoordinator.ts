@@ -1648,8 +1648,16 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         remember_rule: false,
       });
 
-      registerShellBallTask(response.data.task.task_id, turnIndex, response.data.task.status);
-      syncShellBallVisualStateFromTaskStatus(response.data.task.status);
+      const shouldFallbackToResponseStatus = !shellBallTaskIdsRef.current.has(response.data.task.task_id);
+
+      // Live task subscriptions remain authoritative after the task has been
+      // registered. The RPC response only supplies a fallback status for the
+      // narrow first-registration path where no subscription update exists yet.
+      registerShellBallTask(
+        response.data.task.task_id,
+        turnIndex,
+        shouldFallbackToResponseStatus ? response.data.task.status : undefined,
+      );
 
       setBubbleItems((currentItems) =>
         replaceShellBallPendingBubble(
