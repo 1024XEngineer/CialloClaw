@@ -18,6 +18,13 @@ import {
 import { Button, Heading, Select, Slider, Text, TextArea, TextField } from "@radix-ui/themes";
 import isEqual from "react-fast-compare";
 import {
+  getControlPanelAboutFallbackSnapshot,
+  loadControlPanelAboutSnapshot,
+  runControlPanelAboutAction,
+  type ControlPanelAboutAction,
+  type ControlPanelAboutSnapshot,
+} from "@/services/controlPanelAboutService";
+import {
   ControlPanelSaveError,
   loadControlPanelData,
   runControlPanelInspection,
@@ -39,7 +46,7 @@ import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } f
 import { showShellBallWindow } from "@/platform/shellBallWindowController";
 import "./controlPanel.css";
 
-type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models";
+type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "about";
 type ControlPanelAppearance = "light" | "dark";
 
 type NavigationGroup = {
@@ -241,6 +248,12 @@ const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
     navLabel: "镜子记忆",
     title: "记忆设置",
   },
+  about: {
+    group: "治理与应用",
+    icon: CircleHelp,
+    navLabel: "关于",
+    title: "关于",
+  },
   models: {
     group: "治理与应用",
     icon: ShieldCheck,
@@ -260,7 +273,7 @@ const NAVIGATION_GROUPS: NavigationGroup[] = [
   },
   {
     label: "治理与应用",
-    items: ["models"],
+    items: ["models", "about"],
   },
 ];
 
@@ -549,6 +562,8 @@ export function ControlPanelApp() {
   const onboardingSession = useDesktopOnboardingSession();
   const autoAdvancedControlPanelStepRef = useRef(false);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
+  const [aboutSnapshot, setAboutSnapshot] = useState<ControlPanelAboutSnapshot>(() => getControlPanelAboutFallbackSnapshot());
+  const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -610,6 +625,20 @@ export function ControlPanelApp() {
         setDraft((current) => current ?? fallbackData);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadControlPanelAboutSnapshot().then((nextSnapshot) => {
+      if (!cancelled) {
+        setAboutSnapshot(nextSnapshot);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -814,6 +843,14 @@ export function ControlPanelApp() {
       setInspectionSummary(error instanceof Error ? error.message : "手动巡检执行失败。");
     } finally {
       setIsRunningInspection(false);
+    }
+  };
+
+  const handleAboutAction = async (action: ControlPanelAboutAction) => {
+    try {
+      setAboutActionFeedback(await runControlPanelAboutAction(action));
+    } catch (error) {
+      setAboutActionFeedback(error instanceof Error ? error.message : "关于页动作执行失败。");
     }
   };
 
@@ -1387,6 +1424,50 @@ export function ControlPanelApp() {
                 }
               />
             </SettingsCard>
+          </>
+        );
+
+      case "about":
+        return (
+          <>
+            <SettingsCard title="帮助与反馈" description="快速进入项目主页与反馈入口。">
+              <InfoRow label="帮助入口" value="GitHub 项目主页" />
+              <InfoRow label="反馈方式" value="GitHub Issues" />
+
+              <ControlLine label="快捷操作" hint="这些入口不会改动正式设置，只在当前窗口中反馈执行结果。" className="control-panel-shell__row--stacked">
+                <div className="control-panel-shell__about-actions">
+                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("help")}>
+                    打开帮助
+                  </Button>
+                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("feedback")}>
+                    提交反馈
+                  </Button>
+                </div>
+              </ControlLine>
+            </SettingsCard>
+
+            <SettingsCard title="分享 CialloClaw" description="复制项目地址，方便转发给协作者或朋友。">
+              <InfoRow label="分享链接" value={<code className="control-panel-shell__about-link">https://github.com/1024XEngineer/CialloClaw</code>} />
+
+              <ControlLine label="分享操作" hint="优先复制仓库地址；若当前环境不支持剪贴板，会直接显示链接。" className="control-panel-shell__row--stacked">
+                <div className="control-panel-shell__about-actions">
+                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("share")}>
+                    复制链接
+                  </Button>
+                </div>
+              </ControlLine>
+            </SettingsCard>
+
+            <SettingsCard title="版本信息" description="查看当前桌面端版本号。">
+              <InfoRow label="产品名称" value={aboutSnapshot.appName} />
+              <InfoRow label="应用版本" value={aboutSnapshot.appVersion} />
+            </SettingsCard>
+
+            {aboutActionFeedback ? (
+              <Text as="p" size="1" className="control-panel-shell__field-note control-panel-shell__about-feedback" aria-live="polite">
+                {aboutActionFeedback}
+              </Text>
+            ) : null}
           </>
         );
 
