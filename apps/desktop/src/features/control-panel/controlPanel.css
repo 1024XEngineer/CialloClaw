@@ -561,6 +561,23 @@
   width: 100%;
 }
 
+.control-panel-shell__interval-field {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.control-panel-shell__input--compact {
+  flex: 0 0 8rem;
+  max-width: 8rem;
+  width: 8rem;
+}
+
+.control-panel-shell__interval-field .control-panel-shell__select-trigger {
+  width: min(100%, 9rem);
+}
+
 .control-panel-shell__info-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -817,6 +834,12 @@
   place-items: center;
 }
 
+.control-panel-shell__loading-stack {
+  display: grid;
+  gap: 0.85rem;
+  justify-items: center;
+}
+
 .control-panel-shell__loading-copy {
   background: var(--cp-surface-strong);
   border: 1px solid var(--cp-border-soft);
@@ -891,6 +914,17 @@
   .control-panel-shell__row-field,
   .control-panel-shell__row-field--inline {
     justify-self: stretch;
+    width: 100%;
+  }
+
+  .control-panel-shell__interval-field {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .control-panel-shell__input--compact,
+  .control-panel-shell__interval-field .control-panel-shell__select-trigger {
+    max-width: none;
     width: 100%;
   }
 

@@ -45,7 +45,7 @@ type SectionMeta = {
 
 type StatusPillProps = {
   children: ReactNode;
-  tone: "live" | "mock" | "pending" | "synced";
+  tone: "live" | "pending" | "synced";
 };
 
 type SidebarItemProps = {
@@ -79,6 +79,15 @@ type ToggleLineProps = {
 type InfoRowProps = {
   label: string;
   value: ReactNode;
+};
+
+type TimeIntervalInputProps = {
+  interval: {
+    unit: string;
+    value: number;
+  };
+  onUnitChange: (unit: string) => void;
+  onValueChange: (value: number) => void;
 };
 
 type ChoiceOption<T extends string = string> = {
@@ -117,6 +126,24 @@ const POSITION_MODE_OPTIONS = [
   { label: "可拖动", value: "draggable" },
 ] as const satisfies readonly ChoiceOption<"fixed" | "draggable">[];
 
+const FLOATING_BALL_SIZE_VALUES = ["small", "medium", "large"] as const;
+
+const DEFAULT_TIME_UNIT_OPTIONS = [
+  { label: "分钟", value: "minute" },
+  { label: "小时", value: "hour" },
+  { label: "天", value: "day" },
+  { label: "周", value: "week" },
+  { label: "个月", value: "month" },
+] as const satisfies readonly ChoiceOption[];
+
+const TIME_UNIT_LABELS: Record<string, string> = {
+  minute: "分钟",
+  hour: "小时",
+  day: "天",
+  week: "周",
+  month: "个月",
+};
+
 function buildInspectionIntervalOptionValue(interval: { unit: string; value: number }) {
   return `${interval.value}:${interval.unit}`;
 }
@@ -134,6 +161,47 @@ function parseInspectionIntervalOptionValue(optionValue: string) {
   }
 
   return INSPECTION_INTERVAL_OPTIONS[0];
+}
+
+function buildTimeUnitOptions(currentUnit: string): ChoiceOption[] {
+  if (DEFAULT_TIME_UNIT_OPTIONS.some((option) => option.value === currentUnit)) {
+    return [...DEFAULT_TIME_UNIT_OPTIONS];
+  }
+
+  return [
+    ...DEFAULT_TIME_UNIT_OPTIONS,
+    {
+      label: TIME_UNIT_LABELS[currentUnit] ?? currentUnit,
+      value: currentUnit,
+    },
+  ];
+}
+
+function normalizeIntervalNumberInput(rawValue: string, fallbackValue: number) {
+  const parsedValue = Number.parseInt(rawValue, 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+    return fallbackValue;
+  }
+
+  return parsedValue;
+}
+
+function getFloatingBallSizeSliderValue(size: string) {
+  const matchedIndex = FLOATING_BALL_SIZE_VALUES.indexOf(size as (typeof FLOATING_BALL_SIZE_VALUES)[number]);
+  return matchedIndex === -1 ? 1 : matchedIndex;
+}
+
+function getFloatingBallSizeFromSliderValue(value: number | undefined) {
+  if (value === 0) {
+    return "small";
+  }
+
+  if (value === 2) {
+    return "large";
+  }
+
+  return "medium";
 }
 
 const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
@@ -192,18 +260,16 @@ const NAVIGATION_GROUPS: NavigationGroup[] = [
  * @param source Control-panel data source mode.
  * @returns User-facing save feedback copy.
  */
-function getApplyModeCopy(applyMode: string, needRestart: boolean, source: ControlPanelData["source"]) {
-  const localSnapshotSuffix = source === "mock" ? " 当前仍在使用本地快照，不会写入后端。" : "";
-
+function getApplyModeCopy(applyMode: string, needRestart: boolean) {
   if (needRestart) {
-    return `部分设置需要重启桌面端后生效。${localSnapshotSuffix}`;
+    return "部分设置需要重启桌面端后生效。";
   }
 
   if (applyMode === "next_task_effective") {
-    return `设置已保存，将在下一个任务周期生效。${localSnapshotSuffix}`;
+    return "设置已保存，将在下一个任务周期生效。";
   }
 
-  return `设置已即时生效。${localSnapshotSuffix}`;
+  return "设置已即时生效。";
 }
 
 function resolveControlPanelAppearance(
@@ -353,6 +419,36 @@ function ChoiceGroup<T extends string>({
   );
 }
 
+function TimeIntervalInput({ interval, onUnitChange, onValueChange }: TimeIntervalInputProps) {
+  const unitOptions = buildTimeUnitOptions(interval.unit);
+
+  return (
+    <div className="control-panel-shell__interval-field">
+      <TextField.Root
+        className="control-panel-shell__input control-panel-shell__input--compact"
+        type="number"
+        min={1}
+        step={1}
+        inputMode="numeric"
+        value={String(interval.value)}
+        aria-label="间隔数值"
+        onChange={(event) => onValueChange(normalizeIntervalNumberInput(event.target.value, interval.value))}
+      />
+
+      <Select.Root value={interval.unit} onValueChange={onUnitChange}>
+        <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+        <Select.Content className="control-panel-shell__select-content" position="popper">
+          {unitOptions.map((option) => (
+            <Select.Item key={option.value} value={option.value}>
+              {option.label}
+            </Select.Item>
+          ))}
+        </Select.Content>
+      </Select.Root>
+    </div>
+  );
+}
+
 function InfoRow({ label, value }: InfoRowProps) {
   return (
     <div className="control-panel-shell__info-row">
@@ -397,6 +493,7 @@ export function ControlPanelApp() {
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [inspectionSummary, setInspectionSummary] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -431,19 +528,59 @@ export function ControlPanelApp() {
   }, []);
 
   useEffect(() => {
-    void loadControlPanelData().then((nextData) => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const nextData = await loadControlPanelData();
+
+        if (cancelled) {
+          return;
+        }
+
+        setLoadError(null);
+        setPanelData(nextData);
+        setDraft(nextData);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleReload = async () => {
+    setLoadError(null);
+
+    try {
+      const nextData = await loadControlPanelData();
       setPanelData(nextData);
       setDraft(nextData);
-    });
-  }, []);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
+    }
+  };
 
   if (!draft || !panelData) {
     return (
       <main className="app-shell control-panel-shell" data-appearance={systemAppearance}>
         <div className="control-panel-shell__loading">
-          <Text size="2" className="control-panel-shell__loading-copy">
-            正在载入控制面板…
-          </Text>
+          <div className="control-panel-shell__loading-stack">
+            <Text size="2" className="control-panel-shell__loading-copy">
+              {loadError ?? "正在载入控制面板…"}
+            </Text>
+            {loadError ? (
+              <Button className="control-panel-shell__button" variant="soft" onClick={() => void handleReload()}>
+                重新加载
+              </Button>
+            ) : null}
+          </div>
         </div>
       </main>
     );
@@ -453,15 +590,9 @@ export function ControlPanelApp() {
   const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
   const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
   const hasChanges = inspectorDirty || settingsDirty;
-  const pendingFloatingBallHint = "悬浮球联调中：当前仅展示快照，不从控制面板写回。";
-  const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
-  const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
   const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
-  const providerApiKeyHint =
-    draft.source === "rpc"
-      ? "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
-      : "当前为本地快照模式：不会写入后端 Stronghold，也不会在桌面端保存明文 API key。";
+  const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -514,7 +645,7 @@ export function ControlPanelApp() {
       const nextDraft = applyControlPanelSaveResult(draft, result);
       setPanelData(nextPanelData);
       setDraft(nextDraft);
-      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart, result.source));
+      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
     } catch (error) {
       if (error instanceof ControlPanelSaveError && error.partialResult) {
         const nextPanelData = applyControlPanelSaveResult(panelData, error.partialResult);
@@ -625,6 +756,27 @@ export function ControlPanelApp() {
                   }))
                 }
               />
+
+              <ControlLine
+                label="提示声线"
+                hint="控制正式 `general.voice_type`，保存后重新打开控制面板会回显当前值。"
+                disabled={!draft.settings.general.voice_notification_enabled}
+              >
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  disabled={!draft.settings.general.voice_notification_enabled}
+                  value={draft.settings.general.voice_type}
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        general: { ...current.settings.general, voice_type: event.target.value },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
             </SettingsCard>
 
             <SettingsCard title="工作区与下载" description="变更后仅影响后续新生成的文件位置。">
@@ -646,6 +798,27 @@ export function ControlPanelApp() {
                   }
                 />
               </ControlLine>
+
+              <ToggleLine
+                label="下载前逐个确认保存位置"
+                description="开启后，每次下载都会先确认目标保存路径。"
+                checked={draft.settings.general.download.ask_before_save_each_file}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      general: {
+                        ...current.settings.general,
+                        download: {
+                          ...current.settings.general.download,
+                          ask_before_save_each_file: checked,
+                        },
+                      },
+                    },
+                  }))
+                }
+              />
             </SettingsCard>
           </>
         );
@@ -656,10 +829,17 @@ export function ControlPanelApp() {
             <SettingsCard title="悬浮球状态" description="控制悬浮球在桌面上的默认表现。">
               <ToggleLine
                 label="自动贴边"
-                description={pendingFloatingBallHint}
+                description="停止拖拽后自动贴边，减少桌面遮挡。"
                 checked={draft.settings.floating_ball.auto_snap}
-                disabled
-                onCheckedChange={() => {}}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      floating_ball: { ...current.settings.floating_ball, auto_snap: checked },
+                    },
+                  }))
+                }
               />
 
               <ToggleLine
@@ -679,18 +859,25 @@ export function ControlPanelApp() {
             </SettingsCard>
 
             <SettingsCard title="在场方式" description="调整悬浮球的尺寸与停靠模式。">
-              <ControlLine label="尺寸" hint="在多窗口协作时决定悬浮球的可发现程度。" disabled>
+              <ControlLine label="尺寸" hint="在多窗口协作时决定悬浮球的可发现程度。">
                 <div className="control-panel-shell__slider-stack">
-                  <Text as="p" size="1" className="control-panel-shell__field-note">
-                    {pendingFloatingBallHint}
-                  </Text>
                   <Slider
                     min={0}
                     max={2}
                     step={1}
-                    disabled
-                    value={[draft.settings.floating_ball.size === "small" ? 0 : draft.settings.floating_ball.size === "medium" ? 1 : 2]}
-                    onValueChange={() => {}}
+                    value={[getFloatingBallSizeSliderValue(draft.settings.floating_ball.size)]}
+                    onValueChange={(values) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          floating_ball: {
+                            ...current.settings.floating_ball,
+                            size: getFloatingBallSizeFromSliderValue(values[0]),
+                          },
+                        },
+                      }))
+                    }
                   />
                   <div className="control-panel-shell__slider-legend">
                     <span>小</span>
@@ -767,9 +954,78 @@ export function ControlPanelApp() {
               </ControlLine>
             </SettingsCard>
 
-            <SettingsCard title="记忆节奏" description="显示工作总结与画像刷新的默认频率。">
-              <InfoRow label="工作总结间隔" value={workSummaryCadence} />
-              <InfoRow label="画像刷新间隔" value={profileCadence} />
+            <SettingsCard title="记忆节奏" description="控制工作总结与画像刷新的默认频率。">
+              <ControlLine label="工作总结间隔" hint="控制自动工作总结的生成频率。">
+                <TimeIntervalInput
+                  interval={draft.settings.memory.work_summary_interval}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          work_summary_interval: {
+                            ...current.settings.memory.work_summary_interval,
+                            value,
+                          },
+                        },
+                      },
+                    }))
+                  }
+                  onUnitChange={(unit) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          work_summary_interval: {
+                            ...current.settings.memory.work_summary_interval,
+                            unit: unit as (typeof current.settings.memory.work_summary_interval)["unit"],
+                          },
+                        },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
+
+              <ControlLine label="画像刷新间隔" hint="控制偏好画像的刷新频率。">
+                <TimeIntervalInput
+                  interval={draft.settings.memory.profile_refresh_interval}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          profile_refresh_interval: {
+                            ...current.settings.memory.profile_refresh_interval,
+                            value,
+                          },
+                        },
+                      },
+                    }))
+                  }
+                  onUnitChange={(unit) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          profile_refresh_interval: {
+                            ...current.settings.memory.profile_refresh_interval,
+                            unit: unit as (typeof current.settings.memory.profile_refresh_interval)["unit"],
+                          },
+                        },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
             </SettingsCard>
           </>
         );

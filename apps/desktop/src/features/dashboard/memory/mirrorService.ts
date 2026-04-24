@@ -17,6 +17,7 @@ import { loadTaskBuckets } from "@/features/dashboard/tasks/taskPage.service";
 import {
   getInitialDashboardSettingsSnapshot,
   loadDashboardSettingsSnapshot,
+  type DashboardSettingsSnapshotScope,
   type DashboardSettingsSnapshotData,
 } from "@/features/dashboard/shared/dashboardSettingsSnapshot";
 import {
@@ -64,6 +65,8 @@ type MirrorSupportContext = {
   tokenCostSummary: TokenCostSummary | null;
   warnings: string[];
 };
+
+const MIRROR_SETTINGS_SCOPE: DashboardSettingsSnapshotScope = "memory";
 
 function adaptMirrorReference(reference: MirrorOverviewMock["memory_references"][number]): MirrorReference {
   return {
@@ -226,12 +229,26 @@ export function getInitialMirrorOverviewData(): MirrorOverviewData {
   );
 }
 
+/**
+ * Reuses an already refreshed dashboard settings snapshot inside the current
+ * mirror overview state so settings writes do not need a second mirror reload.
+ */
+export function applyMirrorSettingsSnapshot(
+  current: MirrorOverviewData,
+  settingsSnapshot: DashboardSettingsSnapshotData,
+): MirrorOverviewData {
+  return {
+    ...current,
+    settingsSnapshot,
+  };
+}
+
 export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc"): Promise<MirrorOverviewData> {
   if (source === "mock") {
     const overview = buildFallbackOverview();
     const [supportContext, settingsSnapshot] = await Promise.all([
       loadMirrorSupportContext("mock"),
-      loadDashboardSettingsSnapshot("mock"),
+      loadDashboardSettingsSnapshot("mock", MIRROR_SETTINGS_SCOPE),
     ]);
 
     return buildMirrorOverviewData(
@@ -257,7 +274,7 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
     const [response, supportContext, settingsSnapshot] = await Promise.all([
       requestMirrorOverview(params),
       loadMirrorSupportContext("rpc"),
-      loadDashboardSettingsSnapshot("rpc"),
+      loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE),
     ]);
     const overview = response.data;
 
@@ -277,7 +294,7 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
       const overview = buildFallbackOverview();
       const [supportContext, settingsSnapshot] = await Promise.all([
         loadMirrorSupportContext("mock"),
-        loadDashboardSettingsSnapshot("mock"),
+        loadDashboardSettingsSnapshot("mock", MIRROR_SETTINGS_SCOPE),
       ]);
 
       return buildMirrorOverviewData(

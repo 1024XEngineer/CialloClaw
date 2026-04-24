@@ -2,7 +2,12 @@ import type { AgentSettingsUpdateParams, ApplyMode, RequestMeta } from "@cialloc
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { updateSettings as requestUpdateSettings } from "@/rpc/methods";
 import { loadSettings, saveSettings, type DesktopSettings } from "@/services/settingsService";
-import { loadDashboardSettingsSnapshot, type DashboardSettingsSnapshotData, type DashboardSettingsSource } from "./dashboardSettingsSnapshot";
+import {
+  loadDashboardSettingsSnapshot,
+  type DashboardSettingsSnapshotData,
+  type DashboardSettingsSnapshotScope,
+  type DashboardSettingsSource,
+} from "./dashboardSettingsSnapshot";
 
 export type DashboardSettingsPatch = Pick<
   AgentSettingsUpdateParams,
@@ -143,6 +148,32 @@ function inferUpdatedKeys(patch: DashboardSettingsPatch) {
   return (Object.keys(patch) as Array<keyof DashboardSettingsPatch>).filter((key) => patch[key] !== undefined).map((key) => String(key));
 }
 
+function inferDashboardSettingsRefreshScope(patch: DashboardSettingsPatch): DashboardSettingsSnapshotScope {
+  const touchedScopes = new Set<DashboardSettingsSnapshotScope>();
+
+  if (patch.general) {
+    touchedScopes.add("general");
+  }
+  if (patch.floating_ball) {
+    touchedScopes.add("floating_ball");
+  }
+  if (patch.memory) {
+    touchedScopes.add("memory");
+  }
+  if (patch.task_automation) {
+    touchedScopes.add("task_automation");
+  }
+  if (patch.models || patch.data_log) {
+    touchedScopes.add("models");
+  }
+
+  if (touchedScopes.size !== 1) {
+    return "all";
+  }
+
+  return touchedScopes.values().next().value ?? "all";
+}
+
 // Dashboard modules need the same settings mutation rule as the control panel:
 // use JSON-RPC when available, but keep the local snapshot authoritative for
 // immediate rendering and mock-mode operation.
@@ -165,9 +196,10 @@ export async function updateDashboardSettings(
 
   try {
     const response = await requestUpdateSettings(buildRpcSettingsPatch(patch));
+    const refreshScope = inferDashboardSettingsRefreshScope(patch);
 
     persistPatchedSettings(response.effective_settings as DashboardSettingsPatch);
-    const snapshot = await loadDashboardSettingsSnapshot("rpc");
+    const snapshot = await loadDashboardSettingsSnapshot("rpc", refreshScope);
 
     return {
       snapshot,

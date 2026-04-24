@@ -19,7 +19,12 @@ import {
   updateDashboardSettings,
   type DashboardSettingsPatch,
 } from "@/features/dashboard/shared/dashboardSettingsMutation";
-import { loadMirrorOverviewData, type MirrorOverviewData, type MirrorOverviewSource } from "./mirrorService";
+import {
+  applyMirrorSettingsSnapshot,
+  loadMirrorOverviewData,
+  type MirrorOverviewData,
+  type MirrorOverviewSource,
+} from "./mirrorService";
 import { MirrorDetailContent, type MirrorHistoryDetailView } from "./MirrorDetailContent";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
 import { MirrorDecorativeBirds } from "./MirrorDecorativeBirds";
@@ -852,11 +857,10 @@ export function MirrorApp() {
   const handleSettingsUpdate = useCallback(
     async (subject: string, patch: DashboardSettingsPatch) => {
       const result = await updateDashboardSettings(patch, dataMode);
-      const nextData = await loadMirrorOverviewData(dataMode);
 
       if (isMountedRef.current) {
         setLoadError(null);
-        setMirrorData(nextData);
+        setMirrorData((current) => (current ? applyMirrorSettingsSnapshot(current, result.snapshot) : current));
       }
 
       return formatDashboardSettingsMutationFeedback(result, subject);

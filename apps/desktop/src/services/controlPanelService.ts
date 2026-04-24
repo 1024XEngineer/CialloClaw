@@ -14,16 +14,15 @@ import {
   updateSettings,
   updateTaskInspectorConfig,
 } from "@/rpc/methods";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
   hydrateDesktopSettings,
   loadSettings,
   saveSettings,
-  type DesktopSettings,
   type DesktopSettingsData,
 } from "@/services/settingsService";
 
-export type ControlPanelSource = "rpc" | "mock";
+export type ControlPanelSource = "rpc";
 
 export type ControlPanelData = {
   settings: DesktopSettingsData;
@@ -79,33 +78,7 @@ export class ControlPanelSaveError extends Error {
 function buildEditableFloatingBallUpdate(
   floatingBall: DesktopSettingsData["floating_ball"],
 ): Partial<SettingsSnapshot["settings"]["floating_ball"]> {
-  return {
-    idle_translucent: floatingBall.idle_translucent,
-    position_mode: floatingBall.position_mode,
-  };
-}
-
-/**
- * Floating-ball size and edge snapping are still owned by the shell-ball work.
- * Preserve the last persisted values so control-panel saves only update the
- * fields that are already safe to edit from this window.
- *
- * @param nextSettings Draft settings produced by the control panel flow.
- * @param persistedSettings Last persisted desktop snapshot.
- * @returns Settings with detached floating-ball fields restored.
- */
-function preserveDetachedFloatingBallFields(
-  nextSettings: DesktopSettingsData,
-  persistedSettings: DesktopSettingsData,
-): DesktopSettingsData {
-  return hydrateDesktopSettings({
-    ...nextSettings,
-    floating_ball: {
-      ...nextSettings.floating_ball,
-      auto_snap: persistedSettings.floating_ball.auto_snap,
-      size: persistedSettings.floating_ball.size,
-    },
-  });
+  return floatingBall;
 }
 
 function projectInspectorToTaskAutomation(
@@ -188,26 +161,6 @@ function mergeProtocolSettings(
         : base.models,
     }),
   };
-}
-
-function buildSettingsWithProviderApiKeyConfigured(
-  settings: DesktopSettingsData,
-  providerApiKeyConfigured: boolean,
-): DesktopSettingsData {
-  return hydrateDesktopSettings({
-    ...settings,
-    data_log: {
-      ...settings.data_log,
-      provider: settings.models.provider,
-      budget_auto_downgrade: settings.models.budget_auto_downgrade,
-      provider_api_key_configured: providerApiKeyConfigured,
-      stronghold: settings.models.stronghold,
-    },
-    models: {
-      ...settings.models,
-      provider_api_key_configured: providerApiKeyConfigured,
-    },
-  });
 }
 
 function buildModelsUpdatePayload(input: ControlPanelData) {
@@ -296,57 +249,8 @@ function createRequestMeta(): RequestMeta {
   };
 }
 
-function buildMockSecuritySummary(): AgentSecuritySummaryGetResult["summary"] {
-  return {
-    security_status: "pending_confirmation",
-    pending_authorizations: 2,
-    latest_restore_point: {
-      recovery_point_id: "cp_restore_mock_001",
-      task_id: "task_control_panel_mock_001",
-      summary: "控制面板变更前的恢复点快照",
-      created_at: "2026-04-09T13:20:00+08:00",
-      objects: ["D:/CialloClawWorkspace", "VS Code", "Docker sandbox"],
-    },
-    token_cost_summary: {
-      current_task_tokens: 18210,
-      current_task_cost: 1.34,
-      today_tokens: 91230,
-      today_cost: 7.48,
-      single_task_limit: 50000,
-      daily_limit: 300000,
-      budget_auto_downgrade: true,
-    },
-  };
-}
-
-function buildMockInspector(settings: DesktopSettings): AgentTaskInspectorConfigGetResult {
-  return {
-    task_sources: settings.settings.task_automation.task_sources,
-    inspection_interval: settings.settings.task_automation.inspection_interval,
-    inspect_on_file_change: settings.settings.task_automation.inspect_on_file_change,
-    inspect_on_startup: settings.settings.task_automation.inspect_on_startup,
-    remind_before_deadline: settings.settings.task_automation.remind_before_deadline,
-    remind_when_stale: settings.settings.task_automation.remind_when_stale,
-  };
-}
-
-function getInitialControlPanelData(warnings: string[] = []): ControlPanelData {
-  const settings = loadSettings();
-  const inspector = buildMockInspector(settings);
-  const normalizedSettings = projectInspectorToTaskAutomation(settings.settings, inspector);
-  return {
-    settings: normalizedSettings,
-    inspector,
-    providerApiKeyInput: "",
-    securitySummary: buildMockSecuritySummary(),
-    source: "mock",
-    warnings,
-  };
-}
-
 /**
- * loadControlPanelData hydrates the control panel from the formal RPC boundary
- * and falls back to the local snapshot only when the channel is unavailable.
+ * loadControlPanelData hydrates the control panel from the formal RPC boundary.
  */
 export async function loadControlPanelData(): Promise<ControlPanelData> {
   try {
@@ -373,13 +277,11 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
       warnings: [],
     };
   } catch (error) {
-    if (!isRpcChannelUnavailable(error)) {
-      console.warn("Control panel RPC failed, using local settings fallback.", error);
-      return getInitialControlPanelData([error instanceof Error ? error.message : "control panel unavailable"]);
+    if (isRpcChannelUnavailable(error)) {
+      throw new Error("控制面板设置服务暂时不可用，请稍后重试。");
     }
 
-    logRpcMockFallback("control panel load", error);
-    return getInitialControlPanelData();
+    throw error;
   }
 }
 
@@ -394,7 +296,6 @@ export async function saveControlPanelData(
   const saveSettingsRequested = options.saveSettings ?? true;
   const saveInspectorRequested = options.saveInspector ?? true;
   const timeoutMs = options.timeoutMs ?? CONTROL_PANEL_RPC_TIMEOUT_MS;
-  const persistedSettings = loadSettings().settings;
 
   if (!saveSettingsRequested && !saveInspectorRequested) {
     return buildControlPanelSaveResult(data.settings, data.inspector, data.source, {
@@ -403,30 +304,6 @@ export async function saveControlPanelData(
       savedInspector: false,
       savedSettings: false,
       updatedKeys: [],
-    });
-  }
-
-  if (data.source === "mock") {
-    const nextSettingsSnapshot = preserveDetachedFloatingBallFields(
-      buildSettingsWithProviderApiKeyConfigured(
-        projectInspectorToTaskAutomation(data.settings, data.inspector),
-        data.settings.models.provider_api_key_configured,
-      ),
-      persistedSettings,
-    );
-    const nextDesktopSettings: DesktopSettings = {
-      settings: nextSettingsSnapshot,
-    };
-    saveSettings(nextDesktopSettings);
-    return buildControlPanelSaveResult(nextDesktopSettings.settings, data.inspector, "mock", {
-      applyMode: "immediate",
-      needRestart: false,
-      savedInspector: saveInspectorRequested,
-      savedSettings: saveSettingsRequested,
-      updatedKeys: [
-        ...(saveSettingsRequested ? ["general", "floating_ball", "memory", "models"] : []),
-        ...(saveInspectorRequested ? CONTROL_PANEL_INSPECTOR_UPDATED_KEYS : []),
-      ],
     });
   }
 
@@ -442,7 +319,6 @@ export async function saveControlPanelData(
     if (saveSettingsRequested) {
       const settingsResult = await withRpcTimeout(updateSettings(buildSettingsUpdatePayload(data)), timeoutMs, "设置保存");
       effectiveSettings = mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>);
-      effectiveSettings = preserveDetachedFloatingBallFields(effectiveSettings, persistedSettings);
       effectiveSettings = projectInspectorToTaskAutomation(effectiveSettings, effectiveInspector);
       applyMode = settingsResult.apply_mode;
       needRestart = settingsResult.need_restart;
@@ -506,23 +382,6 @@ export async function saveControlPanelData(
  * current control-panel state.
  */
 export async function runControlPanelInspection(data: ControlPanelData): Promise<AgentTaskInspectorRunResult> {
-  if (data.source === "mock") {
-    return {
-      inspection_id: `inspection_mock_${Date.now()}`,
-      summary: {
-        parsed_files: 16,
-        identified_items: 9,
-        due_today: 2,
-        overdue: 1,
-        stale: 3,
-      },
-      suggestions: [
-        "将 overdue 任务提升到今日工作流卡片。",
-        "把高频 task source 固定到前两位，减少巡检噪音。",
-      ],
-    };
-  }
-
   try {
     return await withRpcTimeout(
       runTaskInspector({
@@ -534,24 +393,10 @@ export async function runControlPanelInspection(data: ControlPanelData): Promise
       "巡检执行",
     );
   } catch (error) {
-    if (!isRpcChannelUnavailable(error)) {
-      throw error;
+    if (isRpcChannelUnavailable(error)) {
+      throw new Error("巡检服务暂时不可用，请稍后重试。");
     }
 
-    logRpcMockFallback("control panel inspection", error);
-    return {
-      inspection_id: `inspection_mock_${Date.now()}`,
-      summary: {
-        parsed_files: 16,
-        identified_items: 9,
-        due_today: 2,
-        overdue: 1,
-        stale: 3,
-      },
-      suggestions: [
-        "将 overdue 任务提升到今日工作流卡片。",
-        "把高频 task source 固定到前两位，减少巡检噪音。",
-      ],
-    };
+    throw error;
   }
 }
