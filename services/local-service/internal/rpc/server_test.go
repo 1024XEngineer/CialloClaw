@@ -1563,8 +1563,8 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 	if _, exists := models["api_key"]; exists {
 		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", models)
 	}
-	if success.Result.Data.(map[string]any)["apply_mode"] != "restart_required" || success.Result.Data.(map[string]any)["need_restart"] != true {
-		t.Fatalf("expected model settings update to require restart, got %+v", success.Result.Data)
+	if success.Result.Data.(map[string]any)["apply_mode"] != "next_task_effective" || success.Result.Data.(map[string]any)["need_restart"] != false {
+		t.Fatalf("expected model settings update to be next_task_effective, got %+v", success.Result.Data)
 	}
 }
 
