@@ -1,6 +1,8 @@
 .note-preview-page {
   --note-accent: #d88e63;
   --note-accent-strong: #86573b;
+  --note-canvas-inset: clamp(0.35rem, 0.85vw, 0.72rem);
+  --note-canvas-radius: clamp(2.35rem, 4vw, 3.45rem);
   --note-line: rgba(122, 92, 65, 0.18);
   --note-ink: #35271b;
   --note-copy: rgba(72, 56, 44, 0.72);
@@ -13,13 +15,14 @@
     radial-gradient(circle at 84% 12%, rgba(252, 222, 193, 0.56), transparent 24%),
     radial-gradient(circle at 50% 54%, rgba(255, 245, 232, 0.6), transparent 30%),
     linear-gradient(180deg, #f6efe7 0%, #ebdfd1 48%, #dfd0bf 100%);
+  box-sizing: border-box;
   color: var(--note-ink);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
-  padding: 0;
+  padding: var(--note-canvas-inset);
   position: relative;
 }
 
@@ -29,25 +32,33 @@
 
 .note-preview-page::before,
 .note-preview-page::after {
+  border-radius: var(--note-canvas-radius);
   content: "";
   inset: 0;
   pointer-events: none;
   position: absolute;
+  z-index: 0;
 }
 
 .note-preview-page::before {
   background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.34), transparent 36%),
-    linear-gradient(180deg, rgba(114, 81, 49, 0.08), transparent 16%, transparent 82%, rgba(114, 81, 49, 0.12));
+    radial-gradient(circle at 15% 12%, rgba(255, 255, 255, 0.8), transparent 20%),
+    radial-gradient(circle at 88% 14%, rgba(252, 224, 198, 0.42), transparent 24%),
+    linear-gradient(180deg, rgba(255, 250, 243, 0.86), rgba(243, 233, 221, 0.58) 42%, rgba(233, 220, 206, 0.44) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow:
+    0 38px 84px -64px rgba(106, 73, 40, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .note-preview-page::after {
   background-image:
-    radial-gradient(rgba(122, 92, 65, 0.08) 0.8px, transparent 0.8px),
-    linear-gradient(rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0));
-  background-size: 24px 24px, 100% 100%;
-  mask-image: radial-gradient(ellipse 92% 84% at 50% 50%, black 0%, transparent 100%);
-  opacity: 0.28;
+    linear-gradient(rgba(122, 92, 65, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(122, 92, 65, 0.08) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 250, 243, 0.98) 0%, rgba(255, 250, 243, 0.18) 12%, rgba(255, 250, 243, 0.08) 88%, rgba(236, 223, 209, 0.72) 100%),
+    linear-gradient(90deg, rgba(255, 250, 243, 0.94) 0%, rgba(255, 250, 243, 0.14) 10%, rgba(255, 250, 243, 0.08) 90%, rgba(236, 223, 209, 0.68) 100%);
+  background-size: 28px 28px, 28px 28px, 100% 100%, 100% 100%;
+  opacity: 0.82;
 }
 
 .note-preview-page .dashboard-page__topbar,
@@ -965,7 +976,12 @@
 }
 
 .note-preview-page__board {
-  border-radius: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 249, 0.22), rgba(247, 240, 231, 0.08)),
+    rgba(255, 250, 243, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: calc(var(--note-canvas-radius) - 0.75rem);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
@@ -987,11 +1003,13 @@
 .note-preview-page__board-scene {
   background-image:
     linear-gradient(rgba(134, 94, 64, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(134, 94, 64, 0.05) 1px, transparent 1px);
-  background-size: var(--note-grid-size) var(--note-grid-size);
-  inset: 0;
-  mask-image: none;
-  opacity: 0.94;
+    linear-gradient(90deg, rgba(134, 94, 64, 0.05) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 249, 242, 0.82) 0%, rgba(255, 249, 242, 0.08) 12%, rgba(255, 249, 242, 0.05) 88%, rgba(238, 227, 214, 0.54) 100%),
+    linear-gradient(90deg, rgba(255, 249, 242, 0.78) 0%, rgba(255, 249, 242, 0.08) 10%, rgba(255, 249, 242, 0.04) 90%, rgba(238, 227, 214, 0.48) 100%);
+  background-size: var(--note-grid-size) var(--note-grid-size), var(--note-grid-size) var(--note-grid-size), 100% 100%, 100% 100%;
+  border-radius: calc(var(--note-canvas-radius) - 1rem);
+  inset: 0.25rem;
+  opacity: 0.62;
   pointer-events: none;
   position: absolute;
 }
@@ -1522,6 +1540,11 @@
 }
 
 @media (max-width: 1180px) {
+  .note-preview-page {
+    --note-canvas-inset: clamp(0.28rem, 0.75vw, 0.55rem);
+    --note-canvas-radius: clamp(2rem, 3.6vw, 2.9rem);
+  }
+
   .note-preview-page__frame {
     padding: 0;
   }
@@ -1571,6 +1594,11 @@
 }
 
 @media (max-width: 720px) {
+  .note-preview-page {
+    --note-canvas-inset: 0.2rem;
+    --note-canvas-radius: 1.8rem;
+  }
+
   .note-preview-page .dashboard-page__topbar {
     padding-inline: 0.95rem;
   }

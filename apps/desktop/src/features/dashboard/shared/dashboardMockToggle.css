@@ -1,18 +1,18 @@
 .dashboard-mock-toggle {
   align-items: center;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(10px);
   background: linear-gradient(180deg, rgba(255, 253, 249, 0.88), rgba(244, 239, 232, 0.82));
   border: 1px solid rgba(132, 118, 99, 0.14);
   border-radius: 999px;
-  bottom: clamp(0.8rem, 1.4vw, 1.2rem);
-  box-shadow: 0 14px 28px -24px rgba(65, 55, 43, 0.2);
+  bottom: clamp(0.55rem, 1vw, 0.92rem);
+  box-shadow: 0 12px 24px -22px rgba(65, 55, 43, 0.2);
   color: #4e463f;
   cursor: pointer;
   display: inline-flex;
-  gap: 0.45rem;
-  padding: 0.48rem 0.72rem;
+  gap: 0.32rem;
+  padding: 0.34rem 0.56rem;
   position: fixed;
-  right: clamp(0.9rem, 1.6vw, 1.25rem);
+  right: clamp(0.6rem, 1.1vw, 0.96rem);
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
   z-index: 68;
 }
@@ -35,9 +35,9 @@
 
 .dashboard-mock-toggle__label,
 .dashboard-mock-toggle__state {
-  font-size: 0.68rem;
+  font-size: 0.61rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
