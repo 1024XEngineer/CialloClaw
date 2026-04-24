@@ -914,7 +914,7 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.T) {
+func TestServiceSubmitInputKeepsAmbiguousShortTextInIntentConfirmation(t *testing.T) {
 	service := newTestService()
 
 	result, err := service.SubmitInput(map[string]any{
@@ -932,11 +932,11 @@ func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.
 
 	task := result["task"].(map[string]any)
 	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected unknown short text to remain in confirming_intent, got %v", task["status"])
+		t.Fatalf("expected ambiguous short text to remain in confirming_intent, got %v", task["status"])
 	}
 	intentValue, ok := task["intent"].(map[string]any)
 	if !ok || len(intentValue) != 0 {
-		t.Fatalf("expected unknown short text task to keep empty intent payload, got %+v", task["intent"])
+		t.Fatalf("expected ambiguous short text task to keep empty intent payload, got %+v", task["intent"])
 	}
 	bubble := result["bubble_message"].(map[string]any)
 	if bubble["text"] != "我还不确定你想如何处理这段内容，请确认目标。" {
@@ -947,6 +947,39 @@ func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.
 	}
 	if _, ok := service.runEngine.GetTask(task["task_id"].(string)); !ok {
 		t.Fatal("expected task to remain available in runtime")
+	}
+}
+
+func TestServiceSubmitInputRoutesShortActionTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Short action request completed.")
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_short_action",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "解释下",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected short action text to execute directly, got %v", task["status"])
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected short action text to route through agent_loop, got %+v", task["intent"])
+	}
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected short action text to return delivery_result")
+	}
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected short action text to prefer bubble delivery, got %v", deliveryResult["type"])
 	}
 }
 
