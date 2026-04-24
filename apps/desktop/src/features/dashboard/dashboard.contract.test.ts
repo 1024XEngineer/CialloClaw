@@ -1948,8 +1948,8 @@ test("control panel saves full floating-ball ownership through the real rpc sett
 
     assert.ok(updateSettingsRequest);
     assert.equal(inspectorUpdateCount, 0);
-    assert.equal(settingsReadCount, 2);
-    assert.equal(inspectorReadCount, 2);
+    assert.equal(settingsReadCount, 1);
+    assert.equal(inspectorReadCount, 1);
     assert.equal(result.source, "rpc");
     assert.equal(result.needRestart, false);
     assert.equal(result.effectiveSettings.general.voice_type, "voice_nebula");
@@ -1976,8 +1976,8 @@ test("control panel saves full floating-ball ownership through the real rpc sett
     assert.equal(persisted.settings.memory.profile_refresh_interval.unit, "day");
 
     const reloaded = await loadControlPanelData();
-    assert.equal(settingsReadCount, 3);
-    assert.equal(inspectorReadCount, 3);
+    assert.equal(settingsReadCount, 2);
+    assert.equal(inspectorReadCount, 2);
     assert.equal(reloaded.source, "rpc");
     assert.equal(reloaded.settings.general.voice_type, "voice_nebula");
     assert.equal(reloaded.settings.general.download.ask_before_save_each_file, false);

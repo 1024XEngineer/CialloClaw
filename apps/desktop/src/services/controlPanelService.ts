@@ -307,6 +307,8 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
 /**
  * saveControlPanelData persists only the dirty settings groups requested by
  * the caller so unrelated RPC writes do not block the entire settings surface.
+ * The save path applies effective update payloads directly; formal readback
+ * stays on the open/load path instead of adding extra save-time RPC reads.
  */
 export async function saveControlPanelData(
   data: ControlPanelData,
@@ -374,24 +376,6 @@ export async function saveControlPanelData(
 
         throw error;
       }
-    }
-
-    try {
-      const refreshedSnapshot = await loadControlPanelRpcSnapshot(timeoutMs);
-      effectiveSettings = refreshedSnapshot.settings;
-      effectiveInspector = refreshedSnapshot.inspector;
-      saveSettings({ settings: effectiveSettings });
-    } catch (error) {
-      throw new ControlPanelSaveError(
-        `设置已保存，但重新获取最新配置失败：${error instanceof Error ? error.message : "请重试。"}`,
-        buildControlPanelSaveResult(effectiveSettings, effectiveInspector, "rpc", {
-          applyMode,
-          needRestart,
-          savedInspector,
-          savedSettings,
-          updatedKeys,
-        }),
-      );
     }
 
     return buildControlPanelSaveResult(effectiveSettings, effectiveInspector, "rpc", {
