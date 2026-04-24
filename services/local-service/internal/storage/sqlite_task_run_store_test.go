@@ -313,7 +313,6 @@ func TestSQLiteTaskRunStoreLoadLegacyTaskRunsHandlesErrors(t *testing.T) {
 		t.Fatal("expected closed sqlite task run store to fail legacy load")
 	}
 }
-
 func TestSQLiteTaskRunStorePersistsExecutionAttempt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-run-attempt.db")
 	store, err := NewSQLiteTaskRunStore(path)

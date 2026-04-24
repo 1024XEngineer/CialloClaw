@@ -37,6 +37,7 @@ export type ControlPanelSaveResult = {
   applyMode: ApplyMode;
   needRestart: boolean;
   updatedKeys: string[];
+  warnings: string[];
   effectiveSettings: Partial<DesktopSettingsData>;
   effectiveInspector: AgentTaskInspectorConfigGetResult;
   savedInspector: boolean;
@@ -60,6 +61,8 @@ const CONTROL_PANEL_INSPECTOR_UPDATED_KEYS = [
   "task_automation.remind_before_deadline",
   "task_automation.remind_when_stale",
 ];
+
+const CONTROL_PANEL_SUPPORTED_MODEL_PROVIDERS = new Set(["openai", "openai_responses"]);
 
 /**
  * ControlPanelSaveError reports a save failure while optionally carrying the
@@ -185,6 +188,33 @@ function buildSettingsUpdatePayload(input: ControlPanelData) {
   };
 }
 
+function normalizeControlPanelModelProvider(provider: string): string {
+  return provider.trim().toLowerCase();
+}
+
+function buildControlPanelSaveWarnings(
+  provider: string,
+  updatedKeys: string[],
+  providerApiKeyInput: string,
+): string[] {
+  const normalizedProvider = normalizeControlPanelModelProvider(provider);
+  if (normalizedProvider === "") {
+    return [];
+  }
+
+  const providerChanged = updatedKeys.includes("models.provider");
+  const apiKeySaved = providerApiKeyInput.trim() !== "";
+  if (!providerChanged && !apiKeySaved) {
+    return [];
+  }
+
+  if (CONTROL_PANEL_SUPPORTED_MODEL_PROVIDERS.has(normalizedProvider)) {
+    return [];
+  }
+
+  return ["API Key 已保存，但当前 provider 名暂不受支持；请改用 openai / openai_responses。"];
+}
+
 function buildInspectorUpdatePayload(input: ControlPanelData) {
   return {
     request_meta: createRequestMeta(),
@@ -228,12 +258,14 @@ function buildControlPanelSaveResult(
     savedInspector: boolean;
     savedSettings: boolean;
     updatedKeys: string[];
+    warnings?: string[];
   },
 ): ControlPanelSaveResult {
   return {
     applyMode: options.applyMode,
     needRestart: options.needRestart,
     updatedKeys: options.updatedKeys,
+    warnings: options.warnings ?? [],
     effectiveSettings: settings,
     effectiveInspector: inspector,
     savedInspector: options.savedInspector,
@@ -335,6 +367,7 @@ export async function saveControlPanelData(
   let savedInspector = false;
   let savedSettings = false;
   const updatedKeys: string[] = [];
+  const warnings: string[] = [];
 
   try {
     if (saveSettingsRequested) {
@@ -346,6 +379,7 @@ export async function saveControlPanelData(
       savedSettings = true;
       updatedKeys.push(...settingsResult.updated_keys);
       saveSettings({ settings: effectiveSettings });
+      warnings.push(...buildControlPanelSaveWarnings(data.settings.models.provider, settingsResult.updated_keys, data.providerApiKeyInput));
     }
 
     if (saveInspectorRequested) {
@@ -370,6 +404,7 @@ export async function saveControlPanelData(
               savedInspector: false,
               savedSettings: true,
               updatedKeys,
+              warnings,
             }),
           );
         }
@@ -384,6 +419,7 @@ export async function saveControlPanelData(
       savedInspector,
       savedSettings,
       updatedKeys,
+      warnings,
     });
   } catch (error) {
     if (error instanceof ControlPanelSaveError) {

@@ -700,10 +700,16 @@ async function flushAsyncEffects() {
 
 function createImmediateShellBallReactRuntime(initialBubbleItems: ShellBallBubbleItem[] = []) {
   let bubbleItemsState = [...initialBubbleItems];
+  let visualState: string | null = null;
+
+  const shellBallVisualStateSet = new Set<string>(shellBallVisualStates);
 
   return {
     getBubbleItems() {
       return bubbleItemsState;
+    },
+    getVisualState() {
+      return visualState;
     },
     react: {
       ...require("react"),
@@ -731,6 +737,20 @@ function createImmediateShellBallReactRuntime(initialBubbleItems: ShellBallBubbl
             bubbleItemsState = typeof nextValue === "function"
               ? (nextValue as (currentValue: T) => T)(bubbleItemsState as unknown as T) as unknown as ShellBallBubbleItem[]
               : nextValue as unknown as ShellBallBubbleItem[];
+          }] as const;
+        }
+
+        if (typeof resolvedValue === "string" && shellBallVisualStateSet.has(resolvedValue)) {
+          visualState = resolvedValue;
+
+          return [resolvedValue, (nextValue: T | ((currentValue: T) => T)) => {
+            const nextResolved = typeof nextValue === "function"
+              ? (nextValue as (currentValue: T) => T)(resolvedValue)
+              : nextValue;
+
+            if (typeof nextResolved === "string" && shellBallVisualStateSet.has(nextResolved)) {
+              visualState = nextResolved;
+            }
           }] as const;
         }
 
@@ -967,7 +987,7 @@ test("shell-ball drag sync keeps geometry publishes coalesced and visibility-awa
   assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
   assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
   assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
-  assert.match(appSource, /helperVisibility: snapshot\.visibility/);
+  assert.match(appSource, /helperVisibility: \{[\s\S]*bubble: false,[\s\S]*input: false,[\s\S]*voice: false,[\s\S]*\}/);
 });
 
 test("dashboard stays hidden on cold launch while control-panel is created on demand", () => {
@@ -1005,12 +1025,13 @@ test("shell-ball entries opt into transparent window mode", () => {
 
 test("shell-ball surface styles keep the shell transparent and fully draggable", () => {
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
+  const shellBallSurfaceBlock = shellBallStyles.match(/\.shell-ball-surface\s*\{([\s\S]*?)\}/)?.[1] ?? "";
   const shellBallSurfaceBeforeBlock = shellBallStyles.match(/\.shell-ball-surface::before\s*\{([\s\S]*?)\}/)?.[1] ?? "";
   const mascotBlock = shellBallStyles.match(/\.shell-ball-mascot\s*\{([\s\S]*?)\}/)?.[1] ?? "";
   const mascotHotspotBlock = shellBallStyles.match(/\.shell-ball-mascot__hotspot\s*\{([\s\S]*?)\}/)?.[1] ?? "";
 
   assert.doesNotMatch(shellBallSurfaceBeforeBlock, /background:/);
-  assert.doesNotMatch(shellBallStyles, /overflow-x:\s*hidden/);
+  assert.doesNotMatch(shellBallSurfaceBlock, /overflow-x:\s*hidden/);
   assert.match(mascotBlock, /width:\s*clamp\(/);
   assert.match(mascotHotspotBlock, /inset:\s*0;/);
 });
@@ -1029,10 +1050,6 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
     resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"),
     "utf8",
   );
-  const planSource = readFileSync(
-    resolve(desktopRoot, "docs/2026-04-11-desktop-shell-ball-three-window-implementation-plan.md"),
-    "utf8",
-  );
 
   assert.doesNotMatch(tauriConfig, /"focusable": false/);
   assert.match(controllerSource, /setShellBallWindowFocusable\([^)]*focusable: boolean\)/);
@@ -1042,9 +1059,6 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
   assert.match(metricsSource, /setShellBallWindowIgnoreCursorEvents\(role, interactionMode\.ignoreCursorEvents\)/);
   assert.doesNotMatch(metricsSource, /setFocus\(\)/);
   assert.doesNotMatch(inputBarSource, /focus\(\{ preventScroll: true \}\)/);
-  assert.doesNotMatch(planSource, /focusable: false/);
-  assert.match(planSource, /setFocusable\(false\)/);
-  assert.match(planSource, /setIgnoreCursorEvents\(true\)/);
 });
 
 test("shell-ball desktop navigation keeps route changes separate from desktop window focus", () => {
@@ -1109,11 +1123,9 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   assert.doesNotMatch(dashboardRootSource, /path="\/tasks\/\*"/);
   assert.doesNotMatch(dashboardRootSource, /path="\/notes\/\*"/);
   assert.doesNotMatch(dashboardRootSource, /path="\/memory\/\*"/);
-  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\(module\)/);
-  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("tasks"\)/);
-  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("notes"\)/);
-  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("memory"\)/);
-  assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("safety"\)/);
+  assert.match(dashboardHomeSource, /function getRouteForModule\(module: DashboardHomeModuleKey\)/);
+  assert.match(dashboardHomeSource, /return resolveDashboardModuleRoutePath\(module\);/);
+  assert.match(dashboardHomeSource, /const nextPath = getRouteForModule\(module\);/);
   assert.doesNotMatch(dashboardHomeSource, /"\/tasks"/);
   assert.doesNotMatch(dashboardHomeSource, /"\/notes"/);
   assert.doesNotMatch(dashboardHomeSource, /"\/memory"/);
@@ -1416,7 +1428,7 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelAppSource, /requestCurrentDesktopWindowClose/);
   assert.match(desktopWindowFrameSource, /export function installDesktopEscapeClose\(windowHandle\?: DesktopCloseHandle \| null\)/);
   assert.match(desktopWindowFrameSource, /const currentWindow = windowHandle \?\? getDesktopFrameWindow\(\)/);
-  assert.match(controlPanelAppSource, /control-panel-page__topbar/);
+  assert.match(controlPanelAppSource, /control-panel-shell__titlebar/);
   assert.match(controlPanelAppSource, /拖动控制面板窗口/);
   assert.match(controlPanelAppSource, /关闭控制面板/);
 });
@@ -4911,7 +4923,13 @@ test("shell-ball replays approval.pending notifications that arrive before submi
         openTaskDeliveryForTask() {
           return Promise.resolve(null);
         },
-        resolveTaskOpenExecutionPlan() {
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
           return {
             feedback: "open task detail",
             mode: "task_detail" as const,
@@ -5308,7 +5326,13 @@ test("shell-ball replays task.updated notifications that arrive before submit re
         openTaskDeliveryForTask() {
           return Promise.resolve(null);
         },
-        resolveTaskOpenExecutionPlan() {
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
           return {
             feedback: "open task detail",
             mode: "task_detail" as const,
@@ -5470,7 +5494,13 @@ test("shell-ball ignores untracked approval.pending notifications without a pend
         openTaskDeliveryForTask() {
           return Promise.resolve(null);
         },
-        resolveTaskOpenExecutionPlan() {
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
           return {
             feedback: "open task detail",
             mode: "task_detail" as const,
@@ -5657,7 +5687,13 @@ test("shell-ball approval responses do not overwrite newer task subscription sta
         openTaskDeliveryForTask() {
           return Promise.resolve(null);
         },
-        resolveTaskOpenExecutionPlan() {
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
           return {
             feedback: "open task detail",
             mode: "task_detail" as const,

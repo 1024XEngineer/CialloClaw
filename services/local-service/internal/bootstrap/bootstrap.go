@@ -69,6 +69,11 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	resolvedModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 	auditService := audit.NewService(storageService.AuditWriter())
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -122,12 +127,12 @@ func New(cfg config.Config) (*App, error) {
 	)
 
 	modelService, err := newModelServiceFromConfigForBootstrap(model.ServiceConfig{
-		ModelConfig:  cfg.Model,
+		ModelConfig:  resolvedModelConfig,
 		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
-		if shouldFallbackBootstrapModelService(err) {
-			modelService = model.NewService(cfg.Model)
+		if shouldFallbackBootstrapModelService(err, persistedModelRouteChanged) {
+			modelService = model.NewService(resolvedModelConfig)
 		} else {
 			_ = storageService.Close()
 			return nil, err
@@ -182,7 +187,23 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
-func shouldFallbackBootstrapModelService(err error) bool {
+func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, bool, error) {
+	if settingsStore == nil {
+		return base, false, nil
+	}
+	snapshot, err := settingsStore.LoadSettingsSnapshot(context.Background())
+	if err != nil {
+		return config.ModelConfig{}, false, err
+	}
+	resolved := model.RuntimeConfigFromSettings(base, snapshot)
+	persistedRouteChanged := resolved.Provider != base.Provider || resolved.Endpoint != base.Endpoint || resolved.ModelID != base.ModelID
+	return resolved, persistedRouteChanged, nil
+}
+
+func shouldFallbackBootstrapModelService(err error, allowPersistedRoutePlaceholder bool) bool {
+	if allowPersistedRoutePlaceholder && errors.Is(err, model.ErrModelProviderUnsupported) {
+		return true
+	}
 	if !errors.Is(err, model.ErrSecretSourceFailed) {
 		return false
 	}

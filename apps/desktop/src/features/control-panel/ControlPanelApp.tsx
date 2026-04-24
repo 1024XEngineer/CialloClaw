@@ -536,6 +536,7 @@ function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPane
     providerApiKeyInput: result.savedSettings ? "" : base.providerApiKeyInput,
     settings: nextSettings,
     source: result.source,
+    warnings: result.warnings,
   };
 }
 

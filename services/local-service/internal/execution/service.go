@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
@@ -41,6 +42,7 @@ type Service struct {
 	screen              tools.ScreenCaptureClient
 	lifecycle           *tools.ScreenLifecycleManager
 	artifactStore       storage.ArtifactStore
+	modelMu             sync.RWMutex
 	model               *model.Service
 	loop                *agentloop.Runtime
 	audit               *audit.Service
@@ -1867,14 +1869,9 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 	if err != nil {
 		return generationTrace{}, fmt.Errorf("generate text: %w", err)
 	}
-	if boolValue(toolResult.RawOutput, "fallback") {
-		fallbackErr := modelFallbackErrorFromToolOutput(toolResult.RawOutput)
-		if !boolValue(request.BudgetDowngrade, "applied") {
-			// The formal mainline must surface provider/secret/model failures instead of
-			// silently returning the local fallback text as if OpenAI Responses succeeded.
-			return generationTrace{}, fmt.Errorf("generate text: %w", fallbackErr)
-		}
+	if boolValue(toolResult.RawOutput, "fallback") && boolValue(request.BudgetDowngrade, "applied") {
 		auditRecord := mapValue(toolResult.RawOutput, "audit_record")
+		failureReason := stringValue(toolResult.RawOutput, "fallback_reason", model.ErrClientNotConfigured.Error())
 		return generationTrace{
 			OutputText: budgetDowngradeFallbackText(request, inputText),
 			ToolCalls:  []tools.ToolCallRecord{toolResult.ToolCall},
@@ -1887,7 +1884,7 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 			},
 			AuditRecord:      cloneMap(auditRecord),
 			GenerationOutput: cloneMap(toolResult.RawOutput),
-			BudgetFailure:    budgetFailureSignal(request, fallbackErr),
+			BudgetFailure:    budgetFailureSignal(request, errors.New(failureReason)),
 		}, nil
 	}
 
@@ -1916,7 +1913,8 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 // The loop stops when the model returns a final answer or when the turn budget
 // is exhausted, in which case the normal fallback output is returned.
 func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Request, inputText string) (generationTrace, bool, error) {
-	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
+	modelService := s.currentModel()
+	if !isAgentLoopIntent(request.Intent) || modelService == nil || !modelService.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
 	runtimeInput := inputText
@@ -1945,7 +1943,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 			}
 			return s.steeringPoller(taskID)
 		},
-		GenerateToolCalls: s.model.GenerateToolCalls,
+		GenerateToolCalls: modelService.GenerateToolCalls,
 		ExecuteTool: func(execCtx context.Context, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 			return s.executeAgentLoopTool(execCtx, request, call, loopRound)
 		},
@@ -2039,68 +2037,6 @@ func invocationRecordFromToolResult(request Request, toolResult *tools.ToolExecu
 		},
 		LatencyMS: int64Value(toolResult.RawOutput, "latency_ms"),
 	}
-}
-
-// modelFallbackErrorFromToolOutput reconstructs a typed error chain from the
-// fallback payload that builtin generate_text emits when the configured model
-// client cannot execute the request. This keeps errors.Is checks working for
-// budget downgrade governance, audit classification, and formal task failures.
-func modelFallbackErrorFromToolOutput(raw map[string]any) error {
-	reason := strings.TrimSpace(stringValue(raw, "fallback_reason", ""))
-	if reason == "" {
-		return model.ErrClientNotConfigured
-	}
-
-	matched := make([]error, 0, 12)
-	if statusErr := openAIHTTPStatusErrorFromFallbackReason(reason); statusErr != nil {
-		matched = append(matched, statusErr)
-	}
-	for _, candidate := range []error{
-		model.ErrClientNotConfigured,
-		model.ErrToolCallingNotSupported,
-		model.ErrModelProviderRequired,
-		model.ErrModelProviderUnsupported,
-		model.ErrSecretSourceFailed,
-		model.ErrSecretNotFound,
-		model.ErrOpenAIAPIKeyRequired,
-		model.ErrOpenAIEndpointRequired,
-		model.ErrOpenAIModelIDRequired,
-		model.ErrOpenAIRequestFailed,
-		model.ErrOpenAIRequestTimeout,
-		model.ErrOpenAIResponseInvalid,
-		tools.ErrToolOutputInvalid,
-	} {
-		if strings.Contains(reason, candidate.Error()) {
-			matched = append(matched, candidate)
-		}
-	}
-	if len(matched) == 0 {
-		return errors.New(reason)
-	}
-	if len(matched) == 1 && reason == matched[0].Error() {
-		return matched[0]
-	}
-	matched = append(matched, errors.New(reason))
-	return errors.Join(matched...)
-}
-
-func openAIHTTPStatusErrorFromFallbackReason(reason string) error {
-	const prefix = "openai responses returned http status "
-	trimmed := strings.TrimSpace(reason)
-	if !strings.HasPrefix(trimmed, prefix) {
-		return nil
-	}
-
-	remainder := strings.TrimPrefix(trimmed, prefix)
-	statusText, message, hasMessage := strings.Cut(remainder, ": ")
-	var statusCode int
-	if _, err := fmt.Sscanf(statusText, "%d", &statusCode); err != nil || statusCode <= 0 {
-		return errors.Join(model.ErrOpenAIHTTPStatus, errors.New(trimmed))
-	}
-	if !hasMessage {
-		return &model.OpenAIHTTPStatusError{StatusCode: statusCode}
-	}
-	return &model.OpenAIHTTPStatusError{StatusCode: statusCode, Message: strings.TrimSpace(message)}
 }
 
 func invocationRecordMap(record *model.InvocationRecord) map[string]any {
@@ -2203,7 +2139,7 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 		return nil
 	}
 	reason := strings.TrimSpace(generationErr.Error())
-	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderRequired) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !errors.Is(generationErr, model.ErrOpenAIAPIKeyRequired) && !errors.Is(generationErr, model.ErrOpenAIEndpointRequired) && !errors.Is(generationErr, model.ErrOpenAIModelIDRequired) && !model.IsProviderRuntimeUnavailable(generationErr) && !errors.Is(generationErr, tools.ErrToolOutputInvalid) && !isBudgetFailureReason(reason) {
+	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !isBudgetFailureReason(reason) {
 		return nil
 	}
 	return map[string]any{
@@ -2217,7 +2153,7 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 func isBudgetFailureReason(reason string) bool {
 	trimmed := strings.TrimSpace(reason)
 	switch trimmed {
-	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderRequired.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error(), model.ErrOpenAIAPIKeyRequired.Error(), model.ErrOpenAIEndpointRequired.Error(), model.ErrOpenAIModelIDRequired.Error(), model.ErrOpenAIHTTPStatus.Error(), model.ErrOpenAIRequestFailed.Error(), model.ErrOpenAIRequestTimeout.Error(), model.ErrOpenAIResponseInvalid.Error(), tools.ErrToolOutputInvalid.Error():
+	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error():
 		return true
 	default:
 		return false
@@ -2549,28 +2485,31 @@ func firstNonEmpty(primary, fallback string) string {
 // single loop execution. The value is read from model-facing runtime settings so
 // the execution layer stays configurable without introducing a parallel config path.
 func (s *Service) agentLoopMaxTurns() int {
-	if s.model == nil {
-		return 4
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopMaxToolIterations
 	}
-	return s.model.MaxToolIterations()
+	return modelService.MaxToolIterations()
 }
 
 // agentLoopCompressionChars resolves the planner-input size budget that should
 // trigger lightweight observation compaction.
 func (s *Service) agentLoopCompressionChars() int {
-	if s.model == nil {
-		return 2400
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopContextCompressChars
 	}
-	return s.model.ContextCompressChars()
+	return modelService.ContextCompressChars()
 }
 
 // agentLoopKeepRecent returns how many recent observations stay verbatim when
 // older tool results are compacted.
 func (s *Service) agentLoopKeepRecent() int {
-	if s.model == nil {
-		return 4
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopContextKeepRecent
 	}
-	return s.model.ContextKeepRecent()
+	return modelService.ContextKeepRecent()
 }
 
 func (s *Service) agentLoopTimeout() time.Duration {
@@ -2578,17 +2517,19 @@ func (s *Service) agentLoopTimeout() time.Duration {
 }
 
 func (s *Service) agentLoopPlannerRetryBudget() int {
-	if s.model == nil {
-		return 1
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopPlannerRetryBudget
 	}
-	return s.model.PlannerRetryBudget()
+	return modelService.PlannerRetryBudget()
 }
 
 func (s *Service) agentLoopToolRetryBudget() int {
-	if s.model == nil {
-		return 1
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopToolRetryBudget
 	}
-	return s.model.ToolRetryBudget()
+	return modelService.ToolRetryBudget()
 }
 
 type noopAgentLoopHook struct{}

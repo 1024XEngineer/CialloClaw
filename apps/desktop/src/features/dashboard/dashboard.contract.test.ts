@@ -302,6 +302,13 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
               value: number;
             };
           };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+          };
         };
         inspector: {
           task_sources: string[];
@@ -315,6 +322,7 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
           remind_when_stale: boolean;
         };
         providerApiKeyInput: string;
+        warnings?: string[];
       }>;
       saveControlPanelData: (
         data: unknown,
@@ -327,7 +335,10 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
         source: "rpc";
         applyMode: string;
         needRestart: boolean;
+        savedInspector?: boolean;
+        savedSettings?: boolean;
         updatedKeys: string[];
+        warnings: string[];
         effectiveSettings: {
           general: {
             voice_type: string;
@@ -351,6 +362,13 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
               unit: string;
               value: number;
             };
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
           };
         };
       }>;
@@ -1261,12 +1279,13 @@ test("task context links back into mirror detail state instead of plain text dea
   assert.match(mirrorAppSource, /setHistoryDetailView\(options\.historyDetailView\)/);
 });
 
-test("task page keeps waiting-auth anchors and waiting-input escape hatches", () => {
+test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
   const { getTaskPrimaryActions } = loadTaskPageMapperModule();
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
@@ -1274,7 +1293,8 @@ test("task page keeps waiting-auth anchors and waiting-input escape hatches", ()
     ["cancel", "open-safety"],
   );
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
-  assert.match(taskPageSource, /如需修改或补充当前任务，请到悬浮球继续处理。/);
+  assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
+  assert.match(taskDetailPanelSource, /placeholder=\{canSteerTask \? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"\}/);
 });
 
 test("settings service normalizes legacy stored snapshots before returning and saving", () => {
@@ -1989,6 +2009,187 @@ test("control panel saves full floating-ball ownership through the real rpc sett
     assert.equal(reloaded.settings.memory.work_summary_interval.unit, "hour");
     assert.equal(reloaded.settings.memory.profile_refresh_interval.value, 5);
     assert.equal(reloaded.settings.memory.profile_refresh_interval.unit, "day");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel save warns when an API key is saved for an unsupported provider name", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: {
+        unit: "day",
+        value: 7,
+      },
+      profile_refresh_interval: {
+        unit: "week",
+        value: 2,
+      },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: {
+      unit: "minute",
+      value: 15,
+    },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({
+      settings: remoteSettings,
+    }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        models: {
+          provider: string;
+          budget_auto_downgrade: boolean;
+          base_url: string;
+          model: string;
+          api_key?: string;
+        };
+      };
+
+      assert.equal(request.models.provider, "z-ai");
+      assert.equal(request.models.api_key, "saved-secret-key");
+
+      remoteSettings = {
+        ...remoteSettings,
+        models: {
+          provider: request.models.provider,
+          credentials: {
+            ...remoteSettings.models.credentials,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    updateTaskInspectorConfig: async () => ({
+      effective_config: inspectorConfig,
+    }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        providerApiKeyInput: "saved-secret-key",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "z-ai",
+            base_url: "https://api.qnaigc.com/v1",
+            model: "z-ai/glm-5",
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.deepEqual(result.warnings, ["API Key 已保存，但当前 provider 名暂不受支持；请改用 openai / openai_responses。"]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");

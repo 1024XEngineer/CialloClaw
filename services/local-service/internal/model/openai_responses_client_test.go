@@ -351,6 +351,93 @@ func TestGenerateToolCallsSuccess(t *testing.T) {
 	}
 }
 
+func TestGenerateTextFallsBackToChatCompletionsWhenResponsesRouteIsMissing(t *testing.T) {
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/responses":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"responses route is not available"}}`))
+		case "/chat/completions":
+			_, _ = w.Write([]byte(`{"id":"chatcmpl_123","model":"z-ai/glm-5","choices":[{"message":{"content":"fallback hello"}}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
+		APIKey:     "test-key",
+		Endpoint:   server.URL + "/responses",
+		ModelID:    "z-ai/glm-5",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIResponsesClient returned error: %v", err)
+	}
+
+	response, err := client.GenerateText(context.Background(), GenerateTextRequest{TaskID: "task_compat_text", RunID: "run_compat_text", Input: "hello"})
+	if err != nil {
+		t.Fatalf("GenerateText returned error: %v", err)
+	}
+	if response.OutputText != "fallback hello" {
+		t.Fatalf("expected fallback text output, got %+v", response)
+	}
+	if len(requests) != 2 || requests[0] != "/responses" || requests[1] != "/chat/completions" {
+		t.Fatalf("expected responses then chat completions fallback, got %+v", requests)
+	}
+}
+
+func TestGenerateToolCallsFallBackToChatCompletionsWhenResponsesRouteIsMissing(t *testing.T) {
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/responses":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"responses route is not available"}}`))
+		case "/chat/completions":
+			_, _ = w.Write([]byte(`{"id":"chatcmpl_tool_123","model":"z-ai/glm-5","choices":[{"message":{"content":"","tool_calls":[{"id":"call_001","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"notes/todo.md\"}"}}]}}],"usage":{"prompt_tokens":20,"completion_tokens":8,"total_tokens":28}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
+		APIKey:     "test-key",
+		Endpoint:   server.URL + "/responses",
+		ModelID:    "z-ai/glm-5",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIResponsesClient returned error: %v", err)
+	}
+
+	result, err := client.GenerateToolCalls(context.Background(), ToolCallRequest{
+		TaskID: "task_compat_tool",
+		RunID:  "run_compat_tool",
+		Input:  "Please inspect the workspace note before answering.",
+		Tools: []ToolDefinition{{
+			Name:        "read_file",
+			Description: "Read a workspace file",
+			InputSchema: map[string]any{"type": "object"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("GenerateToolCalls returned error: %v", err)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "read_file" || result.ToolCalls[0].Arguments["path"] != "notes/todo.md" {
+		t.Fatalf("expected fallback tool call, got %+v", result.ToolCalls)
+	}
+	if len(requests) != 2 || requests[0] != "/responses" || requests[1] != "/chat/completions" {
+		t.Fatalf("expected responses then chat completions fallback, got %+v", requests)
+	}
+}
+
 // TestGenerateTextReturnsHTTPStatusError 验证GenerateTextReturnsHTTPStatusError。
 func TestGenerateTextReturnsHTTPStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

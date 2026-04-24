@@ -87,8 +87,6 @@ func (t *GenerateTextTool) Execute(ctx context.Context, execCtx *tools.ToolExecu
 				"output_tokens": response.Usage.OutputTokens,
 				"total_tokens":  response.Usage.TotalTokens,
 			}
-		} else if modelErr == nil {
-			result["fallback_reason"] = tools.ErrToolOutputInvalid.Error()
 		} else if modelErr != nil {
 			result["fallback_reason"] = modelErr.Error()
 		}
