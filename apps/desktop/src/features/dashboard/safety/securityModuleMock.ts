@@ -147,6 +147,7 @@ export function buildMockRespondResult(
     },
     task: {
       task_id: taskId,
+      session_id: null,
       title: "安全审批联调任务",
       source_type: "dragged_file",
       status: decision === "allow_once" ? "processing" : "paused",
@@ -191,6 +192,7 @@ export function buildMockRestoreApplyResult(
     applied: false,
     task: {
       task_id: taskId,
+      session_id: null,
       title: "恢复点回滚联调任务",
       source_type: "dragged_file",
       status: "waiting_auth",

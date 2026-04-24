@@ -23,6 +23,13 @@ export type TaskOpenExecutionPlan = {
   feedback: string;
 };
 
+export type TaskOpenExecutionOptions = {
+  onOpenTaskDetail?: (input: {
+    plan: TaskOpenExecutionPlan;
+    taskId: string;
+  }) => Promise<string | void> | string | void;
+};
+
 const TASK_OUTPUT_RPC_TIMEOUT_MS = 2_500;
 
 function createRequestMeta(scope: string): RequestMeta {
@@ -196,13 +203,25 @@ function localPathExecutionFailure(message: string, error: unknown) {
 }
 
 /**
- * Executes a renderer-side open plan while keeping copy-path as the last
- * fallback when the local desktop shell cannot complete the requested action.
+ * Executes a renderer-side open plan while keeping task-detail routing and
+ * copy-path fallback inside the same formal execution entry.
  *
  * @param plan Renderer-side execution plan derived from the formal open payload.
+ * @param options Optional task-detail delegate for callers that need to route into a view.
  * @returns User-facing feedback describing the completed action or fallback.
  */
-export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan): Promise<string> {
+export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, options: TaskOpenExecutionOptions = {}): Promise<string> {
+  if (plan.mode === "task_detail" && plan.taskId) {
+    const detailFeedback = await options.onOpenTaskDetail?.({
+      plan,
+      taskId: plan.taskId,
+    });
+
+    return typeof detailFeedback === "string" && detailFeedback.trim() !== ""
+      ? detailFeedback
+      : plan.feedback;
+  }
+
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedTaskOpenUrl(plan.url)) {
       return "已拦截不受支持的结果链接。";

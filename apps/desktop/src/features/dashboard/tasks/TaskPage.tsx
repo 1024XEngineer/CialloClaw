@@ -16,6 +16,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
@@ -112,8 +113,8 @@ export function TaskPage() {
   const [taskEventFilters, setTaskEventFilters] = useState<TaskEventFilters>(DEFAULT_TASK_EVENT_FILTERS);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const securityRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
-  const routeFocusState = location.state as { focusTaskId?: string; openDetail?: boolean } | null;
-  const routeFocusTaskId = typeof routeFocusState?.focusTaskId === "string" && routeFocusState.focusTaskId.trim().length > 0 ? routeFocusState.focusTaskId : null;
+  const detailRouteState = readDashboardTaskDetailRouteState(location.state);
+  const routeFocusTaskId = detailRouteState?.focusTaskId ?? null;
 
   const unfinishedQuery = useQuery({
     queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit),
@@ -225,6 +226,26 @@ export function TaskPage() {
     setTaskEventFilters(DEFAULT_TASK_EVENT_FILTERS);
   }, [selectedTaskId]);
 
+  useEffect(() => {
+    /**
+     * Routed task-detail opens can legitimately target tasks outside the
+     * currently loaded preview buckets. Accept the routed task id first and let
+     * the canonical detail query load it instead of blocking on paginated list data.
+     */
+    if (detailRouteState) {
+      setRequestedTaskId(detailRouteState.focusTaskId);
+      setSelectedTaskId(detailRouteState.focusTaskId);
+      if (detailRouteState.openDetail) {
+        setDetailOpen(true);
+      }
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
+
+    if (selectedTaskId && detailOpen) {
+      return;
+    }
+  }, [detailOpen, detailRouteState, location.pathname, navigate, selectedTaskId]);
   const taskDetailQuery = useQuery({
     enabled: shouldEnableDashboardTaskDetailQuery(selectedTaskId, detailOpen),
     queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId ?? ""),
@@ -271,15 +292,6 @@ export function TaskPage() {
       : `${describeCurrentStep(detailData.task, detailData.experience)} 下一步：${detailData.experience.nextAction}`
     : null;
   const selectedUpdateLabel = detailData ? new Date(detailData.task.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "--";
-
-  useEffect(() => {
-    if (!routeFocusTaskId) {
-      return;
-    }
-
-    focusTaskDetail(routeFocusTaskId, routeFocusState?.openDetail ?? true);
-    navigate(location.pathname, { replace: true, state: null });
-  }, [location.pathname, navigate, routeFocusState?.openDetail, routeFocusTaskId]);
 
   useEffect(() => {
     if (routeFocusTaskId || stageInitialized || selectedTaskId) {
@@ -444,13 +456,12 @@ export function TaskPage() {
       return;
     }
 
-    if (plan.mode === "task_detail" && plan.taskId) {
-      focusTaskDetail(plan.taskId);
-      showFeedback(plan.feedback);
-      return;
-    }
-
-    showFeedback(await performTaskOpenExecution(plan));
+    showFeedback(await performTaskOpenExecution(plan, {
+      onOpenTaskDetail: ({ taskId }) => {
+        focusTaskDetail(taskId);
+        return plan.feedback;
+      },
+    }));
   }
 
   const artifactOpenMutation = useMutation({

@@ -27,6 +27,7 @@ import {
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
 import { startTaskFromFiles } from "@/services/taskService";
+import { getCurrentConversationSessionId } from "@/services/conversationSessionService";
 import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
@@ -59,7 +60,10 @@ const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
  * Describes the normalized submission result shape reused by shell-ball follow-up
  * UI such as local bubbles and delivery previews.
  */
-export type ShellBallInputSubmitResult = NonNullable<Awaited<ReturnType<typeof submitTextInput>>> & {
+export type ShellBallInputSubmitResult = (
+  | NonNullable<Awaited<ReturnType<typeof submitTextInput>>>
+  | Awaited<ReturnType<typeof startTaskFromFiles>>
+) & {
   delivery_result?: {
     type?: string;
     preview_text?: string | null;
@@ -157,12 +161,14 @@ export function createShellBallInputSubmitParams(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
+  sessionId?: string;
 }): AgentInputSubmitParams | null {
   return createTextInputSubmitParams({
     text: input.text,
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    sessionId: input.sessionId,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
@@ -207,12 +213,14 @@ async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
+  sessionId?: string;
 }): Promise<ShellBallInputSubmitResult | null> {
   return submitTextInput({
     text: input.text,
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    sessionId: input.sessionId,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
@@ -223,6 +231,7 @@ async function submitShellBallInput(input: {
 async function startShellBallFileTask(input: {
   text: string;
   files: string[];
+  sessionId?: string;
 }): Promise<ShellBallInputSubmitResult | null> {
   const normalizedFiles = normalizeShellBallPendingFiles(input.files);
 
@@ -235,6 +244,7 @@ async function startShellBallFileTask(input: {
       preferred: "bubble",
       fallback: "task_detail",
     },
+    sessionId: input.sessionId,
     source: "floating_ball",
   }, input.text);
 }
@@ -421,7 +431,6 @@ export function useShellBallInteraction() {
   const voiceBaseDraftRef = useRef("");
   const voiceTranscriptRef = useRef("");
   const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
-
   if (controllerRef.current === null) {
     controllerRef.current = createShellBallInteractionController({
       initialState: visualState,
@@ -565,28 +574,7 @@ export function useShellBallInteraction() {
       return;
     }
 
-    try {
-      const result = await submitShellBallInput({
-        text: resolution.finalizedSpeechPayload,
-        trigger: "voice_commit",
-        inputMode: "voice",
-      });
-      setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
-      if (result !== null) {
-        syncVisualStateFromTaskStatus(result.task.status, resolution.nextVisualState);
-      }
-    } catch (error) {
-      console.warn("shell-ball voice submit failed", error);
-      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, resolution.finalizedSpeechPayload);
-      setInputValue(restoredDraft);
-      inputFocusedRef.current = true;
-      setInputFocused(true);
-      controllerRef.current?.forceState("hover_input", {
-        regionActive: regionActiveRef.current,
-        hoverRetained: true,
-      });
-      syncVisualState();
-    }
+    setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
   }
 
   function acknowledgeFinalizedSpeechPayload() {
@@ -790,11 +778,13 @@ export function useShellBallInteraction() {
           ? await startShellBallFileTask({
               text: currentDraft,
               files: pendingFiles,
+              sessionId: getCurrentConversationSessionId(),
             })
           : await submitShellBallInput({
               text: currentDraft,
               trigger: "hover_text_input",
               inputMode: "text",
+              sessionId: getCurrentConversationSessionId(),
             });
       dispatch("submit_text");
       setInputValue(reset.nextInputValue);
@@ -807,6 +797,47 @@ export function useShellBallInteraction() {
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Voice capture reuses the same formal `agent.input.submit` path as the hover
+   * input, but the coordinator owns the shell-ball bubble timeline. This helper
+   * keeps RPC submission and visual-state recovery inside interaction state
+   * while allowing the coordinator to render the corresponding task bubbles.
+   */
+  async function handleSubmitVoiceText(text: string) {
+    const normalizedText = text.trim();
+
+    if (normalizedText === "") {
+      return null;
+    }
+
+    try {
+      const result = await submitShellBallInput({
+        text: normalizedText,
+        trigger: "voice_commit",
+        inputMode: "voice",
+        sessionId: getCurrentConversationSessionId(),
+      });
+
+      if (result !== null) {
+        syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
+      }
+
+      return result;
+    } catch (error) {
+      console.warn("shell-ball voice submit failed", error);
+      const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, normalizedText);
+      setInputValue(restoredDraft);
+      inputFocusedRef.current = true;
+      setInputFocused(true);
+      controllerRef.current?.forceState("hover_input", {
+        regionActive: regionActiveRef.current,
+        hoverRetained: true,
+      });
+      syncVisualState();
       throw error;
     }
   }
@@ -1141,6 +1172,7 @@ export function useShellBallInteraction() {
     handleRegionEnter,
     handleRegionLeave,
     handleSubmitText,
+    handleSubmitVoiceText,
     handleAttachFile,
     handleDroppedFiles,
     handleRemovePendingFile,
@@ -1152,6 +1184,7 @@ export function useShellBallInteraction() {
     handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
+    getCurrentConversationSessionId,
     handleForceState,
   };
 }

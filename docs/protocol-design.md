@@ -79,7 +79,7 @@
 
 ### 3.3 关键对象说明
 
-- `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点。
+- `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点；当前允许后端写回隐藏协作会话的 `session_id`，用于延续同一轮桌面任务。
 - `run`：执行对象，是后端编排和工具链的运行实例。
 - `bubble_message`：轻量承接对象，用于状态反馈和短结果返回。
 - `delivery_result`：正式交付对象，统一描述结果以气泡、文档、结果页、打开文件或任务详情交付。
@@ -623,7 +623,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
-- `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续走后端统一的意图建议主链路。
+- `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
+- 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
+- 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 
 ### agent.input.submit 入参示例
 
@@ -678,6 +680,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
 | `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
 | `data.task.title`        | 任务标题                         |
 | `data.task.source_type`  | 任务来源类型                     |
 | `data.task.status`       | 当前任务状态                     |
@@ -696,6 +699,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_001",
+        "session_id": "sess_001",
         "title": "整理当前页面内容",
         "source_type": "hover_input",
         "status": "processing",
@@ -764,6 +768,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
+- 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
+- `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
+- 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
+- 当后端在正式主链路中已经解析出结构化意图或视觉任务信号时，不得仅凭“当前只有一个 waiting task”就把新输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或本次输入本身就是结构化补充证据时，才允许视为旧 task 的 continuation。
+- continuation 分类发给模型的信号必须至少带上当前输入解析后的 `intent_name / delivery_type` 和候选 task 的 `intent_name / delivery_type`；仅靠 `explicit_intent_present=true` 之类布尔位不足以支撑正式路由判断。
 
 ### agent.task.start 入参示例
 
@@ -810,6 +819,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
 | `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
 | `data.task.title`        | 任务标题                         |
 | `data.task.source_type`  | 任务来源类型                     |
 | `data.task.status`       | 当前任务状态                     |
@@ -828,6 +838,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_101",
+        "session_id": "sess_001",
         "title": "解释选中文本",
         "source_type": "selected_text",
         "status": "processing",
@@ -1483,6 +1494,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------------- | -------- |
 | `data.items`                | 任务列表 |
 | `data.items[].task_id`      | 任务 ID  |
+| `data.items[].session_id`   | 任务归属的隐藏协作会话 ID |
 | `data.items[].title`        | 任务标题 |
 | `data.items[].status`       | 任务状态 |
 | `data.items[].current_step` | 当前步骤 |
@@ -1500,6 +1512,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "items": [
         {
           "task_id": "task_201",
+          "session_id": "sess_001",
           "title": "整理 Q3 复盘要点",
           "source_type": "hover_input",
           "status": "processing",
@@ -1575,6 +1588,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明       |
 | ------------------------ | -------------- |
 | `data.task`              | 任务基础信息   |
+| `data.task.session_id`   | 任务归属的隐藏协作会话 ID |
 | `data.timeline`          | 步骤时间线     |
 | `data.delivery_result`   | 最新正式交付结果；若当前任务尚未形成正式交付则返回 `null` |
 | `data.artifacts`         | 产出物列表     |
@@ -1598,6 +1612,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_201",
+        "session_id": "sess_001",
         "title": "整理 Q3 复盘要点",
         "status": "processing",
         "source_type": "hover_input",
@@ -4200,7 +4215,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 9.1 事件语义
 
-- `task.updated`：任务主状态或关键摘要变化
+- `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
 - `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）

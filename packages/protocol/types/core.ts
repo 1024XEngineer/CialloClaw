@@ -199,9 +199,10 @@ export interface StrongholdStatus {
   formal_store: boolean;
 }
 
-// Task 定义当前模块的接口约束。
+// Task captures the formal task entity surfaced to the frontend.
 export interface Task {
   task_id: string;
+  session_id: string | null;
   title: string;
   source_type: TaskSourceType;
   status: TaskStatus;

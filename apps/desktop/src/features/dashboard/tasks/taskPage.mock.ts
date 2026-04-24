@@ -39,6 +39,7 @@ function createApprovalRequest(taskId: string, approvalId: string, riskLevel: Ap
 const baseTasks: Task[] = [
   {
     task_id: "task_focus_001",
+    session_id: null,
     title: "把任务页整理成可爱又克制的未来感任务舱",
     source_type: "dragged_file",
     status: "processing",
@@ -51,6 +52,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_focus_002",
+    session_id: null,
     title: "补齐安全详情中的授权说明与恢复点解释",
     source_type: "selected_text",
     status: "waiting_auth",
@@ -63,6 +65,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_focus_003",
+    session_id: null,
     title: "把最近便签整理成任务舱所需的上下文提示",
     source_type: "todo",
     status: "paused",
@@ -75,6 +78,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_done_001",
+    session_id: null,
     title: "输出铃兰首页的交互构图和动效版本",
     source_type: "dragged_file",
     status: "completed",
@@ -87,6 +91,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_done_002",
+    session_id: null,
     title: "批量改写旧任务原型并整理回收项",
     source_type: "hover_input",
     status: "cancelled",
@@ -99,6 +104,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_done_003",
+    session_id: null,
     title: "整理安全审批 mock 数据与展示口径",
     source_type: "selected_text",
     status: "completed",
@@ -111,6 +117,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_done_004",
+    session_id: null,
     title: "梳理镜子页摘要卡片与漂浮信息层",
     source_type: "todo",
     status: "completed",
@@ -123,6 +130,7 @@ const baseTasks: Task[] = [
   },
   {
     task_id: "task_done_005",
+    session_id: null,
     title: "导出悬浮球演示截图并归档素材索引",
     source_type: "dragged_file",
     status: "completed",

@@ -49,6 +49,7 @@ function createTask(status: Task["status"], currentStep: string): Task {
 
   return {
     task_id: "task_stub",
+    session_id: null,
     title: "stub task",
     source_type: "hover_input",
     status,

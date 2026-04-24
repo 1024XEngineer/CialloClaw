@@ -26,6 +26,13 @@ export type NoteResourceOpenExecutionPlan = {
   url: string | null;
 };
 
+export type NoteResourceOpenExecutionOptions = {
+  onOpenTaskDetail?: (input: {
+    plan: NoteResourceOpenExecutionPlan;
+    taskId: string;
+  }) => Promise<string | void> | string | void;
+};
+
 function createRequestMeta(scope: string): RequestMeta {
   return {
     client_time: new Date().toISOString(),
@@ -482,13 +489,28 @@ function localPathExecutionFailure(message: string, error: unknown) {
 }
 
 /**
- * Executes a note resource open plan while preserving copy-path as the final
- * fallback when the local desktop shell cannot complete the request.
+ * Executes a note resource open plan while preserving task-detail routing and
+ * copy-path fallback inside the same renderer entry.
  *
  * @param plan Renderer-side execution plan for the selected note resource.
+ * @param options Optional task-detail delegate for callers that need to route into a view.
  * @returns User-facing feedback describing the completed action or fallback.
  */
-export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExecutionPlan): Promise<string> {
+export async function performNoteResourceOpenExecution(
+  plan: NoteResourceOpenExecutionPlan,
+  options: NoteResourceOpenExecutionOptions = {},
+): Promise<string> {
+  if (plan.mode === "task_detail" && plan.taskId) {
+    const detailFeedback = await options.onOpenTaskDetail?.({
+      plan,
+      taskId: plan.taskId,
+    });
+
+    return typeof detailFeedback === "string" && detailFeedback.trim() !== ""
+      ? detailFeedback
+      : plan.feedback;
+  }
+
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedNoteOpenUrl(plan.url)) {
       return "已拦截不受支持的便签资源链接。";

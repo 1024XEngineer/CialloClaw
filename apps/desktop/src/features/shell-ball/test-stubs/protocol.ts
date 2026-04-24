@@ -103,6 +103,7 @@ export interface StrongholdStatus {
 
 export interface Task {
   task_id: string;
+  session_id: string | null;
   title: string;
   source_type: TaskSourceType;
   status: TaskStatus;
@@ -911,6 +912,7 @@ export interface AgentSettingsUpdateResult {
 
 export interface TaskUpdatedNotification {
   task_id: string;
+  session_id: Task["session_id"];
   status: Task["status"];
 }
 

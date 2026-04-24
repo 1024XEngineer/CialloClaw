@@ -13,7 +13,8 @@ import type { NotepadAction } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
-import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
@@ -246,7 +247,7 @@ export function NotePage() {
         ),
       );
       showFeedback("已为这条事项生成任务，正在跳转到任务页。");
-      navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: outcome.result.task.task_id, openDetail: true } });
+      navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "转交给 Agent 失败，请稍后再试。";
@@ -353,13 +354,12 @@ export function NotePage() {
     }
 
     const plan = resolveNoteResourceOpenExecutionPlan(resource);
-    if (plan.mode === "task_detail" && plan.taskId) {
-      navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: plan.taskId, openDetail: true } });
-      showFeedback(plan.feedback);
-      return;
-    }
-
-    showFeedback(await performNoteResourceOpenExecution(plan));
+    showFeedback(await performNoteResourceOpenExecution(plan, {
+      onOpenTaskDetail: ({ taskId }) => {
+        navigateToDashboardTaskDetail(navigate, taskId);
+        return plan.feedback;
+      },
+    }));
   }
 
   useEffect(() => {
