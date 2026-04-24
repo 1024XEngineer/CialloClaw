@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -294,6 +295,51 @@ func (w *streamEnvelopeWriter) writeEnvelope(envelope any) error {
 	return w.encoder.Encode(envelope)
 }
 
+type streamTaskCoordinator struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newStreamTaskCoordinator() *streamTaskCoordinator {
+	return &streamTaskCoordinator{locks: map[string]*sync.Mutex{}}
+}
+
+func (c *streamTaskCoordinator) withTaskLocks(taskIDs map[string]bool, fn func()) {
+	if c == nil || len(taskIDs) == 0 {
+		fn()
+		return
+	}
+
+	orderedTaskIDs := make([]string, 0, len(taskIDs))
+	for taskID := range taskIDs {
+		orderedTaskIDs = append(orderedTaskIDs, taskID)
+	}
+	sort.Strings(orderedTaskIDs)
+
+	locks := make([]*sync.Mutex, 0, len(orderedTaskIDs))
+	c.mu.Lock()
+	for _, taskID := range orderedTaskIDs {
+		lock := c.locks[taskID]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			c.locks[taskID] = lock
+		}
+		locks = append(locks, lock)
+	}
+	c.mu.Unlock()
+
+	for _, lock := range locks {
+		lock.Lock()
+	}
+	defer func() {
+		for index := len(locks) - 1; index >= 0; index-- {
+			locks[index].Unlock()
+		}
+	}()
+
+	fn()
+}
+
 // handleStreamConn serves JSON-RPC requests on a long-lived stream and then
 // replays buffered notifications on the same connection.
 func (s *Server) handleStreamConn(conn net.Conn) {
@@ -301,6 +347,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 
 	decoder := json.NewDecoder(conn)
 	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
+	taskCoordinator := newStreamTaskCoordinator()
 
 	for {
 		var request requestEnvelope
@@ -320,11 +367,13 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 
 		// Each request gets its own worker so a long-running shell-ball task cannot
 		// block dashboard or control-panel reads that share the packaged pipe.
-		go s.handleStreamRequest(request, writer)
+		// Requests for the same task still serialize so they cannot race the shared
+		// notification drain that replays task.updated and delivery.ready envelopes.
+		go s.handleStreamRequest(request, writer, taskCoordinator)
 	}
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, taskCoordinator *streamTaskCoordinator) {
 	streamedRuntimeCounts := map[string]int{}
 	var streamedRuntimeMu sync.Mutex
 	requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
@@ -371,58 +420,60 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		return true
 	}
 
-	unsubscribeRuntime := func() {}
-	if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
-		unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
-			if !isLiveRuntimeMethod(method) {
-				return
-			}
-			notificationTaskID := runtimeNotificationTaskID(taskID, params)
-			if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
-				return
-			}
-			if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err == nil {
-				markRuntimeNotificationStreamed(notificationKey(method, notificationTaskID, params))
-			}
-		})
-	}
-
-	unsubscribeTaskStart := func() {}
-	if shouldTrackStartedTask(request.Method) {
-		unsubscribeTaskStart = s.orchestrator.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
-			if !matchesTaskStart(sessionID, traceID) {
-				return
-			}
-			addRequestTaskID(taskID)
-		})
-	}
-
-	response := s.dispatch(request)
-	unsubscribeTaskStart()
-	unsubscribeRuntime()
-
-	if err := writer.writeEnvelope(response); err != nil {
-		return
-	}
-
-	for _, taskID := range taskIDsFromResponse(response) {
-		notifications, err := s.orchestrator.DrainNotifications(taskID)
-		if err != nil {
-			continue
+	taskCoordinator.withTaskLocks(requestTaskIDs, func() {
+		unsubscribeRuntime := func() {}
+		if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
+			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+				if !isLiveRuntimeMethod(method) {
+					return
+				}
+				notificationTaskID := runtimeNotificationTaskID(taskID, params)
+				if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
+					return
+				}
+				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err == nil {
+					markRuntimeNotificationStreamed(notificationKey(method, notificationTaskID, params))
+				}
+			})
 		}
 
-		for _, notification := range notifications {
-			method := stringValue(notification, "method", "task.updated")
-			params := mapValue(notification, "params")
-			key := notificationKey(method, taskID, params)
-			if isLiveRuntimeMethod(method) && consumeStreamedRuntimeNotification(key) {
+		unsubscribeTaskStart := func() {}
+		if shouldTrackStartedTask(request.Method) {
+			unsubscribeTaskStart = s.orchestrator.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
+				if !matchesTaskStart(sessionID, traceID) {
+					return
+				}
+				addRequestTaskID(taskID)
+			})
+		}
+
+		response := s.dispatch(request)
+		unsubscribeTaskStart()
+		unsubscribeRuntime()
+
+		if err := writer.writeEnvelope(response); err != nil {
+			return
+		}
+
+		for _, taskID := range taskIDsFromResponse(response) {
+			notifications, err := s.orchestrator.DrainNotifications(taskID)
+			if err != nil {
 				continue
 			}
-			if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
-				return
+
+			for _, notification := range notifications {
+				method := stringValue(notification, "method", "task.updated")
+				params := mapValue(notification, "params")
+				key := notificationKey(method, taskID, params)
+				if isLiveRuntimeMethod(method) && consumeStreamedRuntimeNotification(key) {
+					continue
+				}
+				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
+					return
+				}
 			}
 		}
-	}
+	})
 }
 
 // dispatch is the single RPC dispatch path that validates protocol shape,

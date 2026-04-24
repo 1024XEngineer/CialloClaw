@@ -836,6 +836,155 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 	}
 }
 
+func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
+	modelClient := &selectiveWaitLoopModelClient{
+		stubLoopModelClient: stubLoopModelClient{
+			toolResult: model.ToolCallResult{
+				OutputText: "Same-task stream finished.",
+			},
+			generateToolWait: make(chan struct{}),
+			generateToolSeen: make(chan struct{}),
+		},
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	result, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_pipe_same_task",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "inspect this workspace",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	modelClient.blockedTaskID = taskID
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	defer listener.Close()
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptDone <- err
+			return
+		}
+		server.handleStreamConn(conn)
+		acceptDone <- nil
+	}()
+
+	right, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial loopback: %v", err)
+	}
+	defer func() {
+		_ = right.Close()
+		select {
+		case err := <-acceptDone:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("accept loopback: %v", err)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected loopback stream to shut down")
+		}
+	}()
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	envelopeCh := make(chan map[string]any, 32)
+	decodeErrCh := make(chan error, 1)
+	go func() {
+		for {
+			var envelope map[string]any
+			if err := decoder.Decode(&envelope); err != nil {
+				decodeErrCh <- err
+				return
+			}
+			envelopeCh <- envelope
+		}
+	}()
+	confirmRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-same-task"`),
+		Method:  "agent.task.confirm",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":   taskID,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		}),
+	}
+	if err := encoder.Encode(confirmRequest); err != nil {
+		t.Fatalf("encode blocked confirm request: %v", err)
+	}
+
+	select {
+	case <-modelClient.generateToolSeen:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocked same-task loop to start model execution")
+	}
+
+	detailRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-detail-same-task"`),
+		Method:  "agent.task.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	}
+	if err := encoder.Encode(detailRequest); err != nil {
+		t.Fatalf("encode same-task detail request: %v", err)
+	}
+
+	detailResponseSeenEarly := false
+	earlyWindow := time.After(250 * time.Millisecond)
+	for !detailResponseSeenEarly {
+		select {
+		case envelope := <-envelopeCh:
+			responseID, _ := envelope["id"].(string)
+			if responseID == "req-task-detail-same-task" {
+				detailResponseSeenEarly = true
+			}
+		case err := <-decodeErrCh:
+			t.Fatalf("decode same-task early envelope: %v", err)
+		case <-earlyWindow:
+			goto afterEarlyWindow
+		}
+	}
+
+afterEarlyWindow:
+
+	if detailResponseSeenEarly {
+		t.Fatal("expected same-task detail request to wait until the blocked loop request finishes")
+	}
+
+	close(modelClient.generateToolWait)
+	detailResponseSeen := false
+	postUnblockDeadline := time.After(3 * time.Second)
+	for !detailResponseSeen {
+		select {
+		case envelope := <-envelopeCh:
+			responseID, _ := envelope["id"].(string)
+			if responseID == "req-task-detail-same-task" {
+				detailResponseSeen = true
+			}
+		case err := <-decodeErrCh:
+			t.Fatalf("decode same-task post-unblock envelope: %v", err)
+		case <-postUnblockDeadline:
+			t.Fatal("expected same-task detail response after the blocked loop request completed")
+		}
+	}
+}
+
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	server := newTestServer()
 
