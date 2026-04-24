@@ -497,6 +497,7 @@ flowchart TB
 ### 核心能力
 - Typed JSON-RPC Client：统一 method、params、result、错误模型和订阅注册；
 - Windows Named Pipe 连接适配：负责主前后端本地 IPC 建链、重连、权限与错误处理；
+- 调试态兼容传输：当前仍保留本地 HTTP / SSE 调试链路，但对象语义与通知语义必须与 Named Pipe 正式链路保持一致；
 - 订阅与通知适配：`task.updated`、`delivery.ready`、`approval.pending`、`plugin.updated` 等事件桥接；
 - 窗口集成：悬浮球窗口、仪表盘窗口、控制面板窗口的打开、关闭、显隐、聚焦、置顶；
 - 托盘集成：托盘图标、托盘菜单、托盘级快捷入口；
@@ -2640,6 +2641,15 @@ stateDiagram-v2
 #### 7.2.5 平台与执行适配层
 - 负责文件系统抽象层、系统能力抽象层、执行后端适配层；
 - 负责屏蔽 Windows 当前实现细节和未来跨平台差异。
+
+#### 7.2.6 当前实现对齐补充
+- `context.Service` 的稳定输出是 `TaskContextSnapshot`，职责是把页面、选区、文件、错误和行为信号归一化，而不是直接推进 `task.status`。
+- `intent.Service` 当前仍是轻量建议层，其产物是 `Suggestion`；是否创建任务、是否等待确认、是否直接执行，仍由编排层与运行态收敛。
+- `runengine.TaskRecord` 是当前后端桥接 `task` 与 `run` 的核心运行态结构，用于承接主对象投影、治理摘要与通知排队。
+- `agentloop.Runtime` 负责输出 `loop.*` 生命周期事件、工具调用结果和停止原因，但不是系统总编排器；任务状态仍需回到 `runengine` 收口。
+- `risk.Service` 只负责输出可测试的风险判断结果；等待授权、继续执行、终止收敛和恢复回流仍由编排层与运行态接管。
+- `checkpoint` 模块定位为恢复点能力的最小收口层，不独占完整回滚编排；恢复结果必须重新并入正式任务主链。
+- `recommendation`、`taskinspector` 和 `perception` 已形成辅助链路能力，但默认不直接改写任务主状态机；升级为正式任务时仍需回到统一任务入口。
 
 ### 7.3 联调验收清单
 
