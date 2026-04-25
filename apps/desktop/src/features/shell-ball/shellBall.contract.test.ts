@@ -32,6 +32,7 @@ import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
   isShellBallClipboardPromptActive,
+  resolveShellBallInlineInputMode,
   ShellBallApp,
   shouldArmShellBallTextDropTarget,
   shouldShowShellBallFileDropOverlay,
@@ -110,6 +111,7 @@ import {
   getShellBallVoicePreviewFromEvent,
   mapShellBallInteractionConsumedEventToFlag,
   shouldLogShellBallSpeechRecognitionError,
+  shouldRestoreShellBallSubmitFailureDraft,
   shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd,
   shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -3300,7 +3302,7 @@ test("shell-ball interaction consumed reducer keeps pointer sequence scope expli
 test("shell-ball submit reset clears draft retention after submit", () => {
   assert.deepEqual(getShellBallPostSubmitInputReset("summarize this"), {
     nextInputValue: "",
-    nextFocused: false,
+    nextFocused: true,
   });
 
   assert.equal(
@@ -3308,6 +3310,48 @@ test("shell-ball submit reset clears draft retention after submit", () => {
       regionActive: false,
       inputFocused: false,
       hasDraft: false,
+    }),
+    false,
+  );
+});
+
+test("shell-ball submit failure recovery only restores untouched empty drafts", () => {
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "",
+      currentPendingFiles: [],
+      currentDraftRevision: 4,
+      submittedDraftRevision: 4,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "new draft",
+      currentPendingFiles: [],
+      currentDraftRevision: 5,
+      submittedDraftRevision: 4,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "",
+      currentPendingFiles: ["C:/draft.md"],
+      currentDraftRevision: 4,
+      submittedDraftRevision: 4,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "",
+      currentPendingFiles: [],
+      currentDraftRevision: 5,
+      submittedDraftRevision: 4,
     }),
     false,
   );
@@ -6724,7 +6768,7 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   const surfaceSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallSurface.tsx"), "utf8");
 
   assert.match(interactionSource, /function handleDroppedText\(text: string\) \{/);
-  assert.match(interactionSource, /setInputValue\(nextInputValue\);\s*handleInputFocusRequest\(\);/);
+  assert.match(interactionSource, /setTrackedInputValue\(nextInputValue\);\s*handleInputFocusRequest\(\);/);
   assert.doesNotMatch(interactionSource, /startTaskFromSelectedText/);
   assert.match(appSource, /const handleSurfaceTextDrop = useCallback\(\(text: string\) => \{/);
   assert.match(appSource, /handleDroppedText\(text\);\s*window\.requestAnimationFrame\(\(\) => \{\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);\s*\}\);/);
@@ -6843,7 +6887,7 @@ test("shell-ball file drops queue pending attachments instead of starting a task
   assert.match(coordinatorSource, /console\.warn\("shell-ball file drop focus request failed", error\);/);
   assert.doesNotMatch(coordinatorSource, /issue #187/);
   assert.match(interactionSource, /function handleDroppedFiles\(paths: string\[\]\) \{/);
-  assert.match(interactionSource, /setPendingFiles\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
+  assert.match(interactionSource, /setPendingFilesState\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
   assert.match(interactionSource, /controllerRef\.current\?\.forceState\("hover_input", \{/);
 });
 
@@ -6941,6 +6985,17 @@ test("shell-ball resize drag keeps pointer capture and releases resize state on 
   assert.match(inputBarSource, /onResizeStateChange\(false\);/);
 });
 
+test("shell-ball input bar restores textarea focus after attach and send actions", () => {
+  const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
+
+  assert.match(inputBarSource, /function restoreTextareaFocus\(\) \{/);
+  assert.match(inputBarSource, /field\.focus\(\);/);
+  assert.match(inputBarSource, /field\.setSelectionRange\(selectionIndex, selectionIndex\);/);
+  assert.match(inputBarSource, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);/);
+  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreTextareaFocus\(\);/);
+  assert.match(inputBarSource, /onSubmit\(\);\s*restoreTextareaFocus\(\);/);
+});
+
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
   assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "idle", interactionConsumed: false }),
@@ -6996,6 +7051,30 @@ test("shell-ball app injects the demo switcher only in dev mode", () => {
   assert.match(markup, /shell-ball-surface__switcher-shell/);
 });
 
+test("shell-ball inline input stays interactive whenever the bottom input is rendered", () => {
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: true,
+      snapshotInputBarMode: "readonly",
+    }),
+    "interactive",
+  );
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: true,
+      snapshotInputBarMode: "interactive",
+    }),
+    "interactive",
+  );
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: false,
+      snapshotInputBarMode: "readonly",
+    }),
+    "hidden",
+  );
+});
+
 test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("idle"), "hidden");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
@@ -7004,6 +7083,17 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
   assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");
   assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
+});
+
+test("shell-ball text submit clears drafts before RPC completion and gates failure restore", () => {
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(
+    interactionSource,
+    /const submittedDraftRevision = draftRevisionRef\.current;\s*dispatch\("submit_text"\);\s*setInputValueState\(reset\.nextInputValue\);\s*setPendingFilesState\(reset\.nextPendingFiles\);/,
+  );
+  assert.match(interactionSource, /if \(shouldRestoreShellBallSubmitFailureDraft\(\{/);
+  assert.match(interactionSource, /setInputValueState\(currentInputValue\);\s*setPendingFilesState\(currentPendingFiles\);/);
 });
 
 test("shell-ball interaction timing constants stay frozen", () => {

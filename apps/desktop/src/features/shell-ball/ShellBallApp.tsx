@@ -16,7 +16,7 @@ import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
-import type { ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import {
@@ -142,6 +142,17 @@ export function isShellBallClipboardPromptActive(
   now = Date.now(),
 ) {
   return prompt !== null && prompt.expiresAt > now;
+}
+
+export function resolveShellBallInlineInputMode(input: {
+  shouldRenderInlineInput: boolean;
+  snapshotInputBarMode: ShellBallInputBarMode;
+}): ShellBallInputBarMode {
+  if (!input.shouldRenderInlineInput) {
+    return "hidden";
+  }
+
+  return "interactive";
 }
 
 function easeShellBallDashboardTransition(progress: number) {
@@ -322,7 +333,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onPrimaryClick: handlePrimaryClick,
   });
   const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
-  const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
+  const inlineInputMode = resolveShellBallInlineInputMode({
+    shouldRenderInlineInput,
+    snapshotInputBarMode: snapshot.inputBarMode,
+  });
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const {
     beginBallWindowPointerDrag,
