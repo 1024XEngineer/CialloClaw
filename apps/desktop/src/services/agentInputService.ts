@@ -26,6 +26,14 @@ type DesktopMouseActivitySnapshot = {
   updated_at: string;
 };
 
+export type SubmitTextInputClientContext = {
+  detectedPage?: {
+    appName?: string;
+    title?: string;
+    url: string;
+  };
+};
+
 export type SubmitTextInputParams = {
   text: string;
   source: AgentInputSubmitParams["source"];
@@ -280,7 +288,9 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
   };
 }
 
-export type SubmitTextInputResult = AgentInputSubmitResult;
+export type SubmitTextInputResult = AgentInputSubmitResult & {
+  clientContext?: SubmitTextInputClientContext;
+};
 
 async function enrichTextInputSubmitParams(
   params: AgentInputSubmitParams,
@@ -288,7 +298,10 @@ async function enrichTextInputSubmitParams(
     includeForegroundBrowserPageContext?: boolean;
     includeForegroundWindowContext?: boolean;
   } = {},
-): Promise<AgentInputSubmitParams> {
+): Promise<{
+  clientContext?: SubmitTextInputClientContext;
+  params: AgentInputSubmitParams;
+}> {
   const enrichVisualContext = shouldEnrichVisualContext(params, options);
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
     // Fetch the foreground window snapshot only for explicit visual requests.
@@ -309,19 +322,43 @@ async function enrichTextInputSubmitParams(
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
 
   return {
-    ...params,
-    context: {
-      ...params.context,
-      files: params.context.files ?? [],
-      ...(mergedPageContext ? {
-        page: mergedPageContext,
-      } : {}),
-      ...(mergedScreenContext ? {
-        screen: mergedScreenContext,
-      } : {}),
-      ...(mergedBehaviorContext ? {
-        behavior: mergedBehaviorContext,
-      } : {}),
+    clientContext: createSubmitTextInputClientContext(ambientWindowContext),
+    params: {
+      ...params,
+      context: {
+        ...params.context,
+        files: params.context.files ?? [],
+        ...(mergedPageContext ? {
+          page: mergedPageContext,
+        } : {}),
+        ...(mergedScreenContext ? {
+          screen: mergedScreenContext,
+        } : {}),
+        ...(mergedBehaviorContext ? {
+          behavior: mergedBehaviorContext,
+        } : {}),
+      },
+    },
+  };
+}
+
+function createSubmitTextInputClientContext(
+  windowContext: DesktopWindowContextSnapshot | null,
+): SubmitTextInputClientContext | undefined {
+  if (windowContext === null || !shouldUseForegroundBrowserPageContext(windowContext)) {
+    return undefined;
+  }
+
+  const sanitizedUrl = sanitizeDesktopContextUrl(windowContext.url);
+  if (!sanitizedUrl) {
+    return undefined;
+  }
+
+  return {
+    detectedPage: {
+      appName: windowContext.app_name.trim() || undefined,
+      title: windowContext.title?.trim() || undefined,
+      url: sanitizedUrl,
     },
   };
 }
@@ -341,10 +378,11 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     return null;
   }
 
-  const enrichedParams = await enrichTextInputSubmitParams(params, {
+  const enriched = await enrichTextInputSubmitParams(params, {
     includeForegroundBrowserPageContext: input.includeForegroundBrowserPageContext,
     includeForegroundWindowContext: input.includeForegroundWindowContext,
   });
+  const enrichedParams = enriched.params;
   recordMirrorConversationStart(enrichedParams);
   const rpcMethods = await import("@/rpc/methods");
 
@@ -352,7 +390,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     const result = await rpcMethods.submitInput(enrichedParams);
     rememberConversationSessionFromTask(result.task);
     recordMirrorConversationSuccess(enrichedParams, result);
-    return result;
+    return enriched.clientContext ? { ...result, clientContext: enriched.clientContext } : result;
   } catch (error) {
     recordMirrorConversationFailure(enrichedParams, error);
     throw error;

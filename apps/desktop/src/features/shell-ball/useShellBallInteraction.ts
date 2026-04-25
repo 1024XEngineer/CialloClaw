@@ -6,7 +6,11 @@ import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "
 import { useLatest, useUnmount } from "ahooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
+import {
+  submitTextInput,
+  createTextInputSubmitParams,
+  type SubmitTextInputClientContext,
+} from "../../services/agentInputService";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
@@ -64,6 +68,7 @@ export type ShellBallInputSubmitResult = (
   | NonNullable<Awaited<ReturnType<typeof submitTextInput>>>
   | Awaited<ReturnType<typeof startTaskFromFiles>>
 ) & {
+  clientContext?: SubmitTextInputClientContext;
   delivery_result?: {
     type?: string;
     preview_text?: string | null;

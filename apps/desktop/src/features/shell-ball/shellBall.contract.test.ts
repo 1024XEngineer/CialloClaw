@@ -7230,6 +7230,212 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
 });
 
+test("shell-ball direct submit shows a detected-page status bubble before the task reply", async () => {
+  const reactRuntime = createImmediateShellBallReactRuntime();
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"),
+    {
+      react: reactRuntime.react,
+      "@tauri-apps/api/window": {
+        getCurrentWindow() {
+          return {
+            label: shellBallWindowLabels.ball,
+            listen() {
+              return Promise.resolve(() => {});
+            },
+            onMoved() {
+              return Promise.resolve(() => {});
+            },
+            onResized() {
+              return Promise.resolve(() => {});
+            },
+            outerPosition() {
+              return Promise.resolve({ toLogical: () => ({ x: 0, y: 0 }) });
+            },
+            outerSize() {
+              return Promise.resolve({ toLogical: () => ({ width: 124, height: 104 }) });
+            },
+            scaleFactor() {
+              return Promise.resolve(1);
+            },
+          };
+        },
+      },
+      "@/rpc/methods": {
+        respondSecurityDetailed() {
+          return Promise.resolve(null);
+        },
+      },
+      "@/rpc/subscriptions": {
+        subscribeApprovalPending() {
+          return () => {};
+        },
+        subscribeDeliveryReady() {
+          return () => {};
+        },
+        subscribeTaskUpdated() {
+          return () => {};
+        },
+      },
+      "@/services/agentInputService": {
+        submitTextInput() {
+          return Promise.resolve(null);
+        },
+      },
+      "@/services/taskService": {
+        startTaskFromSelectedText() {
+          return Promise.resolve(null);
+        },
+      },
+      "@/services/clipboardService": {
+        readClipboardText() {
+          return Promise.resolve("");
+        },
+      },
+      "@/features/dashboard/tasks/taskOutput.service": {
+        openTaskDeliveryForTask() {
+          return Promise.resolve(null);
+        },
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
+          return {
+            feedback: "",
+            mode: "task_detail" as const,
+            path: null,
+            taskId: null,
+            url: null,
+          };
+        },
+        performTaskOpenExecution() {
+          return Promise.resolve("");
+        },
+      },
+      "@/features/dashboard/shared/dashboardTaskDetailNavigation": {
+        requestDashboardTaskDetailOpen() {
+          return Promise.resolve();
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME: { width: 240, height: 140 },
+        closeShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        emitToShellBallWindowLabel() {
+          return Promise.resolve();
+        },
+        getShellBallPinnedBubbleIdFromLabel(): string | null {
+          return null;
+        },
+        getShellBallPinnedBubbleWindowAnchor() {
+          return { x: 0, y: 0 };
+        },
+        getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
+          return `shell-ball-bubble-pinned-${bubbleId}`;
+        },
+        openShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        setShellBallPinnedBubbleWindowVisible() {
+          return Promise.resolve();
+        },
+        shellBallWindowLabels,
+      },
+      "./useShellBallWindowMetrics": {
+        getShellBallBubbleAnchor() {
+          return { x: 0, y: 0 };
+        },
+      },
+    },
+    async (moduleExports) => {
+      const { useShellBallCoordinator } = moduleExports as {
+        useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator;
+      };
+
+      const { handlePrimaryAction } = useShellBallCoordinator({
+        visualState: "hover_input",
+        regionActive: false,
+        inputValue: "帮我总结这个页面",
+        inputFocused: true,
+        pendingFiles: [],
+        finalizedSpeechPayload: null,
+        voicePreview: null,
+        voiceHintMode: "hidden",
+        setInputValue: () => {},
+        onFinalizedSpeechHandled: () => {},
+        onRegionEnter: () => {},
+        onRegionLeave: () => {},
+        onInputHoverChange: () => {},
+        onInputFocusChange: () => {},
+        onSubmitText: async () => ({
+          task: {
+            task_id: "task-url-context",
+            status: "processing",
+          },
+          bubble_message: {
+            bubble_id: "bubble-url-context",
+            task_id: "task-url-context",
+            type: "result",
+            text: "我会先总结这个网页的重点内容。",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-26T08:00:03.000Z",
+          },
+          delivery_result: null,
+          clientContext: {
+            detectedPage: {
+              appName: "Google Chrome",
+              title: "OpenAI Docs",
+              url: "https://platform.openai.com/docs/overview",
+            },
+          },
+        }) as any,
+        onAttachFile: () => {},
+        onPrimaryClick: () => {},
+      });
+
+      await handlePrimaryAction("submit");
+      await flushAsyncEffects();
+    },
+  );
+
+  const taskBubbleItems = reactRuntime.getBubbleItems().filter((item) => item.bubble.task_id === "task-url-context");
+
+  assert.deepEqual(
+    taskBubbleItems.map((item) => ({
+      role: item.role,
+      text: item.bubble.text,
+      turnPhase: item.desktop.turnPhase,
+      type: item.bubble.type,
+    })),
+    [
+      {
+        role: "user",
+        text: "帮我总结这个页面",
+        turnPhase: 0,
+        type: "result",
+      },
+      {
+        role: "agent",
+        text: "已识别当前网页：OpenAI Docs\nhttps://platform.openai.com/docs/overview",
+        turnPhase: 1,
+        type: "status",
+      },
+      {
+        role: "agent",
+        text: "我会先总结这个网页的重点内容。",
+        turnPhase: 2,
+        type: "result",
+      },
+    ],
+  );
+});
+
 test("shell-ball surface passes mascot double-click and drag wiring through the mascot only", () => {
   const surfaceSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallSurface.tsx"), "utf8");
 
