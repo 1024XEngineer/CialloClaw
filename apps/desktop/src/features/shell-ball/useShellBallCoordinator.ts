@@ -198,13 +198,72 @@ function createShellBallAgentLoadingBubbleItem(input: {
   } satisfies ShellBallBubbleItem;
 }
 
+function createShellBallDetectedPageBubbleItem(input: {
+  createdAt: string;
+  pageTitle?: string;
+  pageUrl: string;
+  taskId?: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  const normalizedTitle = input.pageTitle?.trim() ?? "";
+  const bubbleText = normalizedTitle === ""
+    ? `已识别当前网址：${input.pageUrl}`
+    : `已识别当前网页：${normalizedTitle}\n${input.pageUrl}`;
+
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: bubbleText,
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
+function createShellBallSubmitFeedbackBubbleItems(
+  result: ShellBallInputSubmitResult,
+  input: {
+    createdAt: string;
+    taskId?: string;
+    turnIndex?: number;
+  },
+) {
+  const feedbackItems: ShellBallBubbleItem[] = [];
+  const detectedPage = result.clientContext?.detectedPage;
+
+  if (detectedPage?.url) {
+    feedbackItems.push(createShellBallDetectedPageBubbleItem({
+      createdAt: input.createdAt,
+      pageTitle: detectedPage.title,
+      pageUrl: detectedPage.url,
+      taskId: input.taskId,
+      turnIndex: input.turnIndex,
+      turnPhase: 1,
+    }));
+  }
+
+  feedbackItems.push(createShellBallAgentBubbleItem(result, input.createdAt, {
+    turnIndex: input.turnIndex,
+    turnPhase: detectedPage?.url ? 2 : 1,
+  }));
+
+  return feedbackItems;
+}
+
 function replaceShellBallPendingBubble(
   items: ShellBallBubbleItem[],
   pendingBubbleId: string,
-  nextItem?: ShellBallBubbleItem,
+  nextItem?: ShellBallBubbleItem | ShellBallBubbleItem[],
 ) {
   const nextItems = items.filter((item) => item.bubble.bubble_id !== pendingBubbleId);
-  return nextItem === undefined ? sortShellBallBubbleItemsByTimestamp(nextItems) : sortShellBallBubbleItemsByTimestamp([...nextItems, nextItem]);
+  if (nextItem === undefined) {
+    return sortShellBallBubbleItemsByTimestamp(nextItems);
+  }
+
+  const appendedItems = Array.isArray(nextItem) ? nextItem : [nextItem];
+  return sortShellBallBubbleItemsByTimestamp([...nextItems, ...appendedItems]);
 }
 
 export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem, right: ShellBallBubbleItem) {
@@ -1233,9 +1292,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
         return sortShellBallBubbleItemsByTimestamp([
           ...nextItems,
-          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+          ...createShellBallSubmitFeedbackBubbleItems(result, {
+            createdAt: new Date().toISOString(),
+            taskId: result.task.task_id,
             turnIndex,
-            turnPhase: 1,
           }),
         ]);
       });
@@ -1341,9 +1401,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         return replaceShellBallPendingBubble(
           nextItems,
           pendingAgentBubbleItem.bubble.bubble_id,
-          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+          createShellBallSubmitFeedbackBubbleItems(result, {
+            createdAt: new Date().toISOString(),
+            taskId: result.task.task_id,
             turnIndex,
-            turnPhase: 1,
           }),
         );
       });
@@ -1779,9 +1840,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           return replaceShellBallPendingBubble(
             nextItems,
             pendingAgentBubbleItem.bubble.bubble_id,
-            createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            createShellBallSubmitFeedbackBubbleItems(result, {
+              createdAt: new Date().toISOString(),
+              taskId: result.task.task_id,
               turnIndex,
-              turnPhase: 1,
             }),
           );
         });
@@ -2192,9 +2254,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             return replaceShellBallPendingBubble(
               nextItems,
               pendingAgentBubbleItem.bubble.bubble_id,
-              createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+              createShellBallSubmitFeedbackBubbleItems(result, {
+                createdAt: new Date().toISOString(),
+                taskId: result.task.task_id,
                 turnIndex,
-                turnPhase: 1,
               }),
             );
           });

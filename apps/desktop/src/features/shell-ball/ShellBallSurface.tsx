@@ -1,6 +1,7 @@
 import type { DragEvent, PointerEvent, ReactNode, RefObject } from "react";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallEdgeDockSide } from "./useShellBallWindowMetrics";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 
 type ShellBallSurfaceProps = {
@@ -9,7 +10,7 @@ type ShellBallSurfaceProps = {
   containerRef?: RefObject<HTMLDivElement>;
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
   edgeDockRevealed?: boolean;
-  edgeDockSide?: "left" | "right" | null;
+  edgeDockSide?: ShellBallEdgeDockSide | null;
   fileDropActive?: boolean;
   mascotRef?: RefObject<HTMLDivElement>;
   overlayContent?: ReactNode;

@@ -32,14 +32,16 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
-const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
+const INTERNAL_WINDOW_LABELS: [&str; 7] = [
     "shell-ball",
     "shell-ball-bubble",
     "shell-ball-input",
     "shell-ball-voice",
     "onboarding",
+    "dashboard",
+    "control-panel",
 ];
-const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
+const INTERNAL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_FOREGROUND_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
@@ -109,7 +111,7 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
         return Ok(read_cached_window_context().map(with_window_context_activity_counts));
     }
 
-    if is_shell_ball_cluster_window(hwnd) {
+    if is_internal_app_window(hwnd) {
         return Ok(read_cached_window_context_with_url());
     }
 
@@ -165,7 +167,7 @@ pub fn install_window_context_listener(app: &AppHandle) -> Result<(), String> {
 
 fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPayload)> {
     let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.0.is_null() || is_shell_ball_cluster_window(hwnd) {
+    if hwnd.0.is_null() || is_internal_app_window(hwnd) {
         return None;
     }
 
@@ -330,7 +332,10 @@ fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
     Some(with_window_context_activity_counts(context))
 }
 
-fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
+// Desktop-owned windows should keep using the latest external foreground
+// context so dashboard and shell-ball submissions can still carry the browser
+// page URL that was active right before the desktop surface opened.
+fn is_internal_app_window(hwnd: HWND) -> bool {
     let Some(app) = WINDOW_CONTEXT_APP_HANDLE
         .lock()
         .ok()
@@ -341,7 +346,7 @@ fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
 
     let root_window = get_root_window(hwnd);
 
-    for label in SHELL_BALL_WINDOW_LABELS {
+    for label in INTERNAL_WINDOW_LABELS {
         let Some(window) = app.get_webview_window(label) else {
             continue;
         };
@@ -356,7 +361,7 @@ fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
     }
 
     for window in app.webview_windows().values() {
-        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+        if !window.label().starts_with(INTERNAL_PINNED_WINDOW_PREFIX) {
             continue;
         }
 
@@ -392,7 +397,7 @@ unsafe extern "system" fn window_context_foreground_hook(
     _thread_id: u32,
     _event_time: u32,
 ) {
-    if hwnd.0.is_null() || is_shell_ball_cluster_window(hwnd) {
+    if hwnd.0.is_null() || is_internal_app_window(hwnd) {
         return;
     }
 

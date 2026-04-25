@@ -2700,28 +2700,45 @@ test("note resource execution delegates task-detail routing through the shared c
   assert.equal(feedback, "宸插湪浠〃鐩樹腑鎵撳紑 Task detail銆?");
 });
 
-test("task page adopts rpc output helpers directly in the task detail panel", () => {
+test("task workspace routes formal delivery through a dedicated page and keeps list refresh task-updated aware", () => {
+  const tasksPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TasksPage.tsx"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskDeliverySource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskDeliveryPage.tsx"), "utf8");
   const taskDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+  const taskDeliveryNavigationSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskDeliveryNavigation.ts"), "utf8");
   const taskOutputSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskOutput.service.ts"), "utf8");
   const taskDetailNavigationSource = loadDashboardTaskDetailNavigationSource();
 
+  assert.match(tasksPageSource, /dashboardTaskDeliveryRoutePattern/);
+  assert.match(tasksPageSource, /TaskDeliveryPage/);
   assert.match(taskPageSource, /buildDashboardTaskArtifactQueryKey/);
   assert.match(taskPageSource, /loadTaskArtifactPage/);
   assert.match(taskPageSource, /openTaskArtifactForTask/);
-  assert.match(taskPageSource, /openTaskDeliveryForTask/);
+  assert.match(taskPageSource, /resolveDashboardTaskDeliveryRoutePath/);
   assert.match(taskPageSource, /readDashboardTaskDetailRouteState/);
+  assert.match(taskPageSource, /subscribeTaskUpdated\(\(payload\) =>/);
   assert.match(taskPageSource, /subscribeDeliveryReady\(\(payload\) =>/);
   assert.match(taskPageSource, /payload\.task_id/);
+  assert.doesNotMatch(taskPageSource, /subscribeTask\(/);
   assert.doesNotMatch(taskPageSource, /\["dashboard", "tasks", "artifacts"/);
   assert.doesNotMatch(taskPageSource, /TaskFilesSheet/);
+
+  assert.match(taskDeliverySource, /openTaskDeliveryForTask/);
+  assert.match(taskDeliverySource, /loadTaskArtifactPage/);
+  assert.match(taskDeliverySource, /subscribeTaskUpdated/);
+  assert.match(taskDeliverySource, /subscribeDeliveryReady/);
+  assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
+  assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
   assert.match(taskDetailSource, /onOpenArtifact/);
   assert.match(taskDetailSource, /onOpenLatestDelivery/);
+  assert.match(taskDetailSource, /查看结果页/);
   assert.doesNotMatch(taskDetailSource, /文件舱门/);
   assert.match(taskDetailSource, /artifactItems/);
 
+  assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
+  assert.match(taskDeliveryNavigationSource, /encodeURIComponent\(taskId\)/);
   assert.doesNotMatch(taskOutputSource, /isRpcChannelUnavailable/);
   assert.doesNotMatch(taskOutputSource, /logRpcMockFallback/);
   assert.match(taskOutputSource, /isAllowedTaskOpenUrl/);
@@ -3245,6 +3262,13 @@ test("dashboard validators read enum truth sources from protocol exports", () =>
   const validatorSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardContractValidators.ts"), "utf8");
 
   assert.match(validatorSource, /import\s*\{[^}]*APPROVAL_STATUSES[^}]*RISK_LEVELS[^}]*\}\s*from\s*"@cialloclaw\/protocol"/);
+});
+
+test("dashboard voice submit only reuses browser page context when a real URL is available", () => {
+  const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
+
+  assert.match(voiceFieldSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,/);
+  assert.doesNotMatch(voiceFieldSource, /includeForegroundWindowContext: true/);
 });
 
 function createFallbackExperience() {

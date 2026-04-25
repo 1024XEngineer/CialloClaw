@@ -32,6 +32,7 @@ import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
   isShellBallClipboardPromptActive,
+  resolveShellBallInlineInputMode,
   ShellBallApp,
   shouldArmShellBallTextDropTarget,
   shouldShowShellBallFileDropOverlay,
@@ -85,11 +86,14 @@ import {
   clampShellBallFrameToBounds,
   createShellBallWindowGeometry,
   createShellBallWindowFrame,
+  getShellBallDockAnimationConfig,
   getShellBallHelperWindowInteractionMode,
+  getShellBallParkedDockInsetPx,
   getShellBallBubbleAnchor,
   getShellBallInputAnchor,
   getShellBallVoiceAnchor,
   measureShellBallContentSize,
+  resolveShellBallDockedHostPosition,
 } from "./useShellBallWindowMetrics";
 import {
   applyShellBallBubbleAction,
@@ -110,6 +114,7 @@ import {
   getShellBallVoicePreviewFromEvent,
   mapShellBallInteractionConsumedEventToFlag,
   shouldLogShellBallSpeechRecognitionError,
+  shouldRestoreShellBallSubmitFailureDraft,
   shouldRetryShellBallVoiceRecognitionAfterUnexpectedEnd,
   shouldResumeShellBallVoiceRecognitionAfterUnexpectedEnd,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -1913,6 +1918,142 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
     },
   );
 
+  const mascotFrame = {
+    x: 20,
+    y: 24,
+    width: 100,
+    height: 120,
+  };
+
+  assert.equal(
+    getShellBallParkedDockInsetPx({
+      side: "left",
+      mascotFrame,
+    }),
+    50,
+  );
+  assert.ok(
+    Math.abs(
+      getShellBallParkedDockInsetPx({
+        side: "top",
+        mascotFrame,
+      }) - 21.6,
+    ) < 0.000001,
+  );
+  assert.ok(
+    Math.abs(
+      getShellBallParkedDockInsetPx({
+        side: "bottom",
+        mascotFrame,
+      }) - 33.6,
+    ) < 0.000001,
+  );
+  assert.ok(
+    getShellBallParkedDockInsetPx({
+      side: "top",
+      mascotFrame,
+    }) < getShellBallParkedDockInsetPx({
+      side: "bottom",
+      mascotFrame,
+    }),
+  );
+  assert.deepEqual(
+    resolveShellBallDockedHostPosition({
+      bounds: {
+        minX: 0,
+        minY: 0,
+        maxX: 320,
+        maxY: 520,
+      },
+      currentPosition: { x: 144, y: 200 },
+      edgeDockState: {
+        side: "top",
+        revealed: false,
+      },
+      mascotFrame,
+    }),
+    {
+      x: 144,
+      y: -46,
+    },
+  );
+  assert.deepEqual(
+    resolveShellBallDockedHostPosition({
+      bounds: {
+        minX: 0,
+        minY: 0,
+        maxX: 320,
+        maxY: 520,
+      },
+      currentPosition: { x: 144, y: 200 },
+      edgeDockState: {
+        side: "left",
+        revealed: false,
+      },
+      mascotFrame,
+    }),
+    {
+      x: -70,
+      y: 200,
+    },
+  );
+  assert.deepEqual(
+    resolveShellBallDockedHostPosition({
+      bounds: {
+        minX: 0,
+        minY: 0,
+        maxX: 320,
+        maxY: 520,
+      },
+      currentPosition: { x: 144, y: 200 },
+      edgeDockState: {
+        side: "bottom",
+        revealed: false,
+      },
+      mascotFrame,
+    }),
+    {
+      x: 144,
+      y: 410,
+    },
+  );
+  assert.deepEqual(
+    getShellBallDockAnimationConfig({
+      side: "left",
+      mode: "dock",
+    }),
+    {
+      axis: "x",
+      direction: -1,
+      durationMs: 180,
+      overshootPx: 6,
+    },
+  );
+  assert.deepEqual(
+    getShellBallDockAnimationConfig({
+      side: "top",
+      mode: "dock",
+    }),
+    {
+      axis: "y",
+      direction: -1,
+      durationMs: 220,
+      overshootPx: 8,
+    },
+  );
+  assert.deepEqual(
+    getShellBallDockAnimationConfig({
+      side: "bottom",
+      mode: "reveal",
+    }),
+    {
+      axis: "y",
+      direction: 1,
+      durationMs: 220,
+      overshootPx: 0,
+    },
+  );
+
   const metricsSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
     "utf8",
@@ -1929,12 +2070,20 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /const scheduleBallGeometryEmit = useCallback\(\(geometry: ShellBallWindowGeometry\) => \{/);
   assert.match(metricsSource, /const scheduleBallGeometryPublish = useCallback\(\(input\?: \{ snapToBounds\?: boolean \}\) => \{/);
   assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
+  assert.match(metricsSource, /if \(input\.current\.side === "top"\) \{/);
+  assert.match(metricsSource, /if \(input\.current\.side === "bottom"\) \{/);
+  assert.match(metricsSource, /getShellBallParkedDockInsetPx\(/);
+  assert.match(metricsSource, /getShellBallDockAnimationConfig\(/);
+  assert.match(metricsSource, /mode: "dock"/);
+  assert.match(metricsSource, /mode: "reveal"/);
+  assert.match(metricsSource, /const overshootFrame = animationConfig === null/);
   assert.match(metricsSource, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(metricsSource, /await queueBallWindowDragPosition\(finalFrame\);/);
   assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
   assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
   assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
   assert.match(metricsSource, /await publishBallGeometry\(\{ snapToBounds: true \}\);/);
+  assert.doesNotMatch(metricsSource, /snapToEdge/);
   assert.doesNotMatch(metricsSource, /SHELL_BALL_DRAG_RELEASE_POLL_MS/);
   assert.doesNotMatch(metricsSource, /armBallWindowBoundsSnapOnRelease/);
   assert.match(appSource, /beginBallWindowPointerDrag\(\{\s*x: event\.screenX,\s*y: event\.screenY,\s*\}\);/);
@@ -2654,6 +2803,326 @@ test("submitTextInput keeps ordinary text submissions free of ambient page and s
   assert.equal(windowContextCallCount, 0);
 });
 
+test("submitTextInput can force foreground window snapshots for dashboard voice submissions", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  let windowContextCallCount = 0;
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_003",
+                session_id: null,
+                title: "Open current site",
+                source_type: "voice",
+                status: "processing",
+                intent: null,
+                current_step: "processing",
+                risk_level: "green",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            windowContextCallCount += 1;
+            return Promise.resolve({
+              app_name: "Chrome",
+              browser_kind: "chrome",
+              page_switch_count: 1,
+              process_path: null,
+              title: "Build Dashboard",
+              url: "https://example.com/build?ticket=secret#fragment",
+              window_switch_count: 2,
+            });
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            includeForegroundWindowContext?: boolean;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "打开当前网站",
+          source: "dashboard",
+          trigger: "voice_commit",
+          inputMode: "voice",
+          includeForegroundWindowContext: true,
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    page: {
+      app_name: "Chrome",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
+      window_title: "Build Dashboard",
+    },
+    screen: {
+      summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      screen_summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      window_title: "Build Dashboard",
+    },
+    behavior: {
+      last_action: "voice_commit",
+      dwell_millis: 5000,
+      window_switch_count: 2,
+      page_switch_count: 1,
+    },
+  });
+  assert.equal(windowContextCallCount, 1);
+});
+
+test("submitTextInput can restrict ambient foreground snapshots to browser pages with urls", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  let windowContextCallCount = 0;
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_004",
+                session_id: null,
+                title: "Summarize current page",
+                source_type: "text_input",
+                status: "processing",
+                intent: null,
+                current_step: "processing",
+                risk_level: "green",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            windowContextCallCount += 1;
+            return Promise.resolve({
+              app_name: "Chrome",
+              browser_kind: "chrome",
+              page_switch_count: 1,
+              process_path: null,
+              title: "Build Dashboard",
+              url: "https://example.com/build?ticket=secret#fragment",
+              window_switch_count: 2,
+            });
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            includeForegroundBrowserPageContext?: boolean;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "Summarize this page",
+          source: "floating_ball",
+          trigger: "hover_text_input",
+          inputMode: "text",
+          includeForegroundBrowserPageContext: true,
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    page: {
+      app_name: "Chrome",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
+      window_title: "Build Dashboard",
+    },
+    screen: {
+      summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      screen_summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      window_title: "Build Dashboard",
+    },
+    behavior: {
+      last_action: "hover_text_input",
+      dwell_millis: 5000,
+      window_switch_count: 2,
+      page_switch_count: 1,
+    },
+  });
+  assert.equal(windowContextCallCount, 1);
+});
+
+test("submitTextInput skips browser-page ambient snapshots when the foreground browser has no resolved url", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  let windowContextCallCount = 0;
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_005",
+                session_id: null,
+                title: "Summarize current page",
+                source_type: "text_input",
+                status: "processing",
+                intent: null,
+                current_step: "processing",
+                risk_level: "green",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            windowContextCallCount += 1;
+            return Promise.resolve({
+              app_name: "Chrome",
+              browser_kind: "chrome",
+              page_switch_count: 1,
+              process_path: null,
+              title: "New Tab",
+              url: null,
+              window_switch_count: 2,
+            });
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            includeForegroundBrowserPageContext?: boolean;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "Summarize this page",
+          source: "floating_ball",
+          trigger: "hover_text_input",
+          inputMode: "text",
+          includeForegroundBrowserPageContext: true,
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    behavior: {
+      last_action: "hover_text_input",
+      dwell_millis: 5000,
+    },
+  });
+  assert.equal(windowContextCallCount, 1);
+});
+
 test("shell-ball text drop helpers only accept non-file drags and extract plain text", () => {
   assert.equal(
     shouldAcceptShellBallTextDrop({
@@ -3129,6 +3598,46 @@ test("shell-ball mascot shows a selection marker above the ball when text select
   assert.match(markup, /shell-ball-mascot__selection-marker-glyph/);
 });
 
+test("shell-ball mascot adjusts its posture for top and bottom edge docking", () => {
+  const topMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "top",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+  const bottomMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "bottom",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+  const topRevealedMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "top",
+      edgeDockRevealed: true,
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+  const bottomRevealedMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "bottom",
+      edgeDockRevealed: true,
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+
+  assert.match(topMarkup, /data-edge-dock-side="top"/);
+  assert.match(topMarkup, /translate\(0px, -8px\)/);
+  assert.match(bottomMarkup, /data-edge-dock-side="bottom"/);
+  assert.match(bottomMarkup, /translate\(0px, 4px\)/);
+  assert.match(topRevealedMarkup, /translate\(0px, 0px\)/);
+  assert.match(bottomRevealedMarkup, /translate\(0px, 0px\)/);
+});
+
 test("shell-ball release preview recomputes from the final pointer position", () => {
   assert.equal(
     getShellBallVoicePreviewFromEvent({
@@ -3300,7 +3809,7 @@ test("shell-ball interaction consumed reducer keeps pointer sequence scope expli
 test("shell-ball submit reset clears draft retention after submit", () => {
   assert.deepEqual(getShellBallPostSubmitInputReset("summarize this"), {
     nextInputValue: "",
-    nextFocused: false,
+    nextFocused: true,
   });
 
   assert.equal(
@@ -3308,6 +3817,48 @@ test("shell-ball submit reset clears draft retention after submit", () => {
       regionActive: false,
       inputFocused: false,
       hasDraft: false,
+    }),
+    false,
+  );
+});
+
+test("shell-ball submit failure recovery only restores untouched empty drafts", () => {
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "",
+      currentPendingFiles: [],
+      currentDraftRevision: 4,
+      submittedDraftRevision: 4,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "new draft",
+      currentPendingFiles: [],
+      currentDraftRevision: 5,
+      submittedDraftRevision: 4,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "",
+      currentPendingFiles: ["C:/draft.md"],
+      currentDraftRevision: 4,
+      submittedDraftRevision: 4,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: "",
+      currentPendingFiles: [],
+      currentDraftRevision: 5,
+      submittedDraftRevision: 4,
     }),
     false,
   );
@@ -6672,11 +7223,217 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(sessionServiceSource, /export function rememberConversationSessionFromTask\(task: Task \| null \| undefined\) \{/);
   assert.doesNotMatch(interactionSource, /function ensureConversationSessionId\(\) \{/);
   assert.doesNotMatch(interactionSource, /createShellBallConversationSessionId/);
-  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
-  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
   assert.match(appSource, /getCurrentConversationSessionId,/);
   assert.match(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
+});
+
+test("shell-ball direct submit shows a detected-page status bubble before the task reply", async () => {
+  const reactRuntime = createImmediateShellBallReactRuntime();
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"),
+    {
+      react: reactRuntime.react,
+      "@tauri-apps/api/window": {
+        getCurrentWindow() {
+          return {
+            label: shellBallWindowLabels.ball,
+            listen() {
+              return Promise.resolve(() => {});
+            },
+            onMoved() {
+              return Promise.resolve(() => {});
+            },
+            onResized() {
+              return Promise.resolve(() => {});
+            },
+            outerPosition() {
+              return Promise.resolve({ toLogical: () => ({ x: 0, y: 0 }) });
+            },
+            outerSize() {
+              return Promise.resolve({ toLogical: () => ({ width: 124, height: 104 }) });
+            },
+            scaleFactor() {
+              return Promise.resolve(1);
+            },
+          };
+        },
+      },
+      "@/rpc/methods": {
+        respondSecurityDetailed() {
+          return Promise.resolve(null);
+        },
+      },
+      "@/rpc/subscriptions": {
+        subscribeApprovalPending() {
+          return () => {};
+        },
+        subscribeDeliveryReady() {
+          return () => {};
+        },
+        subscribeTaskUpdated() {
+          return () => {};
+        },
+      },
+      "@/services/agentInputService": {
+        submitTextInput() {
+          return Promise.resolve(null);
+        },
+      },
+      "@/services/taskService": {
+        startTaskFromSelectedText() {
+          return Promise.resolve(null);
+        },
+      },
+      "@/services/clipboardService": {
+        readClipboardText() {
+          return Promise.resolve("");
+        },
+      },
+      "@/features/dashboard/tasks/taskOutput.service": {
+        openTaskDeliveryForTask() {
+          return Promise.resolve(null);
+        },
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
+          return {
+            feedback: "",
+            mode: "task_detail" as const,
+            path: null,
+            taskId: null,
+            url: null,
+          };
+        },
+        performTaskOpenExecution() {
+          return Promise.resolve("");
+        },
+      },
+      "@/features/dashboard/shared/dashboardTaskDetailNavigation": {
+        requestDashboardTaskDetailOpen() {
+          return Promise.resolve();
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME: { width: 240, height: 140 },
+        closeShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        emitToShellBallWindowLabel() {
+          return Promise.resolve();
+        },
+        getShellBallPinnedBubbleIdFromLabel(): string | null {
+          return null;
+        },
+        getShellBallPinnedBubbleWindowAnchor() {
+          return { x: 0, y: 0 };
+        },
+        getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
+          return `shell-ball-bubble-pinned-${bubbleId}`;
+        },
+        openShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        setShellBallPinnedBubbleWindowVisible() {
+          return Promise.resolve();
+        },
+        shellBallWindowLabels,
+      },
+      "./useShellBallWindowMetrics": {
+        getShellBallBubbleAnchor() {
+          return { x: 0, y: 0 };
+        },
+      },
+    },
+    async (moduleExports) => {
+      const { useShellBallCoordinator } = moduleExports as {
+        useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator;
+      };
+
+      const { handlePrimaryAction } = useShellBallCoordinator({
+        visualState: "hover_input",
+        regionActive: false,
+        inputValue: "帮我总结这个页面",
+        inputFocused: true,
+        pendingFiles: [],
+        finalizedSpeechPayload: null,
+        voicePreview: null,
+        voiceHintMode: "hidden",
+        setInputValue: () => {},
+        onFinalizedSpeechHandled: () => {},
+        onRegionEnter: () => {},
+        onRegionLeave: () => {},
+        onInputHoverChange: () => {},
+        onInputFocusChange: () => {},
+        onSubmitText: async () => ({
+          task: {
+            task_id: "task-url-context",
+            status: "processing",
+          },
+          bubble_message: {
+            bubble_id: "bubble-url-context",
+            task_id: "task-url-context",
+            type: "result",
+            text: "我会先总结这个网页的重点内容。",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-26T08:00:03.000Z",
+          },
+          delivery_result: null,
+          clientContext: {
+            detectedPage: {
+              appName: "Google Chrome",
+              title: "OpenAI Docs",
+              url: "https://platform.openai.com/docs/overview",
+            },
+          },
+        }) as any,
+        onAttachFile: () => {},
+        onPrimaryClick: () => {},
+      });
+
+      await handlePrimaryAction("submit");
+      await flushAsyncEffects();
+    },
+  );
+
+  const taskBubbleItems = reactRuntime.getBubbleItems().filter((item) => item.bubble.task_id === "task-url-context");
+
+  assert.deepEqual(
+    taskBubbleItems.map((item) => ({
+      role: item.role,
+      text: item.bubble.text,
+      turnPhase: item.desktop.turnPhase,
+      type: item.bubble.type,
+    })),
+    [
+      {
+        role: "user",
+        text: "帮我总结这个页面",
+        turnPhase: 0,
+        type: "result",
+      },
+      {
+        role: "agent",
+        text: "已识别当前网页：OpenAI Docs\nhttps://platform.openai.com/docs/overview",
+        turnPhase: 1,
+        type: "status",
+      },
+      {
+        role: "agent",
+        text: "我会先总结这个网页的重点内容。",
+        turnPhase: 2,
+        type: "result",
+      },
+    ],
+  );
 });
 
 test("shell-ball surface passes mascot double-click and drag wiring through the mascot only", () => {
@@ -6724,7 +7481,7 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   const surfaceSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallSurface.tsx"), "utf8");
 
   assert.match(interactionSource, /function handleDroppedText\(text: string\) \{/);
-  assert.match(interactionSource, /setInputValue\(nextInputValue\);\s*handleInputFocusRequest\(\);/);
+  assert.match(interactionSource, /setTrackedInputValue\(nextInputValue\);\s*handleInputFocusRequest\(\);/);
   assert.doesNotMatch(interactionSource, /startTaskFromSelectedText/);
   assert.match(appSource, /const handleSurfaceTextDrop = useCallback\(\(text: string\) => \{/);
   assert.match(appSource, /handleDroppedText\(text\);\s*window\.requestAnimationFrame\(\(\) => \{\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);\s*\}\);/);
@@ -6843,7 +7600,7 @@ test("shell-ball file drops queue pending attachments instead of starting a task
   assert.match(coordinatorSource, /console\.warn\("shell-ball file drop focus request failed", error\);/);
   assert.doesNotMatch(coordinatorSource, /issue #187/);
   assert.match(interactionSource, /function handleDroppedFiles\(paths: string\[\]\) \{/);
-  assert.match(interactionSource, /setPendingFiles\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
+  assert.match(interactionSource, /setPendingFilesState\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
   assert.match(interactionSource, /controllerRef\.current\?\.forceState\("hover_input", \{/);
 });
 
@@ -6941,6 +7698,17 @@ test("shell-ball resize drag keeps pointer capture and releases resize state on 
   assert.match(inputBarSource, /onResizeStateChange\(false\);/);
 });
 
+test("shell-ball input bar restores textarea focus after attach and send actions", () => {
+  const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
+
+  assert.match(inputBarSource, /function restoreTextareaFocus\(\) \{/);
+  assert.match(inputBarSource, /field\.focus\(\);/);
+  assert.match(inputBarSource, /field\.setSelectionRange\(selectionIndex, selectionIndex\);/);
+  assert.match(inputBarSource, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);/);
+  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreTextareaFocus\(\);/);
+  assert.match(inputBarSource, /onSubmit\(\);\s*restoreTextareaFocus\(\);/);
+});
+
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
   assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "idle", interactionConsumed: false }),
@@ -6996,6 +7764,30 @@ test("shell-ball app injects the demo switcher only in dev mode", () => {
   assert.match(markup, /shell-ball-surface__switcher-shell/);
 });
 
+test("shell-ball inline input stays interactive whenever the bottom input is rendered", () => {
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: true,
+      snapshotInputBarMode: "readonly",
+    }),
+    "interactive",
+  );
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: true,
+      snapshotInputBarMode: "interactive",
+    }),
+    "interactive",
+  );
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: false,
+      snapshotInputBarMode: "readonly",
+    }),
+    "hidden",
+  );
+});
+
 test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("idle"), "hidden");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
@@ -7004,6 +7796,17 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
   assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");
   assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
+});
+
+test("shell-ball text submit clears drafts before RPC completion and gates failure restore", () => {
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(
+    interactionSource,
+    /const submittedDraftRevision = draftRevisionRef\.current;\s*dispatch\("submit_text"\);\s*setInputValueState\(reset\.nextInputValue\);\s*setPendingFilesState\(reset\.nextPendingFiles\);/,
+  );
+  assert.match(interactionSource, /if \(shouldRestoreShellBallSubmitFailureDraft\(\{/);
+  assert.match(interactionSource, /setInputValueState\(currentInputValue\);\s*setPendingFilesState\(currentPendingFiles\);/);
 });
 
 test("shell-ball interaction timing constants stay frozen", () => {
