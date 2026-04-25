@@ -1931,12 +1931,20 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /const scheduleBallGeometryEmit = useCallback\(\(geometry: ShellBallWindowGeometry\) => \{/);
   assert.match(metricsSource, /const scheduleBallGeometryPublish = useCallback\(\(input\?: \{ snapToBounds\?: boolean \}\) => \{/);
   assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
+  assert.match(metricsSource, /if \(input\.current\.side === "top"\) \{/);
+  assert.match(metricsSource, /if \(input\.current\.side === "bottom"\) \{/);
+  assert.match(metricsSource, /if \(mascotTop < input\.bounds\.minY\) \{/);
+  assert.match(metricsSource, /if \(mascotBottom > input\.bounds\.maxY\) \{/);
+  assert.match(metricsSource, /if \(input\.edgeDockState\.side === "top"\) \{/);
+  assert.match(metricsSource, /const targetMascotBottom = input\.edgeDockState\.revealed/);
   assert.match(metricsSource, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(metricsSource, /await queueBallWindowDragPosition\(finalFrame\);/);
   assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
   assert.match(metricsSource, /scheduleBallGeometryEmit\(geometryRef\.current\);/);
   assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
   assert.match(metricsSource, /await publishBallGeometry\(\{ snapToBounds: true \}\);/);
+  assert.doesNotMatch(metricsSource, /snapToEdge/);
+  assert.doesNotMatch(metricsSource, /easeShellBallDockAnimationProgress/);
   assert.doesNotMatch(metricsSource, /SHELL_BALL_DRAG_RELEASE_POLL_MS/);
   assert.doesNotMatch(metricsSource, /armBallWindowBoundsSnapOnRelease/);
   assert.match(appSource, /beginBallWindowPointerDrag\(\{\s*x: event\.screenX,\s*y: event\.screenY,\s*\}\);/);
@@ -3129,6 +3137,28 @@ test("shell-ball mascot shows a selection marker above the ball when text select
 
   assert.match(markup, /shell-ball-mascot__selection-marker/);
   assert.match(markup, /shell-ball-mascot__selection-marker-glyph/);
+});
+
+test("shell-ball mascot adjusts its posture for top and bottom edge docking", () => {
+  const topMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "top",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+  const bottomMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "bottom",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+
+  assert.match(topMarkup, /data-edge-dock-side="top"/);
+  assert.match(topMarkup, /translate\(0px, -6px\)/);
+  assert.match(bottomMarkup, /data-edge-dock-side="bottom"/);
+  assert.match(bottomMarkup, /translate\(0px, 6px\)/);
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

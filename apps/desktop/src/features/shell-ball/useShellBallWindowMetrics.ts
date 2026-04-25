@@ -85,9 +85,11 @@ type ShellBallWindowBounds = {
 
 type ShellBallBubblePlacement = "above" | "left" | "right" | "below";
 
+export type ShellBallEdgeDockSide = "left" | "right" | "top" | "bottom";
+
 export type ShellBallEdgeDockState = {
   revealed: boolean;
-  side: "left" | "right" | null;
+  side: ShellBallEdgeDockSide | null;
 };
 
 type UseShellBallWindowMetricsInput = {
@@ -288,7 +290,9 @@ function resolveShellBallEdgeDockSide(input: {
   }
 
   const mascotLeft = input.hostFrame.x + mascotFrame.x;
+  const mascotTop = input.hostFrame.y + mascotFrame.y;
   const mascotRight = mascotLeft + mascotFrame.width;
+  const mascotBottom = mascotTop + mascotFrame.height;
 
   if (input.current.side === "left") {
     return mascotLeft >= input.bounds.minX + SHELL_BALL_EDGE_DOCK_RELEASE_DISTANCE_PX ? null : "left";
@@ -298,12 +302,28 @@ function resolveShellBallEdgeDockSide(input: {
     return mascotRight <= input.bounds.maxX - SHELL_BALL_EDGE_DOCK_RELEASE_DISTANCE_PX ? null : "right";
   }
 
+  if (input.current.side === "top") {
+    return mascotTop >= input.bounds.minY + SHELL_BALL_EDGE_DOCK_RELEASE_DISTANCE_PX ? null : "top";
+  }
+
+  if (input.current.side === "bottom") {
+    return mascotBottom <= input.bounds.maxY - SHELL_BALL_EDGE_DOCK_RELEASE_DISTANCE_PX ? null : "bottom";
+  }
+
   if (mascotLeft < input.bounds.minX) {
     return "left";
   }
 
   if (mascotRight > input.bounds.maxX) {
     return "right";
+  }
+
+  if (mascotTop < input.bounds.minY) {
+    return "top";
+  }
+
+  if (mascotBottom > input.bounds.maxY) {
+    return "bottom";
   }
 
   return null;
@@ -332,13 +352,35 @@ function resolveShellBallDockedHostPosition(input: {
     };
   }
 
-  const targetMascotRight = input.edgeDockState.revealed
-    ? input.bounds.maxX
-    : input.bounds.maxX + mascotFrame.width / 2;
+  if (input.edgeDockState.side === "right") {
+    const targetMascotRight = input.edgeDockState.revealed
+      ? input.bounds.maxX
+      : input.bounds.maxX + mascotFrame.width / 2;
+
+    return {
+      x: Math.round(targetMascotRight - mascotFrame.x - mascotFrame.width),
+      y: input.currentPosition.y,
+    };
+  }
+
+  if (input.edgeDockState.side === "top") {
+    const targetMascotTop = input.edgeDockState.revealed
+      ? input.bounds.minY
+      : input.bounds.minY - mascotFrame.height / 2;
+
+    return {
+      x: input.currentPosition.x,
+      y: Math.round(targetMascotTop - mascotFrame.y),
+    };
+  }
+
+  const targetMascotBottom = input.edgeDockState.revealed
+    ? input.bounds.maxY
+    : input.bounds.maxY + mascotFrame.height / 2;
 
   return {
-    x: Math.round(targetMascotRight - mascotFrame.x - mascotFrame.width),
-    y: input.currentPosition.y,
+    x: input.currentPosition.x,
+    y: Math.round(targetMascotBottom - mascotFrame.y - mascotFrame.height),
   };
 }
 

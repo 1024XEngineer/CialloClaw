@@ -4,10 +4,11 @@ import { AudioLines, Mic, ShieldAlert } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import { SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX, type ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
+import type { ShellBallEdgeDockSide } from "../useShellBallWindowMetrics";
 
 type ShellBallMascotProps = {
   edgeDockRevealed?: boolean;
-  edgeDockSide?: "left" | "right" | null;
+  edgeDockSide?: ShellBallEdgeDockSide | null;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -99,6 +100,49 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
   return Math.hypot(input.pointerX - input.startX, input.pointerY - input.startY) > SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX;
 }
 
+function getShellBallDockAttitude(input: {
+  edgeDockSide: ShellBallEdgeDockSide | null;
+  edgeDockRevealed: boolean;
+}) {
+  if (input.edgeDockSide === null) {
+    return {
+      shiftX: 0,
+      shiftY: 0,
+      tiltDeg: 0,
+    };
+  }
+
+  if (input.edgeDockSide === "left") {
+    return {
+      shiftX: input.edgeDockRevealed ? 2 : 6,
+      shiftY: 0,
+      tiltDeg: input.edgeDockRevealed ? 4 : 12,
+    };
+  }
+
+  if (input.edgeDockSide === "right") {
+    return {
+      shiftX: input.edgeDockRevealed ? -2 : -6,
+      shiftY: 0,
+      tiltDeg: input.edgeDockRevealed ? -4 : -12,
+    };
+  }
+
+  if (input.edgeDockSide === "top") {
+    return {
+      shiftX: 0,
+      shiftY: input.edgeDockRevealed ? 2 : -6,
+      tiltDeg: 0,
+    };
+  }
+
+  return {
+    shiftX: 0,
+    shiftY: input.edgeDockRevealed ? -2 : 6,
+    tiltDeg: 0,
+  };
+}
+
 export function ShellBallMascot({
   edgeDockRevealed = false,
   edgeDockSide = null,
@@ -135,10 +179,12 @@ export function ShellBallMascot({
     "--shell-ball-breathe-scale": String(motionConfig.breatheScale),
     "--shell-ball-breathe-duration": `${motionConfig.breatheDurationMs}ms`,
   };
-  const dockTiltDeg = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 4 : 12) : (edgeDockRevealed ? -4 : -12);
-  const dockShiftPx = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 2 : 6) : (edgeDockRevealed ? -2 : -6);
+  const dockAttitude = getShellBallDockAttitude({
+    edgeDockSide,
+    edgeDockRevealed,
+  });
   const attitudeStyle: CSSProperties = {
-    transform: `translateX(${dockShiftPx}px) rotate(${motionConfig.bodyTiltDeg + dockTiltDeg}deg) scale(${motionConfig.bodyScale})`,
+    transform: `translate(${dockAttitude.shiftX}px, ${dockAttitude.shiftY}px) rotate(${motionConfig.bodyTiltDeg + dockAttitude.tiltDeg}deg) scale(${motionConfig.bodyScale})`,
   };
   const wingStyle: MotionStyle = {
     "--shell-ball-wing-lift": `${motionConfig.wingLiftDeg}deg`,
