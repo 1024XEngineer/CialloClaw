@@ -214,6 +214,19 @@ export function loadSettings(): DesktopSettings {
 }
 
 /**
+ * Best-effort host snapshot sync keeps the Tauri-side cache close to the local
+ * desktop snapshot without letting transient bridge failures surface as
+ * unhandled promise rejections after the local save already succeeded.
+ *
+ * @param settings The formal protocol snapshot that the desktop host should cache.
+ */
+function syncDesktopSettingsSnapshotSafely(settings: ProtocolSettings) {
+  void syncDesktopSettingsSnapshot(settings).catch((error) => {
+    console.warn("Failed to sync desktop settings snapshot to the Tauri host cache.", error);
+  });
+}
+
+/**
  * Persists the latest desktop settings snapshot.
  *
  * @param settings The desktop settings snapshot to store locally.
@@ -221,5 +234,5 @@ export function loadSettings(): DesktopSettings {
 export function saveSettings(settings: DesktopSettings) {
   const normalizedSettings = normalizeSettingsSnapshot(settings);
   saveStoredValue(SETTINGS_KEY, normalizedSettings);
-  void syncDesktopSettingsSnapshot(toProtocolSettingsSnapshot(normalizedSettings.settings));
+  syncDesktopSettingsSnapshotSafely(toProtocolSettingsSnapshot(normalizedSettings.settings));
 }
