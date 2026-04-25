@@ -49,10 +49,10 @@ function CursorArtwork({ hoveringAction }: { hoveringAction: boolean }): ReactEl
 
 export function PixelErhuCursor(): ReactElement | null {
   const [enabled, setEnabled] = useState(false);
-  const [hoveringAction, setHoveringAction] = useState(false);
   const [sparks, setSparks] = useState<SparkPoint[]>([]);
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const lastTrailRef = useRef(0);
+  const hoveringActionRef = useRef(false);
 
   function spawnSpark(x: number, y: number, lifetime: number): void {
     const palette = ["#8fe8ff", "#ffd36e", "#ff9ac2", "#fff4de"];
@@ -96,9 +96,21 @@ export function PixelErhuCursor(): ReactElement | null {
 
       const target = event.target;
       if (target instanceof HTMLElement) {
-        setHoveringAction(Boolean(target.closest("a, button, summary")));
+        const nextHoveringAction = Boolean(target.closest("a, button, summary"));
+
+        if (nextHoveringAction !== hoveringActionRef.current) {
+          hoveringActionRef.current = nextHoveringAction;
+
+          if (cursorRef.current) {
+            cursorRef.current.classList.toggle("site-cursor-hover", nextHoveringAction);
+          }
+        }
       } else {
-        setHoveringAction(false);
+        hoveringActionRef.current = false;
+
+        if (cursorRef.current) {
+          cursorRef.current.classList.remove("site-cursor-hover");
+        }
       }
     }
 
@@ -130,7 +142,7 @@ export function PixelErhuCursor(): ReactElement | null {
         className="pointer-events-none fixed left-0 top-0 z-50 hidden md:block"
         style={{ willChange: "transform" }}
       >
-        <CursorArtwork hoveringAction={hoveringAction} />
+        <CursorArtwork hoveringAction={false} />
       </div>
 
       {sparks.map((spark) => (
