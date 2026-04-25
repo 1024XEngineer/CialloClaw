@@ -30,6 +30,7 @@ export type SubmitTextInputParams = {
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  includeForegroundWindowContext?: boolean;
   context?: InputContext;
   pageContext?: PageContext;
   sessionId?: string;
@@ -207,8 +208,13 @@ function sanitizeDesktopContextUrl(rawUrl: string | null | undefined): string | 
   }
 }
 
-function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
-  return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
+function shouldEnrichVisualContext(
+  params: AgentInputSubmitParams,
+  includeForegroundWindowContext = false,
+): boolean {
+  return includeForegroundWindowContext
+    || compactContextRecord(params.context.page) !== undefined
+    || compactContextRecord(params.context.screen) !== undefined;
 }
 
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
@@ -261,8 +267,16 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
 
 export type SubmitTextInputResult = AgentInputSubmitResult;
 
-async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
-  const enrichVisualContext = shouldEnrichVisualContext(params);
+async function enrichTextInputSubmitParams(
+  params: AgentInputSubmitParams,
+  options: {
+    includeForegroundWindowContext?: boolean;
+  } = {},
+): Promise<AgentInputSubmitParams> {
+  const enrichVisualContext = shouldEnrichVisualContext(
+    params,
+    options.includeForegroundWindowContext ?? false,
+  );
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
     // Fetch the foreground window snapshot only for explicit visual requests.
     // Ordinary text submits should not pay the host-side URL lookup cost.
@@ -309,7 +323,9 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     return null;
   }
 
-  const enrichedParams = await enrichTextInputSubmitParams(params);
+  const enrichedParams = await enrichTextInputSubmitParams(params, {
+    includeForegroundWindowContext: input.includeForegroundWindowContext,
+  });
   recordMirrorConversationStart(enrichedParams);
   const rpcMethods = await import("@/rpc/methods");
 
