@@ -3264,6 +3264,13 @@ test("dashboard validators read enum truth sources from protocol exports", () =>
   assert.match(validatorSource, /import\s*\{[^}]*APPROVAL_STATUSES[^}]*RISK_LEVELS[^}]*\}\s*from\s*"@cialloclaw\/protocol"/);
 });
 
+test("dashboard voice submit only reuses browser page context when a real URL is available", () => {
+  const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
+
+  assert.match(voiceFieldSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,/);
+  assert.doesNotMatch(voiceFieldSource, /includeForegroundWindowContext: true/);
+});
+
 function createFallbackExperience() {
   return {
     acceptance: [],
