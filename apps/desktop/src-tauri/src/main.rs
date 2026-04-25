@@ -1108,13 +1108,42 @@ unsafe fn update_onboarding_native_tracking() {
     set_forward_mouse_messages(hwnd, should_track);
 
     if !should_track {
-        set_window_ignore_cursor_events(hwnd, false);
+        set_window_ignore_cursor_events(hwnd, true);
         if let Ok(mut state) = ONBOARDING_INTERACTIVE_STATE.lock() {
             if state.hwnd == Some(hwnd_value) {
-                state.current_ignore = Some(false);
+                state.current_ignore = Some(true);
             }
         }
     }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn onboarding_reset_interactive_state(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("failed to get onboarding hwnd: {error}"))?;
+
+        unsafe {
+            set_forward_mouse_messages(hwnd, false);
+            set_window_ignore_cursor_events(hwnd, true);
+        }
+    }
+
+    let mut state = ONBOARDING_INTERACTIVE_STATE
+        .lock()
+        .map_err(|_| "onboarding interactive state lock poisoned".to_string())?;
+    state.hwnd = None;
+    state.regions.clear();
+    state.current_ignore = None;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn onboarding_reset_interactive_state(_app: tauri::AppHandle) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1165,6 +1194,29 @@ unsafe extern "system" fn mousemove_forward(
     }
 
     CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn onboarding_set_ignore_cursor_events(app: tauri::AppHandle, ignore: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("failed to get onboarding hwnd: {error}"))?;
+
+        unsafe {
+            set_forward_mouse_messages(hwnd, false);
+            set_window_ignore_cursor_events(hwnd, ignore);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn onboarding_set_ignore_cursor_events(_app: tauri::AppHandle, _ignore: bool) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1402,7 +1454,9 @@ fn main() {
             shell_ball_set_ignore_cursor_events,
             shell_ball_get_mouse_position,
             shell_ball_set_interactive_regions,
+            onboarding_set_ignore_cursor_events,
             onboarding_set_interactive_regions,
+            onboarding_reset_interactive_state,
             shell_ball_set_press_lock,
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
