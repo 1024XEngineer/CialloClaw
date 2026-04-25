@@ -1,0 +1,76 @@
+---
+export const prerender = true;
+
+import "../styles/global.css";
+
+import Hero from "@/components/astro/Hero.astro";
+import ProductStory from "@/components/astro/ProductStory.astro";
+import InstallGuide from "@/components/astro/InstallGuide.astro";
+import QuickStart from "@/components/astro/QuickStart.astro";
+import HowItWorks from "@/components/astro/HowItWorks.astro";
+import DocsEntry from "@/components/astro/DocsEntry.astro";
+import Footer from "@/components/astro/Footer.astro";
+import InteractiveShowcase from "@/components/astro/InteractiveShowcase.astro";
+import { PixelErhuCursor } from "@/components/interactive/PixelErhuCursor";
+import SiteHead from "@/components/layout/SiteHead.astro";
+import SiteHeader from "@/components/layout/SiteHeader.astro";
+import { Theme } from "@radix-ui/themes";
+import { ReleaseCards } from "@/components/release/ReleaseCards";
+
+const pageTitle = "CialloClaw | 桌面协作 Agent";
+const pageDescription =
+  "CialloClaw 是一个 Windows-first 的桌面协作 Agent，用轻量近场入口承接任务，用正式结果和清晰界面完成协作。";
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <SiteHead title={pageTitle} description={pageDescription} path="/" />
+  </head>
+  <body>
+    <Theme appearance="dark" accentColor="orange" grayColor="mauve" radius="large" scaling="100%">
+      <div class="site-shell site-noise">
+        <div class="site-grid-backdrop"></div>
+        <PixelErhuCursor client:load />
+        <SiteHeader />
+        <main>
+          <Hero />
+          <ProductStory />
+          <InstallGuide />
+          <QuickStart />
+          <HowItWorks />
+          <InteractiveShowcase />
+
+          <section id="download" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+            <div class="mb-8 grid gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(18rem,0.78fr)] lg:items-end">
+              <div>
+                <p class="site-section-eyebrow">下载</p>
+                <h2 class="site-section-title mt-4">首页只保留当前推荐安装包。</h2>
+                <p class="site-section-copy mt-4">
+                  这里直接展示 GitHub Releases 同步来的最新 Windows 版本。
+                  预览版、历史版本和额外资产统一放在 Releases 页面，不再把下载区做成参数说明表。
+                </p>
+              </div>
+
+              <div class="site-soft-card rounded-[1.8rem] p-5">
+                <p class="text-xs uppercase tracking-[0.22em] text-white/46">下载建议</p>
+                <div class="mt-3 grid gap-3 text-sm leading-7 text-white/70">
+                  <p>普通用户优先使用 Stable。</p>
+                  <p>想更早试新改动，可以切到 Tip Preview。</p>
+                  <p>完整历史版本统一放在 GitHub 版本页。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="site-download-shell rounded-[2.2rem] p-4 md:p-6">
+              <ReleaseCards client:idle />
+            </div>
+          </section>
+
+          <DocsEntry />
+        </main>
+        <Footer />
+      </div>
+    </Theme>
+  </body>
+</html>

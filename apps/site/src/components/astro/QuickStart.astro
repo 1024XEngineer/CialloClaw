@@ -1,0 +1,31 @@
+---
+import { Card, Flex, Text } from "@radix-ui/themes";
+
+const steps = [
+  "长按悬浮球，用最自然的方式把当前任务说出来。",
+  "选中文本、拖拽文件或围绕报错现场发起协作，不必重新组织完整聊天上下文。",
+  "需要看进度、看结果、看风险链路时，进入 Dashboard。",
+  "需要改模型、记忆、预算或边界时，去 Control Panel。",
+];
+---
+
+<section id="quick-start" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="grid gap-8 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)] lg:items-start">
+    <div>
+      <p class="site-section-eyebrow">快速上手</p>
+      <h2 class="site-section-title mt-4">第一次真正使用它，不该先学会写 Prompt，而该先学会怎么把任务交出去。</h2>
+      <p class="site-section-copy mt-5">根据产品交互设计文档，悬浮球不是次要控件，而是默认常驻、低存在感、贴近工作流的主入口。快速上手应该围绕这一点讲，而不是让用户先背内部术语。</p>
+    </div>
+
+    <div class="grid gap-4">
+      {steps.map((step, index) => (
+        <Card className="site-soft-card rounded-[1.7rem] !p-5">
+          <Flex gap="4" align="start">
+            <div class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/8 text-sm font-semibold text-white">{index + 1}</div>
+            <Text size="3" color="gray">{step}</Text>
+          </Flex>
+        </Card>
+      ))}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,49 @@
+---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const capabilities = [
+  {
+    title: "悬浮球近场入口",
+    description: "单击、双击、悬停、长按、文本选中和文件拖拽，都可以从桌面近场入口直接发起。",
+  },
+  {
+    title: "Agent Loop",
+    description: "任务不会停在一次性回答上。这个循环可以观察、规划、行动、修正，并保持状态变化可见。",
+  },
+  {
+    title: "Dashboard",
+    description: "查看 Agent 正在做什么、卡在什么地方、产出了什么，以及什么时候需要你介入。",
+  },
+  {
+    title: "Control Panel",
+    description: "在专用界面里配置 provider、模型、预算、记忆、悬浮球和其他低频控制项。",
+  },
+  {
+    title: "Artifacts 与 Citations",
+    description: "长结果会作为正式输出保存下来，可打开、可检查，而不是消失在瞬时 UI 状态里。",
+  },
+  {
+    title: "本地优先 Harness",
+    description: "local-service harness 把编排、治理、审计、恢复和持久化都放在受控的本地架构内。",
+  },
+];
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="text-sm tracking-[0.28em] text-cc-mint uppercase">核心能力</p>
+    <h2 class="site-section-title mt-4">产品表面可以轻巧可爱，但执行模型必须清晰可见。</h2>
+  </div>
+
+  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+    {capabilities.map((capability) => (
+      <Card className="site-soft-card rounded-[1.75rem] !p-6">
+        <Flex direction="column" gap="3">
+          <Badge color="green" variant="soft" radius="full">能力模块</Badge>
+          <Heading size="4">{capability.title}</Heading>
+          <Text size="3" color="gray">{capability.description}</Text>
+        </Flex>
+      </Card>
+    ))}
+  </div>
+</section>

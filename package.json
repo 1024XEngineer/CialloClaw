@@ -5,9 +5,13 @@
   "scripts": {
     "dev": "pnpm --dir apps/desktop dev",
     "dev:desktop": "pnpm --dir apps/desktop dev",
+    "dev:site": "pnpm --dir apps/site dev",
     "dev:service": "go run ./services/local-service/cmd/server",
     "lint": "pnpm --dir apps/desktop lint",
     "lint:fix": "pnpm --dir apps/desktop lint:fix",
+    "build:site": "pnpm --dir apps/site build",
+    "check:site": "pnpm --dir apps/site check",
+    "preview:site": "pnpm --dir apps/site preview",
     "test:service": "go test ./services/local-service/...",
     "typecheck": "pnpm --dir apps/desktop typecheck"
   }

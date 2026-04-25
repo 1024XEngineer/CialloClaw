@@ -1,0 +1,42 @@
+---
+import { DOC_LINKS } from "@/lib/constants";
+import { Badge, Button, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const featuredDocs = DOC_LINKS.slice(0, 3);
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-stretch">
+    <Card className="site-soft-card rounded-[2rem] !p-6 lg:!p-7">
+      <Flex direction="column" gap="3">
+        <Badge color="violet" variant="soft" radius="full">继续阅读</Badge>
+        <Heading size="7">想看协议、架构和设置边界，就直接去文档页。</Heading>
+        <Text size="3" color="gray">
+          首页到这里就收住，不继续堆细节。更深一层的产品语义、JSON-RPC 边界和控制面板说明，都交给文档页承接。
+        </Text>
+        <div class="mt-3 flex flex-wrap gap-3">
+          <Button asChild radius="full" size="3" highContrast>
+            <a href="/docs">打开文档页</a>
+          </Button>
+          <Button asChild radius="full" size="3" variant="soft">
+            <a href="https://github.com/1024XEngineer/CialloClaw">查看仓库</a>
+          </Button>
+        </div>
+      </Flex>
+    </Card>
+
+    <div class="grid gap-4 md:grid-cols-3">
+      {featuredDocs.map((item) => (
+        <a class="focus-ring" href={item.href}>
+          <Card className="site-soft-card h-full rounded-[1.65rem] !p-5 transition hover:border-white/18 hover:bg-white/10">
+            <Flex direction="column" gap="3">
+              <Badge color="cyan" variant="soft" radius="full">真源文档</Badge>
+              <Heading size="4">{item.label}</Heading>
+              <Text size="3" color="gray">{item.description}</Text>
+            </Flex>
+          </Card>
+        </a>
+      ))}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,47 @@
+---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const installSteps = [
+  {
+    title: "下载安装包",
+    description: "从官网下载区获取最新 Windows 安装包。普通用户优先选择 Stable，想抢先体验可以使用 Tip Preview。",
+  },
+  {
+    title: "启动桌面端",
+    description: "桌面端负责悬浮球、任务看板与控制面板，保持协作入口始终贴近你的当前工作现场。",
+  },
+  {
+    title: "完成必要配置",
+    description: "在控制面板里配置 provider、模型、预算、记忆与安全边界，避免这些低频设置打断主协作流程。",
+  },
+];
+---
+
+<section id="install" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(18rem,0.78fr)] lg:items-end">
+    <div>
+      <p class="site-section-eyebrow">安装运行</p>
+      <h2 class="site-section-title mt-4">当前主线是 Windows first，本地桌面端和本地 Harness 一起工作。</h2>
+      <p class="site-section-copy mt-5">从仓库结构和文档设计看，CialloClaw 不是一个浏览器里的在线聊天应用，而是一套本地桌面协作系统。官网在这里应该把安装逻辑讲清楚，而不是把系统边界讲得像一篇架构论文。</p>
+    </div>
+
+    <Card className="site-soft-card rounded-[1.9rem] !p-5">
+      <Flex direction="column" gap="3">
+        <Badge color="orange" variant="soft" radius="full">运行前提</Badge>
+        <Text size="3" color="gray">当前默认体验围绕 Windows 桌面工作现场设计。官网只负责介绍、下载和引导，不会替代本地 runtime。</Text>
+      </Flex>
+    </Card>
+  </div>
+
+  <div class="grid gap-5 md:grid-cols-3">
+    {installSteps.map((step, index) => (
+      <Card className="site-soft-card rounded-[1.75rem] !p-6">
+        <Flex direction="column" gap="3">
+          <Badge color="cyan" variant="soft" radius="full">步骤 {index + 1}</Badge>
+          <Heading size="4">{step.title}</Heading>
+          <Text size="3" color="gray">{step.description}</Text>
+        </Flex>
+      </Card>
+    ))}
+  </div>
+</section>

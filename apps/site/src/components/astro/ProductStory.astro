@@ -1,0 +1,51 @@
+---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const storyCards = [
+  {
+    title: "从现场起任务",
+    text: "从页面文本、文件拖拽、当前报错和语音承接开始，不要求你先组织一段完整聊天上下文。",
+  },
+  {
+    title: "高风险先确认",
+    text: "写文件、执行命令和边界变更不会偷偷发生，先确认再执行才是默认路径。",
+  },
+  {
+    title: "结果可回看",
+    text: "任务结果和产物会回到任务看板与 artifact 路径，而不是闪一下就消失在首页。",
+  },
+];
+---
+
+<section id="what-is" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(18rem,0.82fr)] lg:items-end">
+    <div>
+      <p class="site-section-eyebrow">产品简介</p>
+      <h2 class="site-section-title mt-4">它不是另一个聊天页，而是一只贴在工作现场的桌面协作助手。</h2>
+      <p class="site-section-copy mt-5">
+        首页只需要把产品讲明白，不需要代替任务看板、控制面板和任务详情页去堆全部信息。
+        所以这里保留三件最关键的事：怎么开始、为什么安心、结果去哪看。
+      </p>
+    </div>
+
+    <Card className="site-soft-card rounded-[1.9rem] !p-5">
+      <Flex direction="column" gap="3">
+        <Badge color="orange" variant="soft" radius="full">一句话理解</Badge>
+        <Heading size="5">它先在你身边接任务，再把复杂信息交回到正确界面里处理。</Heading>
+        <Text size="3" color="gray">因此首页会更克制，真正的状态、结果和配置各回各位。</Text>
+      </Flex>
+    </Card>
+  </div>
+
+  <div class="grid gap-5 md:grid-cols-3">
+    {storyCards.map((card) => (
+      <Card className="site-soft-card rounded-[1.75rem] !p-6">
+        <Flex direction="column" gap="3">
+          <Badge color="cyan" variant="soft" radius="full">核心感受</Badge>
+          <Heading size="4">{card.title}</Heading>
+          <Text size="3" color="gray">{card.text}</Text>
+        </Flex>
+      </Card>
+    ))}
+  </div>
+</section>

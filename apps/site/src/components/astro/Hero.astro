@@ -1,0 +1,96 @@
+---
+import { Badge, Button, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const trustPills = ["Windows 优先", "低打扰", "先确认再执行", "结果可回看"];
+const nearbySignals = ["文本选中", "文件拖拽", "当前报错", "语音承接"];
+const surfaces = [
+  {
+    title: "悬浮球",
+    description: "承接你眼前的文本、文件和报错，而不是逼你先组织一大段 Prompt。",
+  },
+  {
+    title: "任务看板",
+    description: "查看任务进度、风险状态和正式结果，知道它做到哪一步了。",
+  },
+  {
+    title: "控制面板",
+    description: "把模型、记忆、自动化和安全边界都放在该放的位置。",
+  },
+];
+---
+
+<section class="section-frame relative px-4 pb-18 pt-10 lg:px-0 lg:pb-26 lg:pt-18">
+  <div class="grid items-center gap-12 lg:grid-cols-[minmax(0,1.02fr)_minmax(22rem,0.98fr)]">
+    <div>
+      <div class="mb-5 flex flex-wrap gap-3">
+        {trustPills.map((pill) => (
+          <Badge color="orange" variant="soft" radius="full">{pill}</Badge>
+        ))}
+      </div>
+
+      <p class="site-section-eyebrow">桌面协作 Agent</p>
+      <h1 class="mt-4 max-w-4xl font-display text-5xl leading-[0.96] font-semibold tracking-tight text-white sm:text-6xl lg:text-[5rem]">
+        把眼前任务，
+        <br />
+        轻轻交给一个贴在桌面的
+        <span class="site-hero-accent">悬浮球</span>。
+      </h1>
+      <p class="site-lead mt-6 max-w-2xl">
+        CialloClaw 不把你拽进一个满屏聊天窗口。它从当前现场承接任务，
+        先确认，再执行，再把结果通过正式界面和正式产物交回给你。
+      </p>
+
+      <div class="mt-8 flex flex-wrap gap-4">
+        <Button asChild size="4" radius="full" highContrast>
+          <a href="#download">下载最新正式版</a>
+        </Button>
+        <Button asChild size="4" radius="full" variant="soft">
+          <a href="#highlights">先看核心亮点</a>
+        </Button>
+        <Button asChild size="4" radius="full" variant="outline">
+          <a href="/docs">产品文档</a>
+        </Button>
+      </div>
+
+      <div class="mt-10 flex flex-wrap gap-3 text-sm text-white/60">
+        <span>它最适合从这些入口开始：</span>
+        {nearbySignals.map((signal) => (
+          <span class="site-chip px-3 py-1.5 text-white/78">{signal}</span>
+        ))}
+      </div>
+    </div>
+
+    <div class="relative">
+      <Card className="site-soft-card site-hero-card relative overflow-hidden rounded-[2.4rem] !p-6 lg:!p-8">
+        <div class="absolute inset-x-0 top-0 h-32 bg-linear-to-b from-white/12 via-white/0 to-transparent"></div>
+        <div class="relative flex items-center justify-between gap-4">
+          <div>
+            <p class="site-section-eyebrow text-cc-cyan">首页只做轻介绍</p>
+            <h2 class="mt-3 font-display text-3xl font-semibold text-white">你真正会用到的三个界面</h2>
+          </div>
+          <div class="site-mascot-pill">=^.^=</div>
+        </div>
+
+        <div id="highlights" class="mt-6 grid gap-3">
+          {surfaces.map((surface, index) => (
+            <div class="site-window-card grid gap-2 rounded-[1.6rem] p-4">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-sm font-semibold text-white">{surface.title}</p>
+                <span class="text-xs text-white/46">0{index + 1}</span>
+              </div>
+              <p class="text-sm leading-7 text-white/66">{surface.description}</p>
+            </div>
+          ))}
+        </div>
+
+        <div class="mt-5 rounded-[1.7rem] border border-white/8 bg-[rgba(255,255,255,0.04)] p-5">
+          <Flex direction="column" gap="3">
+            <Badge color="cyan" variant="soft" radius="full">正式结果出口</Badge>
+            <Heading size="4">delivery_result / artifact / citation</Heading>
+            <Text size="3" color="gray">长结果不再塞在首页说明文字里，而是交给专门的任务界面和产物路径去承接。</Text>
+          </Flex>
+        </div>
+      </Card>
+    </div>
+  </div>
+</section>

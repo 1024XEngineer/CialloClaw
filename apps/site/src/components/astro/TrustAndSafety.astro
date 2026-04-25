@@ -1,0 +1,53 @@
+---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const trustSignals = [
+  "高风险动作先进入 approval_request",
+  "关键决策会留下 authorization_record",
+  "变更过程可追踪到 audit_record",
+  "高影响执行前保留 recovery_point",
+  "UI 与本地 harness 之间维持 JSON-RPC 正式边界",
+  "官网本身不直接依赖 desktop runtime",
+];
+---
+
+<section id="safety" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
+    <div class="glass-card rounded-[2rem] p-7 lg:p-8">
+      <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">安全与本地优先</p>
+      <h2 class="site-section-title mt-4">界面可以很可爱，但治理故事必须足够认真。</h2>
+      <p class="site-section-copy mt-5 max-w-2xl">
+        CialloClaw 不应该被描述成“魔法般自动执行一切”。它的架构是明确围绕授权、审计、恢复和正式结果交付来设计的。
+      </p>
+
+      <div class="mt-8 grid gap-3">
+        {trustSignals.map((signal) => (
+          <Card className="site-soft-card rounded-[1.35rem] !p-4">
+            <Text size="3" color="gray">{signal}</Text>
+          </Card>
+        ))}
+      </div>
+    </div>
+
+    <div class="glass-card rounded-[2rem] p-7 lg:p-8">
+      <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">桌面控制面</p>
+      <div class="mt-6 grid gap-4">
+        <Card className="site-soft-card rounded-[1.5rem] !p-5">
+          <Flex direction="column" gap="3">
+            <Badge color="cyan" variant="soft" radius="full">Dashboard</Badge>
+            <Heading size="5">查看当前任务、信任摘要和 artifact 路径。</Heading>
+            <Text size="3" color="gray">Dashboard 不是功能菜单，而是让你理解 Agent 正在做什么、任务卡在哪、是否需要你接管的地方。</Text>
+          </Flex>
+        </Card>
+
+        <Card className="site-soft-card rounded-[1.5rem] !p-5">
+          <Flex direction="column" gap="3">
+            <Badge color="violet" variant="soft" radius="full">Control Panel</Badge>
+            <Heading size="5">统一管理 provider、记忆、自动化和安全边界。</Heading>
+            <Text size="3" color="gray">模型凭证、预算降级、记忆保留、悬浮球行为和安全预期，都应该落在专门的设置面板里。</Text>
+          </Flex>
+        </Card>
+      </div>
+    </div>
+  </div>
+</section>

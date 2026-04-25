@@ -1,0 +1,35 @@
+---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const highlights = [
+  {
+    eyebrow: "对外主对象",
+    title: "task",
+    copy: "官网叙事围绕 task 展开，而不是围绕一个聊天会话或临时气泡。",
+  },
+  {
+    eyebrow: "执行兼容链路",
+    title: "run / step / event",
+    copy: "后端编排仍然保留 run、step、event 和 tool_call，不会被官网表述掩盖掉。",
+  },
+  {
+    eyebrow: "正式出口",
+    title: "delivery_result / artifact / citation",
+    copy: "长结果以正式交付形式存在，不再只是看完就消失的对话内容。",
+  },
+];
+---
+
+<section class="section-frame px-4 py-8 lg:px-0 lg:py-10">
+  <div class="grid gap-5 lg:grid-cols-3">
+    {highlights.map((item) => (
+      <Card className="site-soft-card rounded-[1.9rem] !p-6">
+        <Flex direction="column" gap="3">
+          <Badge color="cyan" variant="soft" radius="full">{item.eyebrow}</Badge>
+          <Heading size="6">{item.title}</Heading>
+          <Text size="3" color="gray">{item.copy}</Text>
+        </Flex>
+      </Card>
+    ))}
+  </div>
+</section>

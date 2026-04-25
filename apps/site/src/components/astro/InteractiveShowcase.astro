@@ -1,0 +1,20 @@
+---
+import { FloatingBallDemo } from "@/components/interactive/FloatingBallDemo";
+import { MascotIsland } from "@/components/interactive/MascotIsland";
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 max-w-3xl">
+    <p class="site-section-eyebrow">可爱但不打扰</p>
+    <h2 class="site-section-title mt-4">把轻巧感放在陪伴层，而不是让首页信息继续打架。</h2>
+    <p class="site-section-copy mt-5">
+      自定义光标会保留音乐与二胡主题，并且带上像素音符特效；右侧装饰区也只保留风格化挂件，
+      用来传达产品气质，不再把首页写成实际产品中并不存在的吉祥物设定。
+    </p>
+  </div>
+
+  <div class="grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:items-stretch">
+    <FloatingBallDemo client:visible />
+    <MascotIsland client:idle />
+  </div>
+</section>
