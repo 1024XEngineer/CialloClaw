@@ -358,6 +358,41 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
   }, rpcMethods);
 }
 
+function loadControlPanelAboutServiceModule() {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, "src/services/controlPanelAboutService.ts");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      getControlPanelAboutFeedbackChannels: () => Array<
+        | {
+            actionLabel: string;
+            description: string;
+            href: string;
+            hrefLabel: string;
+            id: string;
+            kind: "link";
+            title: string;
+          }
+        | {
+            description: string;
+            id: string;
+            kind: "placeholder";
+            note: string;
+            placeholderLabel: string;
+            title: string;
+          }
+      >;
+      getControlPanelAboutFallbackSnapshot: () => {
+        appName: string;
+        appVersion: string;
+      };
+      copyControlPanelAboutValue: (value: string, successMessage: string) => Promise<string>;
+      runControlPanelAboutAction: (action: "share") => Promise<string>;
+    };
+  });
+}
+
 function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsMutation.js");
@@ -1434,6 +1469,121 @@ test("settings service keeps RPC data_log fields authoritative over stale deskto
       Object.assign(globalThis, { window: originalWindow });
     }
   }
+});
+
+test("control panel about service exposes fallback metadata and feedback channel config", () => {
+  const { getControlPanelAboutFallbackSnapshot, getControlPanelAboutFeedbackChannels } = loadControlPanelAboutServiceModule();
+  const fallback = getControlPanelAboutFallbackSnapshot();
+  const feedbackChannels = getControlPanelAboutFeedbackChannels();
+
+  assert.deepEqual(fallback, {
+    appName: "CialloClaw",
+    appVersion: "0.1.0",
+  });
+  assert.deepEqual(feedbackChannels, [
+    {
+      actionLabel: "复制链接",
+      description: "公开问题反馈、功能建议与版本回归记录。",
+      href: "https://github.com/1024XEngineer/CialloClaw/issues",
+      hrefLabel: "github.com/1024XEngineer/CialloClaw/issues",
+      id: "github_issues",
+      kind: "link",
+      title: "GitHub Issues",
+    },
+    {
+      description: "预留微信群、QQ群或 Discord 等社群二维码图片。",
+      id: "community_qr",
+      kind: "placeholder",
+      note: "后续放入二维码图片后，会在这里直接显示预览。",
+      placeholderLabel: "待放置二维码图片",
+      title: "社群二维码",
+    },
+    {
+      description: "预留邮箱、工单表单或其它定向联系入口。",
+      id: "contact_form",
+      kind: "placeholder",
+      note: "支持后续替换成链接、表单地址或其它说明文本。",
+      placeholderLabel: "待放置链接或表单",
+      title: "邮箱 / 表单",
+    },
+  ]);
+});
+
+test("control panel about helpers copy feedback and share links", async () => {
+  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
+  const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const copiedValues: string[] = [];
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (value: string) => {
+          copiedValues.push(value);
+        },
+      },
+    },
+  });
+
+  try {
+    const feedbackCopy = await copyControlPanelAboutValue("https://github.com/1024XEngineer/CialloClaw/issues", "已复制反馈渠道链接。");
+    const shareFeedback = await runControlPanelAboutAction("share");
+
+    assert.equal(feedbackCopy, "已复制反馈渠道链接。");
+    assert.equal(shareFeedback, "已复制分享链接。");
+    assert.deepEqual(copiedValues, [
+      "https://github.com/1024XEngineer/CialloClaw/issues",
+      "https://github.com/1024XEngineer/CialloClaw",
+    ]);
+  } finally {
+    if (originalNavigatorDescriptor) {
+      Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "navigator");
+    }
+
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+  }
+});
+
+test("control panel app wires the about navigation without update-only fields", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+  const removedRuntimeCopyPattern = /Tauri\s+Runtime/;
+
+  assert.match(controlPanelAppSource, /type ControlPanelSectionId = .*"about"/);
+  assert.match(controlPanelAppSource, /navLabel: "关于"/);
+  assert.match(controlPanelAppSource, /case "about":/);
+  assert.match(controlPanelAppSource, /title="帮助与反馈"/);
+  assert.match(controlPanelAppSource, /title="版本信息"/);
+  assert.match(controlPanelAppSource, /应用内新手引导/);
+  assert.match(controlPanelAppSource, /反馈渠道/);
+  assert.match(controlPanelAppSource, /CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS/);
+  assert.match(controlPanelAppSource, /复制链接/);
+  assert.doesNotMatch(controlPanelAppSource, /快捷操作/);
+  assert.doesNotMatch(controlPanelAppSource, /打开帮助/);
+  assert.doesNotMatch(controlPanelAppSource, /提交反馈/);
+  assert.doesNotMatch(controlPanelAppSource, /打开链接/);
+  assert.doesNotMatch(controlPanelAppSource, /GitHub 项目主页/);
+  assert.doesNotMatch(controlPanelAppSource, /当前反馈/);
+  assert.doesNotMatch(controlPanelAppSource, /更多渠道/);
+  assert.doesNotMatch(controlPanelAppSource, /应用标识/);
+  assert.doesNotMatch(controlPanelAppSource, /元信息来源/);
+  assert.doesNotMatch(controlPanelAppSource, /检查更新/);
+  assert.doesNotMatch(controlPanelAppSource, removedRuntimeCopyPattern);
+});
+
+test("control panel app surfaces about action feedback in local UI state", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /const \[aboutActionFeedback, setAboutActionFeedback\] = useState<string \| null>\(null\);/);
+  assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
 });
 
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {

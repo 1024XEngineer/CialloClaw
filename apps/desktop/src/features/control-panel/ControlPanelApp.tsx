@@ -18,6 +18,16 @@ import {
 import { Button, Heading, Select, Slider, Text, TextArea, TextField } from "@radix-ui/themes";
 import isEqual from "react-fast-compare";
 import {
+  copyControlPanelAboutValue,
+  getControlPanelAboutFeedbackChannels,
+  getControlPanelAboutFallbackSnapshot,
+  loadControlPanelAboutSnapshot,
+  runControlPanelAboutAction,
+  type ControlPanelAboutAction,
+  type ControlPanelAboutFeedbackChannel,
+  type ControlPanelAboutSnapshot,
+} from "@/services/controlPanelAboutService";
+import {
   ControlPanelSaveError,
   loadControlPanelData,
   runControlPanelInspection,
@@ -39,7 +49,7 @@ import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } f
 import { showShellBallWindow } from "@/platform/shellBallWindowController";
 import "./controlPanel.css";
 
-type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models";
+type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "about";
 type ControlPanelAppearance = "light" | "dark";
 
 type NavigationGroup = {
@@ -139,6 +149,7 @@ const POSITION_MODE_OPTIONS = [
 ] as const satisfies readonly ChoiceOption<"fixed" | "draggable">[];
 
 const FLOATING_BALL_SIZE_VALUES = ["small", "medium", "large"] as const;
+const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = getControlPanelAboutFeedbackChannels();
 
 const DEFAULT_TIME_UNIT_OPTIONS = [
   { label: "分钟", value: "minute" },
@@ -241,6 +252,12 @@ const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
     navLabel: "镜子记忆",
     title: "记忆设置",
   },
+  about: {
+    group: "治理与应用",
+    icon: CircleHelp,
+    navLabel: "关于",
+    title: "关于",
+  },
   models: {
     group: "治理与应用",
     icon: ShieldCheck,
@@ -260,7 +277,7 @@ const NAVIGATION_GROUPS: NavigationGroup[] = [
   },
   {
     label: "治理与应用",
-    items: ["models"],
+    items: ["models", "about"],
   },
 ];
 
@@ -351,7 +368,7 @@ function HelpTooltip({ content }: { content: string }) {
   return (
     <Tooltip>
       <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
-        <CircleHelp size={14} strokeWidth={1.9} />
+        <CircleHelp size={15} strokeWidth={2.35} />
       </TooltipTrigger>
       <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
     </Tooltip>
@@ -516,6 +533,56 @@ function InfoRow({ label, value }: InfoRowProps) {
   );
 }
 
+function FeedbackChannelCard({ channel, onCopyLink }: { channel: ControlPanelAboutFeedbackChannel; onCopyLink: (url: string) => void }) {
+  return (
+    <article className="control-panel-shell__feedback-card" data-kind={channel.kind}>
+      <div className="control-panel-shell__feedback-card-copy">
+        <Text as="p" size="2" weight="medium" className="control-panel-shell__feedback-card-title">
+          {channel.title}
+        </Text>
+        <Text as="p" size="1" className="control-panel-shell__feedback-card-description">
+          {channel.description}
+        </Text>
+      </div>
+
+      {channel.kind === "link" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <button
+            type="button"
+            className="control-panel-shell__feedback-link-button"
+            onClick={() => onCopyLink(channel.href)}
+          >
+            {channel.actionLabel}
+          </button>
+          <code className="control-panel-shell__feedback-link-copy">{channel.hrefLabel}</code>
+        </div>
+      ) : null}
+
+      {channel.kind === "image" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <img className="control-panel-shell__feedback-image" src={channel.previewSrc} alt={channel.previewAlt} />
+          {channel.note ? (
+            <Text as="p" size="1" className="control-panel-shell__feedback-note">
+              {channel.note}
+            </Text>
+          ) : null}
+        </div>
+      ) : null}
+
+      {channel.kind === "placeholder" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <div className="control-panel-shell__feedback-placeholder" aria-hidden="true">
+            <span>{channel.placeholderLabel}</span>
+          </div>
+          <Text as="p" size="1" className="control-panel-shell__feedback-note">
+            {channel.note}
+          </Text>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 // applyControlPanelSaveResult keeps unsaved groups intact so partial saves do
 // not accidentally discard the user's remaining local edits.
 function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPanelSaveResult): ControlPanelData {
@@ -549,6 +616,10 @@ export function ControlPanelApp() {
   const onboardingSession = useDesktopOnboardingSession();
   const autoAdvancedControlPanelStepRef = useRef(false);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
+  const [aboutSnapshot, setAboutSnapshot] = useState<ControlPanelAboutSnapshot>(() => getControlPanelAboutFallbackSnapshot());
+  // About actions only affect local clipboard/help affordances, so their
+  // feedback must stay in local UI state instead of polluting formal settings.
+  const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -610,6 +681,20 @@ export function ControlPanelApp() {
         setDraft((current) => current ?? fallbackData);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadControlPanelAboutSnapshot().then((nextSnapshot) => {
+      if (!cancelled) {
+        setAboutSnapshot(nextSnapshot);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -815,6 +900,16 @@ export function ControlPanelApp() {
     } finally {
       setIsRunningInspection(false);
     }
+  };
+
+  const handleAboutAction = async (action: ControlPanelAboutAction) => {
+    const feedback = await runControlPanelAboutAction(action);
+    setAboutActionFeedback(feedback);
+  };
+
+  const handleAboutLinkCopy = async (url: string) => {
+    const feedback = await copyControlPanelAboutValue(url, "已复制反馈渠道链接。");
+    setAboutActionFeedback(feedback);
   };
 
   const renderSectionContent = () => {
@@ -1390,6 +1485,45 @@ export function ControlPanelApp() {
           </>
         );
 
+      case "about":
+        return (
+          <>
+            <SettingsCard title="帮助与反馈" description="集中展示应用内帮助入口与可扩展的反馈渠道。">
+              <InfoRow label="帮助入口" value="应用内新手引导" />
+
+              <ControlLine
+                label="反馈渠道"
+                hint="支持放置链接、二维码图片和预留位；后续只需要改 about 配置，不需要改 JSX 结构。"
+                className="control-panel-shell__row--stacked"
+              >
+                <div className="control-panel-shell__feedback-grid">
+                  {CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS.map((channel) => (
+                    <FeedbackChannelCard key={channel.id} channel={channel} onCopyLink={handleAboutLinkCopy} />
+                  ))}
+                </div>
+              </ControlLine>
+            </SettingsCard>
+
+            <SettingsCard title="分享 CialloClaw" description="复制项目地址，方便转发给协作者或朋友。">
+              <InfoRow label="分享链接" value={<code className="control-panel-shell__about-link">https://github.com/1024XEngineer/CialloClaw</code>} />
+
+              <ControlLine label="分享操作" hint="优先复制仓库地址；若当前环境不支持剪贴板，会直接显示链接。" className="control-panel-shell__row--stacked">
+                <div className="control-panel-shell__about-actions">
+                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("share")}>
+                    复制链接
+                  </Button>
+                </div>
+              </ControlLine>
+            </SettingsCard>
+
+            <SettingsCard title="版本信息" description="查看当前桌面端版本号。">
+              <InfoRow label="产品名称" value={aboutSnapshot.appName} />
+              <InfoRow label="应用版本" value={aboutSnapshot.appVersion} />
+            </SettingsCard>
+
+          </>
+        );
+
     }
   };
 
@@ -1501,6 +1635,11 @@ export function ControlPanelApp() {
               {inspectionSummary ? (
                 <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
                   {inspectionSummary}
+                </Text>
+              ) : null}
+              {aboutActionFeedback ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {aboutActionFeedback}
                 </Text>
               ) : null}
             </div>
