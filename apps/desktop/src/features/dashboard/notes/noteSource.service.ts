@@ -174,10 +174,10 @@ export async function loadNoteSourceIndex(taskSources: string[]): Promise<Source
 }
 
 /**
- * Creates a markdown note file in the first configured task-source directory.
+ * Appends a markdown note block into the primary task-source note file.
  *
  * @param taskSources Current task-source directory list.
- * @param content Markdown content that should seed the new note file.
+ * @param content Markdown content that should seed the appended note block.
  */
 export async function createNoteSource(
   taskSources: string[],
@@ -193,7 +193,7 @@ export async function createNoteSource(
 }
 
 /**
- * Saves markdown content back into one existing task-source note file.
+ * Saves markdown content back into the selected task-source note file.
  *
  * @param taskSources Current task-source directory list.
  * @param path Existing markdown note file path.

@@ -61,7 +61,38 @@ export type NoteListItem = {
   sourceNote?: {
     localOnly: boolean;
     path: string;
+    sourceLine?: number | null;
+    title?: string | null;
   } | null;
+};
+
+export type SourceNoteMetadataEntry = {
+  key: string;
+  value: string;
+};
+
+export type SourceNoteEditorDraft = {
+  agentSuggestion: string;
+  bucket: NotePreviewGroupKey;
+  checked: boolean;
+  createdAt: string;
+  dueAt: string;
+  effectiveScope: string;
+  endedAt: string;
+  extraMetadata: SourceNoteMetadataEntry[];
+  nextOccurrenceAt: string;
+  noteText: string;
+  prerequisite: string;
+  recentInstanceStatus: string;
+  repeatRule: string;
+  sourceLine: number | null;
+  sourcePath: string | null;
+  title: string;
+  updatedAt: string;
+};
+
+export type SourceNoteEditorBlock = SourceNoteEditorDraft & {
+  endLine: number;
 };
 
 export type NoteBucketsData = {

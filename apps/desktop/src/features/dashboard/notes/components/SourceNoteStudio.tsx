@@ -1,90 +1,84 @@
-import { FilePlus2, FolderTree, RefreshCcw, Save, ScanSearch, X } from "lucide-react";
+import { FilePlus2, NotebookText, RefreshCcw, Save, ScanSearch, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/utils/cn";
-import type { SourceNoteDocument } from "../notePage.types";
+import type { NoteListItem, SourceNoteEditorDraft } from "../notePage.types";
 
 type SourceNoteStudioProps = {
-  activePath: string | null;
   availabilityMessage: string | null;
-  draftContent: string;
+  draft: SourceNoteEditorDraft;
+  editingItem: NoteListItem | null;
+  fileLabel: string | null;
   isCreating: boolean;
   isDirty: boolean;
   isInspecting: boolean;
   isLoading: boolean;
   isSaving: boolean;
-  notes: SourceNoteDocument[];
-  onChange: (value: string) => void;
+  onChange: (draft: SourceNoteEditorDraft) => void;
   onClose?: () => void;
   onCreate: () => void;
   onInspect: () => void;
   onReload: () => void;
   onSave: () => void;
-  onSelect: (path: string) => void;
-  selectedNote: SourceNoteDocument | null;
   sourceRoots: string[];
   syncMessage: string | null;
 };
 
-function formatModifiedAt(value: number | null) {
-  if (!value) {
-    return "未记录修改时间";
-  }
+const bucketLabels = {
+  closed: "已结束",
+  later: "后续",
+  recurring_rule: "重复",
+  upcoming: "近期",
+} as const;
 
-  return new Date(value).toLocaleString("zh-CN", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-  });
+function formatMetadataValue(value: string) {
+  return value.trim() === "" ? "未设置" : value.trim();
 }
 
 /**
- * Renders the markdown source-note editor used by the notes dashboard modal.
+ * Renders the single-note editor used by the notes dashboard modal. The
+ * editor writes one checklist block back into the shared markdown source file
+ * instead of exposing the whole file body.
  *
- * @param props Source-note state, actions, and current selection.
+ * @param props Current note draft, editor actions, and sync state.
  * @returns The source-note editor layout.
  */
 export function SourceNoteStudio({
-  activePath,
   availabilityMessage,
-  draftContent,
+  draft,
+  editingItem,
+  fileLabel,
   isCreating,
   isDirty,
   isInspecting,
   isLoading,
   isSaving,
-  notes,
   onChange,
   onClose,
   onCreate,
   onInspect,
   onReload,
   onSave,
-  onSelect,
-  selectedNote,
   sourceRoots,
   syncMessage,
 }: SourceNoteStudioProps) {
   const canEdit = availabilityMessage === null && sourceRoots.length > 0;
-  const saveDisabled = !canEdit || isSaving || draftContent.trim() === "" || (!isDirty && !isCreating);
-  const editorTitle = isCreating ? "新便签草稿" : selectedNote?.title ?? "选择左侧 markdown 便签";
+  const hasMeaningfulContent = draft.title.trim() !== "" || draft.noteText.trim() !== "";
+  const saveDisabled = !canEdit || isSaving || !hasMeaningfulContent || (!isDirty && !isCreating);
+  const editorTitle = isCreating ? "新建便签" : draft.title.trim() || editingItem?.item.title || "编辑当前便签";
   const editorMeta = isCreating
-    ? (sourceRoots[0] ? `新文件将保存到 ${sourceRoots[0]}` : "请先配置任务来源目录")
-    : selectedNote
-      ? `${selectedNote.fileName} · ${formatModifiedAt(selectedNote.modifiedAtMs)}`
-      : "当前还没有选中 markdown 便签";
+    ? (fileLabel ? `保存时会追加到 ${fileLabel}` : "保存时会追加到主 markdown 便签文件")
+    : (fileLabel ? `当前正在编辑 ${fileLabel} 里的这张便签` : "当前正在编辑这张便签的 markdown 块");
 
   return (
     <section className="note-source-studio">
       <div className="note-source-studio__header">
         <div className="note-source-studio__heading">
-          <p className="note-preview-page__eyebrow">Markdown Sources</p>
+          <p className="note-preview-page__eyebrow">Markdown Notes</p>
           <div className="note-source-studio__title-row">
-            <FolderTree className="note-source-studio__title-icon" />
+            <NotebookText className="note-source-studio__title-icon" />
             <div>
-              <h2>任务来源便签</h2>
-              <p>在这里新建和编辑任务来源 markdown。保存后会立即触发一次巡检，让下方事项列表和源文件保持同步。</p>
+              <h2>单张便签编辑</h2>
+              <p>这里不再展开整份源文件，只编辑当前这张便签对应的 markdown 块。保存后会把元数据和正文一起写回主便签文件，并立即触发一次巡检。</p>
             </div>
           </div>
         </div>
@@ -100,11 +94,11 @@ export function SourceNoteStudio({
           </Button>
           <Button className="note-source-studio__button" disabled={!canEdit || isLoading || isSaving} onClick={onReload} type="button" variant="ghost">
             <RefreshCcw className="h-4 w-4" />
-            刷新源文件
+            刷新主文件
           </Button>
           <Button className="note-source-studio__button note-source-studio__button--primary" disabled={saveDisabled} onClick={onSave} type="button">
             <Save className="h-4 w-4" />
-            {isSaving ? "保存中..." : "保存 markdown"}
+            {isSaving ? "保存中..." : "保存便签"}
           </Button>
           {onClose ? (
             <Button className="note-source-studio__button" onClick={onClose} type="button" variant="ghost">
@@ -116,45 +110,14 @@ export function SourceNoteStudio({
       </div>
 
       <div className="note-source-studio__status-bar">
-        <span className="note-source-studio__status-copy">{availabilityMessage ?? syncMessage ?? `已连接 ${sourceRoots.length} 个任务来源目录`}</span>
+        <span className="note-source-studio__status-copy">
+          {availabilityMessage ?? syncMessage ?? `已连接 ${sourceRoots.length} 个任务来源目录，当前只编辑单张便签。`}
+        </span>
         {isDirty ? <span className="note-source-studio__dirty-pill">未保存</span> : null}
       </div>
 
-      <div className="note-source-studio__body">
-        <aside className="note-source-studio__list">
-          <div className="note-source-studio__list-header">
-            <strong>源文件</strong>
-            <span>{notes.length}</span>
-          </div>
-
-          {notes.length > 0 ? (
-            <div className="note-source-studio__list-items">
-              {notes.map((note) => (
-                <button
-                  key={note.path}
-                  className={cn("note-source-studio__list-item", note.path === activePath && "is-active")}
-                  disabled={!canEdit}
-                  onClick={() => onSelect(note.path)}
-                  type="button"
-                >
-                  <div className="note-source-studio__list-item-copy">
-                    <strong>{note.title}</strong>
-                    <span>{note.fileName}</span>
-                    <span>{formatModifiedAt(note.modifiedAtMs)}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="note-source-studio__empty">
-              {canEdit
-                ? (isLoading ? "正在扫描 markdown 源文件..." : "当前任务来源目录下还没有 markdown 便签。")
-                : "当前环境还不能编辑任务来源 markdown。"}
-            </div>
-          )}
-        </aside>
-
-        <div className="note-source-studio__editor">
+      <div className="note-source-studio__body note-source-studio__body--single">
+        <div className="note-source-studio__editor note-source-studio__editor--single">
           <div className="note-source-studio__editor-head">
             <div>
               <strong>{editorTitle}</strong>
@@ -162,13 +125,120 @@ export function SourceNoteStudio({
             </div>
           </div>
 
-          <Textarea
-            className="note-source-studio__textarea"
-            disabled={!canEdit}
-            onChange={(event) => onChange(event.target.value)}
-            placeholder={"# 新便签\n\n- [ ] 在这里写第一条待办\n"}
-            value={draftContent}
-          />
+          <div className="note-source-studio__field-grid">
+            <label className="note-source-studio__field">
+              <span>标题</span>
+              <input
+                className="note-source-studio__input"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, title: event.target.value })}
+                placeholder="可以留空，保存时会用正文第一行生成标题"
+                type="text"
+                value={draft.title}
+              />
+            </label>
+
+            <label className="note-source-studio__field">
+              <span>分组</span>
+              <select
+                className="note-source-studio__select"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, bucket: event.target.value as SourceNoteEditorDraft["bucket"] })}
+                value={draft.bucket}
+              >
+                <option value="later">后续</option>
+                <option value="upcoming">近期</option>
+                <option value="recurring_rule">重复</option>
+                <option value="closed">已结束</option>
+              </select>
+            </label>
+
+            <label className="note-source-studio__field">
+              <span>计划时间</span>
+              <input
+                className="note-source-studio__input"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, dueAt: event.target.value })}
+                placeholder="例如 2026-04-25 18:30"
+                type="text"
+                value={draft.dueAt}
+              />
+            </label>
+
+            <label className="note-source-studio__field">
+              <span>下次发生</span>
+              <input
+                className="note-source-studio__input"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, nextOccurrenceAt: event.target.value })}
+                placeholder="重复便签可填写下一次触发时间"
+                type="text"
+                value={draft.nextOccurrenceAt}
+              />
+            </label>
+
+            <label className="note-source-studio__field">
+              <span>重复规则</span>
+              <input
+                className="note-source-studio__input"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, repeatRule: event.target.value })}
+                placeholder="例如 每周一 09:00"
+                type="text"
+                value={draft.repeatRule}
+              />
+            </label>
+
+            <label className="note-source-studio__field">
+              <span>前置条件</span>
+              <input
+                className="note-source-studio__input"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, prerequisite: event.target.value })}
+                placeholder="例如 等待对方确认 / 准备材料"
+                type="text"
+                value={draft.prerequisite}
+              />
+            </label>
+
+            <label className="note-source-studio__field note-source-studio__field--wide">
+              <span>Agent 建议</span>
+              <input
+                className="note-source-studio__input"
+                disabled={!canEdit}
+                onChange={(event) => onChange({ ...draft, agentSuggestion: event.target.value })}
+                placeholder="这一条建议会写回 markdown 元数据"
+                type="text"
+                value={draft.agentSuggestion}
+              />
+            </label>
+          </div>
+
+          <div className="note-source-studio__meta-strip">
+            <div className="note-source-studio__meta-pill">
+              <span>写入分组</span>
+              <strong>{bucketLabels[draft.repeatRule.trim() !== "" ? "recurring_rule" : draft.bucket]}</strong>
+            </div>
+            <div className="note-source-studio__meta-pill">
+              <span>创建时间</span>
+              <strong>{formatMetadataValue(draft.createdAt)}</strong>
+            </div>
+            <div className="note-source-studio__meta-pill">
+              <span>最近更新</span>
+              <strong>{formatMetadataValue(draft.updatedAt)}</strong>
+            </div>
+          </div>
+
+          <label className="note-source-studio__field note-source-studio__field--stacked">
+            <span>便签正文</span>
+            <Textarea
+              className="note-source-studio__textarea note-source-studio__textarea--single"
+              disabled={!canEdit}
+              onChange={(event) => onChange({ ...draft, noteText: event.target.value })}
+              placeholder="直接写内容也可以。标题留空时，保存会自动把第一行变成 - [ ] 标题。"
+              value={draft.noteText}
+            />
+          </label>
         </div>
       </div>
     </section>

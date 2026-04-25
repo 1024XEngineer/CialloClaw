@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const PRIMARY_SOURCE_NOTE_FILE_NAME: &str = "notes.md";
+
 /// DesktopSourceNoteDocument keeps the smallest file-backed markdown note shape
 /// that the renderer needs for note-source editing.
 #[derive(Clone, Serialize)]
@@ -46,7 +48,8 @@ pub struct DesktopSourceNoteIndexSnapshot {
     pub source_roots: Vec<String>,
 }
 
-/// Loads every markdown file found under the configured task-source roots.
+/// Loads the primary markdown source note selected from the configured
+/// task-source roots.
 pub fn load_source_notes(
     trusted_sources: &[String],
     roots: &LocalPathRoots,
@@ -54,22 +57,8 @@ pub fn load_source_notes(
     let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
     let mut notes = Vec::new();
 
-    for source_root in &resolved_roots {
-        if !source_root.exists() {
-            continue;
-        }
-        if !source_root.is_dir() {
-            return Err(format!(
-                "task source is not a directory: {}",
-                source_root.display()
-            ));
-        }
-
-        let mut markdown_paths = Vec::new();
-        collect_markdown_files(source_root, &mut markdown_paths)?;
-        for markdown_path in markdown_paths {
-            notes.push(build_source_note_document(&markdown_path, source_root)?);
-        }
+    if let Some((note_path, source_root)) = resolve_primary_source_note(&resolved_roots)? {
+        notes.push(build_source_note_document(&note_path, source_root)?);
     }
 
     notes.sort_by(|left, right| {
@@ -92,7 +81,8 @@ pub fn load_source_notes(
     })
 }
 
-/// Loads markdown note metadata without reading every file body.
+/// Loads lightweight metadata for the primary markdown source note without
+/// rereading every file body under the task-source roots.
 pub fn load_source_note_index(
     trusted_sources: &[String],
     roots: &LocalPathRoots,
@@ -100,22 +90,8 @@ pub fn load_source_note_index(
     let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
     let mut notes = Vec::new();
 
-    for source_root in &resolved_roots {
-        if !source_root.exists() {
-            continue;
-        }
-        if !source_root.is_dir() {
-            return Err(format!(
-                "task source is not a directory: {}",
-                source_root.display()
-            ));
-        }
-
-        let mut markdown_paths = Vec::new();
-        collect_markdown_files(source_root, &mut markdown_paths)?;
-        for markdown_path in markdown_paths {
-            notes.push(build_source_note_index_entry(&markdown_path, source_root)?);
-        }
+    if let Some((note_path, source_root)) = resolve_primary_source_note(&resolved_roots)? {
+        notes.push(build_source_note_index_entry(&note_path, source_root)?);
     }
 
     notes.sort_by(|left, right| {
@@ -137,16 +113,15 @@ pub fn load_source_note_index(
     })
 }
 
-/// Creates one markdown note file under the first configured task-source root.
+/// Appends a new markdown note block into the primary task-source markdown
+/// file, creating that file under the first configured root when needed.
 pub fn create_source_note(
     trusted_sources: &[String],
     roots: &LocalPathRoots,
     content: &str,
 ) -> Result<DesktopSourceNoteDocument, String> {
     let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
-    let target_root = resolved_roots
-        .first()
-        .ok_or_else(|| "task source list is empty".to_string())?;
+    let (target_path, target_root) = resolve_primary_source_note_write_target(&resolved_roots)?;
     fs::create_dir_all(target_root).map_err(|error| {
         format!(
             "failed to create task source directory {}: {error}",
@@ -154,9 +129,19 @@ pub fn create_source_note(
         )
     })?;
 
-    let normalized_content = normalize_markdown_content(content);
-    let target_path = build_unique_note_path(target_root, &normalized_content);
-    fs::write(&target_path, normalized_content).map_err(|error| {
+    let next_content = if target_path.exists() {
+        let existing_content = fs::read_to_string(&target_path).map_err(|error| {
+            format!(
+                "failed to read source note {} before append: {error}",
+                target_path.display()
+            )
+        })?;
+        append_source_note_block(&existing_content, content)
+    } else {
+        normalize_markdown_content(&normalize_new_source_note_block(content))
+    };
+
+    fs::write(&target_path, next_content).map_err(|error| {
         format!(
             "failed to write source note {}: {error}",
             target_path.display()
@@ -174,7 +159,11 @@ pub fn save_source_note(
     content: &str,
 ) -> Result<DesktopSourceNoteDocument, String> {
     let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
-    let (canonical_target, source_root) = resolve_source_note_target(raw_path, &resolved_roots)?;
+    let (canonical_target, source_root) = if raw_path.trim().is_empty() {
+        resolve_primary_source_note_write_target(&resolved_roots)?
+    } else {
+        resolve_source_note_target(raw_path, &resolved_roots)?
+    };
     let normalized_content = normalize_markdown_content(content);
 
     fs::write(&canonical_target, normalized_content).map_err(|error| {
@@ -220,6 +209,62 @@ fn resolve_source_note_target<'a>(
 
     let source_root = match_source_root(&canonical_target, roots)?;
     Ok((canonical_target, source_root))
+}
+
+fn resolve_primary_source_note<'a>(
+    roots: &'a [PathBuf],
+) -> Result<Option<(PathBuf, &'a PathBuf)>, String> {
+    let (preferred_path, preferred_root) = resolve_primary_source_note_write_target(roots)?;
+    if preferred_path.exists() {
+        return Ok(Some((preferred_path, preferred_root)));
+    }
+
+    let mut existing_notes = collect_existing_markdown_files(roots)?;
+    existing_notes.sort_by(|left, right| {
+        read_modified_at_ms(right)
+            .cmp(&read_modified_at_ms(left))
+            .then_with(|| left.cmp(right))
+    });
+
+    if let Some(note_path) = existing_notes.into_iter().next() {
+        let source_root = match_source_root(&note_path, roots)?;
+        return Ok(Some((note_path, source_root)));
+    }
+
+    Ok(None)
+}
+
+fn resolve_primary_source_note_write_target<'a>(
+    roots: &'a [PathBuf],
+) -> Result<(PathBuf, &'a PathBuf), String> {
+    let default_root = roots
+        .first()
+        .ok_or_else(|| "task source list is empty".to_string())?;
+
+    for root in roots {
+        let preferred_path = build_primary_source_note_path(root);
+        if preferred_path.exists() {
+            if preferred_path.is_file() {
+                return Ok((preferred_path, root));
+            }
+            return Err(format!(
+                "primary source note path is not a file: {}",
+                preferred_path.display()
+            ));
+        }
+    }
+
+    let existing_notes = collect_existing_markdown_files(roots)?;
+    if existing_notes.len() == 1 {
+        let note_path = existing_notes
+            .into_iter()
+            .next()
+            .ok_or_else(|| "failed to resolve the single existing markdown note".to_string())?;
+        let source_root = match_source_root(&note_path, roots)?;
+        return Ok((note_path, source_root));
+    }
+
+    Ok((build_primary_source_note_path(default_root), default_root))
 }
 
 /// Source roots are resolved only from the host-trusted settings snapshot.
@@ -292,6 +337,27 @@ fn strip_workspace_prefix(raw_path: &str) -> Option<&str> {
     raw_path
         .strip_prefix("workspace/")
         .or_else(|| raw_path.strip_prefix("workspace\\"))
+}
+
+fn build_primary_source_note_path(root: &Path) -> PathBuf {
+    root.join(PRIMARY_SOURCE_NOTE_FILE_NAME)
+}
+
+fn collect_existing_markdown_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let mut result = Vec::new();
+
+    for root in roots {
+        if !root.exists() {
+            continue;
+        }
+        if !root.is_dir() {
+            return Err(format!("task source is not a directory: {}", root.display()));
+        }
+
+        collect_markdown_files(root, &mut result)?;
+    }
+
+    Ok(result)
 }
 
 fn collect_markdown_files(root: &Path, result: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -412,6 +478,9 @@ fn derive_note_title(content: &str, file_name: &str) -> String {
 
     for line in content.lines() {
         let trimmed = line.trim();
+        if let Some(checklist_title) = parse_checklist_title(trimmed) {
+            return checklist_title.to_string();
+        }
         if !trimmed.is_empty() {
             return trimmed.to_string();
         }
@@ -438,69 +507,72 @@ fn normalize_markdown_content(content: &str) -> String {
     }
 }
 
-fn build_unique_note_path(root: &Path, content: &str) -> PathBuf {
-    let base_name = build_note_file_name(content);
-    let mut candidate = root.join(&base_name);
-    if !candidate.exists() {
-        return candidate;
+fn normalize_new_source_note_block(content: &str) -> String {
+    let normalized = content.replace("\r\n", "\n");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return "- [ ] New note\nbucket: later\nnote: Add details here".to_string();
     }
 
-    let stem = candidate
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("note")
+    if normalized
+        .lines()
+        .map(str::trim)
+        .any(|line| parse_checklist_title(line).is_some())
+    {
+        return trimmed.to_string();
+    }
+
+    let lines = normalized.lines().collect::<Vec<_>>();
+    let first_non_empty_index = lines.iter().position(|line| !line.trim().is_empty());
+    let Some(first_non_empty_index) = first_non_empty_index else {
+        return "- [ ] New note".to_string();
+    };
+
+    let first_line = lines[first_non_empty_index].trim();
+    let title = first_line
+        .trim_start_matches('#')
+        .trim()
+        .trim_start_matches("- ")
+        .trim_start_matches("* ")
+        .trim();
+    let rest = lines
+        .iter()
+        .skip(first_non_empty_index + 1)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
         .to_string();
-    let extension = candidate
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("md")
-        .to_string();
 
-    let mut suffix = 2_u32;
-    while candidate.exists() {
-        candidate = root.join(format!("{stem}-{suffix}.{extension}"));
-        suffix += 1;
-    }
-
-    candidate
-}
-
-fn build_note_file_name(content: &str) -> String {
-    let title = derive_note_title(content, "note.md");
-    let slug = slugify_title(&title);
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-
-    format!("{slug}-{timestamp}.md")
-}
-
-fn slugify_title(title: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_dash = false;
-
-    for character in title.chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-            last_was_dash = false;
-            continue;
-        }
-
-        if character.is_whitespace() || character == '-' || character == '_' {
-            if !last_was_dash && !slug.is_empty() {
-                slug.push('-');
-                last_was_dash = true;
-            }
-        }
-    }
-
-    let slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        "note".to_string()
+    if rest.is_empty() {
+        format!("- [ ] {title}\nbucket: later")
     } else {
-        slug
+        format!("- [ ] {title}\nbucket: later\nnote: {rest}")
     }
+}
+
+fn append_source_note_block(existing_content: &str, new_block_content: &str) -> String {
+    let normalized_existing = existing_content.replace("\r\n", "\n");
+    let trimmed_existing = normalized_existing.trim_end_matches('\n');
+    let normalized_block = normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
+    let trimmed_block = normalized_block.trim_end_matches('\n');
+
+    if trimmed_existing.trim().is_empty() {
+        return format!("{trimmed_block}\n");
+    }
+
+    format!("{trimmed_existing}\n\n{trimmed_block}\n")
+}
+
+fn parse_checklist_title(line: &str) -> Option<&str> {
+    line.strip_prefix("- [ ] ")
+        .or_else(|| line.strip_prefix("* [ ] "))
+        .or_else(|| line.strip_prefix("- [x] "))
+        .or_else(|| line.strip_prefix("* [x] "))
+        .or_else(|| line.strip_prefix("- [X] "))
+        .or_else(|| line.strip_prefix("* [X] "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn match_source_root<'a>(target: &Path, roots: &'a [PathBuf]) -> Result<&'a PathBuf, String> {
