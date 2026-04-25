@@ -1577,6 +1577,15 @@ test("control panel app wires the about navigation without update-only fields", 
   assert.doesNotMatch(controlPanelAppSource, removedRuntimeCopyPattern);
 });
 
+test("control panel app surfaces about action feedback in local UI state", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /const \[aboutActionFeedback, setAboutActionFeedback\] = useState<string \| null>\(null\);/);
+  assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
+});
+
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule();

@@ -617,6 +617,9 @@ export function ControlPanelApp() {
   const autoAdvancedControlPanelStepRef = useRef(false);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
   const [aboutSnapshot, setAboutSnapshot] = useState<ControlPanelAboutSnapshot>(() => getControlPanelAboutFallbackSnapshot());
+  // About actions only affect local clipboard/help affordances, so their
+  // feedback must stay in local UI state instead of polluting formal settings.
+  const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -900,11 +903,13 @@ export function ControlPanelApp() {
   };
 
   const handleAboutAction = async (action: ControlPanelAboutAction) => {
-    void runControlPanelAboutAction(action).catch(() => undefined);
+    const feedback = await runControlPanelAboutAction(action);
+    setAboutActionFeedback(feedback);
   };
 
-  const handleAboutLinkCopy = (url: string) => {
-    void copyControlPanelAboutValue(url, "已复制反馈渠道链接。").catch(() => undefined);
+  const handleAboutLinkCopy = async (url: string) => {
+    const feedback = await copyControlPanelAboutValue(url, "已复制反馈渠道链接。");
+    setAboutActionFeedback(feedback);
   };
 
   const renderSectionContent = () => {
@@ -1630,6 +1635,11 @@ export function ControlPanelApp() {
               {inspectionSummary ? (
                 <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
                   {inspectionSummary}
+                </Text>
+              ) : null}
+              {aboutActionFeedback ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {aboutActionFeedback}
                 </Text>
               ) : null}
             </div>
