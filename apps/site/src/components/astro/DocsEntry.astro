@@ -1,20 +1,34 @@
 ---
 import { DOC_LINKS } from "@/lib/constants";
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
 ---
 
 <section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
-  <div class="mb-10 max-w-3xl">
-    <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">Docs and developer entry</p>
-    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Start from the source-of-truth documents, not from guesses.</h2>
-    <p class="mt-5 text-lg leading-8 text-white/70">The website should send contributors toward the same architecture, protocol, dashboard, control panel, and issue sources that guide implementation inside the repository.</p>
+  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(18rem,0.75fr)] lg:items-end">
+    <div>
+    <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">文档与开发入口</p>
+    <h2 class="site-section-title mt-4">从真源文档开始，而不是从猜测开始。</h2>
+    <p class="site-section-copy mt-5">官网应该把贡献者和用户引向同一批架构、协议、仪表盘、控制面板和 issue 真源，而不是再讲一套平行口径。</p>
+    </div>
+
+    <Card className="site-soft-card rounded-[1.9rem] !p-5">
+      <Flex direction="column" gap="3">
+        <Badge color="cyan" variant="soft" radius="full">开发提示</Badge>
+        <Text size="3" color="gray">如果你要继续深挖产品边界、正式对象、协议设计或风险链路，文档页才是真正的起点。</Text>
+      </Flex>
+    </Card>
   </div>
 
   <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
     {DOC_LINKS.map((item) => (
-      <a class="focus-ring glass-card rounded-[1.75rem] p-6 transition hover:border-white/18 hover:bg-white/10" href={item.href}>
-        <p class="text-xs tracking-[0.24em] text-cc-cyan uppercase">Read next</p>
-        <h3 class="mt-4 font-display text-2xl font-semibold text-white">{item.label}</h3>
-        <p class="mt-4 text-sm leading-7 text-white/68">{item.description}</p>
+      <a class="focus-ring" href={item.href}>
+        <Card className="site-soft-card rounded-[1.75rem] !p-6 transition hover:border-white/18 hover:bg-white/10">
+          <Flex direction="column" gap="3">
+            <Badge color="cyan" variant="soft" radius="full">继续阅读</Badge>
+            <Heading size="4">{item.label}</Heading>
+            <Text size="3" color="gray">{item.description}</Text>
+          </Flex>
+        </Card>
       </a>
     ))}
   </div>

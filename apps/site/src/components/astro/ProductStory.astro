@@ -1,45 +1,62 @@
 ---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
 const storyCards = [
   {
-    title: "Not a chat-first tool",
-    text: "CialloClaw is designed around the task in your current desktop scene, not around keeping a full-screen conversation open all day.",
+    title: "不是聊天框优先",
+    text: "CialloClaw 围绕你当前桌面现场里的任务设计，而不是让你整天挂着一个全屏聊天窗口。",
   },
   {
-    title: "Less prompt rebuilding",
-    text: "The product starts from what you already have: selected text, dragged files, notes, error messages, and the active task context.",
+    title: "更少重复补 Prompt",
+    text: "产品从你手上已经存在的内容开始：文本选中、文件拖拽、便签、报错信息，以及当前任务上下文。",
   },
   {
-    title: "Visible progress",
-    text: "The system keeps task progress, risk state, and delivery paths visible through task, run, step, event, and artifact projections.",
+    title: "进度可见",
+    text: "系统通过 task、run、step、event 和 artifact 投影，让任务进度、风险状态和交付路径保持可见。",
   },
   {
-    title: "Formal outputs",
-    text: "Results are routed through delivery_result, artifact, and citation instead of getting trapped in temporary UI bubbles.",
+    title: "正式结果出口",
+    text: "结果会通过 delivery_result、artifact 和 citation 输出，而不是被困在临时 UI 气泡里。",
   },
 ];
 ---
 
 <section id="product" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
-  <div class="mb-10 max-w-3xl">
-    <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">What is CialloClaw</p>
-    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Built for desktop scenes, task continuity, and low-disruption collaboration.</h2>
-    <p class="mt-5 text-lg leading-8 text-white/70">
-      The official product language stays task-centric. The website explains it in user-facing terms, but the underlying system still revolves around
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">task</code> as the formal object, with
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">run</code>,
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">step</code>,
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">event</code>, and
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">tool_call</code> kept as execution-compatible structures behind the scenes.
+  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(18rem,0.8fr)] lg:items-end">
+    <div>
+    <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">CialloClaw 是什么</p>
+    <h2 class="site-section-title mt-4">为桌面现场、任务连续性和低打扰协作而生。</h2>
+    <p class="site-section-copy mt-5">
+      正式产品语言始终保持 task-centric。官网会用用户更容易理解的方式解释它，但底层系统仍然以
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">task</code>
+      作为对外正式对象，并保留
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">run</code>、
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">step</code>、
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">event</code>
+      和
+      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">tool_call</code>
+      这些执行兼容对象。
     </p>
+    </div>
+
+    <Card className="site-soft-card rounded-[1.9rem] !p-5">
+      <Flex direction="column" gap="3">
+        <Badge color="violet" variant="soft" radius="full">一句话理解</Badge>
+        <Heading size="5">它不是“和你聊天的网页”，而是“贴着你当前工作现场协作的一只桌面 Agent”。</Heading>
+        <Text size="3" color="gray">因此官网的排版也不该只是堆说明卡，而应该让“入口、执行、结果”三件事一眼可读。</Text>
+      </Flex>
+    </Card>
   </div>
 
   <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
     {storyCards.map((card) => (
-      <article class="glass-card rounded-[1.75rem] p-6">
-        <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">Product story</p>
-        <h3 class="mt-4 font-display text-2xl font-semibold text-white">{card.title}</h3>
-        <p class="mt-4 text-sm leading-7 text-white/68">{card.text}</p>
-      </article>
+      <Card className="site-soft-card rounded-[1.75rem] !p-6">
+        <Flex direction="column" gap="3">
+          <Badge color="orange" variant="soft" radius="full">产品叙事</Badge>
+          <Heading size="4">{card.title}</Heading>
+          <Text size="3" color="gray">{card.text}</Text>
+        </Flex>
+      </Card>
     ))}
   </div>
 </section>

@@ -1,0 +1,51 @@
+---
+import { Badge, Button, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
+const scenes = [
+  {
+    title: "当前页面承接",
+    description: "在网页、文档、错误日志和代码现场直接起任务，而不是先切出上下文。",
+    tone: "cyan",
+  },
+  {
+    title: "轻量确认",
+    description: "先确认目标和风险等级，避免模型或工具直接跳进高风险动作。",
+    tone: "violet",
+  },
+  {
+    title: "正式交付",
+    description: "结果以 artifact 和 citation 形式留存，便于打开、分享、追溯和继续处理。",
+    tone: "orange",
+  },
+] as const;
+---
+
+<section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(20rem,1.08fr)] lg:items-center">
+    <div>
+      <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">桌面现场</p>
+      <h2 class="site-section-title mt-4">不是信息从上到下堆满一页，而是像工作台一样分出入口、过程和交付。</h2>
+      <p class="site-section-copy mt-5">这一段专门用来拉开页面节奏。相比一直竖着堆卡片，它更像一个小型产品工作台：左边讲体验主张，右边快速给出三个核心现场。</p>
+      <div class="mt-6 flex flex-wrap gap-3">
+        <Button asChild radius="full" variant="soft" size="3">
+          <a href="#workflow">看任务流</a>
+        </Button>
+        <Button asChild radius="full" variant="outline" size="3">
+          <a href="#safety">看安全边界</a>
+        </Button>
+      </div>
+    </div>
+
+    <div class="grid gap-4">
+      {scenes.map((scene, index) => (
+        <Card className="site-soft-card rounded-[1.85rem] !p-5" style={{ animation: `site-float-soft 6s ease-in-out ${index * 0.5}s infinite` }}>
+          <Flex direction="column" gap="3">
+            <Badge color={scene.tone} variant="soft" radius="full">工作现场 {index + 1}</Badge>
+            <Heading size="5">{scene.title}</Heading>
+            <Text size="3" color="gray">{scene.description}</Text>
+          </Flex>
+        </Card>
+      ))}
+    </div>
+  </div>
+</section>

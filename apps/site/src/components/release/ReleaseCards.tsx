@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { formatBytes, formatDateLabel } from "@/lib/format";
 import type { SiteRelease, SiteReleasePayload } from "@/lib/github-releases";
+import { Badge, Button, Card, Flex, Heading, Text } from "@radix-ui/themes";
 
 interface ReleaseErrorPayload extends Partial<SiteReleasePayload> {
   error?: string;
@@ -10,14 +11,14 @@ interface ReleaseErrorPayload extends Partial<SiteReleasePayload> {
 function readErrorMessage(data: SiteReleasePayload | ReleaseErrorPayload, status: number): string {
   return "error" in data && typeof data.error === "string"
     ? data.error
-    : `Release API failed: ${status}`;
+    : `Release API 请求失败：${status}`;
 }
 
 function summarizeNotes(notes: string): string {
   const condensed = notes.replace(/[#>*`]/g, " ").replace(/\s+/g, " ").trim();
 
   if (!condensed) {
-    return "Release notes are available on GitHub for the latest details and installation guidance.";
+    return "详细版本说明和安装信息请查看 GitHub Release 页面。";
   }
 
   if (condensed.length <= 180) {
@@ -29,16 +30,16 @@ function summarizeNotes(notes: string): string {
 
 function channelMeta(release: SiteRelease): { badge: string; accentClassName: string; title: string } {
   if (release.channel === "stable") {
-    return {
+      return {
       title: "Stable",
-      badge: "Recommended",
+      badge: "推荐使用",
       accentClassName: "bg-emerald-400/18 text-emerald-100",
     };
   }
 
   return {
     title: "Tip Preview",
-    badge: "Fast lane",
+    badge: "抢先体验",
     accentClassName: "bg-orange-400/18 text-orange-100",
   };
 }
@@ -47,41 +48,40 @@ function ReleaseCard({ release }: { release: SiteRelease }): ReactElement {
   const meta = channelMeta(release);
 
   return (
-    <article className="glass-card rounded-[2rem] p-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-white/56">Release channel</p>
-          <h3 className="mt-3 font-display text-3xl font-semibold text-white">{meta.title}</h3>
-        </div>
+    <Card className="site-soft-card rounded-[2rem] !p-6">
+      <Flex justify="between" align="start" gap="4">
+        <Flex direction="column" gap="3">
+          <Badge color={release.channel === "stable" ? "green" : "orange"} variant="soft" radius="full">发布通道</Badge>
+          <Heading size="6">{meta.title}</Heading>
+        </Flex>
         <span className={`rounded-full px-3 py-1 text-xs font-medium ${meta.accentClassName}`}>{meta.badge}</span>
-      </div>
+      </Flex>
 
       <div className="mt-5 flex flex-wrap gap-2 text-sm text-white/60">
         <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">{release.name}</span>
         <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">{release.tagName}</span>
-        <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">Published {formatDateLabel(release.publishedAt)}</span>
+        <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">发布时间 {formatDateLabel(release.publishedAt)}</span>
       </div>
 
-      <p className="mt-5 text-sm leading-7 text-white/68">{summarizeNotes(release.notes)}</p>
+      <Text as="p" size="3" color="gray" className="mt-5 leading-7">{summarizeNotes(release.notes)}</Text>
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <a
-          className="focus-ring inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.02]"
-          href={release.primaryAsset?.downloadUrl ?? release.htmlUrl}
-        >
-          {release.primaryAsset ? `Download ${release.primaryAsset.name}` : "View GitHub release"}
-        </a>
-        <a className="focus-ring inline-flex rounded-full border border-white/10 bg-white/6 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10" href={release.htmlUrl}>
-          Release notes
-        </a>
+        <Button asChild radius="full" size="3" highContrast>
+          <a href={release.primaryAsset?.downloadUrl ?? release.htmlUrl}>
+            {release.primaryAsset ? `下载 ${release.primaryAsset.name}` : "查看 GitHub Release"}
+          </a>
+        </Button>
+        <Button asChild radius="full" size="3" variant="soft">
+          <a href={release.htmlUrl}>版本说明</a>
+        </Button>
       </div>
 
       {release.primaryAsset ? (
         <p className="mt-4 text-sm text-white/56">
-          Primary asset: {release.primaryAsset.kind.toUpperCase()} · {formatBytes(release.primaryAsset.size)} · {release.primaryAsset.downloadCount} downloads
+          主下载：{release.primaryAsset.kind.toUpperCase()} · {formatBytes(release.primaryAsset.size)} · 已下载 {release.primaryAsset.downloadCount} 次
         </p>
       ) : (
-        <p className="mt-4 text-sm text-white/56">No Windows asset is currently marked as primary, so the card links to the release page.</p>
+        <p className="mt-4 text-sm text-white/56">当前没有明确的 Windows 主下载包，所以按钮会回退到 Release 页面。</p>
       )}
 
       {release.assets.length > 0 ? (
@@ -97,7 +97,7 @@ function ReleaseCard({ release }: { release: SiteRelease }): ReactElement {
           ))}
         </div>
       ) : null}
-    </article>
+    </Card>
   );
 }
 
@@ -105,7 +105,7 @@ function LoadingCard(): ReactElement {
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       {Array.from({ length: 2 }, (_, index) => (
-        <article key={index} className="glass-card rounded-[2rem] p-6">
+        <article key={index} className="site-soft-card rounded-[2rem] p-6">
           <div className="h-4 w-28 animate-pulse rounded-full bg-white/10"></div>
           <div className="mt-4 h-10 w-44 animate-pulse rounded-full bg-white/10"></div>
           <div className="mt-6 h-24 animate-pulse rounded-[1.5rem] bg-white/8"></div>
@@ -117,19 +117,19 @@ function LoadingCard(): ReactElement {
 
 function ErrorCard({ message }: { message: string }): ReactElement {
   return (
-    <article className="glass-card rounded-[2rem] p-6">
-      <p className="text-sm uppercase tracking-[0.24em] text-cc-peach">Release sync fallback</p>
-      <h3 className="mt-4 font-display text-3xl font-semibold text-white">GitHub release metadata is temporarily unavailable.</h3>
-      <p className="mt-4 max-w-3xl text-sm leading-7 text-white/68">{message}</p>
+    <Card className="site-soft-card rounded-[2rem] !p-6">
+      <Badge color="orange" variant="soft" radius="full">版本同步降级</Badge>
+      <Heading size="6" className="mt-4">暂时无法获取 GitHub Release 元数据。</Heading>
+      <Text as="p" size="3" color="gray" className="mt-4 max-w-3xl leading-7">{message}</Text>
       <div className="mt-6 flex flex-wrap gap-3">
-        <a className="focus-ring inline-flex rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.02]" href="https://github.com/1024XEngineer/CialloClaw/releases">
-          Open GitHub releases
-        </a>
-        <a className="focus-ring inline-flex rounded-full border border-white/10 bg-white/6 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10" href="https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828">
-          Website requirements
-        </a>
+        <Button asChild radius="full" size="3" highContrast>
+          <a href="https://github.com/1024XEngineer/CialloClaw/releases">打开 GitHub Releases</a>
+        </Button>
+        <Button asChild radius="full" size="3" variant="soft">
+          <a href="https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828">官网需求说明</a>
+        </Button>
       </div>
-    </article>
+    </Card>
   );
 }
 
@@ -155,7 +155,7 @@ export function ReleaseCards(): ReactElement {
         }
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "Unknown release sync error");
+          setError(loadError instanceof Error ? loadError.message : "未知的版本同步错误");
         }
       }
     }
@@ -178,7 +178,7 @@ export function ReleaseCards(): ReactElement {
   const releases = [payload.stable, payload.tip].filter((release): release is SiteRelease => release !== null);
 
   if (releases.length === 0) {
-    return <ErrorCard message="No stable or tip release data was returned. Please use the GitHub Releases page as the current source for downloadable builds." />;
+    return <ErrorCard message="接口没有返回 stable 或 tip 的版本数据。请暂时以 GitHub Releases 页面作为下载真源。" />;
   }
 
   return (

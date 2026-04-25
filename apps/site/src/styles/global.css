@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@radix-ui/themes/styles.css";
 
 :root {
   color-scheme: dark;
@@ -91,6 +92,39 @@ img {
   backdrop-filter: blur(18px);
 }
 
+.site-soft-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 12, 28, 0.72);
+  box-shadow: 0 18px 48px -28px rgba(96, 170, 255, 0.32);
+  backdrop-filter: blur(18px);
+}
+
+.site-section-title {
+  font-family: var(--font-display);
+  font-size: clamp(2.2rem, 4vw, 4rem);
+  line-height: 1.02;
+  font-weight: 600;
+  color: var(--cc-text);
+}
+
+.site-section-copy {
+  color: rgba(232, 238, 255, 0.74);
+  font-size: 1.05rem;
+  line-height: 1.9;
+}
+
+.site-grid-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(141, 232, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 232, 255, 0.12) 1px, transparent 1px);
+  background-size: 84px 84px;
+  mask-image: radial-gradient(circle at top center, black 35%, transparent 100%);
+}
+
 .section-frame {
   width: min(1120px, calc(100% - 32px));
   margin-inline: auto;
@@ -129,6 +163,20 @@ img {
   to {
     opacity: 0;
     transform: translate(var(--spark-x, 0), var(--spark-y, 0)) translate(-50%, -50%) scale(1.8);
+  }
+}
+
+@keyframes site-float-soft {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0);
   }
 }
 

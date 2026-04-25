@@ -1,28 +1,30 @@
 ---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
 const workflowSteps = [
   {
-    title: "Capture",
-    text: "Pick up the task from selected text, dragged files, error snippets, hover input, or voice hold near the floating ball.",
+    title: "承接",
+    text: "从悬浮球附近的文本选中、文件拖拽、错误片段、悬停输入或按住说话开始承接任务。",
   },
   {
-    title: "Confirm",
-    text: "Clarify intent before acting. The product favors lightweight confirmation over jumping straight into blind execution.",
+    title: "确认",
+    text: "先确认意图再行动。相比盲目直接执行，产品更偏向轻量确认与上下文澄清。",
   },
   {
-    title: "Plan",
-    text: "Move the request into a task-centric Agent loop that can organize the work through task, run, step, and event tracking.",
+    title: "规划",
+    text: "把请求送进 task-centric 的 Agent Loop，通过 task、run、step 和 event 组织后续工作。",
   },
   {
-    title: "Govern",
-    text: "Route risky actions through approval_request, authorization_record, audit_record, and recovery_point protections.",
+    title: "治理",
+    text: "高风险动作会进入 approval_request、authorization_record、audit_record 和 recovery_point 保护链路。",
   },
   {
-    title: "Deliver",
-    text: "Return formal outputs through delivery_result, artifact, and citation instead of leaving long results in temporary UI state.",
+    title: "交付",
+    text: "通过 delivery_result、artifact 和 citation 返回正式结果，而不是把长输出留在临时界面状态里。",
   },
   {
-    title: "Review",
-    text: "Inspect task progress, trust summaries, artifacts, and recovery signals through the dashboard and control panel surfaces.",
+    title: "回看",
+    text: "通过 dashboard 和 control panel 查看任务进度、信任摘要、artifact 和恢复信号。",
   },
 ];
 ---
@@ -30,24 +32,27 @@ const workflowSteps = [
 <section id="workflow" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
   <div class="grid gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:items-start">
     <div>
-      <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">How it works</p>
-      <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">A task moves through the Agent loop with explicit checkpoints.</h2>
-      <p class="mt-5 max-w-2xl text-lg leading-8 text-white/70">
-        The website should explain the formal flow without inventing competing objects. That means the public story remains clear while the internal architecture stays aligned with the repository source of truth.
+      <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">工作方式</p>
+      <h2 class="site-section-title mt-4">一个任务会带着明确检查点穿过整个 Agent Loop。</h2>
+      <p class="site-section-copy mt-5 max-w-2xl">
+        官网要把正式流程讲清楚，但不能发明和真源冲突的新对象。也就是说，对外叙事可以友好，但内部架构必须继续和仓库真源保持一致。
       </p>
     </div>
 
     <ol class="grid gap-4">
       {workflowSteps.map((step, index) => (
-        <li class="glass-card grid gap-4 rounded-[1.75rem] p-5 md:grid-cols-[auto_1fr] md:items-start">
-          <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/8 font-display text-lg font-semibold text-white">
-            {index + 1}
-          </div>
-          <div>
-            <h3 class="text-2xl font-semibold text-white">{step.title}</h3>
-            <p class="mt-3 text-sm leading-7 text-white/68">{step.text}</p>
-          </div>
-        </li>
+        <Card className="site-soft-card rounded-[1.75rem] !p-5">
+          <Flex gap="4" align="start">
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/8 font-display text-lg font-semibold text-white">
+              {index + 1}
+            </div>
+            <Flex direction="column" gap="2">
+              <Badge color="violet" variant="soft" radius="full">步骤 {index + 1}</Badge>
+              <Heading size="4">{step.title}</Heading>
+              <Text size="3" color="gray">{step.text}</Text>
+            </Flex>
+          </Flex>
+        </Card>
       ))}
     </ol>
   </div>

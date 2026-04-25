@@ -4,7 +4,9 @@ export const prerender = true;
 import "../styles/global.css";
 
 import Hero from "@/components/astro/Hero.astro";
+import SiteDataRibbon from "@/components/astro/SiteDataRibbon.astro";
 import ProductStory from "@/components/astro/ProductStory.astro";
+import StudioLane from "@/components/astro/StudioLane.astro";
 import HowItWorks from "@/components/astro/HowItWorks.astro";
 import CapabilityGrid from "@/components/astro/CapabilityGrid.astro";
 import TrustAndSafety from "@/components/astro/TrustAndSafety.astro";
@@ -14,43 +16,60 @@ import Footer from "@/components/astro/Footer.astro";
 import InteractiveShowcase from "@/components/astro/InteractiveShowcase.astro";
 import SiteHead from "@/components/layout/SiteHead.astro";
 import SiteHeader from "@/components/layout/SiteHeader.astro";
+import { Theme } from "@radix-ui/themes";
 import { ReleaseCards } from "@/components/release/ReleaseCards";
 
-const pageTitle = "CialloClaw | Desktop Collaboration Agent";
+const pageTitle = "CialloClaw | 桌面协作 Agent";
 const pageDescription =
-  "CialloClaw is a Windows-first desktop collaboration Agent built around floating-ball entry, task-centric orchestration, governed execution, and formal delivery results.";
+  "CialloClaw 是一个 Windows-first 的桌面协作 Agent，围绕悬浮球入口、task-centric 编排、受控执行和正式结果交付构建。";
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <SiteHead title={pageTitle} description={pageDescription} path="/" />
   </head>
   <body>
-    <div class="site-shell site-noise">
-      <SiteHeader />
-      <main>
-        <Hero />
-        <ProductStory />
-        <HowItWorks />
-        <CapabilityGrid />
-        <InteractiveShowcase />
-        <TrustAndSafety />
+    <Theme appearance="dark" accentColor="cyan" grayColor="slate" radius="large" scaling="100%">
+      <div class="site-shell site-noise">
+        <div class="site-grid-backdrop"></div>
+        <SiteHeader />
+        <main>
+          <Hero />
+          <SiteDataRibbon />
+          <ProductStory />
+          <StudioLane />
+          <CapabilityGrid />
+          <HowItWorks />
+          <InteractiveShowcase />
+          <TrustAndSafety />
 
-        <section id="download" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
-          <div class="mb-10 max-w-3xl">
-            <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">Download</p>
-            <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Windows downloads and release channels live here.</h2>
-            <p class="mt-5 text-lg leading-8 text-white/70">The final implementation syncs Stable and Tip Preview from GitHub Releases on the server side. This first slice keeps the section in place so the product story is already complete.</p>
-          </div>
+          <section id="download" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+            <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(18rem,0.8fr)] lg:items-end">
+              <div>
+                <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">下载</p>
+                <h2 class="site-section-title mt-4">Stable 与 Tip Preview 下载通道都在这里。</h2>
+                <p class="site-section-copy mt-5">这里会在服务端同步 GitHub Releases，并实时展示两个 Windows 发布通道，不再手写或硬编码安装包文件名。</p>
+              </div>
 
-          <ReleaseCards client:idle />
-        </section>
+              <div class="site-soft-card rounded-[2rem] p-6">
+                <p class="text-xs uppercase tracking-[0.24em] text-white/56">下载说明</p>
+                <ul class="mt-4 grid gap-3 text-sm leading-7 text-white/72">
+                  <li>Stable 适合大多数用户，优先提供稳定安装体验。</li>
+                  <li>Tip Preview 适合想更早尝试新改动的开发者和早期测试者。</li>
+                  <li>服务端优先选择 `.exe`，再回退到 `.msi`、`.zip` 或 Release 页面。</li>
+                </ul>
+              </div>
+            </div>
 
-        <DocsEntry />
-        <FAQ />
-      </main>
-      <Footer />
-    </div>
+            <ReleaseCards client:idle />
+          </section>
+
+          <DocsEntry />
+          <FAQ />
+        </main>
+        <Footer />
+      </div>
+    </Theme>
   </body>
 </html>

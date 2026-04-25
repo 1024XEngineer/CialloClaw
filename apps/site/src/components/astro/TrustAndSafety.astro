@@ -1,44 +1,52 @@
 ---
+import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
+
 const trustSignals = [
-  "approval_request for risky actions",
-  "authorization_record for decisions",
-  "audit_record for traceable changes",
-  "recovery_point before high-impact execution",
-  "JSON-RPC boundary between UI and local harness",
-  "no direct website dependency on desktop runtime",
+  "高风险动作先进入 approval_request",
+  "关键决策会留下 authorization_record",
+  "变更过程可追踪到 audit_record",
+  "高影响执行前保留 recovery_point",
+  "UI 与本地 harness 之间维持 JSON-RPC 正式边界",
+  "官网本身不直接依赖 desktop runtime",
 ];
 ---
 
 <section id="safety" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
   <div class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
     <div class="glass-card rounded-[2rem] p-7 lg:p-8">
-      <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">Safety and local-first</p>
-      <h2 class="mt-4 font-display text-4xl font-semibold text-white">A cute interface still needs a serious governance story.</h2>
-      <p class="mt-5 max-w-2xl text-lg leading-8 text-white/72">
-        CialloClaw should never be described as magic auto-execution. The project architecture is intentionally built around authorization, audit, recovery, and formal result delivery.
+      <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">安全与本地优先</p>
+      <h2 class="site-section-title mt-4">界面可以很可爱，但治理故事必须足够认真。</h2>
+      <p class="site-section-copy mt-5 max-w-2xl">
+        CialloClaw 不应该被描述成“魔法般自动执行一切”。它的架构是明确围绕授权、审计、恢复和正式结果交付来设计的。
       </p>
 
       <div class="mt-8 grid gap-3">
         {trustSignals.map((signal) => (
-          <div class="rounded-[1.35rem] border border-white/10 bg-white/6 px-4 py-4 text-sm leading-7 text-white/72">{signal}</div>
+          <Card className="site-soft-card rounded-[1.35rem] !p-4">
+            <Text size="3" color="gray">{signal}</Text>
+          </Card>
         ))}
       </div>
     </div>
 
     <div class="glass-card rounded-[2rem] p-7 lg:p-8">
-      <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">Desktop control surfaces</p>
+      <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">桌面控制面</p>
       <div class="mt-6 grid gap-4">
-        <article class="rounded-[1.5rem] border border-white/10 bg-slate-950/52 p-5">
-          <p class="text-xs tracking-[0.24em] text-white/56 uppercase">Dashboard</p>
-          <h3 class="mt-3 font-display text-2xl font-semibold text-white">See the current task, trust summary, and artifact path.</h3>
-          <p class="mt-4 text-sm leading-7 text-white/68">The dashboard is not a feature menu. It is the place to understand what the Agent is doing, where the task is blocked, and whether action is needed from you.</p>
-        </article>
+        <Card className="site-soft-card rounded-[1.5rem] !p-5">
+          <Flex direction="column" gap="3">
+            <Badge color="cyan" variant="soft" radius="full">Dashboard</Badge>
+            <Heading size="5">查看当前任务、信任摘要和 artifact 路径。</Heading>
+            <Text size="3" color="gray">Dashboard 不是功能菜单，而是让你理解 Agent 正在做什么、任务卡在哪、是否需要你接管的地方。</Text>
+          </Flex>
+        </Card>
 
-        <article class="rounded-[1.5rem] border border-white/10 bg-slate-950/52 p-5">
-          <p class="text-xs tracking-[0.24em] text-white/56 uppercase">Control panel</p>
-          <h3 class="mt-3 font-display text-2xl font-semibold text-white">Tune provider, memory, automation, and safety boundaries.</h3>
-          <p class="mt-4 text-sm leading-7 text-white/68">Model credentials, budget fallback, memory retention, floating ball behavior, and safety expectations all belong in the dedicated settings surface.</p>
-        </article>
+        <Card className="site-soft-card rounded-[1.5rem] !p-5">
+          <Flex direction="column" gap="3">
+            <Badge color="violet" variant="soft" radius="full">Control Panel</Badge>
+            <Heading size="5">统一管理 provider、记忆、自动化和安全边界。</Heading>
+            <Text size="3" color="gray">模型凭证、预算降级、记忆保留、悬浮球行为和安全预期，都应该落在专门的设置面板里。</Text>
+          </Flex>
+        </Card>
       </div>
     </div>
   </div>
