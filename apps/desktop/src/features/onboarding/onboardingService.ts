@@ -338,7 +338,21 @@ export async function startDesktopOnboarding(
       const cardReadyPromise = waitForOnboardingCardReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
       await setDesktopOnboardingSession(session);
       await setDesktopOnboardingPresentation(welcomePresentation);
-      await cardReadyPromise;
+      while (true) {
+        const result = await Promise.race([
+          cardReadyPromise.then(() => "ready" as const),
+          new Promise<"retry">((resolve) => {
+            window.setTimeout(() => resolve("retry"), 250);
+          }),
+        ]);
+
+        if (result === "ready") {
+          break;
+        }
+
+        await broadcastSession(session);
+        await broadcastPresentation(welcomePresentation);
+      }
       await showOnboardingWindow();
     } else {
       await setDesktopOnboardingSession(session);
