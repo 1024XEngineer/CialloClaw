@@ -40,6 +40,10 @@ type TaskDetailPanelProps = {
   steeringPending: boolean;
 };
 
+/**
+ * Shows the full task detail panel, including progress, evidence, and the
+ * dedicated jump into the formal delivery page.
+ */
 export function TaskDetailPanel({
   artifactActionPendingId,
   artifactErrorMessage,
@@ -259,7 +263,7 @@ export function TaskDetailPanel({
           </div>
           <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
             <ArrowUpRight className="h-4 w-4" />
-            {deliveryActionPending ? "打开中..." : "打开交付"}
+            {deliveryActionPending ? "打开中..." : "查看结果页"}
           </button>
         </div>
         <p className="task-detail-card__hint">该区域只消费正式 `delivery_result`，用于回看模型结论与最终交付出口。</p>
@@ -597,7 +601,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开最新结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <div className="task-detail-output-list">
@@ -689,7 +693,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <p className="task-detail-ended-copy">{experience.endedSummary ?? stateVoice.body}</p>
@@ -714,7 +718,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <div className="task-detail-output-list">

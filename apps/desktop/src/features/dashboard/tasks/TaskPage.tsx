@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
+import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
@@ -57,10 +57,10 @@ import {
   describeTaskOpenResultForCurrentTask,
   loadTaskArtifactPage,
   openTaskArtifactForTask,
-  openTaskDeliveryForTask,
   performTaskOpenExecution,
   resolveTaskOpenExecutionPlan,
 } from "./taskOutput.service";
+import { resolveDashboardTaskDeliveryRoutePath } from "./taskDeliveryNavigation";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import type { TaskEventFilters, TaskListItem } from "./taskPage.types";
@@ -286,10 +286,14 @@ export function TaskPage() {
   const selectedProgress = detailData ? getTaskProgress(detailData.detail.timeline) : null;
   const selectedStateVoice = detailData ? getTaskStateVoice(detailData.task, detailData.experience, detailData.detail.timeline) : null;
   const selectedTaskEnded = detailData ? isTaskEnded(detailData.task) : false;
+  const selectedWaitingInputGuidance =
+    detailData?.task.status === "waiting_input"
+      ? "如需修改或补充当前任务，请到悬浮球继续处理。"
+      : null;
   const selectedStageDescription = detailData
     ? selectedTaskEnded
       ? detailData.experience.endedSummary ?? selectedStateVoice?.body ?? describeCurrentStep(detailData.task, detailData.experience)
-      : `${describeCurrentStep(detailData.task, detailData.experience)} 下一步：${detailData.experience.nextAction}`
+      : selectedWaitingInputGuidance ?? `${describeCurrentStep(detailData.task, detailData.experience)} 下一步：${detailData.experience.nextAction}`
     : null;
   const selectedUpdateLabel = detailData ? new Date(detailData.task.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "--";
 
@@ -358,11 +362,11 @@ export function TaskPage() {
       invalidateTaskQueries(payload.task_id);
     });
 
-    const clearTaskSubscription = selectedTaskId
-      ? subscribeTask(selectedTaskId, () => {
-          invalidateTaskQueries(selectedTaskId);
-        })
-      : () => {};
+    const clearTaskUpdatedSubscription = subscribeTaskUpdated((payload) => {
+      // The task deck needs every task.updated hit so non-focused cards do not
+      // drift behind the backend while only the selected detail is subscribed.
+      invalidateTaskQueries(payload.task_id);
+    });
 
     const clearRuntimeSubscription = selectedTaskId
       ? subscribeTaskRuntime(selectedTaskId, () => {
@@ -372,7 +376,7 @@ export function TaskPage() {
 
     return () => {
       clearDeliverySubscription();
-      clearTaskSubscription();
+      clearTaskUpdatedSubscription();
       clearRuntimeSubscription();
     };
   }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId, taskEventFilters]);
@@ -447,7 +451,7 @@ export function TaskPage() {
     },
   });
 
-  async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>) {
+  async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>>) {
     const plan = resolveTaskOpenExecutionPlan(result);
     const sameTaskMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
     if (sameTaskMessage) {
@@ -471,16 +475,6 @@ export function TaskPage() {
     },
     onError: (error) => {
       showFeedback(error instanceof Error ? `打开成果失败：${error.message}` : "打开成果失败，请稍后再试。");
-    },
-  });
-
-  const deliveryOpenMutation = useMutation({
-    mutationFn: ({ artifactId, taskId }: { artifactId?: string; taskId: string }) => openTaskDeliveryForTask(taskId, artifactId, dataMode),
-    onSuccess: async (result) => {
-      await handleResolvedOpen(result);
-    },
-    onError: (error) => {
-      showFeedback(error instanceof Error ? `打开结果失败：${error.message}` : "打开结果失败，请稍后再试。");
     },
   });
 
@@ -553,7 +547,7 @@ export function TaskPage() {
       return;
     }
 
-    deliveryOpenMutation.mutate({ taskId: detailData.task.task_id });
+    navigate(resolveDashboardTaskDeliveryRoutePath(detailData.task.task_id));
   }
 
   function handleSteerTask(message: string) {
@@ -825,7 +819,7 @@ export function TaskPage() {
                   eventItems={taskEventsQuery.data?.items ?? []}
                   eventLoading={taskEventsQuery.isPending}
                   detailState={detailState}
-                  deliveryActionPending={deliveryOpenMutation.isPending}
+                  deliveryActionPending={false}
                   feedback={feedback}
                   onAction={handlePrimaryAction}
                   onClose={() => setDetailOpen(false)}
