@@ -72,7 +72,7 @@ export function DraggableSticker(): ReactElement {
     >
       <p className="text-xs uppercase tracking-[0.24em] text-cc-cyan">可拖贴纸</p>
       <h3 className="mt-3 font-display text-2xl font-semibold text-white">任务芯片</h3>
-      <p className="mt-3 text-sm leading-7 text-white/68">把这个小挂件拖来拖去，呼应 issue #332 里要求的“贴近桌面、轻巧灵动”的交互语言。</p>
+      <p className="mt-3 text-sm leading-7 text-white/68">把这个小挂件拖来拖去，用更轻巧的方式提醒你：这个网站也可以像桌面一样有呼吸感。</p>
       <div className="mt-4 flex flex-wrap gap-2">
         <a className="focus-ring rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/76" href="#download">
           下载
