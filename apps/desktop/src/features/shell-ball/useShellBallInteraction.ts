@@ -220,6 +220,7 @@ async function submitShellBallInput(input: {
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
+    includeForegroundBrowserPageContext: true,
     sessionId: input.sessionId,
     options: {
       confirm_required: false,

@@ -15,6 +15,7 @@ import { getCurrentConversationSessionId, rememberConversationSessionFromTask } 
 
 type DesktopWindowContextSnapshot = {
   app_name: string;
+  browser_kind?: "chrome" | "edge" | "other_browser" | "non_browser";
   title: string | null;
   url: string | null;
   window_switch_count?: number | null;
@@ -30,6 +31,7 @@ export type SubmitTextInputParams = {
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  includeForegroundBrowserPageContext?: boolean;
   includeForegroundWindowContext?: boolean;
   context?: InputContext;
   pageContext?: PageContext;
@@ -210,11 +212,24 @@ function sanitizeDesktopContextUrl(rawUrl: string | null | undefined): string | 
 
 function shouldEnrichVisualContext(
   params: AgentInputSubmitParams,
-  includeForegroundWindowContext = false,
+  options: {
+    includeForegroundBrowserPageContext?: boolean;
+    includeForegroundWindowContext?: boolean;
+  } = {},
 ): boolean {
-  return includeForegroundWindowContext
+  return options.includeForegroundWindowContext
+    || options.includeForegroundBrowserPageContext
     || compactContextRecord(params.context.page) !== undefined
     || compactContextRecord(params.context.screen) !== undefined;
+}
+
+function shouldUseForegroundBrowserPageContext(snapshot: DesktopWindowContextSnapshot | null): boolean {
+  if (!snapshot) {
+    return false;
+  }
+
+  const browserKind = snapshot.browser_kind ?? "non_browser";
+  return browserKind !== "non_browser" && sanitizeDesktopContextUrl(snapshot.url) !== undefined;
 }
 
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
@@ -270,22 +285,25 @@ export type SubmitTextInputResult = AgentInputSubmitResult;
 async function enrichTextInputSubmitParams(
   params: AgentInputSubmitParams,
   options: {
+    includeForegroundBrowserPageContext?: boolean;
     includeForegroundWindowContext?: boolean;
   } = {},
 ): Promise<AgentInputSubmitParams> {
-  const enrichVisualContext = shouldEnrichVisualContext(
-    params,
-    options.includeForegroundWindowContext ?? false,
-  );
+  const enrichVisualContext = shouldEnrichVisualContext(params, options);
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
     // Fetch the foreground window snapshot only for explicit visual requests.
     // Ordinary text submits should not pay the host-side URL lookup cost.
     enrichVisualContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
   ]);
-  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
-  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
-  const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
+  // Shell-ball free-form submits should only attach ambient page context when
+  // the last external foreground window was a browser page with a resolved URL.
+  const ambientWindowContext = options.includeForegroundBrowserPageContext
+    ? (shouldUseForegroundBrowserPageContext(windowContext) ? windowContext : null)
+    : windowContext;
+  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(ambientWindowContext) : undefined;
+  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(ambientWindowContext) : undefined;
+  const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, ambientWindowContext);
   const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
@@ -324,6 +342,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
   }
 
   const enrichedParams = await enrichTextInputSubmitParams(params, {
+    includeForegroundBrowserPageContext: input.includeForegroundBrowserPageContext,
     includeForegroundWindowContext: input.includeForegroundWindowContext,
   });
   recordMirrorConversationStart(enrichedParams);

@@ -2914,6 +2914,215 @@ test("submitTextInput can force foreground window snapshots for dashboard voice 
   assert.equal(windowContextCallCount, 1);
 });
 
+test("submitTextInput can restrict ambient foreground snapshots to browser pages with urls", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  let windowContextCallCount = 0;
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_004",
+                session_id: null,
+                title: "Summarize current page",
+                source_type: "text_input",
+                status: "processing",
+                intent: null,
+                current_step: "processing",
+                risk_level: "green",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            windowContextCallCount += 1;
+            return Promise.resolve({
+              app_name: "Chrome",
+              browser_kind: "chrome",
+              page_switch_count: 1,
+              process_path: null,
+              title: "Build Dashboard",
+              url: "https://example.com/build?ticket=secret#fragment",
+              window_switch_count: 2,
+            });
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            includeForegroundBrowserPageContext?: boolean;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "Summarize this page",
+          source: "floating_ball",
+          trigger: "hover_text_input",
+          inputMode: "text",
+          includeForegroundBrowserPageContext: true,
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    page: {
+      app_name: "Chrome",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
+      window_title: "Build Dashboard",
+    },
+    screen: {
+      summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      screen_summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      window_title: "Build Dashboard",
+    },
+    behavior: {
+      last_action: "hover_text_input",
+      dwell_millis: 5000,
+      window_switch_count: 2,
+      page_switch_count: 1,
+    },
+  });
+  assert.equal(windowContextCallCount, 1);
+});
+
+test("submitTextInput skips browser-page ambient snapshots when the foreground browser has no resolved url", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  let windowContextCallCount = 0;
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_005",
+                session_id: null,
+                title: "Summarize current page",
+                source_type: "text_input",
+                status: "processing",
+                intent: null,
+                current_step: "processing",
+                risk_level: "green",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            windowContextCallCount += 1;
+            return Promise.resolve({
+              app_name: "Chrome",
+              browser_kind: "chrome",
+              page_switch_count: 1,
+              process_path: null,
+              title: "New Tab",
+              url: null,
+              window_switch_count: 2,
+            });
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            includeForegroundBrowserPageContext?: boolean;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "Summarize this page",
+          source: "floating_ball",
+          trigger: "hover_text_input",
+          inputMode: "text",
+          includeForegroundBrowserPageContext: true,
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    behavior: {
+      last_action: "hover_text_input",
+      dwell_millis: 5000,
+    },
+  });
+  assert.equal(windowContextCallCount, 1);
+});
+
 test("shell-ball text drop helpers only accept non-file drags and extract plain text", () => {
   assert.equal(
     shouldAcceptShellBallTextDrop({
@@ -7014,8 +7223,8 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(sessionServiceSource, /export function rememberConversationSessionFromTask\(task: Task \| null \| undefined\) \{/);
   assert.doesNotMatch(interactionSource, /function ensureConversationSessionId\(\) \{/);
   assert.doesNotMatch(interactionSource, /createShellBallConversationSessionId/);
-  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
-  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
   assert.match(appSource, /getCurrentConversationSessionId,/);
   assert.match(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
