@@ -6,6 +6,7 @@ import Footer from "@/components/astro/Footer.astro";
 import { PixelErhuCursor } from "@/components/interactive/PixelErhuCursor";
 import SiteHead from "@/components/layout/SiteHead.astro";
 import SiteHeader from "@/components/layout/SiteHeader.astro";
+import { Badge, Button, Card, Flex, Heading, Text, Theme } from "@radix-ui/themes";
 
 const docs = [
   {
@@ -51,27 +52,48 @@ const docs = [
     />
   </head>
   <body>
-    <div class="site-shell site-noise">
-      <PixelErhuCursor client:load />
-      <SiteHeader />
-      <main class="section-frame px-4 py-16 lg:px-0 lg:py-24">
-        <div class="mb-12 max-w-3xl">
-          <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">文档入口</p>
-          <h1 class="mt-4 font-display text-5xl font-semibold text-white">直接阅读指导产品代码库的同一批真源文档。</h1>
-          <p class="mt-5 text-lg leading-8 text-white/72">第一版文档页刻意做成聚焦索引，而不是重复造一个平行文档系统。它把用户和贡献者引向真正定义产品语言、架构和工程边界的仓库文档。</p>
-        </div>
+    <Theme appearance="dark" accentColor="orange" grayColor="mauve" radius="large" scaling="100%">
+      <div class="site-shell site-noise">
+        <PixelErhuCursor client:load />
+        <SiteHeader />
+        <main class="section-frame px-4 py-16 lg:px-0 lg:py-24">
+          <div class="site-docs-shell">
+            <Card className="site-docs-hero rounded-[2.2rem] !p-6 lg:!p-8">
+              <Flex direction="column" gap="4">
+                <Badge color="cyan" variant="soft" radius="full">文档入口</Badge>
+                <Heading size="8">直接阅读指导产品代码库的同一批真源文档。</Heading>
+                <Text size="3" color="gray" className="max-w-3xl leading-8">
+                  文档页不是重复造一个平行说明站，而是把你引向真正定义产品语言、架构和工程边界的仓库文档。
+                  如果首页回答的是“这是什么”，那么这里回答的是“它到底怎么被设计和实现”。
+                </Text>
+                <div class="flex flex-wrap gap-3">
+                  <Button asChild radius="full" size="3" highContrast>
+                    <a href="https://github.com/1024XEngineer/CialloClaw">查看仓库</a>
+                  </Button>
+                  <Button asChild radius="full" size="3" variant="soft">
+                    <a href="/">返回首页</a>
+                  </Button>
+                </div>
+              </Flex>
+            </Card>
 
-        <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {docs.map((doc) => (
-            <a id={doc.id} class="focus-ring glass-card rounded-[1.75rem] p-6 transition hover:border-white/16 hover:bg-white/10" href={doc.href}>
-              <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">真源文档</p>
-              <h2 class="mt-4 font-display text-2xl font-semibold text-white">{doc.title}</h2>
-              <p class="mt-4 text-sm leading-7 text-white/68">{doc.description}</p>
-            </a>
-          ))}
-        </div>
-      </main>
-      <Footer />
-    </div>
+            <div class="site-docs-grid">
+              {docs.map((doc) => (
+                <a id={doc.id} class="focus-ring" href={doc.href}>
+                  <Card className="site-soft-card h-full rounded-[1.75rem] !p-6 transition hover:border-white/16 hover:bg-white/10">
+                    <Flex direction="column" gap="3">
+                      <Badge color="orange" variant="soft" radius="full">真源文档</Badge>
+                      <Heading size="5">{doc.title}</Heading>
+                      <Text size="3" color="gray">{doc.description}</Text>
+                    </Flex>
+                  </Card>
+                </a>
+              ))}
+            </div>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    </Theme>
   </body>
 </html>
