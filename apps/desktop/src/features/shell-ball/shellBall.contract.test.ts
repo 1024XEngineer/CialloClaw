@@ -86,11 +86,14 @@ import {
   clampShellBallFrameToBounds,
   createShellBallWindowGeometry,
   createShellBallWindowFrame,
+  getShellBallDockAnimationConfig,
   getShellBallHelperWindowInteractionMode,
+  getShellBallParkedDockInsetPx,
   getShellBallBubbleAnchor,
   getShellBallInputAnchor,
   getShellBallVoiceAnchor,
   measureShellBallContentSize,
+  resolveShellBallDockedHostPosition,
 } from "./useShellBallWindowMetrics";
 import {
   applyShellBallBubbleAction,
@@ -1915,6 +1918,142 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
     },
   );
 
+  const mascotFrame = {
+    x: 20,
+    y: 24,
+    width: 100,
+    height: 120,
+  };
+
+  assert.equal(
+    getShellBallParkedDockInsetPx({
+      side: "left",
+      mascotFrame,
+    }),
+    50,
+  );
+  assert.ok(
+    Math.abs(
+      getShellBallParkedDockInsetPx({
+        side: "top",
+        mascotFrame,
+      }) - 21.6,
+    ) < 0.000001,
+  );
+  assert.ok(
+    Math.abs(
+      getShellBallParkedDockInsetPx({
+        side: "bottom",
+        mascotFrame,
+      }) - 33.6,
+    ) < 0.000001,
+  );
+  assert.ok(
+    getShellBallParkedDockInsetPx({
+      side: "top",
+      mascotFrame,
+    }) < getShellBallParkedDockInsetPx({
+      side: "bottom",
+      mascotFrame,
+    }),
+  );
+  assert.deepEqual(
+    resolveShellBallDockedHostPosition({
+      bounds: {
+        minX: 0,
+        minY: 0,
+        maxX: 320,
+        maxY: 520,
+      },
+      currentPosition: { x: 144, y: 200 },
+      edgeDockState: {
+        side: "top",
+        revealed: false,
+      },
+      mascotFrame,
+    }),
+    {
+      x: 144,
+      y: -46,
+    },
+  );
+  assert.deepEqual(
+    resolveShellBallDockedHostPosition({
+      bounds: {
+        minX: 0,
+        minY: 0,
+        maxX: 320,
+        maxY: 520,
+      },
+      currentPosition: { x: 144, y: 200 },
+      edgeDockState: {
+        side: "left",
+        revealed: false,
+      },
+      mascotFrame,
+    }),
+    {
+      x: -70,
+      y: 200,
+    },
+  );
+  assert.deepEqual(
+    resolveShellBallDockedHostPosition({
+      bounds: {
+        minX: 0,
+        minY: 0,
+        maxX: 320,
+        maxY: 520,
+      },
+      currentPosition: { x: 144, y: 200 },
+      edgeDockState: {
+        side: "bottom",
+        revealed: false,
+      },
+      mascotFrame,
+    }),
+    {
+      x: 144,
+      y: 410,
+    },
+  );
+  assert.deepEqual(
+    getShellBallDockAnimationConfig({
+      side: "left",
+      mode: "dock",
+    }),
+    {
+      axis: "x",
+      direction: -1,
+      durationMs: 180,
+      overshootPx: 6,
+    },
+  );
+  assert.deepEqual(
+    getShellBallDockAnimationConfig({
+      side: "top",
+      mode: "dock",
+    }),
+    {
+      axis: "y",
+      direction: -1,
+      durationMs: 220,
+      overshootPx: 8,
+    },
+  );
+  assert.deepEqual(
+    getShellBallDockAnimationConfig({
+      side: "bottom",
+      mode: "reveal",
+    }),
+    {
+      axis: "y",
+      direction: 1,
+      durationMs: 220,
+      overshootPx: 0,
+    },
+  );
+
   const metricsSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
     "utf8",
@@ -1933,10 +2072,11 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /const pendingBallDragFrameRef = useRef<ShellBallWindowFrame \| null>\(null\);/);
   assert.match(metricsSource, /if \(input\.current\.side === "top"\) \{/);
   assert.match(metricsSource, /if \(input\.current\.side === "bottom"\) \{/);
-  assert.match(metricsSource, /if \(mascotTop < input\.bounds\.minY\) \{/);
-  assert.match(metricsSource, /if \(mascotBottom > input\.bounds\.maxY\) \{/);
-  assert.match(metricsSource, /if \(input\.edgeDockState\.side === "top"\) \{/);
-  assert.match(metricsSource, /const targetMascotBottom = input\.edgeDockState\.revealed/);
+  assert.match(metricsSource, /getShellBallParkedDockInsetPx\(/);
+  assert.match(metricsSource, /getShellBallDockAnimationConfig\(/);
+  assert.match(metricsSource, /mode: "dock"/);
+  assert.match(metricsSource, /mode: "reveal"/);
+  assert.match(metricsSource, /const overshootFrame = animationConfig === null/);
   assert.match(metricsSource, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(metricsSource, /await queueBallWindowDragPosition\(finalFrame\);/);
   assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
@@ -1944,7 +2084,6 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);
   assert.match(metricsSource, /await publishBallGeometry\(\{ snapToBounds: true \}\);/);
   assert.doesNotMatch(metricsSource, /snapToEdge/);
-  assert.doesNotMatch(metricsSource, /easeShellBallDockAnimationProgress/);
   assert.doesNotMatch(metricsSource, /SHELL_BALL_DRAG_RELEASE_POLL_MS/);
   assert.doesNotMatch(metricsSource, /armBallWindowBoundsSnapOnRelease/);
   assert.match(appSource, /beginBallWindowPointerDrag\(\{\s*x: event\.screenX,\s*y: event\.screenY,\s*\}\);/);
@@ -3154,11 +3293,29 @@ test("shell-ball mascot adjusts its posture for top and bottom edge docking", ()
       motionConfig: getShellBallMotionConfig("idle"),
     }),
   );
+  const topRevealedMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "top",
+      edgeDockRevealed: true,
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+  const bottomRevealedMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "bottom",
+      edgeDockRevealed: true,
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
 
   assert.match(topMarkup, /data-edge-dock-side="top"/);
-  assert.match(topMarkup, /translate\(0px, -6px\)/);
+  assert.match(topMarkup, /translate\(0px, -8px\)/);
   assert.match(bottomMarkup, /data-edge-dock-side="bottom"/);
-  assert.match(bottomMarkup, /translate\(0px, 6px\)/);
+  assert.match(bottomMarkup, /translate\(0px, 4px\)/);
+  assert.match(topRevealedMarkup, /translate\(0px, 0px\)/);
+  assert.match(bottomRevealedMarkup, /translate\(0px, 0px\)/);
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

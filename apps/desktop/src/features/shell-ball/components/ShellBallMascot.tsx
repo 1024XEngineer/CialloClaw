@@ -131,14 +131,14 @@ function getShellBallDockAttitude(input: {
   if (input.edgeDockSide === "top") {
     return {
       shiftX: 0,
-      shiftY: input.edgeDockRevealed ? 2 : -6,
+      shiftY: input.edgeDockRevealed ? 0 : -8,
       tiltDeg: 0,
     };
   }
 
   return {
     shiftX: 0,
-    shiftY: input.edgeDockRevealed ? -2 : 6,
+    shiftY: input.edgeDockRevealed ? 0 : 4,
     tiltDeg: 0,
   };
 }
