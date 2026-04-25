@@ -3,56 +3,45 @@ import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
 
 const storyCards = [
   {
-    title: "不是聊天框优先",
-    text: "CialloClaw 围绕你当前桌面现场里的任务设计，而不是让你整天挂着一个全屏聊天窗口。",
+    title: "从现场起任务",
+    text: "从页面文本、文件拖拽、当前报错和语音承接开始，不要求你先组织一段完整聊天上下文。",
   },
   {
-    title: "更少重复补 Prompt",
-    text: "产品从你手上已经存在的内容开始：文本选中、文件拖拽、便签、报错信息，以及当前任务上下文。",
+    title: "高风险先确认",
+    text: "写文件、执行命令和边界变更不会偷偷发生，先确认再执行才是默认路径。",
   },
   {
-    title: "进度可见",
-    text: "系统通过 task、run、step、event 和 artifact 投影，让任务进度、风险状态和交付路径保持可见。",
-  },
-  {
-    title: "正式结果出口",
-    text: "结果会通过 delivery_result、artifact 和 citation 输出，而不是被困在临时 UI 气泡里。",
+    title: "结果可回看",
+    text: "任务结果和产物会回到任务看板与 artifact 路径，而不是闪一下就消失在首页。",
   },
 ];
 ---
 
-<section id="product" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
-  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(18rem,0.8fr)] lg:items-end">
+<section id="what-is" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(18rem,0.82fr)] lg:items-end">
     <div>
-    <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">CialloClaw 是什么</p>
-    <h2 class="site-section-title mt-4">为桌面现场、任务连续性和低打扰协作而生。</h2>
-    <p class="site-section-copy mt-5">
-      正式产品语言始终保持 task-centric。官网会用用户更容易理解的方式解释它，但底层系统仍然以
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">task</code>
-      作为对外正式对象，并保留
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">run</code>、
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">step</code>、
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">event</code>
-      和
-      <code class="rounded bg-white/8 px-2 py-1 text-sm text-white">tool_call</code>
-      这些执行兼容对象。
-    </p>
+      <p class="site-section-eyebrow">产品简介</p>
+      <h2 class="site-section-title mt-4">它不是另一个聊天页，而是一只贴在工作现场的桌面协作助手。</h2>
+      <p class="site-section-copy mt-5">
+        首页只需要把产品讲明白，不需要代替任务看板、控制面板和任务详情页去堆全部信息。
+        所以这里保留三件最关键的事：怎么开始、为什么安心、结果去哪看。
+      </p>
     </div>
 
     <Card className="site-soft-card rounded-[1.9rem] !p-5">
       <Flex direction="column" gap="3">
-        <Badge color="violet" variant="soft" radius="full">一句话理解</Badge>
-        <Heading size="5">它不是“和你聊天的网页”，而是“贴着你当前工作现场协作的一只桌面 Agent”。</Heading>
-        <Text size="3" color="gray">因此官网的排版也不该只是堆说明卡，而应该让“入口、执行、结果”三件事一眼可读。</Text>
+        <Badge color="orange" variant="soft" radius="full">一句话理解</Badge>
+        <Heading size="5">它先在你身边接任务，再把复杂信息交回到正确界面里处理。</Heading>
+        <Text size="3" color="gray">因此首页会更克制，真正的状态、结果和配置各回各位。</Text>
       </Flex>
     </Card>
   </div>
 
-  <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+  <div class="grid gap-5 md:grid-cols-3">
     {storyCards.map((card) => (
       <Card className="site-soft-card rounded-[1.75rem] !p-6">
         <Flex direction="column" gap="3">
-          <Badge color="orange" variant="soft" radius="full">产品叙事</Badge>
+          <Badge color="cyan" variant="soft" radius="full">核心感受</Badge>
           <Heading size="4">{card.title}</Heading>
           <Text size="3" color="gray">{card.text}</Text>
         </Flex>

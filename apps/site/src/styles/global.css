@@ -1,20 +1,23 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&family=Outfit:wght@500;600;700;800&display=swap");
 @import "tailwindcss";
 @import "@radix-ui/themes/styles.css";
 
 :root {
   color-scheme: dark;
-  --cc-bg: #060816;
-  --cc-bg-soft: #0d1327;
-  --cc-panel: rgba(13, 19, 39, 0.72);
-  --cc-panel-strong: rgba(18, 27, 52, 0.9);
-  --cc-line: rgba(168, 185, 255, 0.16);
-  --cc-text: #f4f7ff;
-  --cc-text-muted: rgba(232, 238, 255, 0.72);
-  --cc-cyan: #8de8ff;
-  --cc-violet: #c6abff;
-  --cc-peach: #ffbe87;
-  --cc-mint: #9ef5cb;
-  --cc-shadow: 0 24px 90px -42px rgba(96, 170, 255, 0.48);
+  --cc-bg: #0a0b17;
+  --cc-bg-soft: #15172a;
+  --cc-panel: rgba(20, 22, 42, 0.78);
+  --cc-panel-strong: rgba(28, 31, 58, 0.92);
+  --cc-line: rgba(255, 255, 255, 0.09);
+  --cc-text: #fff9f1;
+  --cc-text-muted: rgba(255, 246, 234, 0.72);
+  --cc-cyan: #91e6ff;
+  --cc-violet: #b7b0ff;
+  --cc-peach: #ffbf80;
+  --cc-mint: #a8f2d5;
+  --cc-pink: #ff7aa2;
+  --cc-gold: #ffd36e;
+  --cc-shadow: 0 32px 80px -42px rgba(255, 122, 162, 0.42);
 }
 
 @theme inline {
@@ -29,9 +32,11 @@
   --color-cc-violet: var(--cc-violet);
   --color-cc-peach: var(--cc-peach);
   --color-cc-mint: var(--cc-mint);
+  --color-cc-pink: var(--cc-pink);
+  --color-cc-gold: var(--cc-gold);
   --shadow-cc-glow: var(--cc-shadow);
-  --font-sans: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Noto Sans SC", "Outfit", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", "Noto Sans SC", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
 }
 
 html {
@@ -44,10 +49,10 @@ body {
   color: var(--cc-text);
   font-family: var(--font-sans);
   background:
-    radial-gradient(circle at 12% 8%, rgba(141, 232, 255, 0.14), transparent 25rem),
-    radial-gradient(circle at 82% 12%, rgba(198, 171, 255, 0.18), transparent 24rem),
-    radial-gradient(circle at 50% 100%, rgba(255, 190, 135, 0.1), transparent 30rem),
-    linear-gradient(180deg, #060816 0%, #0b1022 36%, #060816 100%);
+    radial-gradient(circle at 12% 10%, rgba(255, 122, 162, 0.18), transparent 24rem),
+    radial-gradient(circle at 78% 14%, rgba(145, 230, 255, 0.16), transparent 24rem),
+    radial-gradient(circle at 50% 100%, rgba(255, 211, 110, 0.12), transparent 30rem),
+    linear-gradient(180deg, #0a0b17 0%, #111427 34%, #0a0b17 100%);
 }
 
 * {
@@ -78,51 +83,129 @@ img {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  opacity: 0.16;
+  opacity: 0.1;
   background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 26px 26px;
+  background-size: 28px 28px;
   mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
 }
 
 .glass-card {
   border: 1px solid var(--cc-line);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05));
   box-shadow: var(--cc-shadow);
   backdrop-filter: blur(18px);
 }
 
 .site-soft-card {
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(8, 12, 28, 0.72);
-  box-shadow: 0 18px 48px -28px rgba(96, 170, 255, 0.32);
-  backdrop-filter: blur(18px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(18, 20, 38, 0.78);
+  box-shadow: 0 24px 60px -36px rgba(255, 122, 162, 0.38);
+  backdrop-filter: blur(22px);
 }
 
 .site-section-title {
   font-family: var(--font-display);
-  font-size: clamp(2.2rem, 4vw, 4rem);
-  line-height: 1.02;
-  font-weight: 600;
+  font-size: clamp(2rem, 4vw, 4rem);
+  line-height: 1.04;
+  font-weight: 700;
   color: var(--cc-text);
+}
+
+.site-section-eyebrow {
+  font-size: 0.78rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--cc-peach);
 }
 
 .site-section-copy {
   color: rgba(232, 238, 255, 0.74);
-  font-size: 1.05rem;
-  line-height: 1.9;
+  font-size: 1.02rem;
+  line-height: 1.88;
+}
+
+.site-lead {
+  color: rgba(255, 246, 234, 0.82);
+  font-size: clamp(1.04rem, 2vw, 1.18rem);
+  line-height: 1.88;
+}
+
+.site-brand-orb {
+  background: linear-gradient(135deg, #8fe8ff 0%, #fff9f1 48%, #ff9ac2 100%);
+  box-shadow: 0 16px 34px -18px rgba(255, 122, 162, 0.86);
 }
 
 .site-grid-backdrop {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.22;
+  opacity: 0.16;
   background-image:
-    linear-gradient(rgba(141, 232, 255, 0.12) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(141, 232, 255, 0.12) 1px, transparent 1px);
-  background-size: 84px 84px;
-  mask-image: radial-gradient(circle at top center, black 35%, transparent 100%);
+    linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size: 92px 92px;
+  mask-image: radial-gradient(circle at top center, black 28%, transparent 100%);
+}
+
+.site-chip {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.site-hero-accent {
+  color: var(--cc-peach);
+}
+
+.site-hero-card::after {
+  content: "";
+  position: absolute;
+  inset: auto -12% -14% auto;
+  width: 16rem;
+  height: 16rem;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255, 122, 162, 0.22), transparent 70%);
+  pointer-events: none;
+}
+
+.site-mascot-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.25rem;
+  height: 2.4rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cc-text);
+  font-size: 0.95rem;
+}
+
+.site-window-card {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.site-download-shell {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top right, rgba(145, 230, 255, 0.08), transparent 18rem),
+    radial-gradient(circle at bottom left, rgba(255, 122, 162, 0.12), transparent 18rem),
+    rgba(12, 14, 28, 0.62);
+}
+
+.site-mascot-button {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    radial-gradient(circle at top left, rgba(255, 154, 194, 0.36), transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    rgba(22, 23, 42, 0.82);
 }
 
 .section-frame {

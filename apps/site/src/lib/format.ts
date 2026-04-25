@@ -1,24 +1,24 @@
 export function formatDateLabel(input: string | null): string {
   if (!input) {
-    return "Unknown publish time";
+    return "未知";
   }
 
   const date = new Date(input);
 
   if (Number.isNaN(date.getTime())) {
-    return "Unknown publish time";
+    return "未知";
   }
 
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
-    month: "short",
+    month: "long",
     day: "numeric",
   }).format(date);
 }
 
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "Unknown size";
+    return "未知";
   }
 
   const units = ["B", "KB", "MB", "GB"];

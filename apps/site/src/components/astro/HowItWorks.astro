@@ -1,55 +1,60 @@
 ---
 import { Badge, Card, Flex, Heading, Text } from "@radix-ui/themes";
 
-const workflowSteps = [
+const surfaces = [
   {
-    title: "承接",
-    text: "从悬浮球附近的文本选中、文件拖拽、错误片段、悬停输入或按住说话开始承接任务。",
+    title: "悬浮球入口",
+    text: "只负责承接你眼前的任务线索，尽量低打扰。",
+    show: "文本选中、文件拖拽、报错、语音、轻量确认",
+    avoid: "长篇说明、所有历史结果、完整设置项",
   },
   {
-    title: "确认",
-    text: "先确认意图再行动。相比盲目直接执行，产品更偏向轻量确认与上下文澄清。",
+    title: "任务看板",
+    text: "任务进行到哪里、卡住没有、产物在哪，都应该在这里看。",
+    show: "任务进度、产物路径、风险状态、结果回看",
+    avoid: "模型凭证、全局开关、低频配置",
   },
   {
-    title: "规划",
-    text: "把请求送进 task-centric 的 Agent Loop，通过 task、run、step 和 event 组织后续工作。",
-  },
-  {
-    title: "治理",
-    text: "高风险动作会进入 approval_request、authorization_record、audit_record 和 recovery_point 保护链路。",
-  },
-  {
-    title: "交付",
-    text: "通过 delivery_result、artifact 和 citation 返回正式结果，而不是把长输出留在临时界面状态里。",
-  },
-  {
-    title: "回看",
-    text: "通过 dashboard 和 control panel 查看任务进度、信任摘要、artifact 和恢复信号。",
+    title: "控制面板",
+    text: "真正低频但关键的能力边界，放在专门的设置面里。",
+    show: "模型、记忆、自动化、安全边界、偏好设置",
+    avoid: "首页介绍、任务正文、临时交互反馈",
   },
 ];
 ---
 
-<section id="workflow" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
+<section id="surfaces" class="section-frame px-4 py-20 lg:px-0 lg:py-24">
   <div class="grid gap-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:items-start">
     <div>
-      <p class="text-sm tracking-[0.28em] text-cc-violet uppercase">工作方式</p>
-      <h2 class="site-section-title mt-4">一个任务会带着明确检查点穿过整个 Agent Loop。</h2>
+      <p class="site-section-eyebrow">界面分工</p>
+      <h2 class="site-section-title mt-4">把信息放回对应界面，首页就不会再堆成一整面墙。</h2>
       <p class="site-section-copy mt-5 max-w-2xl">
-        官网要把正式流程讲清楚，但不能发明和真源冲突的新对象。也就是说，对外叙事可以友好，但内部架构必须继续和仓库真源保持一致。
+        你提到“图四、图五、图六指代不明”，本质上就是界面职责没讲清楚。
+        这次首页明确只做介绍和引导，不再替别的界面承担它们本该负责的信息。
       </p>
     </div>
 
     <ol class="grid gap-4">
-      {workflowSteps.map((step, index) => (
+      {surfaces.map((surface, index) => (
         <Card className="site-soft-card rounded-[1.75rem] !p-5">
           <Flex gap="4" align="start">
             <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/8 font-display text-lg font-semibold text-white">
               {index + 1}
             </div>
             <Flex direction="column" gap="2">
-              <Badge color="violet" variant="soft" radius="full">步骤 {index + 1}</Badge>
-              <Heading size="4">{step.title}</Heading>
-              <Text size="3" color="gray">{step.text}</Text>
+              <Badge color="violet" variant="soft" radius="full">界面 {index + 1}</Badge>
+              <Heading size="4">{surface.title}</Heading>
+              <Text size="3" color="gray">{surface.text}</Text>
+              <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                <div class="rounded-[1.25rem] border border-white/8 bg-white/6 p-4">
+                  <p class="text-xs tracking-[0.22em] text-cc-cyan uppercase">应该放这里</p>
+                  <p class="mt-2 text-sm leading-7 text-white/72">{surface.show}</p>
+                </div>
+                <div class="rounded-[1.25rem] border border-white/8 bg-[rgba(255,255,255,0.03)] p-4">
+                  <p class="text-xs tracking-[0.22em] text-cc-peach uppercase">不要继续堆这里</p>
+                  <p class="mt-2 text-sm leading-7 text-white/62">{surface.avoid}</p>
+                </div>
+              </div>
             </Flex>
           </Flex>
         </Card>

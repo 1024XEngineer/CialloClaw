@@ -3,6 +3,7 @@ export const prerender = true;
 
 import "../../styles/global.css";
 import Footer from "@/components/astro/Footer.astro";
+import { PixelErhuCursor } from "@/components/interactive/PixelErhuCursor";
 import SiteHead from "@/components/layout/SiteHead.astro";
 import SiteHeader from "@/components/layout/SiteHeader.astro";
 
@@ -37,12 +38,6 @@ const docs = [
     href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/protocol-design.md",
     description: "正式 JSON-RPC 边界、方法、通知与稳定合同。",
   },
-  {
-    id: "issue-332",
-    title: "Issue #332 官网需求",
-    href: "https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828",
-    description: "包含可拖元素、吉祥物互动、自定义光标与 release 同步的原始官网需求。",
-  },
 ];
 ---
 
@@ -51,12 +46,13 @@ const docs = [
   <head>
     <SiteHead
       title="CialloClaw 文档入口"
-      description="CialloClaw 架构、产品、仪表盘、设置、协议和官网需求真源文档的入口页。"
+      description="CialloClaw 架构、产品、仪表盘、设置与协议真源文档的入口页。"
       path="/docs"
     />
   </head>
   <body>
     <div class="site-shell site-noise">
+      <PixelErhuCursor client:load />
       <SiteHeader />
       <main class="section-frame px-4 py-16 lg:px-0 lg:py-24">
         <div class="mb-12 max-w-3xl">

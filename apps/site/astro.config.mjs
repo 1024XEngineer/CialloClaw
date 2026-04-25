@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   site: process.env.PUBLIC_SITE_URL || "https://cialloclaw.vercel.app",
   output: "server",
+  devToolbar: {
+    enabled: false,
+  },
   integrations: [react()],
   adapter: vercel(),
   vite: {

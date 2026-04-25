@@ -1,9 +1,10 @@
 export const SITE_URL = "https://cialloclaw.vercel.app";
 
 export const PRIMARY_NAV_ITEMS = [
-  { href: "#product", label: "产品" },
-  { href: "#workflow", label: "工作方式" },
-  { href: "#safety", label: "安全" },
+  { href: "#what-is", label: "CialloClaw 是什么" },
+  { href: "#install", label: "安装运行" },
+  { href: "#quick-start", label: "快速上手" },
+  { href: "#highlights", label: "核心亮点" },
   { href: "#download", label: "下载" },
   { href: "/docs", label: "文档" },
   { href: "https://github.com/1024XEngineer/CialloClaw", label: "GitHub" },
@@ -34,11 +35,6 @@ export const DOC_LINKS = [
     href: "/docs#protocol-design",
     label: "协议设计",
     description: "查看让桌面 UI 与本地 harness 保持一致的 JSON-RPC 正式边界。",
-  },
-  {
-    href: "https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828",
-    label: "Issue #332",
-    description: "查看官网动态体验与 Release 同步需求的原始任务说明。",
   },
 ] as const;
 
