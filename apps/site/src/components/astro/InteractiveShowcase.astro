@@ -1,37 +1,49 @@
 ---
-import { CuteCursor, ClickSparkPreview } from "@/components/interactive/CuteCursor";
+import { PixelErhuCursor } from "@/components/interactive/PixelErhuCursor";
 import { DraggableSticker } from "@/components/interactive/DraggableSticker";
 import { FloatingBallDemo } from "@/components/interactive/FloatingBallDemo";
 import { MascotIsland } from "@/components/interactive/MascotIsland";
+import { Badge, Button, Card, Flex, Heading, Text } from "@radix-ui/themes";
 ---
 
-<CuteCursor client:load />
+<PixelErhuCursor client:load />
 <MascotIsland client:idle />
 <DraggableSticker client:visible />
 
 <section class="section-frame px-4 py-20 lg:px-0 lg:py-24">
-  <div class="mb-10 max-w-3xl">
-    <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">Interactive layer</p>
-    <h2 class="mt-4 font-display text-4xl font-semibold text-white sm:text-5xl">Playful motion is used as a supporting layer, not as a distraction.</h2>
-    <p class="mt-5 text-lg leading-8 text-white/70">The website picks up the issue #332 direction with a mascot island, a draggable sticker, a custom pointer layer for desktop devices, and a floating ball concept panel. Reduced-motion users still get the full content without extra animation pressure.</p>
+  <div class="mb-10 grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(20rem,0.85fr)] lg:items-end">
+    <div>
+      <p class="text-sm tracking-[0.28em] text-cc-peach uppercase">互动层</p>
+      <h2 class="site-section-title mt-4">像素二胡光标、吉祥物和悬浮球演示一起营造轻巧又可爱的陪伴感。</h2>
+      <p class="site-section-copy mt-5">参考流畅可爱的网站表达方式，但保持边界清楚：浏览器里展示的是交互语言和产品心智，不是假装能直接控制你本地桌面的一层壳。</p>
+    </div>
+
+    <Card className="site-soft-card rounded-[2rem] !p-6">
+      <Flex direction="column" gap="3">
+        <Badge color="cyan" variant="soft" radius="full">本轮重点</Badge>
+        <Heading size="5">这一层专门解决“页面不够灵”和“交互不够可爱”的问题。</Heading>
+        <Text size="3" color="gray">像素二胡光标不再用带迟滞的大圆形跟随，也不再用图片；点击反馈改成更短促的像素火花，不再遮挡正文。</Text>
+        <Button asChild radius="full" size="3">
+          <a href="#download">去看下载区</a>
+        </Button>
+      </Flex>
+    </Card>
   </div>
 
-  <div class="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+  <div class="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:items-stretch">
     <FloatingBallDemo client:visible />
 
-    <div class="glass-card rounded-[2rem] p-6">
-      <p class="text-xs uppercase tracking-[0.24em] text-cc-violet">Interaction notes</p>
-      <h3 class="mt-4 font-display text-3xl font-semibold text-white">Website interactions stay lightweight and honest.</h3>
-      <ul class="mt-5 grid gap-3 text-sm leading-7 text-white/68">
-        <li>Custom cursor is only enabled on pointer-fine devices and is disabled for reduced motion.</li>
-        <li>Drag behavior is local website state only, with no persistence beyond the sticker position.</li>
-        <li>The floating ball panel is clearly framed as a concept demo rather than a fake runtime action.</li>
-        <li>Clicks use short-lived spark feedback so the page feels alive without covering the reading flow.</li>
-      </ul>
-
-      <div class="mt-6">
-        <ClickSparkPreview client:load />
-      </div>
-    </div>
+    <Card className="site-soft-card rounded-[2rem] !p-6">
+      <Flex direction="column" gap="4">
+        <Badge color="violet" variant="soft" radius="full">交互说明</Badge>
+        <Heading size="6">官网交互只做有意义的活泼感，不做噱头。</Heading>
+        <div class="grid gap-3 text-sm leading-7 text-white/72">
+          <p>像素二胡光标只在桌面指针设备开启，并在 reduced motion 下自动关闭。</p>
+          <p>拖拽贴纸只保留本地网页位置状态，不伪造更多“系统能力”。</p>
+          <p>悬浮球面板明确是概念演示，不会冒充真实 desktop RPC 行为。</p>
+          <p>页面动效应该让产品更灵动，而不是让信息层级继续打架。</p>
+        </div>
+      </Flex>
+    </Card>
   </div>
 </section>

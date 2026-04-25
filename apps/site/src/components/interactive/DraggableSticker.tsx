@@ -70,22 +70,22 @@ export function DraggableSticker(): ReactElement {
       whileDrag={{ scale: 1.03, rotate: -3 }}
       transition={{ type: "spring", stiffness: 280, damping: 24 }}
     >
-      <p className="text-xs uppercase tracking-[0.24em] text-cc-cyan">Draggable sticker</p>
-      <h3 className="mt-3 font-display text-2xl font-semibold text-white">Task chip</h3>
-      <p className="mt-3 text-sm leading-7 text-white/68">Move this little widget around to echo the playful desktop-near interaction language requested in issue #332.</p>
+      <p className="text-xs uppercase tracking-[0.24em] text-cc-cyan">可拖贴纸</p>
+      <h3 className="mt-3 font-display text-2xl font-semibold text-white">任务芯片</h3>
+      <p className="mt-3 text-sm leading-7 text-white/68">把这个小挂件拖来拖去，呼应 issue #332 里要求的“贴近桌面、轻巧灵动”的交互语言。</p>
       <div className="mt-4 flex flex-wrap gap-2">
         <a className="focus-ring rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/76" href="#download">
-          Download
+          下载
         </a>
         <a className="focus-ring rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/76" href="/docs">
-          Docs
+          文档
         </a>
         <button
           type="button"
           onPointerDown={resetPosition}
           className="focus-ring rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/76"
         >
-          Reset
+          归位
         </button>
       </div>
     </motion.div>
