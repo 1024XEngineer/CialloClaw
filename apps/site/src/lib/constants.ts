@@ -1,76 +1,76 @@
 export const SITE_URL = "https://cialloclaw.vercel.app";
 
 export const PRIMARY_NAV_ITEMS = [
-  { href: "#product", label: "Product" },
-  { href: "#workflow", label: "How it works" },
-  { href: "#safety", label: "Safety" },
-  { href: "#download", label: "Download" },
-  { href: "/docs", label: "Docs" },
+  { href: "#product", label: "产品" },
+  { href: "#workflow", label: "工作方式" },
+  { href: "#safety", label: "安全" },
+  { href: "#download", label: "下载" },
+  { href: "/docs", label: "文档" },
   { href: "https://github.com/1024XEngineer/CialloClaw", label: "GitHub" },
 ] as const;
 
 export const DOC_LINKS = [
   {
     href: "/docs#architecture-overview",
-    label: "Architecture overview",
-    description: "Read how task, run, delivery_result, artifact, and governance fit together.",
+    label: "架构总览",
+    description: "了解 task、run、delivery_result、artifact 与治理链路如何组成同一条正式主线。",
   },
   {
     href: "/docs#product-interaction-design",
-    label: "Product interaction design",
-    description: "See how the floating ball, lightweight input, and dashboard work together.",
+    label: "产品交互设计",
+    description: "查看悬浮球、轻量输入和仪表盘如何组成低打扰的桌面协作体验。",
   },
   {
     href: "/docs#dashboard-design",
-    label: "Dashboard design",
-    description: "Review the dashboard as the task-centric control surface and trust summary.",
+    label: "仪表盘设计",
+    description: "查看 task-centric 工作台如何承接任务进度、信任摘要和正式结果。",
   },
   {
     href: "/docs#control-panel-settings",
-    label: "Control panel settings",
-    description: "Explore provider, memory, automation, and safety settings in one place.",
+    label: "控制面板设置",
+    description: "在同一处查看 provider、记忆、自动化和安全边界设置。",
   },
   {
     href: "/docs#protocol-design",
-    label: "Protocol design",
-    description: "Check the JSON-RPC boundary that keeps the desktop UI and local harness aligned.",
+    label: "协议设计",
+    description: "查看让桌面 UI 与本地 harness 保持一致的 JSON-RPC 正式边界。",
   },
   {
     href: "https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828",
     label: "Issue #332",
-    description: "Follow the original website requirements for lively interaction and release sync.",
+    description: "查看官网动态体验与 Release 同步需求的原始任务说明。",
   },
 ] as const;
 
 export const FAQ_ITEMS = [
   {
-    question: "Is CialloClaw a chatbot?",
+    question: "CialloClaw 是聊天机器人吗？",
     answer:
-      "No. CialloClaw is a Windows-first desktop collaboration Agent. It uses lightweight nearby entry points, task-centric orchestration, and formal delivery_result and artifact outputs instead of making chat the whole product.",
+      "不是。CialloClaw 是一个 Windows first 的桌面协作 Agent。它以近场入口、task-centric 编排和正式的 delivery_result / artifact 输出为核心，而不是把聊天窗口当成整个产品。",
   },
   {
-    question: "What platforms does it target today?",
+    question: "目前主要支持哪些平台？",
     answer:
-      "The current product direction and engineering baseline are Windows first. The desktop runtime, local-service harness, and task flows are all designed around a Windows desktop workspace.",
+      "当前产品方向和工程基线都是 Windows first。桌面 runtime、本地 harness 和任务流都围绕 Windows 桌面工作现场设计。",
   },
   {
-    question: "Why is the floating ball emphasized so much?",
+    question: "为什么悬浮球会被反复强调？",
     answer:
-      "Because the floating ball is the low-friction entry point. It lets users start from selected text, dragged files, current errors, hover input, or voice without switching into a heavy chat window first.",
+      "因为悬浮球是低摩擦入口。它允许用户从文本选中、文件拖拽、当前错误、悬停输入或语音承接开始，而不是先切进一个笨重的聊天窗口。",
   },
   {
-    question: "How are risky actions handled?",
+    question: "高风险动作会怎么处理？",
     answer:
-      "File writes, command execution, workspace boundary changes, and other risky actions are designed to flow through approval_request, authorization_record, audit_record, and recovery_point safeguards before formal delivery.",
+      "文件写入、命令执行、工作区边界变化等高风险动作，都会先进入 approval_request、authorization_record、audit_record 和 recovery_point 保护链路，再进入正式交付。",
   },
   {
-    question: "What is the difference between Stable and Tip Preview?",
+    question: "Stable 和 Tip Preview 有什么区别？",
     answer:
-      "Stable is the recommended release channel for most users. Tip Preview tracks the faster-moving tag intended for developers and early testers who want the latest changes sooner.",
+      "Stable 是推荐给大多数用户的稳定通道。Tip Preview 跟踪更快更新的 tag，更适合开发者和愿意抢先体验新变化的早期测试者。",
   },
   {
-    question: "Do website downloads talk to the local desktop runtime?",
+    question: "官网的下载区会直接连接本地桌面 runtime 吗？",
     answer:
-      "No. The website is intentionally independent from apps/desktop, local-service, workers, Named Pipe, and local storage. It only presents product information and synced release metadata.",
+      "不会。官网刻意与 apps/desktop、local-service、workers、Named Pipe 和本地存储解耦，它只负责展示产品信息和同步后的 release 元数据。",
   },
 ] as const;

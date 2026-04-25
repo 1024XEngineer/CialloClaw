@@ -9,49 +9,49 @@ import SiteHeader from "@/components/layout/SiteHeader.astro";
 const docs = [
   {
     id: "architecture-overview",
-    title: "Architecture overview",
+    title: "架构总览",
     href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/architecture-overview.md",
-    description: "System positioning, layered boundaries, task-centric flow, and governance architecture.",
+    description: "系统定位、分层边界、task-centric 主链路和治理架构。",
   },
   {
     id: "product-interaction-design",
-    title: "Product interaction design",
+    title: "产品交互设计",
     href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/product-interaction-design.md",
-    description: "Floating ball entry, hover input, voice hold, selected text, and desktop collaboration semantics.",
+    description: "悬浮球入口、悬停输入、语音承接、文本选中与桌面协作语义。",
   },
   {
     id: "dashboard-design",
-    title: "Dashboard design",
+    title: "仪表盘设计",
     href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/dashboard-design.md",
-    description: "Task overview, trust summary, memory, safety, and visibility expectations for the dashboard.",
+    description: "仪表盘对任务总览、信任摘要、记忆、安全与可见性的承接方式。",
   },
   {
     id: "control-panel-settings",
-    title: "Control panel settings",
+    title: "控制面板设置",
     href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/control-panel-settings.md",
-    description: "Provider, model, memory, automation, floating ball, and budget control surfaces.",
+    description: "Provider、模型、记忆、自动化、悬浮球和预算控制面。",
   },
   {
     id: "protocol-design",
-    title: "Protocol design",
+    title: "协议设计",
     href: "https://github.com/1024XEngineer/CialloClaw/blob/main/docs/protocol-design.md",
-    description: "Formal JSON-RPC boundaries, methods, notifications, and stable contracts.",
+    description: "正式 JSON-RPC 边界、方法、通知与稳定合同。",
   },
   {
     id: "issue-332",
-    title: "Issue #332 website requirements",
+    title: "Issue #332 官网需求",
     href: "https://github.com/1024XEngineer/CialloClaw/issues/332#issue-4321666828",
-    description: "The original request for a lively website with draggable elements, mascot interaction, custom cursor, and release sync.",
+    description: "包含可拖元素、吉祥物互动、自定义光标与 release 同步的原始官网需求。",
   },
 ];
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <SiteHead
-      title="CialloClaw Docs Entry"
-      description="Entry page for the source-of-truth CialloClaw architecture, product, dashboard, settings, protocol, and website requirement documents."
+      title="CialloClaw 文档入口"
+      description="CialloClaw 架构、产品、仪表盘、设置、协议和官网需求真源文档的入口页。"
       path="/docs"
     />
   </head>
@@ -60,15 +60,15 @@ const docs = [
       <SiteHeader />
       <main class="section-frame px-4 py-16 lg:px-0 lg:py-24">
         <div class="mb-12 max-w-3xl">
-          <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">Docs entry</p>
-          <h1 class="mt-4 font-display text-5xl font-semibold text-white">Use the same source-of-truth docs that guide the product codebase.</h1>
-          <p class="mt-5 text-lg leading-8 text-white/72">This first docs page is intentionally a focused index rather than a duplicate documentation system. It points contributors and users to the project documents that define product language, architecture, and engineering boundaries.</p>
+          <p class="text-sm tracking-[0.28em] text-cc-cyan uppercase">文档入口</p>
+          <h1 class="mt-4 font-display text-5xl font-semibold text-white">直接阅读指导产品代码库的同一批真源文档。</h1>
+          <p class="mt-5 text-lg leading-8 text-white/72">第一版文档页刻意做成聚焦索引，而不是重复造一个平行文档系统。它把用户和贡献者引向真正定义产品语言、架构和工程边界的仓库文档。</p>
         </div>
 
         <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
           {docs.map((doc) => (
             <a id={doc.id} class="focus-ring glass-card rounded-[1.75rem] p-6 transition hover:border-white/16 hover:bg-white/10" href={doc.href}>
-              <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">Source of truth</p>
+              <p class="text-xs tracking-[0.24em] text-cc-peach uppercase">真源文档</p>
               <h2 class="mt-4 font-display text-2xl font-semibold text-white">{doc.title}</h2>
               <p class="mt-4 text-sm leading-7 text-white/68">{doc.description}</p>
             </a>
