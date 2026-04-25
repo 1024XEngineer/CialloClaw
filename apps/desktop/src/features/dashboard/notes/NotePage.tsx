@@ -132,7 +132,7 @@ export function NotePage() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
-  const [expandedBucket, setExpandedBucket] = useState<"upcoming" | "later" | "recurring_rule" | "closed" | null>("upcoming");
+  const [expandedBucket, setExpandedBucket] = useState<NotePreviewGroupKey>("upcoming");
   const [showMoreClosed, setShowMoreClosed] = useState(false);
   const [canvasCards, setCanvasCards] = useState<NoteCanvasCard[]>([]);
   const [boardSeeded, setBoardSeeded] = useState(false);
@@ -1145,10 +1145,113 @@ export function NotePage() {
     setIsRailDropTarget(false);
   }
 
-  function toggleBucket(bucket: "upcoming" | "later" | "recurring_rule" | "closed") {
-    setExpandedBucket((current) => (current === bucket ? null : bucket));
+  function toggleBucket(bucket: NotePreviewGroupKey) {
+    setExpandedBucket(bucket);
     if (!drawerOpen) {
       setDrawerOpen(true);
+    }
+  }
+
+  function resolveRailDropBucket(itemId: string): NotePreviewGroupKey | null {
+    if (!drawerOpen) {
+      return noteItemsById.get(itemId)?.item.bucket ?? null;
+    }
+
+    return expandedBucket;
+  }
+
+  async function runNoteUpdateForRailDrop(itemId: string, action: NotepadAction) {
+    const outcome = await updateNote(itemId, action, dataMode);
+    await invalidateNoteBuckets(outcome.result.refresh_groups);
+    return outcome.result.notepad_item;
+  }
+
+  /**
+   * Returning a card from the board into the sidebar keeps the board layout
+   * local-only, while still using formal note actions when the protocol
+   * already supports the requested bucket transition.
+   */
+  async function syncBoardCardToRailBucket(item: NoteListItem, targetBucket: NotePreviewGroupKey) {
+    const sourceBucket = item.item.bucket;
+    const sourceLabel = getNoteBucketLabel(sourceBucket);
+    const targetLabel = getNoteBucketLabel(targetBucket);
+    const presentRailFeedback = (message: string) => {
+      window.setTimeout(() => showFeedback(message), 0);
+    };
+
+    try {
+      if (item.sourceNote?.localOnly && targetBucket !== sourceBucket) {
+        if (drawerOpen) {
+          setExpandedBucket(sourceBucket);
+        }
+        presentRailFeedback(`这张源便签还没进入正式事项流，先放回${sourceLabel}。`);
+        return;
+      }
+
+      if (targetBucket === sourceBucket) {
+        if (drawerOpen) {
+          setExpandedBucket(targetBucket);
+        }
+        presentRailFeedback(drawerOpen ? `已放回${targetLabel}分组。` : "已收回侧边栏，可继续在原分组查看。");
+        return;
+      }
+
+      if (sourceBucket === "later" && targetBucket === "upcoming") {
+        await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
+        if (drawerOpen) {
+          setExpandedBucket("upcoming");
+        }
+        presentRailFeedback("已放进近期分组，并同步更新便签状态。");
+        return;
+      }
+
+      if (sourceBucket === "recurring_rule" && targetBucket === "closed") {
+        await runNoteUpdateForRailDrop(item.item.item_id, "cancel_recurring");
+        if (drawerOpen) {
+          setExpandedBucket("closed");
+        }
+        presentRailFeedback("已放进已结束分组，并结束这条重复规则。");
+        return;
+      }
+
+      if (sourceBucket === "closed") {
+        const restoredItem = await runNoteUpdateForRailDrop(item.item.item_id, "restore");
+        const restoredBucket = restoredItem?.bucket ?? sourceBucket;
+
+        if (restoredBucket === targetBucket) {
+          if (drawerOpen) {
+            setExpandedBucket(restoredBucket);
+          }
+          presentRailFeedback(`已恢复到${targetLabel}分组。`);
+          return;
+        }
+
+        if (restoredBucket === "later" && targetBucket === "upcoming") {
+          await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
+          if (drawerOpen) {
+            setExpandedBucket("upcoming");
+          }
+          presentRailFeedback("已恢复并提前到近期分组。");
+          return;
+        }
+
+        if (drawerOpen) {
+          setExpandedBucket(restoredBucket);
+        }
+        presentRailFeedback(`当前正式状态还不能直接拖到${targetLabel}，已恢复到${getNoteBucketLabel(restoredBucket)}。`);
+        return;
+      }
+
+      if (drawerOpen) {
+        setExpandedBucket(sourceBucket);
+      }
+      presentRailFeedback(`当前正式状态还不能直接拖到${targetLabel}，已放回${sourceLabel}。`);
+    } catch (error) {
+      if (drawerOpen) {
+        setExpandedBucket(sourceBucket);
+      }
+      const message = error instanceof Error ? error.message : "请稍后再试。";
+      presentRailFeedback(`便签状态同步失败：${message}`);
     }
   }
 
@@ -1316,9 +1419,9 @@ export function NotePage() {
         event.clientY >= railRect.top &&
         event.clientY <= railRect.bottom;
       setIsRailDropTarget(overRail);
-      // Returning a board card to the sidebar should point back to the formal
-      // source bucket instead of creating a new local grouping.
-      setActiveRailDropBucket(overRail ? noteItemsById.get(itemId)?.item.bucket ?? null : null);
+      // The open drawer treats its currently expanded bucket as the active drop
+      // target so users can steer cards back into one visible group at a time.
+      setActiveRailDropBucket(overRail ? resolveRailDropBucket(itemId) : null);
     }
 
     if (!dragState.moved && Math.hypot(deltaX, deltaY) > 4) {
@@ -1347,11 +1450,13 @@ export function NotePage() {
         event.clientY <= railRect.bottom;
       if (droppedOverRail) {
         const returnedItem = noteItemsById.get(itemId);
+        const railDropBucket = resolveRailDropBucket(itemId);
         unpinNoteFromCanvas(itemId);
-        if (drawerOpen && returnedItem) {
-          setExpandedBucket(returnedItem.item.bucket);
+        if (returnedItem && railDropBucket) {
+          void syncBoardCardToRailBucket(returnedItem, railDropBucket);
+        } else {
+          showFeedback("已收回侧边栏。");
         }
-        showFeedback(drawerOpen ? "已放回侧边栏对应分组。" : "已收回侧边栏，对应分组里可以继续查看。");
       }
     }
 
@@ -1512,6 +1617,7 @@ export function NotePage() {
                       onCanvasDragStart={handleDrawerCardDragStart}
                       onSelect={openNoteDetail}
                       onToggle={() => toggleBucket("upcoming")}
+                      stackCards
                       title="近期"
                       trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : visibleUpcomingItems.length}</span>}
                     />
@@ -1529,6 +1635,7 @@ export function NotePage() {
                       onCanvasDragStart={handleDrawerCardDragStart}
                       onSelect={openNoteDetail}
                       onToggle={() => toggleBucket("later")}
+                      stackCards
                       title="后续"
                       trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : visibleLaterItems.length}</span>}
                     />
@@ -1546,6 +1653,7 @@ export function NotePage() {
                       onCanvasDragStart={handleDrawerCardDragStart}
                       onSelect={openNoteDetail}
                       onToggle={() => toggleBucket("recurring_rule")}
+                      stackCards
                       title="重复"
                       trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : visibleRecurringItems.length}</span>}
                     />
@@ -1570,7 +1678,7 @@ export function NotePage() {
                                     <p className="note-preview-finished-group__title">{group.title}</p>
                                     <p className="note-preview-finished-group__description">{group.description}</p>
                                   </div>
-                                  <div className="note-preview-shell__list">
+                                  <div className={cn("note-preview-shell__list", group.items.length > 1 && "note-preview-shell__list--stacked")}>
                                     {group.items.map((entry) => (
                                       <NotePreviewCard
                                         draggableToCanvas

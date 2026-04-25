@@ -28,6 +28,7 @@ type NotePreviewSectionProps = {
   ) => void;
   onSelect: (itemId: string) => void;
   onToggle: () => void;
+  stackCards?: boolean;
   title: string;
   trailing?: ReactNode;
   variant?: "default" | "hint";
@@ -51,6 +52,7 @@ export function NotePreviewSection({
   onCanvasDragStart,
   onSelect,
   onToggle,
+  stackCards = false,
   title,
   trailing,
   variant = "default",
@@ -72,7 +74,7 @@ export function NotePreviewSection({
 
       {isExpanded ? (
         <div className="note-preview-shell__bucket-body">
-          <div className="note-preview-shell__list">
+          <div className={cn("note-preview-shell__list", stackCards && items.length > 1 && "note-preview-shell__list--stacked")}>
             {errorMessage ? (
               <div className="note-preview-shell__empty note-preview-shell__empty--error">{errorMessage}</div>
             ) : items.length > 0 ? (
