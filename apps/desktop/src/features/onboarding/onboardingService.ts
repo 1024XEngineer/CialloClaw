@@ -322,6 +322,16 @@ export async function startDesktopOnboarding(
     (currentWindowLabel === "dashboard" || currentWindowLabel === "control-panel" ? currentWindowLabel : "shell-ball");
   const welcomePresentation = await buildDefaultWelcomePresentation(windowLabel);
 
+  // Prime the shared storage before the on-demand window mounts so the very
+  // first render can read the session/presentation even if it misses the first
+  // cross-window event broadcast.
+  saveStoredValue(DESKTOP_ONBOARDING_SESSION_KEY, session);
+  if (welcomePresentation !== null) {
+    saveStoredValue(DESKTOP_ONBOARDING_PRESENTATION_KEY, welcomePresentation);
+  } else {
+    removeStoredValue(DESKTOP_ONBOARDING_PRESENTATION_KEY);
+  }
+
   await setDesktopOnboardingLoadingState({
     message: "正在打开引导...",
     windowLabel,
