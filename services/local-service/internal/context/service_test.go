@@ -63,3 +63,56 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 		t.Fatalf("expected numeric behavior counters to be normalized, got %+v", snapshot)
 	}
 }
+
+func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.T) {
+	service := NewService()
+
+	snapshot := service.Capture(map[string]any{
+		"source": "floating_ball",
+		"input": map[string]any{
+			"type": "text",
+			"text": "看看当前屏幕上哪里出错了",
+			"page_context": map[string]any{
+				"title":        " Build Pipeline ",
+				"url":          " https://example.com/build ",
+				"app_name":     " Chrome ",
+				"window_title": " Build Pipeline - Browser ",
+			},
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        " Legacy Page Title ",
+				"url":          " https://example.com/legacy ",
+				"app_name":     " Legacy Browser ",
+				"window_title": " Legacy Window ",
+				"visible_text": " fallback visible text ",
+			},
+			"screen_summary":      " build failed before release ",
+			"hover_target":        " publish button ",
+			"last_action":         " switch_window ",
+			"dwell_millis":        float64(8200),
+			"copy_count":          float64(1),
+			"window_switch_count": float64(3),
+			"page_switch_count":   float64(2),
+			"screen": map[string]any{
+				"visible_text": " fatal build error ",
+			},
+		},
+	})
+
+	if snapshot.PageTitle != "Build Pipeline" || snapshot.PageURL != "https://example.com/build" || snapshot.AppName != "Chrome" {
+		t.Fatalf("expected input.page_context to stay authoritative, got %+v", snapshot)
+	}
+	if snapshot.WindowTitle != "Build Pipeline - Browser" {
+		t.Fatalf("expected input.page_context window title to win, got %+v", snapshot)
+	}
+	if snapshot.VisibleText != "fallback visible text" {
+		t.Fatalf("expected context.page visible_text fallback when page_context omits it, got %+v", snapshot)
+	}
+	if snapshot.ScreenSummary != "build failed before release" || snapshot.HoverTarget != "publish button" {
+		t.Fatalf("expected flat screen fallbacks to stay normalized, got %+v", snapshot)
+	}
+	if snapshot.LastAction != "switch_window" || snapshot.DwellMillis != 8200 || snapshot.CopyCount != 1 || snapshot.WindowSwitches != 3 || snapshot.PageSwitches != 2 {
+		t.Fatalf("expected flat behavior counters to be normalized, got %+v", snapshot)
+	}
+}

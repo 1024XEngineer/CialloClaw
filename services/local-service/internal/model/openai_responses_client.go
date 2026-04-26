@@ -147,7 +147,11 @@ func (c *OpenAIResponsesClient) GenerateText(ctx context.Context, request Genera
 		},
 	})
 	if err != nil {
-		return GenerateTextResponse{}, classifyOpenAIRequestError(err)
+		classifiedErr := classifyOpenAIRequestError(err)
+		if chatCompletionsFallbackEnabled(classifiedErr) {
+			return c.generateTextViaChatCompletions(ctx, request)
+		}
+		return GenerateTextResponse{}, classifiedErr
 	}
 
 	return GenerateTextResponse{
@@ -186,7 +190,11 @@ func (c *OpenAIResponsesClient) GenerateToolCalls(ctx context.Context, request T
 
 	response, err := c.client.Responses.New(ctx, params)
 	if err != nil {
-		return ToolCallResult{}, classifyOpenAIRequestError(err)
+		classifiedErr := classifyOpenAIRequestError(err)
+		if chatCompletionsFallbackEnabled(classifiedErr) {
+			return c.generateToolCallsViaChatCompletions(ctx, request)
+		}
+		return ToolCallResult{}, classifiedErr
 	}
 
 	return ToolCallResult{

@@ -1,72 +1,292 @@
 /**
- * Control panel editing flow keeps a local draft so desktop settings can be
- * reviewed and persisted without mutating the last loaded snapshot in place.
+ * ControlPanelApp renders the desktop settings surface with a sidebar-driven
+ * layout while preserving the existing draft, inspection, and save flows.
  */
-import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { GripHorizontal, X } from "lucide-react";
-import { Button, Heading, SegmentedControl, Slider, Switch, Text, TextArea, TextField } from "@radix-ui/themes";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Window } from "@tauri-apps/api/window";
+import {
+  BrainCircuit,
+  CircleHelp,
+  GripHorizontal,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { Button, Heading, Select, Slider, Text, TextArea, TextField } from "@radix-ui/themes";
 import isEqual from "react-fast-compare";
 import {
+  copyControlPanelAboutValue,
+  getControlPanelAboutFeedbackChannels,
+  getControlPanelAboutFallbackSnapshot,
+  loadControlPanelAboutSnapshot,
+  runControlPanelAboutAction,
+  type ControlPanelAboutAction,
+  type ControlPanelAboutFeedbackChannel,
+  type ControlPanelAboutSnapshot,
+} from "@/services/controlPanelAboutService";
+import {
+  ControlPanelSaveError,
   loadControlPanelData,
   runControlPanelInspection,
   saveControlPanelData,
+  validateControlPanelModel,
   type ControlPanelData,
+  type ControlPanelModelValidationOptions,
+  type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
+import { loadSettings } from "@/services/settingsService";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
+import {
+  advanceDesktopOnboarding,
+  setDesktopOnboardingPresentation,
+  startDesktopOnboarding,
+} from "@/features/onboarding/onboardingService";
+import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
+import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
+import { showShellBallWindow } from "@/platform/shellBallWindowController";
+import "./controlPanel.css";
 
-type PanelTone = "blush" | "warm" | "mist" | "leaf";
+type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "about";
+type ControlPanelAppearance = "light" | "dark";
 
-type SectionHeaderProps = {
-  titleId: string;
+type NavigationGroup = {
+  label: string;
+  items: ControlPanelSectionId[];
+};
+
+type SectionMeta = {
+  group: string;
+  icon: LucideIcon;
+  navLabel: string;
+  title: string;
+};
+
+type StatusPillProps = {
+  children: ReactNode;
+  tone: "live" | "pending" | "synced";
+};
+
+type ModelValidationFeedback = {
+  message: string;
+  tone: "neutral" | "warning";
+};
+
+type SidebarItemProps = {
+  active: boolean;
+  item: SectionMeta;
+  onSelect: () => void;
+};
+
+type SettingsCardProps = {
+  children: ReactNode;
+  className?: string;
+  description?: string;
   title: string;
 };
 
 type ControlLineProps = {
-  label: string;
-  hint?: string;
   children: ReactNode;
-  tone?: PanelTone;
   className?: string;
+  disabled?: boolean;
+  hint?: string;
+  label: string;
 };
 
 type ToggleLineProps = {
-  label: string;
-  description?: string;
   checked: boolean;
+  disabled?: boolean;
+  description?: string;
+  label: string;
   onCheckedChange: (checked: boolean) => void;
-  tone?: PanelTone;
-  className?: string;
 };
 
 type InfoRowProps = {
   label: string;
   value: ReactNode;
-  tone?: PanelTone;
-  className?: string;
 };
 
-/**
- * Maps the current data source into a presentational badge for the control
- * panel header.
- *
- * @param source Control-panel data source mode.
- * @returns Badge copy and color metadata for the UI.
- */
-function getSourceCopy(source: ControlPanelData["source"]) {
-  if (source === "rpc") {
+type TimeIntervalInputProps = {
+  interval: {
+    unit: string;
+    value: number;
+  };
+  onUnitChange: (unit: string) => void;
+  onValueChange: (value: number) => void;
+};
+
+type ChoiceOption<T extends string = string> = {
+  label: string;
+  value: T;
+};
+
+const LANGUAGE_OPTIONS = [
+  { label: "简体中文", value: "zh-CN" },
+  { label: "English", value: "en-US" },
+] as const;
+
+const MEMORY_LIFECYCLE_OPTIONS = [
+  { label: "3 天", value: "3d" },
+  { label: "7 天", value: "7d" },
+  { label: "15 天", value: "15d" },
+  { label: "30 天", value: "30d" },
+] as const;
+
+const INSPECTION_INTERVAL_OPTIONS = [
+  { label: "15 分钟", unit: "minute", value: 15 },
+  { label: "30 分钟", unit: "minute", value: 30 },
+  { label: "1 小时", unit: "hour", value: 1 },
+  { label: "6 小时", unit: "hour", value: 6 },
+  { label: "1 天", unit: "day", value: 1 },
+] as const;
+
+const THEME_MODE_OPTIONS = [
+  { label: "跟随系统", value: "follow_system" },
+  { label: "浅色", value: "light" },
+  { label: "深色", value: "dark" },
+] as const satisfies readonly ChoiceOption<"follow_system" | "light" | "dark">[];
+
+const POSITION_MODE_OPTIONS = [
+  { label: "固定", value: "fixed" },
+  { label: "可拖动", value: "draggable" },
+] as const satisfies readonly ChoiceOption<"fixed" | "draggable">[];
+
+const FLOATING_BALL_SIZE_VALUES = ["small", "medium", "large"] as const;
+const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = getControlPanelAboutFeedbackChannels();
+
+const DEFAULT_TIME_UNIT_OPTIONS = [
+  { label: "分钟", value: "minute" },
+  { label: "小时", value: "hour" },
+  { label: "天", value: "day" },
+  { label: "周", value: "week" },
+  { label: "个月", value: "month" },
+] as const satisfies readonly ChoiceOption[];
+
+const TIME_UNIT_LABELS: Record<string, string> = {
+  minute: "分钟",
+  hour: "小时",
+  day: "天",
+  week: "周",
+  month: "个月",
+};
+
+function buildInspectionIntervalOptionValue(interval: { unit: string; value: number }) {
+  return `${interval.value}:${interval.unit}`;
+}
+
+function parseInspectionIntervalOptionValue(optionValue: string) {
+  const matchedOption = INSPECTION_INTERVAL_OPTIONS.find(
+    (option) => buildInspectionIntervalOptionValue(option) === optionValue,
+  );
+
+  if (matchedOption) {
     return {
-      badge: "LIVE",
-      label: "JSON-RPC",
-      color: "green" as const,
+      unit: matchedOption.unit,
+      value: matchedOption.value,
     };
   }
 
-  return {
-    badge: "MOCK",
-    label: "本地快照",
-    color: "amber" as const,
-  };
+  return INSPECTION_INTERVAL_OPTIONS[0];
 }
+
+function buildTimeUnitOptions(currentUnit: string): ChoiceOption[] {
+  if (DEFAULT_TIME_UNIT_OPTIONS.some((option) => option.value === currentUnit)) {
+    return [...DEFAULT_TIME_UNIT_OPTIONS];
+  }
+
+  return [
+    ...DEFAULT_TIME_UNIT_OPTIONS,
+    {
+      label: TIME_UNIT_LABELS[currentUnit] ?? currentUnit,
+      value: currentUnit,
+    },
+  ];
+}
+
+function normalizeIntervalNumberInput(rawValue: string, fallbackValue: number) {
+  const parsedValue = Number.parseInt(rawValue, 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+    return fallbackValue;
+  }
+
+  return parsedValue;
+}
+
+function getFloatingBallSizeSliderValue(size: string) {
+  const matchedIndex = FLOATING_BALL_SIZE_VALUES.indexOf(size as (typeof FLOATING_BALL_SIZE_VALUES)[number]);
+  return matchedIndex === -1 ? 1 : matchedIndex;
+}
+
+function getFloatingBallSizeFromSliderValue(value: number | undefined) {
+  if (value === 0) {
+    return "small";
+  }
+
+  if (value === 2) {
+    return "large";
+  }
+
+  return "medium";
+}
+
+const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
+  automation: {
+    group: "协作策略",
+    icon: Workflow,
+    navLabel: "任务巡检",
+    title: "任务与巡检",
+  },
+  desktop: {
+    group: "基础控制",
+    icon: Sparkles,
+    navLabel: "悬浮球",
+    title: "悬浮球",
+  },
+  general: {
+    group: "基础控制",
+    icon: Settings2,
+    navLabel: "通用设置",
+    title: "通用设置",
+  },
+  memory: {
+    group: "协作策略",
+    icon: BrainCircuit,
+    navLabel: "镜子记忆",
+    title: "记忆设置",
+  },
+  about: {
+    group: "治理与应用",
+    icon: CircleHelp,
+    navLabel: "关于",
+    title: "关于",
+  },
+  models: {
+    group: "治理与应用",
+    icon: ShieldCheck,
+    navLabel: "模型与安全",
+    title: "模型与安全",
+  },
+};
+
+const NAVIGATION_GROUPS: NavigationGroup[] = [
+  {
+    label: "基础控制",
+    items: ["general", "desktop"],
+  },
+  {
+    label: "协作策略",
+    items: ["memory", "automation"],
+  },
+  {
+    label: "治理与应用",
+    items: ["models", "about"],
+  },
+];
 
 /**
  * Resolves the save feedback copy shown after settings are persisted.
@@ -75,173 +295,548 @@ function getSourceCopy(source: ControlPanelData["source"]) {
  * @param needRestart Whether the current change set requires an app restart.
  * @returns User-facing save feedback copy.
  */
-function getApplyModeCopy(applyMode: string, needRestart: boolean, source: ControlPanelData["source"]) {
-  const localSnapshotSuffix = source === "mock" ? " 当前仍在使用本地快照，不会写入后端。": "";
-
+function getApplyModeCopy(applyMode: string, needRestart: boolean) {
   if (needRestart) {
-    return `部分设置需要重启桌面端后生效。${localSnapshotSuffix}`;
+    return "部分设置需要重启桌面端后生效。";
   }
 
   if (applyMode === "next_task_effective") {
-    return `设置已保存，将在下一个任务周期生效。${localSnapshotSuffix}`;
+    return "设置已保存，将在下一个任务周期生效。";
   }
 
-  return `设置已即时生效。${localSnapshotSuffix}`;
+  return "设置已即时生效。";
+}
+
+function buildLocalInspectorFallback(settings: ControlPanelData["settings"]): ControlPanelData["inspector"] {
+  return {
+    task_sources: settings.task_automation.task_sources,
+    inspection_interval: settings.task_automation.inspection_interval,
+    inspect_on_file_change: settings.task_automation.inspect_on_file_change,
+    inspect_on_startup: settings.task_automation.inspect_on_startup,
+    remind_before_deadline: settings.task_automation.remind_before_deadline,
+    remind_when_stale: settings.task_automation.remind_when_stale,
+  };
 }
 
 /**
- * Renders the visual section header used by control panel setting groups.
- *
- * @param props Heading metadata for the current section.
- * @returns A stylized heading row for the section.
+ * Keeps the control-panel shell renderable when the RPC bootstrap fails by
+ * falling back to the last persisted local snapshot under an explicit error banner.
  */
-function SectionHeader({ titleId, title }: SectionHeaderProps) {
-  return (
-    <div className="control-panel-page__section-header">
-      <Heading id={titleId} size="4" className="control-panel-page__section-title">
-        {title}
-      </Heading>
+function buildLocalControlPanelSnapshot(): ControlPanelData {
+  const settings = loadSettings().settings;
 
-      <div className="control-panel-page__section-ornament" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-      </div>
-    </div>
+  return {
+    settings,
+    inspector: buildLocalInspectorFallback(settings),
+    providerApiKeyInput: "",
+    securitySummary: {
+      security_status: "execution_error",
+      pending_authorizations: 0,
+      latest_restore_point: null,
+      token_cost_summary: {
+        current_task_tokens: 0,
+        current_task_cost: 0,
+        today_tokens: 0,
+        today_cost: 0,
+        single_task_limit: 0,
+        daily_limit: 0,
+        budget_auto_downgrade: settings.models.budget_auto_downgrade,
+      },
+    },
+    source: "rpc",
+    warnings: [],
+  };
+}
+
+function shouldSurfaceRpcErrorBanner(message: string) {
+  return message.includes("暂时不可用") || message.includes("重新获取最新配置失败");
+}
+
+function resolveControlPanelAppearance(
+  themeMode: ControlPanelData["settings"]["general"]["theme_mode"],
+  systemAppearance: ControlPanelAppearance,
+): ControlPanelAppearance {
+  if (themeMode === "dark") {
+    return "dark";
+  }
+
+  if (themeMode === "light") {
+    return "light";
+  }
+
+  return systemAppearance;
+}
+
+function StatusPill({ children, tone }: StatusPillProps) {
+  return <span className={`control-panel-shell__status-pill control-panel-shell__status-pill--${tone}`}>{children}</span>;
+}
+
+function HelpTooltip({ content }: { content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
+        <CircleHelp size={15} strokeWidth={2.35} />
+      </TooltipTrigger>
+      <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
+    </Tooltip>
   );
 }
 
-function ControlLine({ label, hint, children, tone = "blush", className }: ControlLineProps) {
-  const classes = ["control-panel-page__control-line", `control-panel-page__tone-surface--${tone}`, className]
-    .filter(Boolean)
-    .join(" ");
+function SidebarItem({ active, item, onSelect }: SidebarItemProps) {
+  const Icon = item.icon;
 
   return (
-    <div className={classes}>
-      <div className="control-panel-page__control-copy">
-        <Text as="p" size="2" weight="medium" className="control-panel-page__field-label">
-          {label}
-        </Text>
-        {hint ? (
-          <Text as="p" size="1" className="control-panel-page__field-hint">
-            {hint}
+    <button
+      type="button"
+      className="control-panel-shell__nav-item"
+      data-active={active ? "true" : "false"}
+      onClick={onSelect}
+    >
+      <span className="control-panel-shell__nav-icon" aria-hidden="true">
+        <Icon size={17} strokeWidth={1.85} />
+      </span>
+      <span className="control-panel-shell__nav-label">{item.navLabel}</span>
+    </button>
+  );
+}
+
+function SettingsCard({ children, className, description, title }: SettingsCardProps) {
+  return (
+    <section className={className ? `control-panel-shell__card ${className}` : "control-panel-shell__card"}>
+      <div className="control-panel-shell__card-header">
+        <div className="control-panel-shell__title-row">
+          <Heading as="h2" size="4" className="control-panel-shell__card-title">
+            {title}
+          </Heading>
+          {description ? <HelpTooltip content={description} /> : null}
+        </div>
+      </div>
+      <div className="control-panel-shell__card-body">{children}</div>
+    </section>
+  );
+}
+
+function ControlLine({ children, className, disabled = false, hint, label }: ControlLineProps) {
+  const classes = ["control-panel-shell__row", className].filter(Boolean).join(" ");
+
+  return (
+    <div className={classes} data-disabled={disabled ? "true" : "false"}>
+      <div className="control-panel-shell__row-copy">
+        <div className="control-panel-shell__title-row control-panel-shell__title-row--field">
+          <Text as="p" size="2" weight="medium" className="control-panel-shell__row-label">
+            {label}
           </Text>
-        ) : null}
+          {hint ? <HelpTooltip content={hint} /> : null}
+        </div>
       </div>
-      <div className="control-panel-page__control-field">{children}</div>
+      <div className="control-panel-shell__row-field">{children}</div>
     </div>
   );
 }
 
-function ToggleLine({ label, description, checked, onCheckedChange, tone = "warm", className }: ToggleLineProps) {
-  const classes = ["control-panel-page__toggle-line", `control-panel-page__tone-surface--${tone}`, className]
-    .filter(Boolean)
-    .join(" ");
-
+function ToggleLine({ checked, description, disabled = false, label, onCheckedChange }: ToggleLineProps) {
   return (
-    <div className={classes}>
-      <div className="control-panel-page__control-copy">
-        <Text as="p" size="2" weight="medium" className="control-panel-page__field-label">
-          {label}
-        </Text>
-        {description ? (
-          <Text as="p" size="1" className="control-panel-page__field-hint">
-            {description}
+    <div className="control-panel-shell__row control-panel-shell__row--toggle" data-disabled={disabled ? "true" : "false"}>
+      <div className="control-panel-shell__row-copy">
+        <div className="control-panel-shell__title-row control-panel-shell__title-row--field">
+          <Text as="p" size="2" weight="medium" className="control-panel-shell__row-label">
+            {label}
           </Text>
-        ) : null}
+          {description ? <HelpTooltip content={description} /> : null}
+        </div>
       </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      <div className="control-panel-shell__row-field control-panel-shell__row-field--inline">
+        <button
+          type="button"
+          role="switch"
+          aria-disabled={disabled}
+          aria-checked={checked}
+          className="control-panel-shell__toggle"
+          data-state={checked ? "checked" : "unchecked"}
+          disabled={disabled}
+          onClick={() => onCheckedChange(!checked)}
+        >
+          <span className="control-panel-shell__toggle-handle" aria-hidden="true" />
+        </button>
+      </div>
     </div>
   );
 }
 
-function InfoRow({ label, value, tone = "mist", className }: InfoRowProps) {
-  const classes = ["control-panel-page__info-row", `control-panel-page__tone-surface--${tone}`, className]
-    .filter(Boolean)
-    .join(" ");
+function ChoiceGroup<T extends string>({
+  className,
+  options,
+  value,
+  onValueChange,
+}: {
+  className?: string;
+  options: readonly ChoiceOption<T>[];
+  value: T;
+  onValueChange: (value: T) => void;
+}) {
+  const classes = ["control-panel-shell__choice-group", className].filter(Boolean).join(" ");
 
   return (
-    <div className={classes}>
-      <Text as="span" size="1" className="control-panel-page__info-label">
+    <div className={classes} role="radiogroup">
+      {options.map((option) => {
+        const checked = option.value === value;
+
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            className="control-panel-shell__choice-option"
+            data-state={checked ? "checked" : "unchecked"}
+            onClick={() => onValueChange(option.value)}
+          >
+            <span className="control-panel-shell__choice-label">{option.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TimeIntervalInput({ interval, onUnitChange, onValueChange }: TimeIntervalInputProps) {
+  const unitOptions = buildTimeUnitOptions(interval.unit);
+
+  return (
+    <div className="control-panel-shell__interval-field">
+      <TextField.Root
+        className="control-panel-shell__input control-panel-shell__input--compact"
+        type="number"
+        min={1}
+        step={1}
+        inputMode="numeric"
+        value={String(interval.value)}
+        aria-label="间隔数值"
+        onChange={(event) => onValueChange(normalizeIntervalNumberInput(event.target.value, interval.value))}
+      />
+
+      <Select.Root value={interval.unit} onValueChange={onUnitChange}>
+        <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+        <Select.Content className="control-panel-shell__select-content" position="popper">
+          {unitOptions.map((option) => (
+            <Select.Item key={option.value} value={option.value}>
+              {option.label}
+            </Select.Item>
+          ))}
+        </Select.Content>
+      </Select.Root>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: InfoRowProps) {
+  return (
+    <div className="control-panel-shell__info-row">
+      <Text as="span" size="2" className="control-panel-shell__info-label">
         {label}
       </Text>
-      <Text as="span" size="2" weight="medium" className="control-panel-page__info-value">
-        {value}
-      </Text>
+      <div className="control-panel-shell__info-value">{value}</div>
     </div>
   );
 }
 
+function FeedbackChannelCard({ channel, onCopyLink }: { channel: ControlPanelAboutFeedbackChannel; onCopyLink: (url: string) => void }) {
+  return (
+    <article className="control-panel-shell__feedback-card" data-kind={channel.kind}>
+      <div className="control-panel-shell__feedback-card-copy">
+        <Text as="p" size="2" weight="medium" className="control-panel-shell__feedback-card-title">
+          {channel.title}
+        </Text>
+        <Text as="p" size="1" className="control-panel-shell__feedback-card-description">
+          {channel.description}
+        </Text>
+      </div>
+
+      {channel.kind === "link" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <button
+            type="button"
+            className="control-panel-shell__feedback-link-button"
+            onClick={() => onCopyLink(channel.href)}
+          >
+            {channel.actionLabel}
+          </button>
+          <code className="control-panel-shell__feedback-link-copy">{channel.hrefLabel}</code>
+        </div>
+      ) : null}
+
+      {channel.kind === "image" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <img className="control-panel-shell__feedback-image" src={channel.previewSrc} alt={channel.previewAlt} />
+          {channel.note ? (
+            <Text as="p" size="1" className="control-panel-shell__feedback-note">
+              {channel.note}
+            </Text>
+          ) : null}
+        </div>
+      ) : null}
+
+      {channel.kind === "placeholder" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <div className="control-panel-shell__feedback-placeholder" aria-hidden="true">
+            <span>{channel.placeholderLabel}</span>
+          </div>
+          <Text as="p" size="1" className="control-panel-shell__feedback-note">
+            {channel.note}
+          </Text>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+// applyControlPanelSaveResult keeps unsaved groups intact so partial saves do
+// not accidentally discard the user's remaining local edits.
+function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPanelSaveResult): ControlPanelData {
+  const nextSettings = result.savedSettings || result.savedInspector
+    ? {
+        ...base.settings,
+        ...(result.savedSettings ? result.effectiveSettings : {}),
+        task_automation: {
+          ...base.settings.task_automation,
+          ...(result.effectiveSettings.task_automation ?? {}),
+        },
+      }
+    : base.settings;
+
+  return {
+    ...base,
+    inspector: result.savedInspector ? result.effectiveInspector : base.inspector,
+    providerApiKeyInput: result.savedSettings ? "" : base.providerApiKeyInput,
+    settings: nextSettings,
+    source: result.source,
+    warnings: result.warnings,
+  };
+}
+
+/**
+ * ControlPanelApp renders the desktop settings surface with a sidebar-driven
+ * layout while keeping the current settings data model untouched.
+ *
+ * @returns The desktop control panel window.
+ */
 export function ControlPanelApp() {
+  const onboardingSession = useDesktopOnboardingSession();
+  const autoAdvancedControlPanelStepRef = useRef(false);
+  const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
+  const [aboutSnapshot, setAboutSnapshot] = useState<ControlPanelAboutSnapshot>(() => getControlPanelAboutFallbackSnapshot());
+  // About actions only affect local clipboard/help affordances, so their
+  // feedback must stay in local UI state instead of polluting formal settings.
+  const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
+  const [modelValidationFeedback, setModelValidationFeedback] = useState<ModelValidationFeedback | null>(null);
   const [inspectionSummary, setInspectionSummary] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidatingModel, setIsValidatingModel] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
+  const [systemAppearance, setSystemAppearance] = useState<ControlPanelAppearance>(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
 
   useEffect(() => {
-    void loadControlPanelData().then((nextData) => {
-      setPanelData(nextData);
-      setDraft(nextData);
-    });
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateSystemAppearance = (event?: MediaQueryListEvent) => {
+      setSystemAppearance((event?.matches ?? mediaQuery.matches) ? "dark" : "light");
+    };
+
+    updateSystemAppearance();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", updateSystemAppearance);
+      return () => mediaQuery.removeEventListener("change", updateSystemAppearance);
+    }
+
+    mediaQuery.addListener(updateSystemAppearance);
+    return () => mediaQuery.removeListener(updateSystemAppearance);
   }, []);
 
-  const sourceCopy = useMemo(() => (draft ? getSourceCopy(draft.source) : null), [draft]);
+  useEffect(() => {
+    let cancelled = false;
 
-  const hasChanges = !isEqual(draft, panelData);
+    void (async () => {
+      try {
+        const nextData = await loadControlPanelData();
 
-  if (!draft || !panelData || !sourceCopy) {
+        if (cancelled) {
+          return;
+        }
+
+        setLoadError(null);
+        setPanelData(nextData);
+        setDraft(nextData);
+        setModelValidationFeedback(null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        const fallbackData = buildLocalControlPanelSnapshot();
+        setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
+        setPanelData((current) => current ?? fallbackData);
+        setDraft((current) => current ?? fallbackData);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadControlPanelAboutSnapshot().then((nextSnapshot) => {
+      if (!cancelled) {
+        setAboutSnapshot(nextSnapshot);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleReload = async () => {
+    setLoadError(null);
+
+    try {
+      const nextData = await loadControlPanelData();
+      setLoadError(null);
+      setPanelData(nextData);
+      setDraft(nextData);
+      setModelValidationFeedback(null);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
+    }
+  };
+
+  useEffect(() => {
+    if (onboardingSession?.isOpen !== true) {
+      autoAdvancedControlPanelStepRef.current = false;
+      return;
+    }
+
+    if (onboardingSession.step === "tray_hint" && !autoAdvancedControlPanelStepRef.current) {
+      autoAdvancedControlPanelStepRef.current = true;
+      setActiveSection("models");
+      void Window.getByLabel("dashboard").then((windowHandle) => {
+        void windowHandle?.close();
+      });
+      void advanceDesktopOnboarding("control_panel_api_key");
+      return;
+    }
+
+    if (onboardingSession.step === "control_panel_api_key") {
+      autoAdvancedControlPanelStepRef.current = true;
+      setActiveSection("models");
+    }
+  }, [onboardingSession]);
+
+  useDesktopOnboardingActions(
+    "control-panel",
+    (action) => {
+      if (action.type === "close_control_panel") {
+        void requestCurrentDesktopWindowClose();
+      }
+    },
+  );
+
+  useEffect(() => {
+    if (onboardingSession?.isOpen !== true) {
+      return;
+    }
+
+    if (onboardingSession.step === "control_panel_api_key" && draft?.settings.models.provider_api_key_configured) {
+      void advanceDesktopOnboarding("done");
+    }
+  }, [draft?.settings.models.provider_api_key_configured, onboardingSession]);
+
+  useEffect(() => {
+    if (
+      onboardingSession?.isOpen !== true ||
+      (onboardingSession.step !== "control_panel_api_key" && onboardingSession.step !== "done")
+    ) {
+      return;
+    }
+
+    void (async () => {
+      const presentation = await buildDesktopOnboardingPresentation({
+        anchors: [],
+        placement: onboardingSession.step === "control_panel_api_key" ? "top-right" : "center",
+        step: onboardingSession.step,
+        windowLabel: "control-panel",
+      });
+
+      if (presentation !== null) {
+        await setDesktopOnboardingPresentation(presentation);
+      }
+    })();
+  }, [onboardingSession]);
+
+  if (!draft || !panelData) {
     return (
-      <main className="app-shell control-panel-page">
-        <div className="control-panel-page__loading">
-          <Text size="2" className="control-panel-page__loading-copy">
-            正在载入控制面板…
-          </Text>
+      <main className="app-shell control-panel-shell" data-appearance={systemAppearance}>
+        <div className="control-panel-shell__loading">
+          <div className="control-panel-shell__loading-stack">
+            <Text size="2" className="control-panel-shell__loading-copy">
+              {loadError ?? "正在载入控制面板…"}
+            </Text>
+            {loadError ? (
+              <Button className="control-panel-shell__button" variant="soft" onClick={() => void handleReload()}>
+                重新加载
+              </Button>
+            ) : null}
+          </div>
         </div>
       </main>
     );
   }
 
-  const latestRestorePoint = draft.securitySummary.latest_restore_point?.summary ?? "暂无恢复点";
-  const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
-  const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
-  const profileCadence = `${draft.settings.memory.profile_refresh_interval.value}${draft.settings.memory.profile_refresh_interval.unit}`;
+  const activeMeta = SECTION_META[activeSection];
+  const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
+  const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
+  const modelSettingsDirty = !isEqual(draft.settings.models, panelData.settings.models) || draft.providerApiKeyInput.trim() !== "";
+  const hasChanges = inspectorDirty || settingsDirty;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
-  const providerApiKeyHint =
-    draft.source === "rpc"
-      ? "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。"
-      : "当前为本地快照模式：不会写入后端 Stronghold，也不会在桌面端保存明文 API key。";
-  const sourceValue = (
-    <span className="control-panel-page__value-cluster">
-      <span
-        className={`control-panel-page__value-badge ${
-          draft.source === "rpc"
-            ? "control-panel-page__value-badge--live"
-            : "control-panel-page__value-badge--mock"
-        }`}
-      >
-        {sourceCopy.badge}
-      </span>
-      <span className="control-panel-page__value-text">{sourceCopy.label}</span>
-    </span>
-  );
-  const saveStateValue = (
-    <span
-      className={`control-panel-page__value-badge ${
-        hasChanges ? "control-panel-page__value-badge--pending" : "control-panel-page__value-badge--synced"
-      }`}
-    >
-      {hasChanges ? "待保存" : "已同步"}
-    </span>
-  );
+  const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
+  const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
+  const hasRpcLoadError = loadError !== null;
+
+  const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
   const updateSettings = (updater: (current: ControlPanelData) => ControlPanelData) => {
-    setDraft((current) => (current ? updater(current) : current));
+    setDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const next = updater(current);
+      const modelRouteChanged = !isEqual(next.settings.models, current.settings.models) || next.providerApiKeyInput !== current.providerApiKeyInput;
+      if (modelRouteChanged) {
+        setModelValidationFeedback(null);
+      }
+      return next;
+    });
   };
 
-  // The top bar doubles as the drag region, but interactive controls inside it
-  // must keep their own pointer behavior instead of starting a window move.
+  // The custom titlebar is draggable, but embedded controls must keep their own
+  // pointer behavior instead of starting a native window move.
   const handleTopbarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
 
@@ -257,8 +852,6 @@ export function ControlPanelApp() {
     void startCurrentDesktopWindowDragging();
   };
 
-  // Stop the close button press from bubbling into the drag region before
-  // the click handler requests the native close flow.
   const handleWindowClosePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.stopPropagation();
   };
@@ -267,34 +860,101 @@ export function ControlPanelApp() {
     void requestCurrentDesktopWindowClose();
   };
 
+  const handleReset = () => {
+    setDraft(panelData);
+    setSaveFeedback("已恢复为上次载入的设置快照。");
+    setModelValidationFeedback(null);
+  };
+
+  const handleValidateModel = async (options: ControlPanelModelValidationOptions = {}) => {
+    setIsValidatingModel(true);
+    try {
+      const result = await validateControlPanelModel(draft, options);
+      setLoadError(null);
+      setModelValidationFeedback({
+        message: result.message,
+        tone: result.ok ? "neutral" : "warning",
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "模型配置校验失败，请稍后重试。";
+      if (shouldSurfaceRpcErrorBanner(message)) {
+        setLoadError(message);
+      }
+      setModelValidationFeedback({
+        message,
+        tone: "warning",
+      });
+      throw error;
+    } finally {
+      setIsValidatingModel(false);
+    }
+  };
+
+  const handleReplayOnboarding = () => {
+    void (async () => {
+      await showShellBallWindow("ball");
+      await startDesktopOnboarding("manual", "control-panel");
+      await requestCurrentDesktopWindowClose();
+    })();
+  };
+
   const handleSave = async () => {
+    if (!hasChanges) {
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const result = await saveControlPanelData(draft);
-      const nextData: ControlPanelData = {
-        ...draft,
-        inspector: result.effectiveInspector,
-        providerApiKeyInput: "",
-        settings: {
-          ...draft.settings,
-          ...result.effectiveSettings,
-          task_automation: {
-            ...draft.settings.task_automation,
-            ...(result.effectiveSettings.task_automation ?? {}),
-          },
-        },
-      };
-      setPanelData(nextData);
-      setDraft(nextData);
-      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart, result.source));
+      const result = await saveControlPanelData(draft, {
+        confirmedInspector: panelData.inspector,
+        saveInspector: inspectorDirty,
+        saveSettings: settingsDirty,
+        validateModel: modelSettingsDirty,
+      });
+      const nextPanelData = applyControlPanelSaveResult(panelData, result);
+      const nextDraft = applyControlPanelSaveResult(draft, result);
+      setLoadError(null);
+      setPanelData(nextPanelData);
+      setDraft(nextDraft);
+      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
+      if (result.modelValidation) {
+        setModelValidationFeedback({
+          message: result.modelValidation.message,
+          tone: result.modelValidation.ok ? "neutral" : "warning",
+        });
+      }
     } catch (error) {
-      setSaveFeedback(error instanceof Error ? error.message : "保存控制面板设置失败。");
+      if (error instanceof ControlPanelSaveError && error.partialResult) {
+        const nextPanelData = applyControlPanelSaveResult(panelData, error.partialResult);
+        const nextDraft = applyControlPanelSaveResult(draft, error.partialResult);
+        setPanelData(nextPanelData);
+        setDraft(nextDraft);
+      }
+
+      const errorMessage = error instanceof Error ? error.message : "保存控制面板设置失败。";
+      if (error instanceof ControlPanelSaveError && error.kind === "model_validation_failed") {
+        setSaveFeedback("模型配置校验未通过，当前设置未保存。");
+        setModelValidationFeedback({
+          message: errorMessage,
+          tone: "warning",
+        });
+        return;
+      }
+      if (shouldSurfaceRpcErrorBanner(errorMessage)) {
+        setLoadError(errorMessage);
+      }
+      setSaveFeedback(errorMessage);
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleRunInspection = async () => {
+    if (isSaving) {
+      return;
+    }
+
     setIsRunningInspection(true);
     try {
       const result = await runControlPanelInspection(draft);
@@ -307,558 +967,803 @@ export function ControlPanelApp() {
       setIsRunningInspection(false);
     }
   };
+  void handleRunInspection;
 
-  return (
-    <main className="app-shell control-panel-page">
-      <div className="control-panel-page__frame">
-        <section
-          className="control-panel-page__topbar control-panel-page__tone-surface--warm"
-          aria-label="控制面板窗口操作"
-          onPointerDown={handleTopbarPointerDown}
-        >
-          <div className="control-panel-page__page-copy">
-            <Text as="p" size="1" className="control-panel-page__meta-label">
-              Desktop Control Surface
-            </Text>
-            <Heading size="6" className="control-panel-page__page-title">
-              控制面板
-            </Heading>
-            <Text as="p" size="2" className="control-panel-page__meta-text">
-              拖动顶部区域可以移动窗口，按 Esc 或右上角按钮可以关闭。
-            </Text>
-          </div>
+  const handleAboutAction = async (action: ControlPanelAboutAction) => {
+    const feedback = await runControlPanelAboutAction(action);
+    setAboutActionFeedback(feedback);
+  };
 
-          <div className="control-panel-page__topbar-side">
-            <div className="control-panel-page__meta-grid">
-              <div className="control-panel-page__meta-item">
-                <Text as="p" size="1" className="control-panel-page__meta-label">
-                  数据来源
-                </Text>
-                <div className="control-panel-page__meta-value">{sourceValue}</div>
-              </div>
+  const handleAboutLinkCopy = async (url: string) => {
+    const feedback = await copyControlPanelAboutValue(url, "已复制反馈渠道链接。");
+    setAboutActionFeedback(feedback);
+  };
 
-              <div className="control-panel-page__meta-item">
-                <Text as="p" size="1" className="control-panel-page__meta-label">
-                  保存状态
-                </Text>
-                <div className="control-panel-page__meta-value">{saveStateValue}</div>
-              </div>
+  const renderSectionContent = () => {
+    switch (activeSection) {
+      case "general":
+        return (
+          <>
+            <SettingsCard title="界面偏好" description="语言与主题会影响整个桌面端界面。">
+              <ControlLine label="语言" hint="统一控制仪表盘与操作面板界面语言。">
+                <Select.Root
+                  value={draft.settings.general.language}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        general: { ...current.settings.general, language: value },
+                      },
+                    }))
+                  }
+                >
+                  <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+                  <Select.Content className="control-panel-shell__select-content" position="popper">
+                    {LANGUAGE_OPTIONS.map((option) => (
+                      <Select.Item key={option.value} value={option.value}>
+                        {option.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </ControlLine>
 
-              <div className="control-panel-page__meta-item">
-                <Text as="p" size="1" className="control-panel-page__meta-label">
-                  最近恢复点
-                </Text>
-                <Text as="p" size="2" className="control-panel-page__meta-text">
-                  {latestRestorePoint}
-                </Text>
-              </div>
-            </div>
+              <ControlLine label="主题" hint="支持跟随系统或直接指定浅色、深色。">
+                <ChoiceGroup
+                  value={draft.settings.general.theme_mode}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        general: { ...current.settings.general, theme_mode: value },
+                      },
+                    }))
+                  }
+                  className="control-panel-shell__choice-group--wide"
+                  options={THEME_MODE_OPTIONS}
+                />
+              </ControlLine>
+            </SettingsCard>
 
-            <div className="control-panel-page__window-actions">
-              <button
-                type="button"
-                className="control-panel-page__frame-button control-panel-page__frame-button--drag"
-                aria-label="拖动控制面板窗口"
-                onPointerDown={handleWindowDragPointerDown}
+            <SettingsCard title="系统行为" description="影响应用启动方式和通知表现。">
+              <ToggleLine
+                label="开机自启"
+                description="仅影响下次系统启动时是否自动运行。"
+                checked={draft.settings.general.auto_launch}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      general: { ...current.settings.general, auto_launch: checked },
+                    },
+                  }))
+                }
+              />
+
+              <ToggleLine
+                label="语音通知"
+                description="控制应用内语音提示和音效反馈。"
+                checked={draft.settings.general.voice_notification_enabled}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      general: { ...current.settings.general, voice_notification_enabled: checked },
+                    },
+                  }))
+                }
+              />
+
+              <ControlLine
+                label="提示声线"
+                hint="控制正式 `general.voice_type`，保存后重新打开控制面板会回显当前值。"
+                disabled={!draft.settings.general.voice_notification_enabled}
               >
-                <GripHorizontal className="control-panel-page__frame-button-icon" />
-                <span>拖动窗口</span>
-              </button>
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  disabled={!draft.settings.general.voice_notification_enabled}
+                  value={draft.settings.general.voice_type}
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        general: { ...current.settings.general, voice_type: event.target.value },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
+            </SettingsCard>
 
-              <button
-                type="button"
-                className="control-panel-page__frame-button control-panel-page__frame-button--close"
-                aria-label="关闭控制面板"
-                onClick={handleWindowCloseClick}
-                onPointerDown={handleWindowClosePointerDown}
-              >
-                <X className="control-panel-page__frame-button-icon" />
-              </button>
-            </div>
-          </div>
-        </section>
-        <div className="control-panel-page__columns" aria-label="控制面板设置分组">
-          <div className="control-panel-page__column">
-            <section className="control-panel-page__panel control-panel-page__tone-surface--blush" aria-labelledby="control-panel-general-title">
-              <SectionHeader titleId="control-panel-general-title" title="通用" />
-
-              <div className="control-panel-page__stack">
-                <ControlLine label="语言" tone="blush">
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    value={draft.settings.general.language}
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          general: { ...current.settings.general, language: event.target.value },
+            <SettingsCard title="工作区与下载" description="变更后仅影响后续新生成的文件位置。">
+              <ControlLine label="工作区路径" hint="任务文档与生成文件默认写入的本地位置。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  value={draft.settings.general.download.workspace_path}
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        general: {
+                          ...current.settings.general,
+                          download: { ...current.settings.general.download, workspace_path: event.target.value },
                         },
-                      }))
-                    }
-                  />
-                </ControlLine>
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
 
-                <ControlLine label="工作区路径" tone="blush">
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    value={draft.settings.general.download.workspace_path}
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          general: {
-                            ...current.settings.general,
-                            download: { ...current.settings.general.download, workspace_path: event.target.value },
-                          },
+              <ToggleLine
+                label="下载前逐个确认保存位置"
+                description="开启后，每次下载都会先确认目标保存路径。"
+                checked={draft.settings.general.download.ask_before_save_each_file}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      general: {
+                        ...current.settings.general,
+                        download: {
+                          ...current.settings.general.download,
+                          ask_before_save_each_file: checked,
                         },
-                      }))
-                    }
-                  />
-                </ControlLine>
-
-                <ToggleLine
-                  label="开机自启"
-                  checked={draft.settings.general.auto_launch}
-                  tone="blush"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        general: { ...current.settings.general, auto_launch: checked },
                       },
-                    }))
-                  }
-                />
+                    },
+                  }))
+                }
+              />
+            </SettingsCard>
+          </>
+        );
 
-                <ToggleLine
-                  label="语音通知"
-                  checked={draft.settings.general.voice_notification_enabled}
-                  tone="blush"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        general: { ...current.settings.general, voice_notification_enabled: checked },
-                      },
-                    }))
-                  }
-                />
+      case "desktop":
+        return (
+          <>
+            <SettingsCard title="悬浮球状态" description="控制悬浮球在桌面上的默认表现。">
+              <ToggleLine
+                label="自动贴边"
+                description="停止拖拽后自动贴边，减少桌面遮挡。"
+                checked={draft.settings.floating_ball.auto_snap}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      floating_ball: { ...current.settings.floating_ball, auto_snap: checked },
+                    },
+                  }))
+                }
+              />
 
-                <ControlLine label="主题" tone="blush">
-                  <SegmentedControl.Root
-                    value={draft.settings.general.theme_mode}
-                    onValueChange={(value) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          general: { ...current.settings.general, theme_mode: value as typeof current.settings.general.theme_mode },
-                        },
-                      }))
-                    }
-                    className="control-panel-page__selector"
-                  >
-                    <SegmentedControl.Item value="follow_system">跟随系统</SegmentedControl.Item>
-                    <SegmentedControl.Item value="light">浅色</SegmentedControl.Item>
-                    <SegmentedControl.Item value="dark">深色</SegmentedControl.Item>
-                  </SegmentedControl.Root>
-                </ControlLine>
-              </div>
-            </section>
+              <ToggleLine
+                label="空闲半透明"
+                description="在无操作时降低存在感，减少桌面遮挡。"
+                checked={draft.settings.floating_ball.idle_translucent}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      floating_ball: { ...current.settings.floating_ball, idle_translucent: checked },
+                    },
+                  }))
+                }
+              />
+            </SettingsCard>
 
-            <section className="control-panel-page__panel control-panel-page__tone-surface--mist" aria-labelledby="control-panel-memory-title">
-              <SectionHeader titleId="control-panel-memory-title" title="记忆" />
-
-              <div className="control-panel-page__stack">
-                <div className="control-panel-page__info-list">
-                  <InfoRow label="工作总结间隔" value={workSummaryCadence} tone="mist" />
-                  <InfoRow label="画像刷新间隔" value={profileCadence} tone="mist" />
-                </div>
-
-                <ToggleLine
-                  label="启用记忆"
-                  checked={draft.settings.memory.enabled}
-                  tone="mist"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        memory: { ...current.settings.memory, enabled: checked },
-                      },
-                    }))
-                  }
-                />
-
-                <ControlLine label="生命周期" tone="mist">
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    value={draft.settings.memory.lifecycle}
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          memory: { ...current.settings.memory, lifecycle: event.target.value },
-                        },
-                      }))
-                    }
-                  />
-                </ControlLine>
-              </div>
-            </section>
-
-            <section className="control-panel-page__panel control-panel-page__tone-surface--warm" aria-labelledby="control-panel-floating-title">
-              <SectionHeader titleId="control-panel-floating-title" title="悬浮球" />
-
-              <div className="control-panel-page__stack">
-                <ToggleLine
-                  label="自动贴边"
-                  checked={draft.settings.floating_ball.auto_snap}
-                  tone="warm"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        floating_ball: { ...current.settings.floating_ball, auto_snap: checked },
-                      },
-                    }))
-                  }
-                />
-
-                <ToggleLine
-                  label="空闲半透明"
-                  checked={draft.settings.floating_ball.idle_translucent}
-                  tone="warm"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        floating_ball: { ...current.settings.floating_ball, idle_translucent: checked },
-                      },
-                    }))
-                  }
-                />
-
-                <ControlLine label="尺寸" tone="warm">
-                  <div className="control-panel-page__slider-stack">
-                    <Slider
-                      min={0}
-                      max={2}
-                      step={1}
-                      value={[draft.settings.floating_ball.size === "small" ? 0 : draft.settings.floating_ball.size === "medium" ? 1 : 2]}
-                      onValueChange={([value]) =>
-                        updateSettings((current) => ({
-                          ...current,
-                          settings: {
-                            ...current.settings,
-                            floating_ball: {
-                              ...current.settings.floating_ball,
-                              size: value === 0 ? "small" : value === 1 ? "medium" : "large",
-                            },
-                          },
-                        }))
-                      }
-                    />
-
-                    <div className="control-panel-page__slider-legend">
-                      <span>小</span>
-                      <span>中</span>
-                      <span>大</span>
-                    </div>
-                  </div>
-                </ControlLine>
-
-                <ControlLine label="停靠方式" tone="warm">
-                  <SegmentedControl.Root
-                    value={draft.settings.floating_ball.position_mode}
-                    onValueChange={(value) =>
+            <SettingsCard title="在场方式" description="调整悬浮球的尺寸与停靠模式。">
+              <ControlLine label="尺寸" hint="在多窗口协作时决定悬浮球的可发现程度。">
+                <div className="control-panel-shell__slider-stack">
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={1}
+                    value={[getFloatingBallSizeSliderValue(draft.settings.floating_ball.size)]}
+                    onValueChange={(values) =>
                       updateSettings((current) => ({
                         ...current,
                         settings: {
                           ...current.settings,
                           floating_ball: {
                             ...current.settings.floating_ball,
-                            position_mode: value as typeof current.settings.floating_ball.position_mode,
+                            size: getFloatingBallSizeFromSliderValue(values[0]),
                           },
                         },
                       }))
                     }
-                    className="control-panel-page__selector"
-                  >
-                    <SegmentedControl.Item value="fixed">固定</SegmentedControl.Item>
-                    <SegmentedControl.Item value="draggable">拖动</SegmentedControl.Item>
-                  </SegmentedControl.Root>
-                </ControlLine>
-              </div>
-            </section>
-          </div>
-
-          <div className="control-panel-page__column">
-            <section className="control-panel-page__panel control-panel-page__tone-surface--leaf" aria-labelledby="control-panel-inspection-title">
-              <SectionHeader titleId="control-panel-inspection-title" title="巡检" />
-
-              <div className="control-panel-page__stack">
-                <div className="control-panel-page__info-list">
-                  <InfoRow label="任务来源" value={`${draft.inspector.task_sources.length} 项`} tone="leaf" />
-                  <InfoRow label="巡检频率" value={inspectionInterval} tone="leaf" />
+                  />
+                  <div className="control-panel-shell__slider-legend">
+                    <span>小</span>
+                    <span>中</span>
+                    <span>大</span>
+                  </div>
                 </div>
+              </ControlLine>
 
-                <ToggleLine
-                  label="开机巡检"
-                  checked={draft.inspector.inspect_on_startup}
-                  tone="leaf"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      inspector: { ...current.inspector, inspect_on_startup: checked },
-                    }))
-                  }
-                />
-
-                <ToggleLine
-                  label="文件变化时巡检"
-                  checked={draft.inspector.inspect_on_file_change}
-                  tone="leaf"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      inspector: { ...current.inspector, inspect_on_file_change: checked },
-                    }))
-                  }
-                />
-
-                <ToggleLine
-                  label="截止前提醒"
-                  checked={draft.inspector.remind_before_deadline}
-                  tone="leaf"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      inspector: { ...current.inspector, remind_before_deadline: checked },
-                    }))
-                  }
-                />
-
-                <ToggleLine
-                  label="陈旧任务提醒"
-                  checked={draft.inspector.remind_when_stale}
-                  tone="leaf"
-                  onCheckedChange={(checked) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      inspector: { ...current.inspector, remind_when_stale: checked },
-                    }))
-                  }
-                />
-
-                <ControlLine
-                  label="任务来源列表"
-                  hint="每行一个路径或标签。"
-                  tone="leaf"
-                  className="control-panel-page__control-line--textarea"
-                >
-                  <TextArea
-                    className="control-panel-page__textarea"
-                    value={draft.inspector.task_sources.join("\n")}
-                    onChange={(event) =>
-                      updateSettings((current) => {
-                        const taskSources = event.target.value
-                          .split(/\r?\n/)
-                          .map((item) => item.trim())
-                          .filter(Boolean);
-
-                        return {
-                          ...current,
-                          inspector: { ...current.inspector, task_sources: taskSources },
-                        };
-                      })
-                    }
-                  />
-                </ControlLine>
-              </div>
-            </section>
-
-            <section className="control-panel-page__panel control-panel-page__tone-surface--warm" aria-labelledby="control-panel-budget-title">
-              <SectionHeader titleId="control-panel-budget-title" title="模型与路由" />
-
-              <div className="control-panel-page__stack">
-                <ControlLine label="Provider" tone="warm">
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    value={draft.settings.models.provider}
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          models: { ...current.settings.models, provider: event.target.value },
-                        },
-                      }))
-                    }
-                  />
-                </ControlLine>
-
-                <ControlLine label="Base URL" tone="warm">
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    value={draft.settings.models.base_url}
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          models: { ...current.settings.models, base_url: event.target.value },
-                        },
-                      }))
-                    }
-                  />
-                </ControlLine>
-
-                <ControlLine label="Model" tone="warm">
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    value={draft.settings.models.model}
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        settings: {
-                          ...current.settings,
-                          models: { ...current.settings.models, model: event.target.value },
-                        },
-                      }))
-                    }
-                  />
-                </ControlLine>
-
-                <ControlLine
-                  label="API Key"
-                  hint={providerApiKeyHint}
-                  tone="warm"
-                >
-                  <TextField.Root
-                    className="control-panel-page__input"
-                    type="password"
-                    value={draft.providerApiKeyInput}
-                    placeholder={draft.settings.models.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
-                    autoComplete="off"
-                    onChange={(event) =>
-                      updateSettings((current) => ({
-                        ...current,
-                        providerApiKeyInput: event.target.value,
-                      }))
-                    }
-                  />
-                </ControlLine>
-
-                <ToggleLine
-                  label="预算自动降级"
-                  checked={draft.settings.models.budget_auto_downgrade}
-                  tone="warm"
-                  onCheckedChange={(checked) =>
+              <ControlLine label="停靠方式" hint="固定更稳定，可拖动更适合多屏与复杂工作区。">
+                <ChoiceGroup
+                  value={draft.settings.floating_ball.position_mode}
+                  onValueChange={(value) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        models: { ...current.settings.models, budget_auto_downgrade: checked },
+                        floating_ball: {
+                          ...current.settings.floating_ball,
+                          position_mode: value,
+                        },
+                      },
+                    }))
+                  }
+                  className="control-panel-shell__choice-group--wide"
+                  options={POSITION_MODE_OPTIONS}
+                />
+              </ControlLine>
+            </SettingsCard>
+          </>
+        );
+
+      case "memory":
+        return (
+          <>
+            <SettingsCard title="镜子记忆" description="控制长期记忆是否开启以及保留方式。">
+              <ToggleLine
+                label="启用记忆"
+                description="关闭后不再记录新的长期记忆。"
+                checked={draft.settings.memory.enabled}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      memory: { ...current.settings.memory, enabled: checked },
+                    },
+                  }))
+                }
+              />
+
+              <ControlLine label="生命周期" hint="控制镜子记忆默认保留周期。">
+                <Select.Root
+                  value={draft.settings.memory.lifecycle}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: { ...current.settings.memory, lifecycle: value },
+                      },
+                    }))
+                  }
+                >
+                  <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+                  <Select.Content className="control-panel-shell__select-content" position="popper">
+                    {MEMORY_LIFECYCLE_OPTIONS.map((option) => (
+                      <Select.Item key={option.value} value={option.value}>
+                        {option.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </ControlLine>
+            </SettingsCard>
+
+            <SettingsCard title="记忆节奏" description="控制工作总结与画像刷新的默认频率。">
+              <ControlLine label="工作总结间隔" hint="控制自动工作总结的生成频率。">
+                <TimeIntervalInput
+                  interval={draft.settings.memory.work_summary_interval}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          work_summary_interval: {
+                            ...current.settings.memory.work_summary_interval,
+                            value,
+                          },
+                        },
+                      },
+                    }))
+                  }
+                  onUnitChange={(unit) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          work_summary_interval: {
+                            ...current.settings.memory.work_summary_interval,
+                            unit: unit as (typeof current.settings.memory.work_summary_interval)["unit"],
+                          },
+                        },
                       },
                     }))
                   }
                 />
+              </ControlLine>
 
-                <div className="control-panel-page__info-list">
-                  <InfoRow label="当前模型" value={draft.settings.models.model} tone="warm" />
-                  <InfoRow label="API Key 状态" value={providerApiKeyStatus} tone="warm" />
-                  <InfoRow label="安全状态" value={draft.securitySummary.security_status} tone="warm" />
-                  <InfoRow label="待确认授权" value={draft.securitySummary.pending_authorizations} tone="warm" />
-                  <InfoRow
-                    label="今日成本"
-                    value={`¥${draft.securitySummary.token_cost_summary.today_cost.toFixed(2)}`}
-                    tone="warm"
-                  />
-                  <InfoRow
-                    label="单任务上限"
-                    value={`${draft.securitySummary.token_cost_summary.single_task_limit.toLocaleString("zh-CN")} tokens`}
-                    tone="warm"
-                  />
-                  <InfoRow
-                    label="当日上限"
-                    value={`${draft.securitySummary.token_cost_summary.daily_limit.toLocaleString("zh-CN")} tokens`}
-                    tone="warm"
-                  />
-                </div>
+              <ControlLine label="画像刷新间隔" hint="控制偏好画像的刷新频率。">
+                <TimeIntervalInput
+                  interval={draft.settings.memory.profile_refresh_interval}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          profile_refresh_interval: {
+                            ...current.settings.memory.profile_refresh_interval,
+                            value,
+                          },
+                        },
+                      },
+                    }))
+                  }
+                  onUnitChange={(unit) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        memory: {
+                          ...current.settings.memory,
+                          profile_refresh_interval: {
+                            ...current.settings.memory.profile_refresh_interval,
+                            unit: unit as (typeof current.settings.memory.profile_refresh_interval)["unit"],
+                          },
+                        },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
+            </SettingsCard>
+          </>
+        );
+
+      case "automation":
+        return (
+          <>
+            <SettingsCard title="巡检规则" description="控制任务巡检的启动方式与提醒节奏。">
+              <ControlLine label="巡检频率" hint="控制系统定时扫描待办来源的时间间隔。">
+                <Select.Root
+                  value={buildInspectionIntervalOptionValue(draft.inspector.inspection_interval)}
+                  onValueChange={(value) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      inspector: {
+                        ...current.inspector,
+                        inspection_interval: parseInspectionIntervalOptionValue(value),
+                      },
+                    }))
+                  }
+                >
+                  <Select.Trigger className="control-panel-shell__select-trigger" radius="full" />
+                  <Select.Content className="control-panel-shell__select-content" position="popper">
+                    {INSPECTION_INTERVAL_OPTIONS.map((option) => (
+                      <Select.Item
+                        key={buildInspectionIntervalOptionValue(option)}
+                        value={buildInspectionIntervalOptionValue(option)}
+                      >
+                        {option.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </ControlLine>
+
+              <ToggleLine
+                label="开机巡检"
+                description="应用启动后自动运行一次任务巡检。"
+                checked={draft.inspector.inspect_on_startup}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    inspector: { ...current.inspector, inspect_on_startup: checked },
+                  }))
+                }
+              />
+
+              <ToggleLine
+                label="文件变化时巡检"
+                description="监听任务文件变化并刷新巡检结果。"
+                checked={draft.inspector.inspect_on_file_change}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    inspector: { ...current.inspector, inspect_on_file_change: checked },
+                  }))
+                }
+              />
+
+              <ToggleLine
+                label="截止前提醒"
+                description="在任务接近截止前推送预警。"
+                checked={draft.inspector.remind_before_deadline}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    inspector: { ...current.inspector, remind_before_deadline: checked },
+                  }))
+                }
+              />
+
+              <ToggleLine
+                label="陈旧任务提醒"
+                description="对长时间未推进的任务发出提醒。"
+                checked={draft.inspector.remind_when_stale}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    inspector: { ...current.inspector, remind_when_stale: checked },
+                  }))
+                }
+              />
+            </SettingsCard>
+
+            <SettingsCard title="任务来源" description="每行填写一个路径或标签作为巡检来源。">
+              <InfoRow label="已配置来源" value={`${draft.inspector.task_sources.length} 项`} />
+
+              <ControlLine label="任务来源列表" hint="支持多个工作区路径或任务标签。" className="control-panel-shell__row--stacked">
+                <TextArea
+                  className="control-panel-shell__textarea"
+                  value={draft.inspector.task_sources.join("\n")}
+                  onChange={(event) =>
+                    updateSettings((current) => {
+                      const taskSources = event.target.value
+                        .split(/\r?\n/)
+                        .map((item) => item.trim())
+                        .filter(Boolean);
+
+                      return {
+                        ...current,
+                        inspector: { ...current.inspector, task_sources: taskSources },
+                      };
+                    })
+                  }
+                />
+              </ControlLine>
+            </SettingsCard>
+          </>
+        );
+
+      case "models":
+        return (
+          <>
+            <div>
+              <SettingsCard title="模型路由" description="配置 provider、接口地址和默认模型。">
+              <ControlLine label="Provider" hint="当前任务默认使用的模型提供商。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  value={draft.settings.models.provider}
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        models: { ...current.settings.models, provider: event.target.value },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
+
+              <ControlLine label="Base URL" hint="用于接入托管服务或兼容接口。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  value={draft.settings.models.base_url}
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        models: { ...current.settings.models, base_url: event.target.value },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
+
+              <ControlLine label="Model" hint="主链路默认优先选择的模型名。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  value={draft.settings.models.model}
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        models: { ...current.settings.models, model: event.target.value },
+                      },
+                    }))
+                  }
+                />
+              </ControlLine>
+
+              <ControlLine label="API Key" hint={providerApiKeyHint} className="control-panel-shell__row--stacked">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  type="password"
+                  value={draft.providerApiKeyInput}
+                  placeholder={draft.settings.models.provider_api_key_configured ? "已配置，如需更换请重新输入" : "输入新的 provider API key"}
+                  autoComplete="off"
+                  onChange={(event) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      providerApiKeyInput: event.target.value,
+                    }))
+                  }
+                />
+              </ControlLine>
+
+              <ToggleLine
+                label="预算自动降级"
+                description="预算接近上限时自动降级模型或交付强度。"
+                checked={draft.settings.models.budget_auto_downgrade}
+                onCheckedChange={(checked) =>
+                  updateSettings((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      models: { ...current.settings.models, budget_auto_downgrade: checked },
+                    },
+                  }))
+                }
+              />
+              <div className="control-panel-shell__model-actions">
+                <Button
+                  className="control-panel-shell__button control-panel-shell__button--ghost"
+                  variant="soft"
+                  color="gray"
+                  onClick={() => void handleValidateModel()}
+                  disabled={isSaving || isRunningInspection || isValidatingModel}
+                >
+                  {isValidatingModel ? "校验中…" : "测试连接"}
+                </Button>
+                {modelValidationFeedback ? (
+                  <Text
+                    as="p"
+                    size="2"
+                    color={modelValidationFeedback.tone === "warning" ? "amber" : undefined}
+                    className="control-panel-shell__action-feedback control-panel-shell__model-feedback"
+                    aria-live="polite"
+                  >
+                    {modelValidationFeedback.message}
+                  </Text>
+                ) : null}
               </div>
-            </section>
+              </SettingsCard>
+            </div>
 
-            <section className="control-panel-page__panel control-panel-page__tone-surface--blush" aria-labelledby="control-panel-actions-title">
-              <SectionHeader titleId="control-panel-actions-title" title="操作" />
+            <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
+              <InfoRow label="当前模型" value={draft.settings.models.model} />
+              <InfoRow label="API Key 状态" value={providerApiKeyStatus} />
+              <InfoRow label="安全状态" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.security_status} />
+              <InfoRow label="待确认授权" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.pending_authorizations} />
+              <InfoRow
+                label="今日成本"
+                value={hasRpcLoadError ? "暂不可用" : `¥${draft.securitySummary.token_cost_summary.today_cost.toFixed(2)}`}
+              />
+              <InfoRow
+                label="单任务上限"
+                value={
+                  hasRpcLoadError
+                    ? "暂不可用"
+                    : `${draft.securitySummary.token_cost_summary.single_task_limit.toLocaleString("zh-CN")} tokens`
+                }
+              />
+              <InfoRow
+                label="当日上限"
+                value={
+                  hasRpcLoadError
+                    ? "暂不可用"
+                    : `${draft.securitySummary.token_cost_summary.daily_limit.toLocaleString("zh-CN")} tokens`
+                }
+              />
+            </SettingsCard>
+          </>
+        );
 
-              <div className="control-panel-page__stack">
-                <div className="control-panel-page__info-list">
-                  <InfoRow label="数据来源" value={sourceValue} tone="blush" />
-                  <InfoRow label="保存状态" value={saveStateValue} tone="blush" />
-                  <InfoRow label="巡检频率" value={inspectionInterval} tone="blush" />
-                  <InfoRow label="恢复点" value={latestRestorePoint} tone="blush" />
+      case "about":
+        return (
+          <>
+            <SettingsCard title="帮助与反馈" description="集中展示应用内帮助入口与可扩展的反馈渠道。">
+              <InfoRow label="帮助入口" value="应用内新手引导" />
+
+              <ControlLine
+                label="反馈渠道"
+                hint="支持放置链接、二维码图片和预留位；后续只需要改 about 配置，不需要改 JSX 结构。"
+                className="control-panel-shell__row--stacked"
+              >
+                <div className="control-panel-shell__feedback-grid">
+                  {CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS.map((channel) => (
+                    <FeedbackChannelCard key={channel.id} channel={channel} onCopyLink={handleAboutLinkCopy} />
+                  ))}
                 </div>
+              </ControlLine>
+            </SettingsCard>
 
-                <div className="control-panel-page__button-row">
-                  <Button
-                    className="control-panel-page__button control-panel-page__button--secondary"
-                    variant="soft"
-                    onClick={() => void handleRunInspection()}
-                    disabled={isRunningInspection}
-                  >
-                    {isRunningInspection ? "巡检执行中…" : "立即巡检"}
-                  </Button>
+            <SettingsCard title="分享 CialloClaw" description="复制项目地址，方便转发给协作者或朋友。">
+              <InfoRow label="分享链接" value={<code className="control-panel-shell__about-link">https://github.com/1024XEngineer/CialloClaw</code>} />
 
-                  <Button
-                    className="control-panel-page__button control-panel-page__button--ghost"
-                    variant="soft"
-                    color="gray"
-                    onClick={() => setDraft(panelData)}
-                    disabled={!hasChanges || isSaving}
-                  >
-                    撤销修改
-                  </Button>
-
-                  <Button
-                    className="control-panel-page__button control-panel-page__button--primary"
-                    onClick={() => void handleSave()}
-                    disabled={!hasChanges || isSaving}
-                  >
-                    {isSaving ? "保存中…" : "保存设置"}
+              <ControlLine label="分享操作" hint="优先复制仓库地址；若当前环境不支持剪贴板，会直接显示链接。" className="control-panel-shell__row--stacked">
+                <div className="control-panel-shell__about-actions">
+                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("share")}>
+                    复制链接
                   </Button>
                 </div>
+              </ControlLine>
+            </SettingsCard>
 
-                <div className="control-panel-page__feedback-list">
-                  <div className="control-panel-page__message control-panel-page__tone-surface--warm">
-                    <Text as="p" size="1" className="control-panel-page__meta-label">
-                      巡检结果
-                    </Text>
-                    <Text as="p" size="2" className="control-panel-page__message-text" aria-live="polite">
-                      {inspectionSummary ?? "手动巡检后显示结果。"}
-                    </Text>
-                  </div>
+            <SettingsCard title="版本信息" description="查看当前桌面端版本号。">
+              <InfoRow label="产品名称" value={aboutSnapshot.appName} />
+              <InfoRow label="应用版本" value={aboutSnapshot.appVersion} />
+            </SettingsCard>
 
-                  <div className="control-panel-page__message control-panel-page__tone-surface--blush">
-                    <Text as="p" size="1" className="control-panel-page__meta-label">
-                      保存结果
-                    </Text>
-                    <Text as="p" size="2" className="control-panel-page__message-text" aria-live="polite">
-                      {saveFeedback ?? "保存后显示结果。"}
-                    </Text>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          </>
+        );
+
+    }
+  };
+
+  return (
+    <main className="app-shell control-panel-shell" data-appearance={resolvedAppearance}>
+      <div className="control-panel-shell__titlebar" aria-label="控制面板窗口操作" onPointerDown={handleTopbarPointerDown}>
+        <div className="control-panel-shell__titlebar-copy">
+          <Heading size="5" className="control-panel-shell__titlebar-title">
+            控制面板
+          </Heading>
         </div>
+
+        <div className="control-panel-shell__titlebar-actions">
+          <button
+            type="button"
+            className="control-panel-shell__window-button control-panel-shell__window-button--drag"
+            aria-label="拖动控制面板窗口"
+            onPointerDown={handleWindowDragPointerDown}
+          >
+            <GripHorizontal size={16} strokeWidth={1.85} />
+            <span>拖动窗口</span>
+          </button>
+          <button
+            type="button"
+            className="control-panel-shell__window-button control-panel-shell__window-button--close"
+            aria-label="关闭控制面板"
+            onClick={handleWindowCloseClick}
+            onPointerDown={handleWindowClosePointerDown}
+          >
+            <X size={16} strokeWidth={1.9} />
+          </button>
+        </div>
+      </div>
+
+      <div className="control-panel-shell__workspace">
+        <aside className="control-panel-shell__sidebar" aria-label="控制面板分组导航">
+          <div className="control-panel-shell__nav-groups">
+            {NAVIGATION_GROUPS.map((group) => (
+              <div key={group.label} className="control-panel-shell__nav-group">
+                <Text as="p" size="1" className="control-panel-shell__nav-group-label">
+                  {group.label}
+                </Text>
+                <div className="control-panel-shell__nav-list">
+                  {group.items.map((itemId) => (
+                    <SidebarItem
+                      key={itemId}
+                      active={activeSection === itemId}
+                      item={SECTION_META[itemId]}
+                      onSelect={() => setActiveSection(itemId)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        <section className="control-panel-shell__content">
+          <header className="control-panel-shell__hero">
+            {hasRpcLoadError ? (
+              <section className="control-panel-shell__error-banner" aria-live="polite">
+                <div className="control-panel-shell__error-banner-copy">
+                  <Text as="p" size="2" weight="medium" className="control-panel-shell__error-banner-title">
+                    设置服务连接失败
+                  </Text>
+                  <Text as="p" size="2" className="control-panel-shell__error-banner-text">
+                    {loadError}
+                  </Text>
+                  <Text as="p" size="1" className="control-panel-shell__error-banner-note">
+                    当前仍展示上一次成功同步的本地快照，重新连接后请刷新页面以回显正式设置。
+                  </Text>
+                </div>
+
+                <Button
+                  className="control-panel-shell__button control-panel-shell__button--secondary"
+                  variant="soft"
+                  onClick={() => void handleReload()}
+                >
+                  重新加载
+                </Button>
+              </section>
+            ) : null}
+
+            <div className="control-panel-shell__hero-heading">
+              <Text as="p" size="1" className="control-panel-shell__eyebrow">
+                {activeMeta.group}
+              </Text>
+              <Heading size="8" className="control-panel-shell__hero-title">
+                {activeMeta.title}
+              </Heading>
+            </div>
+          </header>
+
+          <div className="control-panel-shell__cards">{renderSectionContent()}</div>
+
+          <div className="control-panel-shell__action-bar">
+            <div className="control-panel-shell__action-statuses">
+              {saveStateValue}
+              {draft.warnings && draft.warnings.length > 0 ? (
+                <Text as="p" size="2" color="amber" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {draft.warnings[0]}
+                </Text>
+              ) : null}
+              {saveFeedback ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {saveFeedback}
+                </Text>
+              ) : null}
+              {inspectionSummary ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {inspectionSummary}
+                </Text>
+              ) : null}
+              {aboutActionFeedback ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {aboutActionFeedback}
+                </Text>
+              ) : null}
+            </div>
+
+            <div className="control-panel-shell__action-buttons">
+              <Button
+                className="control-panel-shell__button control-panel-shell__button--ghost"
+                variant="soft"
+                color="gray"
+                onClick={handleReplayOnboarding}
+                disabled={isSaving || isRunningInspection}
+              >
+                重新查看新手引导
+              </Button>
+
+              <Button
+                className="control-panel-shell__button control-panel-shell__button--ghost"
+                variant="soft"
+                color="gray"
+                onClick={handleReset}
+                disabled={!hasChanges || isSaving || isRunningInspection}
+              >
+                撤销修改
+              </Button>
+
+              <Button
+                className="control-panel-shell__button control-panel-shell__button--primary"
+                onClick={() => void handleSave()}
+                disabled={!hasChanges || isSaving || isRunningInspection}
+              >
+                {isSaving ? "保存中…" : "保存设置"}
+              </Button>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   );

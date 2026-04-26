@@ -1,5 +1,6 @@
 import type {
   AgentSecuritySummaryGetResult,
+  AgentSettingsModelValidateResult,
   AgentTaskInspectorConfigGetResult,
   AgentTaskInspectorRunResult,
   ApplyMode,
@@ -11,19 +12,19 @@ import {
   getSettings,
   getTaskInspectorConfig,
   runTaskInspector,
+  validateSettingsModel,
   updateSettings,
   updateTaskInspectorConfig,
 } from "@/rpc/methods";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
   hydrateDesktopSettings,
   loadSettings,
   saveSettings,
-  type DesktopSettings,
   type DesktopSettingsData,
 } from "@/services/settingsService";
 
-export type ControlPanelSource = "rpc" | "mock";
+export type ControlPanelSource = "rpc";
 
 export type ControlPanelData = {
   settings: DesktopSettingsData;
@@ -31,16 +32,68 @@ export type ControlPanelData = {
   securitySummary: AgentSecuritySummaryGetResult["summary"];
   providerApiKeyInput: string;
   source: ControlPanelSource;
+  warnings?: string[];
 };
 
 export type ControlPanelSaveResult = {
   applyMode: ApplyMode;
   needRestart: boolean;
   updatedKeys: string[];
+  warnings: string[];
+  modelValidation: AgentSettingsModelValidateResult | null;
   effectiveSettings: Partial<DesktopSettingsData>;
   effectiveInspector: AgentTaskInspectorConfigGetResult;
+  savedInspector: boolean;
+  savedSettings: boolean;
   source: ControlPanelSource;
 };
+
+export type ControlPanelSaveOptions = {
+  confirmedInspector?: AgentTaskInspectorConfigGetResult;
+  saveInspector?: boolean;
+  saveSettings?: boolean;
+  validateModel?: boolean;
+  timeoutMs?: number;
+};
+
+export type ControlPanelModelValidationOptions = {
+  timeoutMs?: number;
+};
+
+type ControlPanelSaveErrorKind = "general" | "model_validation_failed";
+
+const CONTROL_PANEL_RPC_TIMEOUT_MS = 10_000;
+
+const CONTROL_PANEL_INSPECTOR_UPDATED_KEYS = [
+  "task_automation.task_sources",
+  "task_automation.inspection_interval",
+  "task_automation.inspect_on_file_change",
+  "task_automation.inspect_on_startup",
+  "task_automation.remind_before_deadline",
+  "task_automation.remind_when_stale",
+];
+
+/**
+ * ControlPanelSaveError reports a save failure while optionally carrying the
+ * already-applied subset so the UI can preserve successful groups.
+ */
+export class ControlPanelSaveError extends Error {
+  readonly partialResult: ControlPanelSaveResult | null;
+  readonly kind: ControlPanelSaveErrorKind;
+
+  constructor(message: string, partialResult: ControlPanelSaveResult | null = null, kind: ControlPanelSaveErrorKind = "general") {
+    super(message);
+    this.name = "ControlPanelSaveError";
+    this.partialResult = partialResult;
+    this.kind = kind;
+  }
+}
+
+function buildEditableFloatingBallUpdate(
+  floatingBall: DesktopSettingsData["floating_ball"],
+): Partial<SettingsSnapshot["settings"]["floating_ball"]> {
+  return floatingBall;
+}
 
 function projectInspectorToTaskAutomation(
   settings: DesktopSettingsData,
@@ -107,42 +160,142 @@ function mergeProtocolSettings(
             },
           }
         : base.task_automation,
-      data_log: patch.data_log
+      models: patch.models
         ? {
-            ...base.data_log,
-            ...patch.data_log,
+            ...base.models,
+            ...patch.models,
+            ...(patch.models.credentials ?? {}),
           }
-        : base.data_log,
+        : base.models,
     }),
   };
 }
 
-function buildSettingsWithProviderApiKeyConfigured(
-  settings: DesktopSettingsData,
-  providerApiKeyConfigured: boolean,
-): DesktopSettingsData {
-  return hydrateDesktopSettings({
-    ...settings,
-    data_log: {
-      ...settings.data_log,
-      provider: settings.models.provider,
-      budget_auto_downgrade: settings.models.budget_auto_downgrade,
-      provider_api_key_configured: providerApiKeyConfigured,
-    },
-    models: {
-      ...settings.models,
-      provider_api_key_configured: providerApiKeyConfigured,
-    },
-  });
-}
-
-function buildDataLogUpdatePayload(input: ControlPanelData) {
+function buildModelsUpdatePayload(input: ControlPanelData) {
   const apiKey = input.providerApiKeyInput.trim();
 
   return {
     provider: input.settings.models.provider,
     budget_auto_downgrade: input.settings.models.budget_auto_downgrade,
+    base_url: input.settings.models.base_url,
+    model: input.settings.models.model,
     ...(apiKey === "" ? {} : { api_key: apiKey }),
+  };
+}
+
+function buildSettingsUpdatePayload(input: ControlPanelData) {
+  return {
+    request_meta: createRequestMeta(),
+    general: input.settings.general,
+    floating_ball: buildEditableFloatingBallUpdate(input.settings.floating_ball),
+    memory: input.settings.memory,
+    models: buildModelsUpdatePayload(input),
+  };
+}
+
+function normalizeControlPanelModelProvider(provider: string): string {
+  return provider.trim().toLowerCase();
+}
+
+function buildControlPanelSaveWarnings(
+  provider: string,
+  updatedKeys: string[],
+  providerApiKeyInput: string,
+): string[] {
+  const normalizedProvider = normalizeControlPanelModelProvider(provider);
+  if (normalizedProvider === "") {
+    return [];
+  }
+
+  const providerChanged = updatedKeys.includes("models.provider");
+  const apiKeySaved = providerApiKeyInput.trim() !== "";
+  if (!providerChanged && !apiKeySaved) {
+    return [];
+  }
+
+  return [];
+}
+
+function shouldValidateSavedModelRoute(updatedKeys: string[], providerApiKeyInput: string) {
+  return updatedKeys.some((key) => key.startsWith("models.")) || providerApiKeyInput.trim() !== "";
+}
+
+function buildModelValidatePayload(input: ControlPanelData) {
+  return {
+    request_meta: createRequestMeta(),
+    models: buildModelsUpdatePayload(input),
+  };
+}
+
+async function runControlPanelModelValidation(
+  data: ControlPanelData,
+  timeoutMs: number,
+): Promise<AgentSettingsModelValidateResult> {
+  return withRpcTimeout(
+    validateSettingsModel(buildModelValidatePayload(data)),
+    timeoutMs,
+    "模型配置校验",
+  );
+}
+
+function buildInspectorUpdatePayload(input: ControlPanelData) {
+  return {
+    request_meta: createRequestMeta(),
+    task_sources: input.inspector.task_sources,
+    inspection_interval: input.inspector.inspection_interval,
+    inspect_on_file_change: input.inspector.inspect_on_file_change,
+    inspect_on_startup: input.inspector.inspect_on_startup,
+    remind_before_deadline: input.inspector.remind_before_deadline,
+    remind_when_stale: input.inspector.remind_when_stale,
+  };
+}
+
+// The desktop bridge currently has no abort channel, so timeout only releases
+// the UI from waiting forever and lets the user retry instead of hanging.
+function withRpcTimeout<T>(promise: Promise<T>, timeoutMs: number, actionLabel: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${actionLabel}请求超时，请重试。`));
+    }, timeoutMs);
+
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function buildControlPanelSaveResult(
+  settings: DesktopSettingsData,
+  inspector: AgentTaskInspectorConfigGetResult,
+  source: ControlPanelSource,
+  options: {
+    applyMode: ApplyMode;
+    needRestart: boolean;
+    savedInspector: boolean;
+    savedSettings: boolean;
+    updatedKeys: string[];
+    warnings?: string[];
+    modelValidation?: AgentSettingsModelValidateResult | null;
+  },
+): ControlPanelSaveResult {
+  return {
+    applyMode: options.applyMode,
+    needRestart: options.needRestart,
+    updatedKeys: options.updatedKeys,
+    warnings: options.warnings ?? [],
+    modelValidation: options.modelValidation ?? null,
+    effectiveSettings: settings,
+    effectiveInspector: inspector,
+    savedInspector: options.savedInspector,
+    savedSettings: options.savedSettings,
+    source,
   };
 }
 
@@ -153,204 +306,220 @@ function createRequestMeta(): RequestMeta {
   };
 }
 
-function buildMockSecuritySummary(): AgentSecuritySummaryGetResult["summary"] {
+/**
+ * Reads the latest formal control-panel snapshot from the RPC boundary.
+ *
+ * The local desktop snapshot only provides a compatibility merge baseline for
+ * aliased fields; the returned view model is still sourced from formal RPC data.
+ *
+ * @param timeoutMs Optional timeout guard for the RPC reads.
+ * @returns The latest control-panel settings, inspector config, and security summary.
+ */
+async function loadControlPanelRpcSnapshot(
+  timeoutMs: number = CONTROL_PANEL_RPC_TIMEOUT_MS,
+): Promise<Pick<ControlPanelData, "inspector" | "securitySummary" | "settings">> {
+  const requestMeta = createRequestMeta();
+  const localSettings = loadSettings().settings;
+  const [settingsResult, inspectorResult, securityResult] = await Promise.all([
+    withRpcTimeout(getSettings({ request_meta: requestMeta, scope: "all" }), timeoutMs, "设置读取"),
+    withRpcTimeout(getTaskInspectorConfig({ request_meta: createRequestMeta() }), timeoutMs, "巡检设置读取"),
+    withRpcTimeout(getSecuritySummary({ request_meta: createRequestMeta() }), timeoutMs, "安全摘要读取"),
+  ]);
+
+  const effectiveSettings = projectInspectorToTaskAutomation(
+    mergeProtocolSettings(localSettings, settingsResult.settings),
+    inspectorResult,
+  );
+
   return {
-    security_status: "pending_confirmation",
-    pending_authorizations: 2,
-    latest_restore_point: {
-      recovery_point_id: "cp_restore_mock_001",
-      task_id: "task_control_panel_mock_001",
-      summary: "控制面板变更前的恢复点快照",
-      created_at: "2026-04-09T13:20:00+08:00",
-      objects: ["D:/CialloClawWorkspace", "VS Code", "Docker sandbox"],
-    },
-    token_cost_summary: {
-      current_task_tokens: 18210,
-      current_task_cost: 1.34,
-      today_tokens: 91230,
-      today_cost: 7.48,
-      single_task_limit: 50000,
-      daily_limit: 300000,
-      budget_auto_downgrade: true,
-    },
+    settings: effectiveSettings,
+    inspector: inspectorResult,
+    securitySummary: securityResult.summary,
   };
 }
 
-function buildMockInspector(settings: DesktopSettings): AgentTaskInspectorConfigGetResult {
-  return {
-    task_sources: settings.settings.task_automation.task_sources,
-    inspection_interval: settings.settings.task_automation.inspection_interval,
-    inspect_on_file_change: settings.settings.task_automation.inspect_on_file_change,
-    inspect_on_startup: settings.settings.task_automation.inspect_on_startup,
-    remind_before_deadline: settings.settings.task_automation.remind_before_deadline,
-    remind_when_stale: settings.settings.task_automation.remind_when_stale,
-  };
-}
-
-function getInitialControlPanelData(): ControlPanelData {
-  const settings = loadSettings();
-  const inspector = buildMockInspector(settings);
-  const normalizedSettings = projectInspectorToTaskAutomation(settings.settings, inspector);
-  return {
-    settings: normalizedSettings,
-    inspector,
-    providerApiKeyInput: "",
-    securitySummary: buildMockSecuritySummary(),
-    source: "mock",
-  };
-}
-
+/**
+ * loadControlPanelData hydrates the control panel from the formal RPC boundary.
+ */
 export async function loadControlPanelData(): Promise<ControlPanelData> {
   try {
-    const requestMeta = createRequestMeta();
-    const localSettings = loadSettings().settings;
-    const [settingsResult, inspectorResult, securityResult] = await Promise.all([
-      getSettings({ request_meta: requestMeta, scope: "all" }),
-      getTaskInspectorConfig({ request_meta: createRequestMeta() }),
-      getSecuritySummary({ request_meta: createRequestMeta() }),
-    ]);
-
-    const effectiveSettings = projectInspectorToTaskAutomation(
-      mergeProtocolSettings(localSettings, settingsResult.settings),
-      inspectorResult,
-    );
-    saveSettings({ settings: effectiveSettings });
+    const snapshot = await loadControlPanelRpcSnapshot();
+    saveSettings({ settings: snapshot.settings });
 
     return {
-      settings: effectiveSettings,
-      inspector: inspectorResult,
+      ...snapshot,
       providerApiKeyInput: "",
-      securitySummary: securityResult.summary,
       source: "rpc",
+      warnings: [],
     };
   } catch (error) {
-    console.warn("Control panel RPC unavailable, using local settings fallback.", error);
-    return getInitialControlPanelData();
-  }
-}
-
-export async function saveControlPanelData(data: ControlPanelData): Promise<ControlPanelSaveResult> {
-  if (data.source === "mock") {
-    const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
-      projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.models.provider_api_key_configured,
-    );
-    const nextDesktopSettings: DesktopSettings = {
-      settings: nextSettingsSnapshot,
-    };
-    saveSettings(nextDesktopSettings);
-    return {
-      applyMode: "immediate",
-      needRestart: false,
-      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "models"],
-      effectiveSettings: nextDesktopSettings.settings,
-      effectiveInspector: data.inspector,
-      source: "mock",
-    };
-  }
-
-  try {
-    const [settingsResult, inspectorResult] = await Promise.all([
-      updateSettings({
-        request_meta: createRequestMeta(),
-        general: data.settings.general,
-        floating_ball: data.settings.floating_ball,
-        memory: data.settings.memory,
-        data_log: buildDataLogUpdatePayload(data),
-      }),
-      updateTaskInspectorConfig({
-        request_meta: createRequestMeta(),
-        task_sources: data.inspector.task_sources,
-        inspection_interval: data.inspector.inspection_interval,
-        inspect_on_file_change: data.inspector.inspect_on_file_change,
-        inspect_on_startup: data.inspector.inspect_on_startup,
-        remind_before_deadline: data.inspector.remind_before_deadline,
-        remind_when_stale: data.inspector.remind_when_stale,
-      }),
-    ]);
-
-    const effectiveSettings = projectInspectorToTaskAutomation(
-      mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>),
-      inspectorResult.effective_config,
-    );
-    saveSettings({ settings: effectiveSettings });
-
-    return {
-      applyMode: settingsResult.apply_mode,
-      needRestart: settingsResult.need_restart,
-      updatedKeys: settingsResult.updated_keys,
-      effectiveSettings,
-      effectiveInspector: inspectorResult.effective_config,
-      source: "rpc",
-    };
-  } catch (error) {
-    if (!isRpcChannelUnavailable(error)) {
-      throw error;
+    if (isRpcChannelUnavailable(error)) {
+      throw new Error("控制面板设置服务暂时不可用，请稍后重试。");
     }
 
-    logRpcMockFallback("control panel save", error);
-    const nextSettingsSnapshot = buildSettingsWithProviderApiKeyConfigured(
-      projectInspectorToTaskAutomation(data.settings, data.inspector),
-      data.settings.models.provider_api_key_configured,
-    );
-    const nextDesktopSettings: DesktopSettings = {
-      settings: nextSettingsSnapshot,
-    };
-    saveSettings(nextDesktopSettings);
-    return {
-      applyMode: "immediate",
-      needRestart: false,
-      updatedKeys: ["general", "floating_ball", "memory", "task_automation", "models"],
-      effectiveSettings: nextDesktopSettings.settings,
-      effectiveInspector: data.inspector,
-      source: "mock",
-    };
+    throw error;
   }
 }
 
-export async function runControlPanelInspection(data: ControlPanelData): Promise<AgentTaskInspectorRunResult> {
-  if (data.source === "mock") {
-    return {
-      inspection_id: `inspection_mock_${Date.now()}`,
-      summary: {
-        parsed_files: 16,
-        identified_items: 9,
-        due_today: 2,
-        overdue: 1,
-        stale: 3,
-      },
-      suggestions: [
-        "将 overdue 任务提升到今日工作流卡片。",
-        "把高频 task source 固定到前两位，减少巡检噪音。",
-      ],
-    };
+/**
+ * saveControlPanelData persists only the dirty settings groups requested by
+ * the caller so unrelated RPC writes do not block the entire settings surface.
+ * Model-route changes run through a read-only validation probe before the
+ * formal settings write so invalid provider/base-url/model/key drafts never
+ * reach the persisted snapshot.
+ */
+export async function saveControlPanelData(
+  data: ControlPanelData,
+  options: ControlPanelSaveOptions = {},
+): Promise<ControlPanelSaveResult> {
+  const confirmedInspector = options.confirmedInspector ?? data.inspector;
+  const saveSettingsRequested = options.saveSettings ?? true;
+  const saveInspectorRequested = options.saveInspector ?? true;
+  const validateModelRequested = options.validateModel ?? saveSettingsRequested;
+  const timeoutMs = options.timeoutMs ?? CONTROL_PANEL_RPC_TIMEOUT_MS;
+
+  if (!saveSettingsRequested && !saveInspectorRequested) {
+    return buildControlPanelSaveResult(data.settings, data.inspector, data.source, {
+      applyMode: "immediate",
+      needRestart: false,
+      savedInspector: false,
+      savedSettings: false,
+      updatedKeys: [],
+      modelValidation: null,
+    });
   }
 
+  let applyMode: ApplyMode = "immediate";
+  let effectiveInspector = confirmedInspector;
+  let effectiveSettings = data.settings;
+  let needRestart = false;
+  let savedInspector = false;
+  let savedSettings = false;
+  const updatedKeys: string[] = [];
+  const warnings: string[] = [];
+  let modelValidation: AgentSettingsModelValidateResult | null = null;
+
   try {
-    return await runTaskInspector({
-      request_meta: createRequestMeta(),
-      reason: "control_panel_manual_run",
-      target_sources: data.inspector.task_sources,
+    if (saveSettingsRequested && validateModelRequested) {
+      modelValidation = await validateControlPanelModel(data, { timeoutMs });
+      if (!modelValidation.ok) {
+        throw new ControlPanelSaveError(`${modelValidation.message} 当前设置未保存。`, null, "model_validation_failed");
+      }
+    }
+
+    if (saveSettingsRequested) {
+      const settingsResult = await withRpcTimeout(updateSettings(buildSettingsUpdatePayload(data)), timeoutMs, "设置保存");
+      effectiveSettings = mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>);
+      effectiveSettings = projectInspectorToTaskAutomation(effectiveSettings, effectiveInspector);
+      applyMode = settingsResult.apply_mode;
+      needRestart = settingsResult.need_restart;
+      savedSettings = true;
+      updatedKeys.push(...settingsResult.updated_keys);
+      warnings.push(...buildControlPanelSaveWarnings(data.settings.models.provider, settingsResult.updated_keys, data.providerApiKeyInput));
+      if (!modelValidation && shouldValidateSavedModelRoute(settingsResult.updated_keys, data.providerApiKeyInput)) {
+        modelValidation = await validateControlPanelModel(data, { timeoutMs });
+      }
+      if (!saveInspectorRequested) {
+        saveSettings({ settings: effectiveSettings });
+      }
+    }
+
+    if (saveInspectorRequested) {
+      try {
+        const inspectorResult = await withRpcTimeout(
+          updateTaskInspectorConfig(buildInspectorUpdatePayload(data)),
+          timeoutMs,
+          "巡检设置保存",
+        );
+        effectiveInspector = inspectorResult.effective_config;
+        effectiveSettings = projectInspectorToTaskAutomation(effectiveSettings, effectiveInspector);
+        savedInspector = true;
+        updatedKeys.push(...CONTROL_PANEL_INSPECTOR_UPDATED_KEYS);
+        saveSettings({ settings: effectiveSettings });
+      } catch (error) {
+        if (savedSettings) {
+          saveSettings({ settings: effectiveSettings });
+          throw new ControlPanelSaveError(
+            `通用设置已保存，但巡检设置保存失败：${error instanceof Error ? error.message : "请重试。"}`,
+            buildControlPanelSaveResult(effectiveSettings, effectiveInspector, "rpc", {
+              applyMode,
+              needRestart,
+              savedInspector: false,
+              savedSettings: true,
+              updatedKeys,
+              warnings,
+              modelValidation,
+            }),
+          );
+        }
+
+        throw error;
+      }
+    }
+
+    return buildControlPanelSaveResult(effectiveSettings, effectiveInspector, "rpc", {
+      applyMode,
+      needRestart,
+      savedInspector,
+      savedSettings,
+      updatedKeys,
+      warnings,
+      modelValidation,
     });
   } catch (error) {
-    if (!isRpcChannelUnavailable(error)) {
+    if (error instanceof ControlPanelSaveError) {
       throw error;
     }
 
-    logRpcMockFallback("control panel inspection", error);
-    return {
-      inspection_id: `inspection_mock_${Date.now()}`,
-      summary: {
-        parsed_files: 16,
-        identified_items: 9,
-        due_today: 2,
-        overdue: 1,
-        stale: 3,
-      },
-      suggestions: [
-        "将 overdue 任务提升到今日工作流卡片。",
-        "把高频 task source 固定到前两位，减少巡检噪音。",
-      ],
-    };
+    if (isRpcChannelUnavailable(error)) {
+      throw new ControlPanelSaveError("设置服务暂时不可用，请稍后重试。");
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * validateControlPanelModel runs the formal model-route probe without mutating
+ * the saved settings snapshot, so the UI can distinguish saved-vs-usable state.
+ */
+export async function validateControlPanelModel(
+  data: ControlPanelData,
+  options: ControlPanelModelValidationOptions = {},
+): Promise<AgentSettingsModelValidateResult> {
+  const timeoutMs = options.timeoutMs ?? CONTROL_PANEL_RPC_TIMEOUT_MS;
+
+  try {
+    return await runControlPanelModelValidation(data, timeoutMs);
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      throw new Error("模型配置校验服务暂时不可用，请稍后重试。");
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * runControlPanelInspection triggers one manual inspection pass from the
+ * current control-panel state.
+ */
+export async function runControlPanelInspection(data: ControlPanelData): Promise<AgentTaskInspectorRunResult> {
+  try {
+    return await withRpcTimeout(
+      runTaskInspector({
+        request_meta: createRequestMeta(),
+        reason: "control_panel_manual_run",
+        target_sources: data.inspector.task_sources,
+      }),
+      CONTROL_PANEL_RPC_TIMEOUT_MS,
+      "巡检执行",
+    );
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      throw new Error("巡检服务暂时不可用，请稍后重试。");
+    }
+
+    throw error;
   }
 }

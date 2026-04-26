@@ -4,12 +4,18 @@ import type { ShellBallMotionConfig, ShellBallVisualState } from "./shellBall.ty
 import { ShellBallMascot } from "./components/ShellBallMascot";
 
 type ShellBallSurfaceProps = {
+  bottomContent?: ReactNode;
   children?: ReactNode;
   containerRef?: RefObject<HTMLDivElement>;
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
+  edgeDockRevealed?: boolean;
+  edgeDockSide?: "left" | "right" | null;
   fileDropActive?: boolean;
+  mascotRef?: RefObject<HTMLDivElement>;
+  overlayContent?: ReactNode;
   textDropActive?: boolean;
   selectionIndicatorVisible?: boolean;
+  topContent?: ReactNode;
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
   voiceHoldProgress?: number;
@@ -24,7 +30,6 @@ type ShellBallSurfaceProps = {
   onRegionEnter: () => void;
   onRegionLeave: () => void;
   onTextDrop?: (text: string) => void | Promise<void>;
-  onInputProxyClick?: () => void;
   onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressEnd: (event: PointerEvent<HTMLButtonElement>) => boolean;
@@ -75,16 +80,22 @@ export function extractShellBallDroppedText(dataTransfer: ShellBallDropDataTrans
 }
 
 export function ShellBallSurface({
+  bottomContent,
   children,
   containerRef,
   dashboardTransitionPhase = "idle",
+  edgeDockRevealed = false,
+  edgeDockSide = null,
   fileDropActive = false,
+  mascotRef,
+  overlayContent,
   textDropActive = false,
   selectionIndicatorVisible = false,
+  topContent,
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
-  inputFocused = false,
+  inputFocused: _inputFocused = false,
   motionConfig,
   onDragStart,
   onDragMove,
@@ -95,14 +106,11 @@ export function ShellBallSurface({
   onRegionEnter,
   onRegionLeave,
   onTextDrop = () => {},
-  onInputProxyClick = () => {},
   onPressStart,
   onPressMove,
   onPressEnd,
   onPressCancel,
 }: ShellBallSurfaceProps) {
-  const showInputProxy = visualState === "hover_input" && !inputFocused;
-
   // Only the armed text target is allowed to consume drag events.
   function handleDragOver(event: DragEvent<HTMLElement>) {
     if (!textDropActive || !shouldAcceptShellBallTextDrop(event.dataTransfer)) {
@@ -141,13 +149,12 @@ export function ShellBallSurface({
       onDropCapture={handleDrop}
     >
       <div className="shell-ball-surface__core">
+        {topContent ? <div className="shell-ball-surface__slot shell-ball-surface__slot--top">{topContent}</div> : null}
         <div className="shell-ball-surface__interaction-shell">
           <section
             aria-label="Shell-ball interaction zone"
             className="shell-ball-surface__interaction-zone"
             data-shell-ball-zone="interaction"
-            onPointerEnter={onRegionEnter}
-            onPointerLeave={onRegionLeave}
           >
               <div className="shell-ball-surface__body">
                 <div
@@ -166,15 +173,22 @@ export function ShellBallSurface({
                   value=""
                   onChange={() => {}}
                 />
-                <div className="shell-ball-surface__mascot-shell">
-                  <ShellBallMascot
-                    visualState={visualState}
-                    voicePreview={voicePreview}
+                <div
+                  ref={mascotRef}
+                  className="shell-ball-surface__mascot-shell"
+                >
+                    <ShellBallMascot
+                      edgeDockRevealed={edgeDockRevealed}
+                      edgeDockSide={edgeDockSide}
+                      visualState={visualState}
+                      voicePreview={voicePreview}
                     selectionIndicatorVisible={selectionIndicatorVisible}
                     voiceHoldProgress={voiceHoldProgress}
                     motionConfig={motionConfig}
                     onPrimaryClick={onPrimaryClick}
                     onDoubleClick={onDoubleClick}
+                    onHotspotEnter={onRegionEnter}
+                    onHotspotLeave={onRegionLeave}
                     onHotspotDragStart={onDragStart}
                     onHotspotDragMove={onDragMove}
                     onHotspotDragEnd={onDragEnd}
@@ -185,19 +199,21 @@ export function ShellBallSurface({
                     onPressCancel={onPressCancel}
                   />
                 </div>
-                <button
-                  aria-hidden={!showInputProxy}
-                  className="shell-ball-surface__input-line-proxy"
-                  data-visible={showInputProxy}
-                  onClick={onInputProxyClick}
-                  tabIndex={showInputProxy ? 0 : -1}
-                  type="button"
-                />
+                {overlayContent ? (
+                  <div className="shell-ball-surface__overlay">
+                    <div className="shell-ball-surface__voice-anchor">{overlayContent}</div>
+                  </div>
+                ) : null}
               </div>
-          </section>
+            </section>
         </div>
+        {bottomContent ? (
+          <div className="shell-ball-surface__slot shell-ball-surface__slot--bottom">
+            <div className="shell-ball-surface__slot-visual shell-ball-surface__slot-visual--bottom">{bottomContent}</div>
+          </div>
+        ) : null}
+        {children ? <div className="shell-ball-surface__stack">{children}</div> : null}
       </div>
-      {children}
     </div>
   );
 }

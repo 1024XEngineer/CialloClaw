@@ -6,6 +6,9 @@ import type {
   AgentMirrorOverviewGetResult,
   AgentRecommendationFeedbackSubmitResult,
   AgentRecommendationGetResult,
+  AgentTaskControlResult,
+  AgentTaskDetailGetResult,
+  AgentTaskListResult,
   AgentSettingsUpdateResult,
   AgentSecurityAuditListResult,
   AgentSecurityPendingListResult,
@@ -16,13 +19,16 @@ import type {
   AgentTaskArtifactListResult,
   AgentTaskArtifactOpenResult,
   AgentTaskEventsListResult,
+  AgentTaskToolCallsListResult,
   AgentTaskStartResult,
   AgentTaskSteerResult,
   AuditRecord,
+  Citation,
   DeliveryPayload,
   DeliveryResult,
   RecoveryPoint,
   Task,
+  TaskRuntimeSummary,
   TokenCostSummary,
 } from "@cialloclaw/protocol";
 import { loadSettings } from "@/services/settingsService";
@@ -48,6 +54,7 @@ function createTask(status: Task["status"], currentStep: string): Task {
 
   return {
     task_id: "task_stub",
+    session_id: null,
     title: "stub task",
     source_type: "hover_input",
     status,
@@ -126,6 +133,93 @@ function createTaskDeliveryResult(): DeliveryResult {
     title: "Task detail",
     preview_text: "Open the task detail view.",
     payload: createResolvedPayload(),
+  };
+}
+
+function createRuntimeSummary(): TaskRuntimeSummary {
+  return {
+    active_steering_count: 1,
+    events_count: 4,
+    latest_event_type: "loop.completed",
+    latest_failure_code: null,
+    latest_failure_category: null,
+    latest_failure_summary: null,
+    loop_stop_reason: "completed",
+    observation_signals: ["screen_capture"],
+  };
+}
+
+function createCitations(): Citation[] {
+  return [
+    {
+      citation_id: "citation_stub_001",
+      task_id: "task_stub",
+      run_id: "run_stub",
+      source_type: "file",
+      source_ref: "workspace/stub.txt",
+      label: "Stub workspace file",
+      artifact_id: "artifact_stub",
+      artifact_type: "workspace_document",
+      evidence_role: "supporting_material",
+      excerpt_text: "stub content",
+      screen_session_id: null,
+    },
+  ];
+}
+
+function createTaskListResult(): AgentTaskListResult {
+  return {
+    items: [createTask("processing", "collect_input")],
+    page: {
+      has_more: false,
+      limit: 20,
+      offset: 0,
+      total: 1,
+    },
+  };
+}
+
+function createTaskDetailResult(): AgentTaskDetailGetResult {
+  return {
+    approval_request: null,
+    audit_record: createAuditRecord(),
+    artifacts: [
+      {
+        artifact_id: "artifact_stub",
+        artifact_type: "workspace_document",
+        mime_type: "text/plain",
+        path: "workspace/stub.txt",
+        task_id: "task_stub",
+        title: "stub.txt",
+      },
+    ],
+    authorization_record: {
+      authorization_record_id: "auth_stub",
+      task_id: "task_stub",
+      approval_id: "approval_stub",
+      decision: "allow_once",
+      remember_rule: false,
+      operator: "test-stub",
+      created_at: new Date().toISOString(),
+    },
+    citations: createCitations(),
+    delivery_result: createTaskDeliveryResult(),
+    mirror_references: [
+      {
+        memory_id: "mem_stub_001",
+        reason: "Continue the structured summary.",
+        summary: "Keep a concise wrap-up with one risk note.",
+      },
+    ],
+    runtime_summary: createRuntimeSummary(),
+    security_summary: {
+      latest_restore_point: createRecoveryPoint(),
+      pending_authorizations: 0,
+      risk_level: "yellow",
+      security_status: "normal",
+    },
+    task: createTask("processing", "collect_input"),
+    timeline: [],
   };
 }
 
@@ -427,6 +521,62 @@ export async function listTaskEvents(_params?: unknown): Promise<AgentTaskEvents
   };
 }
 
+export async function listTasks(_params?: unknown): Promise<AgentTaskListResult> {
+  return createTaskListResult();
+}
+
+export async function getTaskDetail(_params?: unknown): Promise<AgentTaskDetailGetResult> {
+  return createTaskDetailResult();
+}
+
+export async function controlTask(_params?: unknown): Promise<AgentTaskControlResult> {
+  return {
+    task: createTask("processing", "collect_input"),
+    bubble_message: {
+      bubble_id: "bubble_control_stub",
+      task_id: "task_stub",
+      type: "status",
+      text: "The requested task control action was accepted.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+  };
+}
+
+export async function listTaskToolCalls(_params?: unknown): Promise<AgentTaskToolCallsListResult> {
+  return {
+    items: [
+      {
+        tool_call_id: "tool_call_stub_001",
+        run_id: "run_stub",
+        task_id: "task_stub",
+        step_id: null,
+        created_at: new Date().toISOString(),
+        tool_name: "read_file",
+        status: "succeeded",
+        input: {
+          path: "notes/source.txt",
+        },
+        output: {
+          path: "notes/source.txt",
+          summary_output: {
+            excerpt: "stub content",
+          },
+        },
+        error_code: null,
+        duration_ms: 12,
+      },
+    ],
+    page: {
+      has_more: false,
+      limit: 20,
+      offset: 0,
+      total: 1,
+    },
+  };
+}
+
 export async function steerTask(_params?: unknown): Promise<AgentTaskSteerResult> {
   return {
     task: createTask("waiting_auth", "agent_loop"),
@@ -486,8 +636,21 @@ export async function updateSettings(_params?: unknown): Promise<AgentSettingsUp
   const current = loadSettings();
 
   return {
-    apply_mode: "immediate",
-    effective_settings: current.settings,
+    apply_mode: "next_task_effective",
+    effective_settings: {
+      general: current.settings.general,
+      floating_ball: current.settings.floating_ball,
+      memory: current.settings.memory,
+      task_automation: current.settings.task_automation,
+      models: {
+        provider: current.settings.models.provider,
+        budget_auto_downgrade: current.settings.models.budget_auto_downgrade,
+        provider_api_key_configured: current.settings.models.provider_api_key_configured,
+        base_url: current.settings.models.base_url,
+        model: current.settings.models.model,
+        stronghold: current.settings.models.stronghold,
+      },
+    },
     need_restart: false,
     updated_keys: [],
   };

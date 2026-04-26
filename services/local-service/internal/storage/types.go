@@ -137,6 +137,13 @@ type TodoStore interface {
 	LoadTodoState(ctx context.Context) ([]TodoItemRecord, []RecurringRuleRecord, error)
 }
 
+// SettingsStore persists the ordinary non-secret settings snapshot used by
+// `agent.settings.get / agent.settings.update`.
+type SettingsStore interface {
+	SaveSettingsSnapshot(ctx context.Context, snapshot map[string]any) error
+	LoadSettingsSnapshot(ctx context.Context) (map[string]any, error)
+}
+
 // TraceRecord describes one persisted execution trace snapshot.
 type TraceRecord struct {
 	TraceID          string
@@ -147,6 +154,7 @@ type TraceRecord struct {
 	LLMOutputSummary string
 	LatencyMS        int64
 	Cost             float64
+	AssetRefsJSON    string
 	RuleHitsJSON     string
 	ReviewResult     string
 	CreatedAt        string
@@ -158,6 +166,7 @@ type EvalSnapshotRecord struct {
 	TraceID        string
 	TaskID         string
 	Status         string
+	AssetRefsJSON  string
 	MetricsJSON    string
 	CreatedAt      string
 }
@@ -236,6 +245,45 @@ type PromptTemplateVersionStore interface {
 	ListPromptTemplateVersions(ctx context.Context, limit, offset int) ([]PromptTemplateVersionRecord, int, error)
 }
 
+// PluginManifestRecord persists one formal plugin_manifests row without turning
+// on plugin marketplace or install flows before the roadmap reaches them.
+type PluginManifestRecord struct {
+	PluginID         string
+	Name             string
+	Version          string
+	Entry            string
+	Source           string
+	Summary          string
+	CapabilitiesJSON string
+	PermissionsJSON  string
+	RuntimeNamesJSON string
+	CreatedAt        string
+	UpdatedAt        string
+}
+
+// PluginManifestStore persists versioned plugin manifest assets.
+type PluginManifestStore interface {
+	WritePluginManifest(ctx context.Context, record PluginManifestRecord) error
+	GetPluginManifest(ctx context.Context, pluginID string) (PluginManifestRecord, error)
+	ListPluginManifests(ctx context.Context, limit, offset int) ([]PluginManifestRecord, int, error)
+}
+
+// ExtensionAssetReference records one concrete versioned asset that execution,
+// trace, and eval can attribute to a task/run without exposing any marketplace
+// or installation workflow.
+type ExtensionAssetReference struct {
+	AssetKind    string   `json:"asset_kind"`
+	AssetID      string   `json:"asset_id"`
+	Name         string   `json:"name"`
+	Version      string   `json:"version"`
+	Source       string   `json:"source"`
+	Summary      string   `json:"summary,omitempty"`
+	Entry        string   `json:"entry,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	Permissions  []string `json:"permissions,omitempty"`
+	RuntimeNames []string `json:"runtime_names,omitempty"`
+}
+
 // SecretRecord captures one secret value persisted outside the normal settings path.
 type SecretRecord struct {
 	Namespace string
@@ -291,6 +339,8 @@ type TaskRunRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	RequestSource     string
+	RequestTrigger    string
 	ExecutionAttempt  int
 	Title             string
 	SourceType        string
@@ -307,6 +357,7 @@ type TaskRunRecord struct {
 	BubbleMessage     map[string]any
 	DeliveryResult    map[string]any
 	Artifacts         []map[string]any
+	Citations         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
 	Snapshot          contextsvc.TaskContextSnapshot
@@ -334,6 +385,8 @@ type TaskRunStore interface {
 	DeleteTaskRun(ctx context.Context, taskID string) error
 	SaveTaskRun(ctx context.Context, record TaskRunRecord) error
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
+	GetTaskRun(ctx context.Context, taskID string) (TaskRunRecord, error)
+	LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error)
 }
 
 // TaskRecord describes one first-class tasks row aligned with the product layer.
@@ -341,6 +394,7 @@ type TaskRecord struct {
 	TaskID              string
 	SessionID           string
 	RunID               string
+	PrimaryRunID        string
 	Title               string
 	SourceType          string
 	Status              string
@@ -351,10 +405,29 @@ type TaskRecord struct {
 	CurrentStep         string
 	CurrentStepStatus   string
 	RiskLevel           string
+	RequestSource       string
+	RequestTrigger      string
 	StartedAt           string
 	UpdatedAt           string
 	FinishedAt          string
 	SnapshotJSON        string
+}
+
+// SessionRecord describes one first-class sessions row aligned with the product layer.
+type SessionRecord struct {
+	SessionID string
+	Title     string
+	Status    string
+	CreatedAt string
+	UpdatedAt string
+}
+
+// SessionStore persists first-class sessions rows.
+type SessionStore interface {
+	WriteSession(ctx context.Context, record SessionRecord) error
+	DeleteSession(ctx context.Context, sessionID string) error
+	GetSession(ctx context.Context, sessionID string) (SessionRecord, error)
+	ListSessions(ctx context.Context, limit, offset int) ([]SessionRecord, int, error)
 }
 
 // TaskStepRecord describes one first-class task_steps row for user-facing timelines.
@@ -376,6 +449,7 @@ type TaskStore interface {
 	DeleteTask(ctx context.Context, taskID string) error
 	GetTask(ctx context.Context, taskID string) (TaskRecord, error)
 	ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error)
+	ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]TaskRecord, int, error)
 }
 
 // TaskStepStore persists first-class task_steps rows for task-facing timelines.
@@ -384,18 +458,26 @@ type TaskStepStore interface {
 	ListTaskSteps(ctx context.Context, taskID string, limit, offset int) ([]TaskStepRecord, int, error)
 }
 
-// LoopRuntimeStore defines normalized run/step/event/delivery_result persistence.
+// LoopRuntimeStore defines normalized run/step/event/delivery_result persistence
+// plus the task-facing citation snapshots that structured task detail can
+// rehydrate without relying on task_run compatibility rows.
 type LoopRuntimeStore interface {
 	SaveRun(ctx context.Context, record RunRecord) error
 	SaveSteps(ctx context.Context, records []StepRecord) error
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
+	GetRun(ctx context.Context, runID string) (RunRecord, error)
+	ListDeliveryResults(ctx context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error)
+	ReplaceTaskCitations(ctx context.Context, taskID string, records []CitationRecord) error
+	GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error)
+	ListTaskCitations(ctx context.Context, taskID string) ([]CitationRecord, error)
 	ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error)
 }
 
 // ToolCallStore defines persistence for tool_call records.
 type ToolCallStore interface {
 	SaveToolCall(ctx context.Context, record tools.ToolCallRecord) error
+	ListToolCalls(ctx context.Context, taskID, runID string, limit, offset int) ([]tools.ToolCallRecord, int, error)
 }
 
 // AuditStore defines persistence for audit records.

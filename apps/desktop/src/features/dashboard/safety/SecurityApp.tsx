@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import type {
   AgentSecurityApprovalRespondResult,
+  AgentTaskDetailGetResult,
   AuditRecord,
   ApprovalDecision,
   ApprovalPendingNotification,
@@ -34,6 +35,7 @@ import { JsonRpcClientError } from "@/rpc/client";
 import { subscribeApprovalPending, subscribeTask } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
   isDashboardSafetyApprovalSnapshotOnly,
   resolveDashboardSafetyNavigationRoute,
@@ -48,6 +50,7 @@ import {
   isSecurityApprovalRespondResult,
   isSecurityRestoreRespondResult,
   loadSecurityAuditRecords,
+  loadSecurityFocusedTaskDetail,
   loadSecurityModuleData,
   loadSecurityModuleRpcData,
   loadSecurityRestorePoints,
@@ -58,7 +61,6 @@ import {
   type SecurityRestorePointListData,
   type SecurityRespondOutcome,
 } from "./securityService";
-import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
 import "./securityPage.css";
 import "./securityBoard.css";
@@ -101,7 +103,7 @@ const CARD_STEP = 18;
 const BOARD_INSET_X = 22;
 const BOARD_INSET_TOP = 140;
 const BOARD_INSET_BOTTOM = 24;
-const DEFAULT_CARD_SIZE: CardSize = { width: 248, height: 176 };
+const DEFAULT_CARD_SIZE: CardSize = { width: 316, height: 236 };
 const FALLBACK_POSITION: CardPosition = { x: BOARD_INSET_X, y: BOARD_INSET_TOP };
 const SECURITY_DETAIL_PAGE_SIZE = 8;
 const ALL_AUDIT_TYPES = "__all__";
@@ -233,6 +235,34 @@ function formatPageWindow(page: { offset: number; total: number }, itemCount: nu
   return `${start}-${end} / ${page.total}`;
 }
 
+function isFocusedScreenTask(detail: AgentTaskDetailGetResult | null) {
+  return detail?.task.source_type === "screen_capture" || detail?.task.intent?.name === "screen_analyze";
+}
+
+function formatFocusedTaskFailure(detail: AgentTaskDetailGetResult | null) {
+  if (!detail) {
+    return "当前 task 还没有失败记录。";
+  }
+
+  const parts = [
+    detail.runtime_summary.latest_failure_category,
+    detail.runtime_summary.latest_failure_code,
+    detail.runtime_summary.latest_failure_summary,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  return parts.length > 0 ? parts.join(" · ") : "当前 task 还没有失败记录。";
+}
+
+function formatCitationEvidence(citation: AgentTaskDetailGetResult["citations"][number]) {
+  return [citation.label, citation.source_type, citation.source_ref].filter((value) => value.trim().length > 0).join(" · ");
+}
+
+function formatArtifactEvidence(artifact: AgentTaskDetailGetResult["artifacts"][number]) {
+  const headline = artifact.title.trim() || artifact.artifact_type;
+  const location = artifact.path.trim() || artifact.artifact_id;
+  return [headline, location].filter((value) => value.trim().length > 0).join(" · ");
+}
+
 function resolveSecurityDetailTaskId(args: {
   activeDetailKey: SecurityCardKey | null;
   approvalLookup: Map<string, ApprovalRequest>;
@@ -332,8 +362,8 @@ function getBoardCardSize(canvasWidth: number, canvasHeight: number, grid: Board
   const height = Math.floor((canvasHeight - BOARD_INSET_TOP - BOARD_INSET_BOTTOM - CARD_CLEARANCE * (grid.rows - 1)) / grid.rows);
 
   return {
-    width: clampValue(width, 208, 260),
-    height: clampValue(height, 152, 184),
+    width: clampValue(width, 228, DEFAULT_CARD_SIZE.width),
+    height: clampValue(height, 172, DEFAULT_CARD_SIZE.height),
   } satisfies CardSize;
 }
 
@@ -600,6 +630,8 @@ export function SecurityApp() {
   const [auditRecordsData, setAuditRecordsData] = useState<SecurityAuditRecordListData | null>(null);
   const [auditRecordsError, setAuditRecordsError] = useState<string | null>(null);
   const [auditRecordsLoading, setAuditRecordsLoading] = useState(false);
+  const [focusedTaskDetail, setFocusedTaskDetail] = useState<AgentTaskDetailGetResult | null>(null);
+  const [focusedTaskDetailError, setFocusedTaskDetailError] = useState<string | null>(null);
   const [auditScope, setAuditScope] = useState<SecurityAuditScope>("focused_task");
   const [auditOffset, setAuditOffset] = useState(0);
   const [auditTypeFilter, setAuditTypeFilter] = useState<string>(ALL_AUDIT_TYPES);
@@ -875,6 +907,35 @@ export function SecurityApp() {
   }, [dataMode, queueRpcRefresh, subscribedTaskId]);
 
   useEffect(() => {
+    if (!focusedTaskId) {
+      setFocusedTaskDetail(null);
+      setFocusedTaskDetailError(null);
+      return;
+    }
+
+    let disposed = false;
+    setFocusedTaskDetail(null);
+    setFocusedTaskDetailError(null);
+    void loadSecurityFocusedTaskDetail(focusedTaskId, moduleData?.source ?? "rpc")
+      .then((detail) => {
+        if (!disposed) {
+          setFocusedTaskDetail(detail);
+          setFocusedTaskDetailError(null);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setFocusedTaskDetail(null);
+          setFocusedTaskDetailError(formatRpcError(error));
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [focusedTaskId, moduleData?.source]);
+
+  useEffect(() => {
     if (!moduleData || activeDetailKey !== "status") {
       return;
     }
@@ -1034,6 +1095,19 @@ export function SecurityApp() {
     [cardKeys, getBoardLayout],
   );
 
+  const getClampedCardPosition = useCallback(
+    (target: CardPosition) => {
+      const layout = getBoardLayout();
+
+      if (!layout) {
+        return target;
+      }
+
+      return clampPosition(target, layout.bounds);
+    },
+    [getBoardLayout],
+  );
+
   useLayoutEffect(() => {
     const syncBoardLayout = () => {
       const layout = getBoardLayout();
@@ -1082,12 +1156,7 @@ export function SecurityApp() {
 
   const openTaskDetail = useCallback(
     (taskId: string) => {
-      navigate(resolveDashboardModuleRoutePath("tasks"), {
-        state: {
-          focusTaskId: taskId,
-          openDetail: true,
-        },
-      });
+      navigateToDashboardTaskDetail(navigate, taskId);
     },
     [navigate],
   );
@@ -1272,14 +1341,12 @@ export function SecurityApp() {
 
     setCardPositions((currentPositions) => ({
       ...currentPositions,
-      [key]: getSettledCardPosition(
-        key,
-        {
-          x: dragState.originX + deltaX,
-          y: dragState.originY + deltaY,
-        },
-        currentPositions,
-      ),
+      // Keep the drag path free while the card is moving so neighboring cards do
+      // not block the pointer. Collision avoidance still runs on release.
+      [key]: getClampedCardPosition({
+        x: dragState.originX + deltaX,
+        y: dragState.originY + deltaY,
+      }),
     }));
   };
 
@@ -1294,6 +1361,13 @@ export function SecurityApp() {
 
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (dragState.moved) {
+      setCardPositions((currentPositions) => ({
+        ...currentPositions,
+        [key]: getSettledCardPosition(key, currentPositions[key] ?? FALLBACK_POSITION, currentPositions),
+      }));
     }
 
     releaseDrag();
@@ -1629,6 +1703,11 @@ export function SecurityApp() {
     const auditGroups = groupAuditRecordsByType(filteredAuditRecords);
     const auditPageWindow = activeAuditRecordsData ? formatPageWindow(activeAuditRecordsData.page, activeAuditRecordsData.items.length) : null;
     const auditPageStep = activeAuditRecordsData?.page.limit ?? SECURITY_DETAIL_PAGE_SIZE;
+    const focusedTaskApproval = focusedTaskDetail?.approval_request ?? null;
+    const focusedTaskRestorePoint = focusedTaskDetail?.security_summary.latest_restore_point ?? null;
+    const focusedTaskIsScreenTask = isFocusedScreenTask(focusedTaskDetail);
+    const focusedTaskEvidence = focusedTaskDetail?.citations.map(formatCitationEvidence) ?? [];
+    const focusedTaskArtifacts = focusedTaskDetail?.artifacts.map(formatArtifactEvidence) ?? [];
 
     return (
       <div className="security-page__detail-stack">
@@ -1649,6 +1728,72 @@ export function SecurityApp() {
             <p className="security-page__detail-copy">{latestRestorePoint?.summary ?? "当前没有恢复点"}</p>
           </article>
         </div>
+
+        {focusedTaskId ? (
+          <div className="security-page__detail-section">
+            <div className="security-page__detail-toolbar">
+              <p className="security-page__detail-label">{focusedTaskIsScreenTask ? "当前屏幕任务治理链" : "当前 task 治理链"}</p>
+              <Button variant="soft" color="gray" onClick={() => openTaskDetail(focusedTaskId)}>
+                查看关联任务
+                <ArrowUpRight className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {focusedTaskDetailError ? <div className="security-page__detail-callout">任务详情同步失败：{focusedTaskDetailError}</div> : null}
+            {!focusedTaskDetail && !focusedTaskDetailError ? <div className="security-page__detail-note">正在同步当前 task 的正式治理对象…</div> : null}
+
+            {focusedTaskDetail ? (
+              <>
+                <div className="security-page__detail-grid">
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">当前 task</p>
+                    <p className="security-page__detail-value">{focusedTaskDetail.task.title}</p>
+                    <p className="security-page__detail-copy">
+                      task {focusedTaskDetail.task.task_id} · {focusedTaskDetail.task.intent?.name ?? focusedTaskDetail.task.source_type} · {focusedTaskDetail.task.status}
+                    </p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">正式授权锚点</p>
+                    <p className="security-page__detail-value">{focusedTaskApproval ? focusedTaskApproval.operation_name : "无活跃授权"}</p>
+                    <p className="security-page__detail-copy">
+                      {focusedTaskApproval
+                        ? `${focusedTaskApproval.risk_level} · ${focusedTaskApproval.status} · ${focusedTaskApproval.target_object}`
+                        : "当前 task 没有活跃 approval_request。"}
+                    </p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">最近失败</p>
+                    <p className="security-page__detail-value">
+                      {focusedTaskDetail.runtime_summary.latest_failure_category ?? focusedTaskDetail.runtime_summary.latest_failure_code ?? "暂无"}
+                    </p>
+                    <p className="security-page__detail-copy">{formatFocusedTaskFailure(focusedTaskDetail)}</p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">恢复锚点</p>
+                    <p className="security-page__detail-value">
+                      {focusedTaskRestorePoint ? formatDateTime(focusedTaskRestorePoint.created_at) : "暂无"}
+                    </p>
+                    <p className="security-page__detail-copy">{focusedTaskRestorePoint?.summary ?? "当前 task 没有 recovery_point。"}</p>
+                  </article>
+                </div>
+
+                <article className="security-page__detail-list-item">
+                  <p className="security-page__detail-label">正式引用</p>
+                  {renderDetailEntryList(
+                    focusedTaskEvidence,
+                    focusedTaskIsScreenTask ? "当前屏幕任务还没有 formal citation。" : "当前 task 还没有 formal citation。",
+                    "focused-task-citation",
+                  )}
+                </article>
+
+                <article className="security-page__detail-list-item">
+                  <p className="security-page__detail-label">正式产物</p>
+                  {renderDetailEntryList(focusedTaskArtifacts, "当前 task 还没有可回看的正式产物。", "focused-task-artifact")}
+                </article>
+              </>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="security-page__detail-section">
           <div className="security-page__detail-toolbar">
@@ -1978,10 +2123,10 @@ export function SecurityApp() {
 
               <div className="security-page__detail-actions">
                 <Flex align="center" gap="2" wrap="wrap" justify="end">
-                  <Badge color={preview.badgeColor} variant="soft" highContrast>
+                  <Badge color={preview.badgeColor} variant="soft" highContrast className="security-page__detail-badge">
                     {preview.badgeLabel}
                   </Badge>
-                  <Badge color={sourceBadgeColor} variant="soft" highContrast>
+                  <Badge color={sourceBadgeColor} variant="soft" highContrast className="security-page__detail-badge">
                     {sourceBadgeLabel}
                   </Badge>
                 </Flex>
@@ -2045,7 +2190,7 @@ export function SecurityApp() {
               <Icon className="security-page__card-icon" />
             </div>
 
-            <Badge color={preview.badgeColor} variant="soft" highContrast>
+            <Badge color={preview.badgeColor} variant="soft" highContrast className="security-page__card-badge">
               {preview.badgeLabel}
             </Badge>
 
@@ -2068,17 +2213,17 @@ export function SecurityApp() {
           <Heading size="9" className="security-page__title">
             安全卫士
           </Heading>
-          <Flex align="center" gap="2" wrap="wrap">
-            <Badge color={sourceBadgeColor} variant="soft" highContrast>
+          <Flex align="center" gap="2" wrap="wrap" className="security-page__status-strip">
+            <Badge color={sourceBadgeColor} variant="soft" highContrast className="security-page__status-badge">
               {sourceBadgeLabel}
             </Badge>
-            <Badge color={getStatusColor(moduleData.summary.security_status)} variant="soft" highContrast>
+            <Badge color={getStatusColor(moduleData.summary.security_status)} variant="soft" highContrast className="security-page__status-badge">
               {moduleData.summary.security_status}
             </Badge>
-            <Badge color={moduleData.summary.pending_authorizations > 0 ? "amber" : "gray"} variant="soft" highContrast>
+            <Badge color={moduleData.summary.pending_authorizations > 0 ? "amber" : "gray"} variant="soft" highContrast className="security-page__status-badge">
               {moduleData.summary.pending_authorizations} pending
             </Badge>
-            <Badge color={moduleData.summary.latest_restore_point ? "orange" : "gray"} variant="soft" highContrast>
+            <Badge color={moduleData.summary.latest_restore_point ? "orange" : "gray"} variant="soft" highContrast className="security-page__status-badge">
               {moduleData.summary.latest_restore_point ? "restore ready" : "no restore"}
             </Badge>
           </Flex>

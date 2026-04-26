@@ -11,7 +11,6 @@ export const shellBallWindowSyncEvents = Object.freeze({
   snapshot: "desktop-shell-ball:snapshot",
   geometry: "desktop-shell-ball:geometry",
   helperReady: "desktop-shell-ball:helper-ready",
-  textSelectionState: "desktop-shell-ball:text-selection-state",
   selectionSnapshot: "desktop-shell-ball:selection-snapshot",
   clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot",
   pinnedWindowReady: "desktop-shell-ball:pinned-window-ready",
@@ -35,7 +34,7 @@ export type ShellBallPendingFileAction = "append" | "remove";
 
 export type ShellBallIntentDecision = "confirm" | "cancel";
 
-export type ShellBallBubbleAction = "pin" | "unpin" | "delete";
+export type ShellBallBubbleAction = "pin" | "unpin" | "delete" | "allow_approval" | "deny_approval";
 
 export type ShellBallBubbleActionSource = "bubble" | "pinned_window";
 
@@ -118,10 +117,6 @@ export type ShellBallInputDraftPayload = {
 
 export type ShellBallInputRequestFocusPayload = {
   token: number;
-};
-
-export type ShellBallTextSelectionStatePayload = {
-  available: boolean;
 };
 
 export type ShellBallSelectionSnapshotPayload = {

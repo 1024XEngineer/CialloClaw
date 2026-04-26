@@ -9,4 +9,6 @@ pub struct ActiveWindowContextPayload {
     pub title: Option<String>,
     pub url: Option<String>,
     pub browser_kind: String,
+    pub window_switch_count: Option<u32>,
+    pub page_switch_count: Option<u32>,
 }

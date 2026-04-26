@@ -1,4 +1,5 @@
-// 该文件负责主链路最小真实执行链路：收集输入、生成内容、写入 workspace 并返回交付结果。
+// Package execution wires the minimum task execution pipeline: collect input,
+// generate content, persist outputs, and return formal delivery artifacts.
 package execution
 
 import (
@@ -10,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
@@ -30,7 +32,7 @@ const (
 	internalScreenAnalyzeIntent = "screen_analyze_candidate"
 )
 
-// Service 负责在当前仓库代码范围内完成一条可运行的最小执行链路。
+// Service owns the minimum executable task pipeline inside local-service.
 type Service struct {
 	fileSystem          platform.FileSystemAdapter
 	execution           tools.ExecutionCapability
@@ -40,6 +42,7 @@ type Service struct {
 	screen              tools.ScreenCaptureClient
 	lifecycle           *tools.ScreenLifecycleManager
 	artifactStore       storage.ArtifactStore
+	modelMu             sync.RWMutex
 	model               *model.Service
 	loop                *agentloop.Runtime
 	audit               *audit.Service
@@ -49,6 +52,7 @@ type Service struct {
 	executor            *tools.ToolExecutor
 	plugin              *plugin.Service
 	loopStore           storage.LoopRuntimeStore
+	extensionAssets     storage.ExtensionAssetCatalog
 	notificationEmitter func(taskID, method string, params map[string]any)
 	steeringPoller      func(taskID string) []string
 	workspace           string
@@ -74,6 +78,16 @@ func (s *Service) WithLoopRuntimeStore(store storage.LoopRuntimeStore) *Service 
 	return s
 }
 
+// WithExtensionAssetCatalog injects the versioned extension-asset catalog used
+// to attribute execution, trace, and eval snapshots to one concrete asset set.
+func (s *Service) WithExtensionAssetCatalog(catalog storage.ExtensionAssetCatalog) *Service {
+	if s == nil {
+		return nil
+	}
+	s.extensionAssets = catalog
+	return s
+}
+
 // WithNotificationEmitter lets the execution layer publish formal runtime
 // notifications without depending directly on runengine internals.
 func (s *Service) WithNotificationEmitter(emitter func(taskID, method string, params map[string]any)) *Service {
@@ -94,10 +108,11 @@ func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Servi
 	return s
 }
 
-// Request 描述一次任务执行所需的最小输入。
+// Request carries the minimum execution input for one task attempt.
 type Request struct {
 	TaskID               string
 	RunID                string
+	SourceType           string
 	Title                string
 	Intent               map[string]any
 	AttemptIndex         int
@@ -112,12 +127,14 @@ type Request struct {
 	BudgetDowngrade      map[string]any
 }
 
-// Result 描述执行完成后需要回填给 orchestrator 的交付与痕迹。
+// Result carries delivery outputs and trace fragments back to orchestrator.
 type Result struct {
 	Content         string
 	DeliveryResult  map[string]any
 	Artifacts       []map[string]any
+	ExtensionAssets []map[string]any
 	BubbleText      string
+	LoopStopReason  string
 	RecoveryPoint   map[string]any
 	ModelInvocation map[string]any
 	AuditRecord     map[string]any
@@ -129,7 +146,7 @@ type Result struct {
 	DurationMS      int64
 }
 
-// GovernanceAssessment 描述一次潜在高风险动作的预执行治理判断结果。
+// GovernanceAssessment captures the pre-execution governance decision for one potentially risky action.
 type GovernanceAssessment struct {
 	OperationName      string
 	TargetObject       string
@@ -141,7 +158,7 @@ type GovernanceAssessment struct {
 	ImpactScope        map[string]any
 }
 
-// ErrRecoveryPointPrepareFailed 表示执行前的恢复点准备失败。
+// ErrRecoveryPointPrepareFailed reports that a pre-execution recovery point could not be prepared.
 var ErrRecoveryPointPrepareFailed = errors.New("execution: recovery point prepare failed")
 
 type generationTrace struct {
@@ -151,9 +168,10 @@ type generationTrace struct {
 	AuditRecord      map[string]any
 	GenerationOutput map[string]any
 	BudgetFailure    map[string]any
+	LoopStopReason   string
 }
 
-// NewService 创建执行服务。
+// NewService builds the execution service.
 func NewService(
 	fileSystem platform.FileSystemAdapter,
 	executionBackend tools.ExecutionCapability,
@@ -232,7 +250,7 @@ func (s *Service) ScreenClient() tools.ScreenCaptureClient {
 	return s.screen
 }
 
-// AssessGovernance 在真正执行前，基于将要落地的工具调用做一次统一风险判断。
+// AssessGovernance evaluates the pending tool action before it is executed.
 func (s *Service) AssessGovernance(ctx context.Context, request Request) (GovernanceAssessment, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -276,20 +294,18 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 	}, true, nil
 }
 
-// Execute 执行当前任务的最小内容生成与落盘链路。
+// Execute runs the minimum content-generation and persistence flow for one task.
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
 	startedAt := time.Now()
 	if result, ok, err := s.executeInternalScreenAnalysis(ctx, request); err != nil {
 		return result, err
 	} else if ok {
-		result.DurationMS = time.Since(startedAt).Milliseconds()
-		return result, nil
+		return s.finalizeExecutionResult(ctx, request, startedAt, result, internalScreenAnalysisCapabilities(request)...), nil
 	}
 	if result, ok, err := s.executeDirectBuiltinTool(ctx, request); err != nil {
 		return result, err
 	} else if ok {
-		result.DurationMS = time.Since(startedAt).Milliseconds()
-		return result, nil
+		return s.finalizeExecutionResult(ctx, request, startedAt, result), nil
 	}
 
 	inputText := s.buildExecutionInput(request.Snapshot)
@@ -311,6 +327,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		AuditRecord:     cloneMap(trace.AuditRecord),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
 		BudgetFailure:   cloneMap(trace.BudgetFailure),
+		LoopStopReason:  trace.LoopStopReason,
 		ToolInput: map[string]any{
 			"intent_name":     effectiveIntentName(request.Intent),
 			"delivery_type":   deliveryType,
@@ -324,12 +341,11 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		return toolResult, err
 	} else if ok {
 		toolResult.ToolCalls = append(append([]tools.ToolCallRecord(nil), result.ToolCalls...), toolResult.ToolCalls...)
-		// 当请求已走 ToolExecutor 路径时，保留真实工具输入，
-		// 仅把 execution 层的通用上下文附加到 execution_context，
-		// 避免后续 ToolCall 记录丢失实际工具参数。
+		// When ToolExecutor already produced the concrete tool input, keep it as the
+		// primary payload and only append generic execution context so downstream
+		// ToolCall records do not lose the original user-facing arguments.
 		toolResult.ToolInput = mergeToolInputs(toolResult.ToolInput, result.ToolInput)
-		toolResult.DurationMS = time.Since(startedAt).Milliseconds()
-		return toolResult, nil
+		return s.finalizeExecutionResult(ctx, request, startedAt, toolResult), nil
 	}
 
 	if deliveryType == "workspace_document" {
@@ -382,7 +398,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 			"model_invocation": cloneMap(result.ModelInvocation),
 			"audit_record":     cloneMap(result.AuditRecord),
 		})
-		return result, nil
+		return s.finalizeExecutionResult(ctx, request, startedAt, result), nil
 	}
 
 	result.BubbleText = truncateBubbleText(trace.OutputText)
@@ -399,7 +415,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		"model_invocation": cloneMap(result.ModelInvocation),
 		"audit_record":     cloneMap(result.AuditRecord),
 	})
-	return result, nil
+	return s.finalizeExecutionResult(ctx, request, startedAt, result), nil
 }
 
 func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Request) (Result, bool, error) {
@@ -409,21 +425,35 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	args := mapValue(request.Intent, "arguments")
 	candidate, ok := screenFrameCandidateFromArgs(request, args)
 	if !ok {
-		return Result{}, false, fmt.Errorf("screen analysis candidate arguments are incomplete")
+		err := fmt.Errorf("screen analysis candidate arguments are incomplete")
+		return s.screenAnalysisFailureResult(ctx, request, tools.ScreenFrameCandidate{}, err), false, err
 	}
 	analysis, err := s.buildScreenAnalysisResult(ctx, request.TaskID, candidate, stringValue(args, "language", ""), stringValue(args, "evidence_role", "error_evidence"), mapValue(args, "extra"))
 	if err != nil {
-		return Result{}, false, err
+		return s.screenAnalysisFailureResult(ctx, request, candidate, err), false, err
 	}
-	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, candidate, analysis.PreviewText)
-	cleanupPlan := s.screenAnalysisCleanupPlan(candidate)
-	cleanupSummary := s.screenAnalysisCleanupSummary(candidate)
-	cleanupExecuted := map[string]any{
-		"reason":        stringValue(cleanupPlan, "reason", "screen_analysis_pending_cleanup"),
-		"deleted_paths": []string{},
-		"skipped_paths": stringSliceValue(cleanupPlan, "paths"),
-		"deleted_count": 0,
-		"skipped_count": len(stringSliceValue(cleanupPlan, "paths")),
+	promotedArtifact, promotedCleanup := s.promoteScreenArtifactForPersistence(ctx, request.TaskID, analysis.Artifact)
+	analysis.Artifact = promotedArtifact
+	if candidate.CaptureMode == tools.ScreenCaptureModeClip && len(analysis.ObservationSummary) > 0 {
+		if promotedPath := stringValue(promotedArtifact, "path", ""); strings.TrimSpace(promotedPath) != "" {
+			analysis.ObservationSummary["temp_clip_path"] = candidate.Path
+			analysis.ObservationSummary["clip_path"] = promotedPath
+		}
+	}
+	analysis.CitationSeed["artifact_id"] = stringValue(analysis.Artifact, "artifact_id", "")
+	analysis.CitationSeed["artifact_type"] = stringValue(analysis.Artifact, "artifact_type", "")
+	analysis.CitationSeed["screen_session_id"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "screen_session_id", "")
+	analysis.CitationSeed["evidence_role"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "evidence_role", "")
+	auditTargetCandidate := screenAuditTargetCandidate(candidate, analysis.Artifact)
+	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, auditTargetCandidate, analysis.PreviewText)
+	auditCandidate := screenAnalysisAuditCandidate(auditTargetCandidate, analysis.PreviewText, "success")
+	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, analysis.CleanupPaths)
+	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
+	cleanupExecuted := pendingScreenCleanupExecution(cleanupPlan)
+	if len(promotedCleanup) > 0 {
+		cleanupPlan = removeScreenCleanupPaths(cleanupPlan, []string{candidate.Path})
+		cleanupSummary = mergeScreenCleanupSummaries(promotedCleanup, s.screenAnalysisCleanupSummary(cleanupPlan))
+		cleanupExecuted = mergeScreenCleanupSummaries(promotedCleanup, pendingScreenCleanupExecution(cleanupPlan))
 	}
 	persistedArtifact := s.persistScreenArtifact(ctx, request.TaskID, analysis.Artifact)
 	recoveryPoint := s.screenAnalysisRecoveryPoint(ctx, request.TaskID, cleanupPlan, cleanupExecuted)
@@ -442,6 +472,7 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 			"observation_summary": cloneMap(analysis.ObservationSummary),
 			"citation_seed":       cloneMap(analysis.CitationSeed),
 			"preview_text":        analysis.PreviewText,
+			"audit_candidate":     cloneMap(auditCandidate),
 			"trace_summary":       cloneMap(traceSummary),
 			"eval_summary":        cloneMap(evalSummary),
 			"audit_record":        cloneMap(auditRecord),
@@ -450,9 +481,92 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 			"cleanup_executed":    cloneMap(cleanupExecuted),
 			"artifact_persisted":  cloneMap(persistedArtifact),
 			"recovery_point":      cloneMap(recoveryPoint),
+			"screen_session":      screenSessionSummary(candidate),
 		},
 	}
+	result.ToolCalls = []tools.ToolCallRecord{screenAnalysisToolCall(request, result.ToolOutput, tools.ToolCallStatusSucceeded, nil)}
 	return result, true, nil
+}
+
+// screenAnalysisFailureResult keeps screen-task failure paths on the same
+// tool_call/audit/cleanup chain as successful screen analysis so task detail and
+// later storage fallbacks can explain what temporary capture state remains.
+func (s *Service) screenAnalysisFailureResult(ctx context.Context, request Request, candidate tools.ScreenFrameCandidate, err error) Result {
+	args := mapValue(request.Intent, "arguments")
+	summary := firstNonEmpty(strings.TrimSpace(err.Error()), "screen analysis failed")
+	auditRecord := s.screenAnalysisAuditRecordWithResult(request.TaskID, candidate, summary, "failed")
+	auditCandidate := screenAnalysisAuditCandidate(candidate, summary, "failed")
+	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, nil)
+	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
+	cleanupExecuted := pendingScreenCleanupExecution(cleanupPlan)
+	recoveryPoint := s.screenAnalysisRecoveryPoint(ctx, request.TaskID, cleanupPlan, cleanupExecuted)
+	toolOutput := map[string]any{
+		"failure_summary":   summary,
+		"audit_candidate":   cloneMap(auditCandidate),
+		"audit_record":      cloneMap(auditRecord),
+		"cleanup_summary":   cloneMap(cleanupSummary),
+		"cleanup_plan":      cloneMap(cleanupPlan),
+		"cleanup_executed":  cloneMap(cleanupExecuted),
+		"recovery_point":    cloneMap(recoveryPoint),
+		"screen_session":    screenSessionSummary(candidate),
+		"failure_stage":     "screen_analysis",
+		"screen_session_id": candidate.ScreenSessionID,
+	}
+	result := Result{
+		BubbleText:    summary,
+		RecoveryPoint: cloneMap(recoveryPoint),
+		AuditRecord:   cloneMap(auditRecord),
+		ToolName:      internalScreenAnalyzeIntent,
+		ToolInput:     cloneMap(args),
+		ToolOutput:    toolOutput,
+	}
+	result.ToolCalls = []tools.ToolCallRecord{screenAnalysisToolCall(request, toolOutput, tools.ToolCallStatusFailed, nil)}
+	return result
+}
+
+func (s *Service) promoteScreenArtifactForPersistence(_ context.Context, taskID string, artifact map[string]any) (map[string]any, map[string]any) {
+	normalized := cloneMap(artifact)
+	if len(normalized) == 0 || s == nil || s.fileSystem == nil {
+		return normalized, nil
+	}
+	currentPath := workspaceFSPath(stringValue(normalized, "path", ""))
+	if currentPath == "" || !strings.HasPrefix(currentPath, "temp/") {
+		return normalized, nil
+	}
+	if normalizedID := delivery.EnsureArtifactIdentifiers(taskID, []map[string]any{normalized}); len(normalizedID) == 1 {
+		normalized = normalizedID[0]
+	}
+	artifactID := stringValue(normalized, "artifact_id", "")
+	if artifactID == "" {
+		return normalized, nil
+	}
+	targetDir := path.Join("artifacts", "screen", taskID)
+	targetPath := path.Join(targetDir, fmt.Sprintf("%s%s", artifactID, filepath.Ext(currentPath)))
+	if currentPath == targetPath {
+		return normalized, nil
+	}
+	if err := s.fileSystem.MkdirAll(targetDir); err != nil {
+		return normalized, nil
+	}
+	if err := s.fileSystem.Move(currentPath, targetPath); err != nil {
+		return normalized, nil
+	}
+	normalized["path"] = targetPath
+	payload := cloneMap(mapValue(normalized, "delivery_payload"))
+	payload["retention_policy"] = string(tools.ScreenRetentionArtifact)
+	normalized["delivery_payload"] = payload
+	if normalizedID := delivery.EnsureArtifactIdentifiers(taskID, []map[string]any{normalized}); len(normalizedID) == 1 {
+		normalized = normalizedID[0]
+	}
+	cleanup := map[string]any{
+		"reason":            "screen_artifact_promoted",
+		"deleted_paths":     []string{currentPath},
+		"skipped_paths":     []string{},
+		"deleted_count":     1,
+		"skipped_count":     0,
+		"screen_session_id": stringValue(payload, "screen_session_id", ""),
+	}
+	return normalized, cleanup
 }
 
 func (s *Service) persistScreenArtifact(ctx context.Context, taskID string, artifact map[string]any) map[string]any {
@@ -477,7 +591,7 @@ func (s *Service) persistScreenArtifact(ctx context.Context, taskID string, arti
 	if err := s.artifactStore.SaveArtifacts(ctx, []storage.ArtifactRecord{record}); err != nil {
 		return map[string]any{"persisted": false, "reason": err.Error()}
 	}
-	return map[string]any{"persisted": true, "artifact_id": record.ArtifactID}
+	return map[string]any{"persisted": true, "artifact_id": record.ArtifactID, "path": record.Path}
 }
 
 func (s *Service) screenAnalysisRecoveryPoint(ctx context.Context, taskID string, cleanupPlan map[string]any, cleanupExecuted map[string]any) map[string]any {
@@ -546,27 +660,89 @@ func (s *Service) screenAnalysisEvalSummary(candidate tools.ScreenFrameCandidate
 }
 
 func (s *Service) screenAnalysisAuditRecord(taskID string, candidate tools.ScreenFrameCandidate, previewText string) map[string]any {
+	return s.screenAnalysisAuditRecordWithResult(taskID, candidate, previewText, "success")
+}
+
+func (s *Service) screenAnalysisAuditRecordWithResult(taskID string, candidate tools.ScreenFrameCandidate, summary string, resultStatus string) map[string]any {
 	if s == nil || s.audit == nil {
 		return nil
+	}
+	target := firstNonEmpty(strings.TrimSpace(candidate.Path), strings.TrimSpace(candidate.ScreenSessionID))
+	if strings.TrimSpace(target) == "" {
+		target = "screen_capture"
 	}
 	record, err := s.audit.BuildRecord(audit.RecordInput{
 		TaskID:  taskID,
 		Type:    "screen_capture",
 		Action:  screenAuditActionName(candidate),
-		Summary: firstNonEmpty(previewText, "screen analysis completed"),
-		Target:  candidate.Path,
-		Result:  "success",
+		Summary: firstNonEmpty(summary, "screen analysis completed"),
+		Target:  target,
+		Result:  firstNonEmpty(strings.TrimSpace(resultStatus), "success"),
 	})
 	if err != nil {
 		return nil
 	}
-	result := record.Map()
-	result["metadata"] = map[string]any{
+	recordMap := record.Map()
+	recordMap["metadata"] = map[string]any{
 		"screen_session_id": candidate.ScreenSessionID,
 		"capture_mode":      string(candidate.CaptureMode),
 		"source":            candidate.Source,
 	}
-	return result
+	return recordMap
+}
+
+func screenAnalysisAuditCandidate(candidate tools.ScreenFrameCandidate, summary string, resultStatus string) map[string]any {
+	target := firstNonEmpty(strings.TrimSpace(candidate.Path), strings.TrimSpace(candidate.ScreenSessionID))
+	if strings.TrimSpace(target) == "" {
+		target = "screen_capture"
+	}
+	return map[string]any{
+		"type":    "screen_capture",
+		"action":  screenAuditActionName(candidate),
+		"summary": firstNonEmpty(summary, "screen analysis completed"),
+		"target":  target,
+		"result":  firstNonEmpty(strings.TrimSpace(resultStatus), "success"),
+	}
+}
+
+func screenSessionSummary(candidate tools.ScreenFrameCandidate) map[string]any {
+	if strings.TrimSpace(candidate.ScreenSessionID) == "" && strings.TrimSpace(candidate.FrameID) == "" && strings.TrimSpace(candidate.Path) == "" {
+		return nil
+	}
+	return map[string]any{
+		"screen_session_id": candidate.ScreenSessionID,
+		"frame_id":          candidate.FrameID,
+		"capture_mode":      string(candidate.CaptureMode),
+		"path":              candidate.Path,
+		"cleanup_required":  candidate.CleanupRequired,
+		"retention_policy":  string(candidate.RetentionPolicy),
+	}
+}
+
+func screenAnalysisToolCall(request Request, output map[string]any, status tools.ToolCallStatus, errorCode *int) tools.ToolCallRecord {
+	return tools.ToolCallRecord{
+		RunID:      request.RunID,
+		TaskID:     request.TaskID,
+		ToolName:   internalScreenAnalyzeIntent,
+		Status:     status,
+		Input:      cloneMap(mapValue(request.Intent, "arguments")),
+		Output:     cloneMap(output),
+		ErrorCode:  errorCode,
+		DurationMS: 0,
+	}
+}
+
+// screenAuditTargetCandidate rewrites the audit target to the promoted artifact
+// path when one exists so later task detail consumers do not point operators at
+// a temp capture file that was already moved out of the workspace temp area.
+func screenAuditTargetCandidate(candidate tools.ScreenFrameCandidate, artifact map[string]any) tools.ScreenFrameCandidate {
+	pathValue := strings.TrimSpace(stringValue(artifact, "path", ""))
+	if pathValue == "" {
+		return candidate
+	}
+	updated := candidate
+	updated.Path = pathValue
+	return updated
 }
 
 func screenAuditActionName(candidate tools.ScreenFrameCandidate) string {
@@ -580,30 +756,152 @@ func screenAuditActionName(candidate tools.ScreenFrameCandidate) string {
 	}
 }
 
-func (s *Service) screenAnalysisCleanupSummary(candidate tools.ScreenFrameCandidate) map[string]any {
-	if s == nil || s.lifecycle == nil || !candidate.CleanupRequired {
+func (s *Service) screenAnalysisCleanupSummary(plan map[string]any) map[string]any {
+	if s == nil || s.lifecycle == nil || len(plan) == 0 {
+		return nil
+	}
+	paths := stringSliceValue(plan, "paths")
+	if len(paths) == 0 {
 		return nil
 	}
 	return s.lifecycle.BuildCleanupSummary(tools.ScreenCleanupResult{
-		ScreenSessionID: candidate.ScreenSessionID,
-		Reason:          "screen_analysis_pending_cleanup",
+		ScreenSessionID: stringValue(plan, "screen_session_id", ""),
+		Reason:          stringValue(plan, "reason", "screen_analysis_pending_cleanup"),
 		DeletedPaths:    nil,
-		SkippedPaths:    []string{candidate.Path},
+		SkippedPaths:    paths,
 		DeletedCount:    0,
-		SkippedCount:    1,
+		SkippedCount:    len(paths),
 	})
 }
 
-func (s *Service) screenAnalysisCleanupPlan(candidate tools.ScreenFrameCandidate) map[string]any {
-	if !candidate.CleanupRequired || strings.TrimSpace(candidate.Path) == "" {
+func (s *Service) screenAnalysisCleanupPlan(candidate tools.ScreenFrameCandidate, extraPaths []string) map[string]any {
+	paths := make([]string, 0, len(extraPaths)+1)
+	if candidate.CleanupRequired && strings.TrimSpace(candidate.Path) != "" {
+		paths = append(paths, candidate.Path)
+	}
+	paths = append(paths, extraPaths...)
+	paths = uniqueScreenCleanupPaths(paths)
+	if len(paths) == 0 {
 		return nil
 	}
 	return map[string]any{
 		"screen_session_id": candidate.ScreenSessionID,
-		"reason":            "screen_analysis_pending_cleanup",
+		"reason":            screenAnalysisCleanupReason(candidate),
 		"cleanup_required":  true,
-		"paths":             []string{candidate.Path},
+		"paths":             paths,
 	}
+}
+
+func removeScreenCleanupPaths(plan map[string]any, removedPaths []string) map[string]any {
+	if len(plan) == 0 {
+		return nil
+	}
+	remaining := uniqueScreenCleanupPaths(removePaths(stringSliceValue(plan, "paths"), removedPaths))
+	if len(remaining) == 0 {
+		return nil
+	}
+	normalized := cloneMap(plan)
+	normalized["paths"] = remaining
+	normalized["cleanup_required"] = true
+	return normalized
+}
+
+func pendingScreenCleanupExecution(plan map[string]any) map[string]any {
+	if len(plan) == 0 {
+		return map[string]any{
+			"reason":        "screen_analysis_pending_cleanup",
+			"deleted_paths": []string{},
+			"skipped_paths": []string{},
+			"deleted_count": 0,
+			"skipped_count": 0,
+		}
+	}
+	paths := stringSliceValue(plan, "paths")
+	return map[string]any{
+		"reason":            stringValue(plan, "reason", "screen_analysis_pending_cleanup"),
+		"screen_session_id": stringValue(plan, "screen_session_id", ""),
+		"deleted_paths":     []string{},
+		"skipped_paths":     paths,
+		"deleted_count":     0,
+		"skipped_count":     len(paths),
+	}
+}
+
+func mergeScreenCleanupSummaries(primary, secondary map[string]any) map[string]any {
+	if len(primary) == 0 {
+		return cloneMap(secondary)
+	}
+	if len(secondary) == 0 {
+		return cloneMap(primary)
+	}
+	mergedReason := firstNonEmpty(stringValue(primary, "reason", ""), stringValue(secondary, "reason", ""))
+	if strings.TrimSpace(mergedReason) == "" {
+		mergedReason = "screen_analysis_pending_cleanup"
+	}
+	merged := map[string]any{
+		"reason":            mergedReason,
+		"screen_session_id": firstNonEmpty(stringValue(primary, "screen_session_id", ""), stringValue(secondary, "screen_session_id", "")),
+	}
+	deletedPaths := uniqueScreenCleanupPaths(append(stringSliceValue(primary, "deleted_paths"), stringSliceValue(secondary, "deleted_paths")...))
+	skippedPaths := uniqueScreenCleanupPaths(append(stringSliceValue(primary, "skipped_paths"), stringSliceValue(secondary, "skipped_paths")...))
+	merged["deleted_paths"] = deletedPaths
+	merged["skipped_paths"] = skippedPaths
+	merged["deleted_count"] = len(deletedPaths)
+	merged["skipped_count"] = len(skippedPaths)
+	return merged
+}
+
+func uniqueScreenCleanupPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, pathValue := range paths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func removePaths(paths []string, removedPaths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	removed := make(map[string]int, len(removedPaths))
+	for _, pathValue := range removedPaths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		removed[trimmed]++
+	}
+	result := make([]string, 0, len(paths))
+	for _, pathValue := range paths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		if removed[trimmed] > 0 {
+			removed[trimmed]--
+			continue
+		}
+		result = append(result, trimmed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func (s *Service) executeScreenCleanupPlan(plan map[string]any) map[string]any {
@@ -620,11 +918,12 @@ func (s *Service) executeScreenCleanupPlan(plan map[string]any) map[string]any {
 		if strings.TrimSpace(pathValue) == "" {
 			continue
 		}
-		if err := s.fileSystem.Remove(pathValue); err != nil {
+		removedPaths, err := removeCleanupPath(s.fileSystem, pathValue)
+		if err != nil {
 			skipped = append(skipped, pathValue)
 			continue
 		}
-		deleted = append(deleted, pathValue)
+		deleted = append(deleted, removedPaths...)
 	}
 	return map[string]any{
 		"reason":        stringValue(plan, "reason", "screen_analysis_pending_cleanup"),
@@ -1047,6 +1346,7 @@ type screenObservationFlowResult struct {
 	OCRResult       tools.OCRTextResult
 	ObservationSeed map[string]any
 	Artifact        map[string]any
+	CleanupPaths    []string
 }
 
 type screenAnalysisResult struct {
@@ -1055,31 +1355,153 @@ type screenAnalysisResult struct {
 	Artifact           map[string]any
 	ObservationSummary map[string]any
 	CitationSeed       map[string]any
+	CleanupPaths       []string
+}
+
+type screenOCRPreparation struct {
+	Input            map[string]any
+	ObservationPatch map[string]any
+	CleanupPaths     []string
 }
 
 func (s *Service) buildScreenObservationFlow(ctx context.Context, taskID string, candidate tools.ScreenFrameCandidate, language string, evidenceRole string, extra map[string]any) (*screenObservationFlowResult, error) {
 	if s == nil || s.ocr == nil {
 		return nil, tools.ErrOCRWorkerFailed
 	}
-	ocrInput, ok := screenOCRInputFromCandidate(candidate, language)
-	if !ok {
+	ocrPreparation, err := s.prepareScreenOCRInput(ctx, candidate, language)
+	if err != nil {
+		return nil, err
+	}
+	if len(ocrPreparation.Input) == 0 {
 		return nil, fmt.Errorf("screen frame candidate is not OCR-ready")
 	}
-	ocrResult, err := s.ocr.OCRImage(ctx, stringValue(ocrInput, "path", ""), stringValue(ocrInput, "language", ""))
+	ocrResult, err := s.ocr.OCRImage(ctx, stringValue(ocrPreparation.Input, "path", ""), stringValue(ocrPreparation.Input, "language", ""))
 	if err != nil {
 		return nil, err
 	}
 	observation := screenObservationSeed(candidate, ocrResult)
+	for key, value := range ocrPreparation.ObservationPatch {
+		observation[key] = value
+	}
 	artifact, err := screenArtifactFromCandidate(taskID, s.lifecycle, candidate, evidenceRole, extra)
 	if err != nil {
 		return nil, err
 	}
 	return &screenObservationFlowResult{
-		OCRInput:        ocrInput,
+		OCRInput:        ocrPreparation.Input,
 		OCRResult:       ocrResult,
 		ObservationSeed: observation,
 		Artifact:        artifact,
+		CleanupPaths:    append([]string(nil), ocrPreparation.CleanupPaths...),
 	}, nil
+}
+
+func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.ScreenFrameCandidate, language string) (_ *screenOCRPreparation, err error) {
+	ocrInput, ok := screenOCRInputFromCandidate(candidate, language)
+	if candidate.CaptureMode != tools.ScreenCaptureModeClip {
+		if !ok {
+			return &screenOCRPreparation{}, nil
+		}
+		return &screenOCRPreparation{Input: ocrInput}, nil
+	}
+	if s == nil || s.media == nil {
+		return nil, fmt.Errorf("%w: media worker unavailable for clip analysis", tools.ErrMediaWorkerFailed)
+	}
+	cleanupPaths := uniqueScreenCleanupPaths([]string{candidate.Path})
+	defer func() {
+		if err != nil {
+			cleanupScreenClipTemps(s.fileSystem, cleanupPaths)
+		}
+	}()
+	normalizedPath := clipNormalizedOutputPath(candidate.Path)
+	normalizedResult, err := s.media.NormalizeRecording(ctx, candidate.Path, normalizedPath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrMediaWorkerFailed, err)
+	}
+	effectiveNormalizedPath := firstNonEmpty(strings.TrimSpace(normalizedResult.OutputPath), normalizedPath)
+	if strings.TrimSpace(effectiveNormalizedPath) == "" {
+		return nil, fmt.Errorf("%w: normalized clip path is empty", tools.ErrToolOutputInvalid)
+	}
+	normalizedMediaPaths, ok := s.normalizeScreenWorkspacePaths([]string{effectiveNormalizedPath})
+	if !ok || len(normalizedMediaPaths) == 0 {
+		return nil, fmt.Errorf("%w: clip normalization returned invalid paths", tools.ErrToolOutputInvalid)
+	}
+	normalizedMediaPath := normalizedMediaPaths[0]
+	cleanupPaths = uniqueScreenCleanupPaths(append(cleanupPaths, normalizedMediaPath))
+	outputDir := clipFrameOutputDir(candidate.Path)
+	framesResult, err := s.media.ExtractFrames(ctx, effectiveNormalizedPath, outputDir, 1, 1)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrMediaWorkerFailed, err)
+	}
+	normalizedOutputDir := firstNonEmpty(strings.TrimSpace(framesResult.OutputDir), outputDir)
+	if len(framesResult.FramePaths) == 0 {
+		return nil, fmt.Errorf("%w: clip analysis produced no extracted frames", tools.ErrToolOutputInvalid)
+	}
+	normalizedFramePaths, ok := s.normalizeScreenWorkspacePaths(framesResult.FramePaths)
+	if !ok {
+		return nil, fmt.Errorf("%w: clip analysis returned invalid frame paths", tools.ErrToolOutputInvalid)
+	}
+	cleanupPaths = uniqueScreenCleanupPaths(append(cleanupPaths, append(normalizedFramePaths, normalizedOutputDir)...))
+	preparedInput := map[string]any{
+		"path": normalizedFramePaths[0],
+	}
+	if strings.TrimSpace(language) != "" {
+		preparedInput["language"] = strings.TrimSpace(language)
+	}
+	return &screenOCRPreparation{
+		Input: preparedInput,
+		ObservationPatch: map[string]any{
+			"clip_path":              candidate.Path,
+			"temp_clip_path":         candidate.Path,
+			"normalized_path":        normalizedMediaPath,
+			"normalized_output_path": normalizedMediaPath,
+			"normalized_format":      firstNonEmpty(strings.TrimSpace(normalizedResult.Format), "mp4"),
+			"analysis_frame_path":    normalizedFramePaths[0],
+			"analyzed_path":          normalizedFramePaths[0],
+			"clip_frame_count":       framesResult.FrameCount,
+			"clip_output_dir":        normalizedOutputDir,
+			"frame_output_dir":       normalizedOutputDir,
+			"clip_worker_source":     framesResult.Source,
+			"media_source":           firstNonEmpty(strings.TrimSpace(framesResult.Source), strings.TrimSpace(normalizedResult.Source)),
+		},
+		CleanupPaths: append([]string(nil), cleanupPaths[1:]...),
+	}, nil
+}
+
+func (s *Service) normalizeScreenWorkspacePaths(paths []string) ([]string, bool) {
+	if len(paths) == 0 {
+		return nil, false
+	}
+	if s == nil || s.fileSystem == nil {
+		return uniqueScreenCleanupPaths(paths), true
+	}
+	workspaceRoot := strings.TrimSpace(s.workspace)
+	if workspaceRoot == "" {
+		workspaceRoot = strings.TrimSpace(resolveWorkspaceRoot(s.fileSystem))
+	}
+	result := make([]string, 0, len(paths))
+	for _, pathValue := range paths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			return nil, false
+		}
+		safePath, err := s.fileSystem.EnsureWithinWorkspace(trimmed)
+		if err != nil {
+			return nil, false
+		}
+		normalized := filepath.ToSlash(safePath)
+		if workspaceRoot != "" {
+			if relative, err := s.fileSystem.Rel(workspaceRoot, safePath); err == nil {
+				normalized = filepath.ToSlash(relative)
+			}
+		}
+		result = append(result, normalized)
+	}
+	result = uniqueScreenCleanupPaths(result)
+	if len(result) == 0 {
+		return nil, false
+	}
+	return result, true
 }
 
 func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, candidate tools.ScreenFrameCandidate, language string, evidenceRole string, extra map[string]any) (*screenAnalysisResult, error) {
@@ -1110,7 +1532,75 @@ func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, 
 		Artifact:           cloneMap(flow.Artifact),
 		ObservationSummary: observationSummary,
 		CitationSeed:       citationSeed,
+		CleanupPaths:       append([]string(nil), flow.CleanupPaths...),
 	}, nil
+}
+
+func clipNormalizedOutputPath(pathValue string) string {
+	trimmedPath := strings.TrimSpace(pathValue)
+	if trimmedPath == "" {
+		return ""
+	}
+	baseName := strings.TrimSuffix(path.Base(trimmedPath), path.Ext(trimmedPath))
+	if strings.TrimSpace(baseName) == "" {
+		baseName = "clip"
+	}
+	return path.Join(path.Dir(trimmedPath), baseName+"_normalized.mp4")
+}
+
+func clipFrameOutputDir(pathValue string) string {
+	trimmedPath := strings.TrimSpace(pathValue)
+	if trimmedPath == "" {
+		return ""
+	}
+	baseName := strings.TrimSuffix(path.Base(trimmedPath), path.Ext(trimmedPath))
+	if strings.TrimSpace(baseName) == "" {
+		baseName = "clip"
+	}
+	return path.Join(path.Dir(trimmedPath), baseName+"_frames")
+}
+
+func screenAnalysisCleanupReason(candidate tools.ScreenFrameCandidate) string {
+	if candidate.CaptureMode == tools.ScreenCaptureModeClip {
+		return "screen_clip_pending_cleanup"
+	}
+	return "screen_analysis_pending_cleanup"
+}
+
+func cleanupScreenClipTemps(fileSystem platform.FileSystemAdapter, cleanupPaths []string) {
+	for _, cleanupPath := range cleanupPaths {
+		_, _ = removeCleanupPath(fileSystem, cleanupPath)
+	}
+}
+
+func removeCleanupPath(fileSystem platform.FileSystemAdapter, cleanupPath string) ([]string, error) {
+	if fileSystem == nil {
+		return nil, fmt.Errorf("file system unavailable")
+	}
+	cleanupPath = strings.TrimSpace(cleanupPath)
+	if cleanupPath == "" {
+		return nil, nil
+	}
+	entries, err := fs.ReadDir(fileSystem, cleanupPath)
+	if err == nil {
+		deleted := make([]string, 0, len(entries)+1)
+		for _, entry := range entries {
+			childPath := path.Join(cleanupPath, entry.Name())
+			childDeleted, childErr := removeCleanupPath(fileSystem, childPath)
+			deleted = append(deleted, childDeleted...)
+			if childErr != nil {
+				return deleted, childErr
+			}
+		}
+		if err := fileSystem.Remove(cleanupPath); err != nil {
+			return deleted, err
+		}
+		return append(deleted, cleanupPath), nil
+	}
+	if err := fileSystem.Remove(cleanupPath); err != nil {
+		return nil, err
+	}
+	return []string{cleanupPath}, nil
 }
 
 func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
@@ -1379,6 +1869,9 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 	if err != nil {
 		return generationTrace{}, fmt.Errorf("generate text: %w", err)
 	}
+	if boolValue(toolResult.RawOutput, "fallback") && stringValue(toolResult.RawOutput, "fallback_reason", "") == tools.ErrToolOutputInvalid.Error() {
+		return generationTrace{}, fmt.Errorf("%w: generate_text content is missing", tools.ErrToolOutputInvalid)
+	}
 	if boolValue(toolResult.RawOutput, "fallback") && boolValue(request.BudgetDowngrade, "applied") {
 		auditRecord := mapValue(toolResult.RawOutput, "audit_record")
 		failureReason := stringValue(toolResult.RawOutput, "fallback_reason", model.ErrClientNotConfigured.Error())
@@ -1423,7 +1916,8 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 // The loop stops when the model returns a final answer or when the turn budget
 // is exhausted, in which case the normal fallback output is returned.
 func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Request, inputText string) (generationTrace, bool, error) {
-	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
+	modelService := s.currentModel()
+	if !isAgentLoopIntent(request.Intent) || modelService == nil || !modelService.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
 	runtimeInput := inputText
@@ -1452,7 +1946,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 			}
 			return s.steeringPoller(taskID)
 		},
-		GenerateToolCalls: s.model.GenerateToolCalls,
+		GenerateToolCalls: modelService.GenerateToolCalls,
 		ExecuteTool: func(execCtx context.Context, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 			return s.executeAgentLoopTool(execCtx, request, call, loopRound)
 		},
@@ -1486,6 +1980,7 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		ToolCalls:       runtimeResult.ToolCalls,
 		ModelInvocation: cloneMap(runtimeResult.ModelInvocation),
 		AuditRecord:     cloneMap(runtimeResult.AuditRecord),
+		LoopStopReason:  string(runtimeResult.StopReason),
 	}, true, nil
 }
 
@@ -1724,11 +2219,7 @@ func fallbackOutput(request Request, inputText string) string {
 	case "":
 		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
 	case defaultAgentLoopIntentName:
-		highlights := extractHighlights(normalized, 3)
-		if len(highlights) == 0 {
-			return "我已经理解了当前输入，但还需要更多信息才能继续执行。"
-		}
-		return "初步处理结果：\n- " + strings.Join(highlights, "\n- ")
+		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
 	case "rewrite":
 		return "改写结果：\n" + normalized
 	case "translate":
@@ -1997,28 +2488,31 @@ func firstNonEmpty(primary, fallback string) string {
 // single loop execution. The value is read from model-facing runtime settings so
 // the execution layer stays configurable without introducing a parallel config path.
 func (s *Service) agentLoopMaxTurns() int {
-	if s.model == nil {
-		return 4
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopMaxToolIterations
 	}
-	return s.model.MaxToolIterations()
+	return modelService.MaxToolIterations()
 }
 
 // agentLoopCompressionChars resolves the planner-input size budget that should
 // trigger lightweight observation compaction.
 func (s *Service) agentLoopCompressionChars() int {
-	if s.model == nil {
-		return 2400
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopContextCompressChars
 	}
-	return s.model.ContextCompressChars()
+	return modelService.ContextCompressChars()
 }
 
 // agentLoopKeepRecent returns how many recent observations stay verbatim when
 // older tool results are compacted.
 func (s *Service) agentLoopKeepRecent() int {
-	if s.model == nil {
-		return 4
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopContextKeepRecent
 	}
-	return s.model.ContextKeepRecent()
+	return modelService.ContextKeepRecent()
 }
 
 func (s *Service) agentLoopTimeout() time.Duration {
@@ -2026,17 +2520,19 @@ func (s *Service) agentLoopTimeout() time.Duration {
 }
 
 func (s *Service) agentLoopPlannerRetryBudget() int {
-	if s.model == nil {
-		return 1
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopPlannerRetryBudget
 	}
-	return s.model.PlannerRetryBudget()
+	return modelService.PlannerRetryBudget()
 }
 
 func (s *Service) agentLoopToolRetryBudget() int {
-	if s.model == nil {
-		return 1
+	modelService := s.currentModel()
+	if modelService == nil {
+		return defaultAgentLoopToolRetryBudget
 	}
-	return s.model.ToolRetryBudget()
+	return modelService.ToolRetryBudget()
 }
 
 type noopAgentLoopHook struct{}
@@ -2289,6 +2785,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		RunID:      request.RunID,
 		TaskID:     request.TaskID,
 		SessionID:  "",
+		SourceType: strings.TrimSpace(request.SourceType),
 		Status:     runStatusFromStopReason(result.StopReason),
 		IntentName: effectiveIntentName(request.Intent),
 		StartedAt:  updatedAt,
@@ -2376,7 +2873,7 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 	case agentloop.StopReasonNeedAuthorization:
 		return "waiting_auth"
 	case agentloop.StopReasonNeedUserInput:
-		return "confirming_intent"
+		return "waiting_input"
 	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted:
 		return "failed"
 	default:
@@ -2645,6 +3142,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 	workspacePath = firstNonEmpty(strings.TrimSpace(workspacePath), s.workspace)
 	approvedOperation := firstNonEmpty(strings.TrimSpace(request.ApprovedOperation), stringValue(request.Intent, "name", ""))
 	approvedTargetObject := firstNonEmpty(strings.TrimSpace(request.ApprovedTargetObject), approvedTargetObject(request.Intent, s.workspace))
+	modelService := s.currentModel()
 	return &tools.ToolExecuteContext{
 		TaskID:               request.TaskID,
 		RunID:                request.RunID,
@@ -2657,7 +3155,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		Playwright:           s.playwright,
 		OCR:                  s.ocr,
 		Media:                s.media,
-		Model:                s.model,
+		Model:                modelService,
 	}
 }
 
@@ -2785,6 +3283,107 @@ func latestToolCall(toolCalls []tools.ToolCallRecord) tools.ToolCallRecord {
 		return tools.ToolCallRecord{}
 	}
 	return toolCalls[len(toolCalls)-1]
+}
+
+func internalScreenAnalysisCapabilities(request Request) []string {
+	capabilities := []string{"ocr_image"}
+	arguments := mapValue(request.Intent, "arguments")
+	if tools.ScreenCaptureMode(stringValue(arguments, "capture_mode", string(tools.ScreenCaptureModeScreenshot))) == tools.ScreenCaptureModeClip {
+		capabilities = append(capabilities, "extract_frames")
+	}
+	return capabilities
+}
+
+func (s *Service) finalizeExecutionResult(ctx context.Context, request Request, startedAt time.Time, result Result, directCapabilities ...string) Result {
+	if result.DurationMS <= 0 {
+		result.DurationMS = time.Since(startedAt).Milliseconds()
+	}
+	s.attachExtensionAssets(ctx, &result, request, directCapabilities...)
+	return result
+}
+
+func (s *Service) attachExtensionAssets(ctx context.Context, result *Result, request Request, directCapabilities ...string) {
+	if s == nil || result == nil || s.extensionAssets == nil {
+		return
+	}
+	refs := make([]storage.ExtensionAssetReference, 0)
+	if currentRefs, err := s.extensionAssets.CurrentExecutionAssets(ctx); err == nil {
+		refs = append(refs, currentRefs...)
+	}
+	refs = append(refs, supplementalExecutionBoundaryAssets(request, *result, s.currentModel())...)
+	capabilities := append(capabilityNamesFromToolCalls(result.ToolCalls), directCapabilities...)
+	if pluginRefs, err := s.extensionAssets.PluginAssetsForCapabilities(ctx, capabilities); err == nil {
+		refs = append(refs, pluginRefs...)
+	}
+	refs = dedupeExtensionAssetRefs(refs)
+	if len(refs) == 0 {
+		return
+	}
+	result.ExtensionAssets = extensionAssetReferenceMaps(refs)
+	refsPayload := cloneMapSlice(result.ExtensionAssets)
+	if result.ModelInvocation == nil {
+		result.ModelInvocation = map[string]any{}
+	}
+	result.ModelInvocation["extension_asset_refs"] = refsPayload
+	enrichToolTrace(result, map[string]any{"extension_asset_refs": cloneMapSlice(result.ExtensionAssets)})
+	enrichLatestToolCall(result, map[string]any{"extension_asset_refs": cloneMapSlice(result.ExtensionAssets)})
+}
+
+func capabilityNamesFromToolCalls(toolCalls []tools.ToolCallRecord) []string {
+	capabilities := make([]string, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if candidate := strings.TrimSpace(toolCall.ToolName); candidate != "" {
+			capabilities = append(capabilities, candidate)
+		}
+	}
+	return capabilities
+}
+
+func dedupeExtensionAssetRefs(items []storage.ExtensionAssetReference) []storage.ExtensionAssetReference {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]storage.ExtensionAssetReference, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		key := strings.Join([]string{item.AssetKind, item.AssetID, item.Version}, "|")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+func extensionAssetReferenceMaps(items []storage.ExtensionAssetReference) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		entry := map[string]any{
+			"asset_kind": item.AssetKind,
+			"asset_id":   item.AssetID,
+			"name":       item.Name,
+			"version":    item.Version,
+			"source":     item.Source,
+		}
+		if item.Summary != "" {
+			entry["summary"] = item.Summary
+		}
+		if item.Entry != "" {
+			entry["entry"] = item.Entry
+		}
+		if len(item.Capabilities) > 0 {
+			entry["capabilities"] = append([]string(nil), item.Capabilities...)
+		}
+		if len(item.Permissions) > 0 {
+			entry["permissions"] = append([]string(nil), item.Permissions...)
+		}
+		if len(item.RuntimeNames) > 0 {
+			entry["runtime_names"] = append([]string(nil), item.RuntimeNames...)
+		}
+		result = append(result, entry)
+	}
+	return result
 }
 
 func assignLatestToolTrace(result *Result, toolCall tools.ToolCallRecord) {

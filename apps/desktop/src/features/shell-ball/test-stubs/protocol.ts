@@ -14,6 +14,7 @@ export const TASK_STATUSES = [
 export const TASK_LIST_GROUPS = ["unfinished", "finished"] as const;
 export const TODO_BUCKETS = ["upcoming", "later", "recurring_rule", "closed"] as const;
 export const TASK_STEP_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
+export const TOOL_CALL_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
 export const SECURITY_STATUSES = [
   "normal",
@@ -42,7 +43,7 @@ export const REQUEST_TRIGGERS = [
 ] as const;
 export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 export const INPUT_MODES = ["voice", "text"] as const;
-export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"] as const;
+export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal", "screen_capture"] as const;
 export const BUBBLE_MESSAGE_TYPES = ["status", "intent_confirm", "result"] as const;
 export const APPROVAL_DECISIONS = ["allow_once", "deny_once"] as const;
 export const APPROVAL_STATUSES = ["pending", "approved", "denied"] as const;
@@ -60,6 +61,7 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskListGroup = (typeof TASK_LIST_GROUPS)[number];
 export type TodoBucket = (typeof TODO_BUCKETS)[number];
 export type TaskStepStatus = (typeof TASK_STEP_STATUSES)[number];
+export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number];
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 export type SecurityStatus = (typeof SECURITY_STATUSES)[number];
 export type DeliveryType = (typeof DELIVERY_TYPES)[number];
@@ -101,6 +103,7 @@ export interface StrongholdStatus {
 
 export interface Task {
   task_id: string;
+  session_id: string | null;
   title: string;
   source_type: TaskSourceType;
   status: TaskStatus;
@@ -251,14 +254,32 @@ export interface SettingsSnapshot {
       task_sources: string[];
       remind_before_deadline: boolean;
       remind_when_stale: boolean;
-    };
-    data_log: {
-      provider: string;
-      budget_auto_downgrade: boolean;
-      provider_api_key_configured: boolean;
-      stronghold: StrongholdStatus;
-    };
-  };
+	    };
+	    models: {
+	      provider: string;
+	      credentials: {
+	        budget_auto_downgrade: boolean;
+	        provider_api_key_configured: boolean;
+	        base_url: string;
+	        model: string;
+	        stronghold: StrongholdStatus;
+	      };
+	    };
+	  };
+}
+
+export interface Citation {
+  citation_id: string;
+  task_id: string;
+  run_id: string;
+  source_type: "file" | "web" | "context";
+  source_ref: string;
+  label: string;
+  artifact_id?: string | null;
+  artifact_type?: string | null;
+  evidence_role?: string | null;
+  excerpt_text?: string | null;
+  screen_session_id?: string | null;
 }
 
 export const RPC_METHODS_STABLE = {
@@ -270,6 +291,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_LIST: "agent.task.list",
   AGENT_TASK_DETAIL_GET: "agent.task.detail.get",
   AGENT_TASK_EVENTS_LIST: "agent.task.events.list",
+  AGENT_TASK_TOOL_CALLS_LIST: "agent.task.tool_calls.list",
   AGENT_TASK_STEER: "agent.task.steer",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
@@ -334,17 +356,59 @@ export interface JsonRpcPage {
 }
 
 export interface PageContext {
-  title: string;
-  app_name: string;
-  url: string;
+  title?: string;
+  app_name?: string;
+  url?: string;
+  window_title?: string;
+  visible_text?: string;
+  hover_target?: string;
+}
+
+export interface ScreenContext {
+  summary?: string;
+  screen_summary?: string;
+  visible_text?: string;
+  window_title?: string;
+  hover_target?: string;
+}
+
+export interface BehaviorContext {
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
+}
+
+export interface ErrorContext {
+  message?: string;
+}
+
+export interface ClipboardContext {
+  text?: string;
 }
 
 export interface InputContext {
   page?: PageContext;
+  screen?: ScreenContext;
+  behavior?: BehaviorContext;
   selection?: {
     text: string;
   };
+  error?: ErrorContext;
+  clipboard?: ClipboardContext;
+  text?: string;
+  selection_text?: string;
   files?: string[];
+  file_paths?: string[];
+  screen_summary?: string;
+  clipboard_text?: string;
+  hover_target?: string;
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
 }
 
 export interface VoiceMeta {
@@ -479,10 +543,26 @@ export interface AgentTaskDetailGetParams {
 export interface AgentTaskDetailGetResult {
   task: Task;
   timeline: TaskStep[];
+  delivery_result: DeliveryResult | null;
   artifacts: Artifact[];
+  citations: Citation[];
   mirror_references: MirrorReference[];
   approval_request: ApprovalRequest | null;
+  authorization_record: AuthorizationRecord | null;
+  audit_record: AuditRecord | null;
   security_summary: SecuritySummary;
+  runtime_summary: TaskRuntimeSummary;
+}
+
+export interface TaskRuntimeSummary {
+  loop_stop_reason?: string | null;
+  events_count: number;
+  latest_event_type?: string | null;
+  active_steering_count: number;
+  latest_failure_code?: string | null;
+  latest_failure_category?: string | null;
+  latest_failure_summary?: string | null;
+  observation_signals: string[];
 }
 
 export interface TaskEvent {
@@ -509,6 +589,33 @@ export interface AgentTaskEventsListParams {
 
 export interface AgentTaskEventsListResult {
 	 items: TaskEvent[];
+	 page: JsonRpcPage;
+}
+
+export interface ToolCall {
+	 tool_call_id: string;
+	 run_id: string;
+	 task_id: string;
+	 step_id: string | null;
+	 created_at: string | null;
+	 tool_name: string;
+	 status: ToolCallStatus;
+	 input: Record<string, unknown>;
+	 output: Record<string, unknown>;
+	 error_code: number | null;
+	 duration_ms: number;
+}
+
+export interface AgentTaskToolCallsListParams {
+	 request_meta: RequestMeta;
+	 task_id: string;
+	 run_id?: string;
+	 limit?: number;
+	 offset?: number;
+}
+
+export interface AgentTaskToolCallsListResult {
+	 items: ToolCall[];
 	 page: JsonRpcPage;
 }
 
@@ -811,7 +918,7 @@ export type AgentSecurityRespondResult =
 
 export interface AgentSettingsGetParams {
   request_meta: RequestMeta;
-  scope: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "data_log";
+  scope: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "models";
 }
 
 export interface AgentSettingsGetResult {
@@ -824,21 +931,40 @@ export interface AgentSettingsUpdateParams {
   floating_ball?: Partial<SettingsSnapshot["settings"]["floating_ball"]>;
   memory?: Partial<SettingsSnapshot["settings"]["memory"]>;
   task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
-  data_log?: Partial<SettingsSnapshot["settings"]["data_log"]> & {
+  models?: Partial<SettingsSnapshot["settings"]["models"]> & {
+    budget_auto_downgrade?: boolean;
+    base_url?: string;
+    model?: string;
     api_key?: string;
     delete_api_key?: boolean;
   };
 }
 
+export interface AgentSettingsEffectiveSettings {
+  general?: Partial<SettingsSnapshot["settings"]["general"]>;
+  floating_ball?: Partial<SettingsSnapshot["settings"]["floating_ball"]>;
+  memory?: Partial<SettingsSnapshot["settings"]["memory"]>;
+  task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
+  models?: {
+    provider?: string;
+    budget_auto_downgrade?: boolean;
+    provider_api_key_configured?: boolean;
+    base_url?: string;
+    model?: string;
+    stronghold?: SettingsSnapshot["settings"]["models"]["credentials"]["stronghold"];
+  };
+}
+
 export interface AgentSettingsUpdateResult {
   updated_keys: string[];
-  effective_settings: Partial<SettingsSnapshot["settings"]>;
+  effective_settings: AgentSettingsEffectiveSettings;
   apply_mode: ApplyMode;
   need_restart: boolean;
 }
 
 export interface TaskUpdatedNotification {
   task_id: string;
+  session_id: Task["session_id"];
   status: Task["status"];
 }
 

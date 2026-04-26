@@ -1,8 +1,8 @@
+use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, RPC_E_CHANGED_MODE, WPARAM};
@@ -17,31 +17,34 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR,
-    VK_RIGHT, VK_SHIFT, VK_UP,
+    GetAsyncKeyState, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT,
+    VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    KBDLLHOOKSTRUCT, SetWindowsHookExW, GA_ROOT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
+    SetWindowsHookExW, GA_ROOT, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
     WM_LBUTTONUP, WM_SYSKEYDOWN,
 };
 
 const WINDOWS_UIA_SELECTION_SOURCE: &str = "windows_uia";
 const WINDOWS_UIA_SELECTION_URL: &str = "native://windows-uia-selection";
 const SHELL_BALL_SELECTION_SNAPSHOT_EVENT: &str = "desktop-shell-ball:selection-snapshot";
-const SHELL_BALL_WINDOW_LABELS: [&str; 4] = [
+const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
     "shell-ball",
     "shell-ball-bubble",
     "shell-ball-input",
     "shell-ball-voice",
+    "onboarding",
 ];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_SELECTION_MOUSE_DELAY_MS: u64 = 100;
 const SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS: u64 = 80;
 
 static SHELL_BALL_SELECTION_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
-static SHELL_BALL_SELECTION_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
-static SHELL_BALL_SELECTION_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> =
+    Lazy::new(|| Mutex::new(None));
+static SHELL_BALL_SELECTION_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> =
+    Lazy::new(|| Mutex::new(None));
 static SHELL_BALL_SELECTION_MONITOR_STATE: Lazy<Mutex<SelectionMonitorState>> =
     Lazy::new(|| Mutex::new(SelectionMonitorState::default()));
 
@@ -113,9 +116,14 @@ pub fn install_selection_listener(app: &AppHandle) -> Result<(), String> {
     if keyboard_hook.is_none() {
         unsafe {
             *keyboard_hook = Some(
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(shell_ball_selection_keyboard_hook), None, 0)
-                    .map_err(|error| format!("failed to install selection keyboard hook: {error}"))?
-                    .0 as isize,
+                SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(shell_ball_selection_keyboard_hook),
+                    None,
+                    0,
+                )
+                .map_err(|error| format!("failed to install selection keyboard hook: {error}"))?
+                .0 as isize,
             );
         }
     }
@@ -280,7 +288,10 @@ fn selection_snapshot_fingerprint(snapshot: Option<&SelectionSnapshotPayload>) -
     snapshot.map(|value| {
         format!(
             "{}|{}|{}|{}",
-            value.text, value.page_context.title, value.page_context.url, value.page_context.app_name
+            value.text,
+            value.page_context.title,
+            value.page_context.url,
+            value.page_context.app_name
         )
     })
 }

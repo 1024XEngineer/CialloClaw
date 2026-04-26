@@ -19,7 +19,12 @@ import {
   updateDashboardSettings,
   type DashboardSettingsPatch,
 } from "@/features/dashboard/shared/dashboardSettingsMutation";
-import { loadMirrorOverviewData, type MirrorOverviewData, type MirrorOverviewSource } from "./mirrorService";
+import {
+  applyMirrorSettingsSnapshot,
+  loadMirrorOverviewData,
+  type MirrorOverviewData,
+  type MirrorOverviewSource,
+} from "./mirrorService";
 import { MirrorDetailContent, type MirrorHistoryDetailView } from "./MirrorDetailContent";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
 import { MirrorDecorativeBirds } from "./MirrorDecorativeBirds";
@@ -87,10 +92,11 @@ const BOARD_PADDING = 12;
 const CARD_CLEARANCE = 10;
 const CARD_STEP = 16;
 const COMPACT_MEMORY_GAP = 14;
-const MIN_COMPACT_CARD_WIDTH = 92;
-const MIN_COMPACT_CARD_HEIGHT = 92;
+/* Keep floating mirror cards large enough to show two readable headline lines. */
+const MIN_COMPACT_CARD_WIDTH = 132;
+const MIN_COMPACT_CARD_HEIGHT = 132;
 const MIN_COMPACT_MEMORY_HEIGHT = 132;
-const DEFAULT_CARD_SIZE: ModuleSize = { width: 260, height: 168 };
+const DEFAULT_CARD_SIZE: ModuleSize = { width: 376, height: 252 };
 const DEFAULT_MEMORY_CARD_SIZE: ModuleSize = { width: 480, height: 320 };
 const PINNED_MEMORY_CARD_OFFSET = { x: 20, y: 104 };
 const DEFAULT_MODULE_SIZES: ModuleSizes = {
@@ -224,8 +230,8 @@ function getBoardCardSize(canvasWidth: number, canvasHeight: number, grid: Board
   const height = Math.floor((canvasHeight - BOARD_PADDING * 2 - CARD_CLEARANCE * (grid.rows - 1)) / grid.rows);
 
   return {
-    width: clampValue(width, 1, 264),
-    height: clampValue(height, 1, 172),
+    width: clampValue(width, 1, DEFAULT_CARD_SIZE.width),
+    height: clampValue(height, 1, DEFAULT_CARD_SIZE.height),
   } satisfies ModuleSize;
 }
 
@@ -405,7 +411,7 @@ function getCompactLayout(canvasWidth: number, canvasHeight: number): BoardLayou
     const regularHeight = clampValue(
       Math.floor(Math.min(availableRegularHeight / rows, regularWidth * 0.72)),
       MIN_COMPACT_CARD_HEIGHT,
-      172,
+      224,
     );
     const score = regularWidth * regularHeight;
 
@@ -445,7 +451,7 @@ function getCompactLayout(canvasWidth: number, canvasHeight: number): BoardLayou
   const fallbackGrid = { columns: FLOATING_MIRROR_DIRECTION_KEYS.length, rows: 1 } satisfies BoardGrid;
   const regularSize = {
     width: Math.max(1, Math.floor((canvasInnerWidth - CARD_CLEARANCE * (fallbackGrid.columns - 1)) / fallbackGrid.columns)),
-    height: clampValue(Math.floor(canvasInnerHeight * 0.26), 1, 136),
+    height: clampValue(Math.floor(canvasInnerHeight * 0.32), 1, 180),
   } satisfies ModuleSize;
   const memoryHeight = Math.max(1, canvasInnerHeight - regularSize.height - COMPACT_MEMORY_GAP);
   const memorySize = {
@@ -851,11 +857,10 @@ export function MirrorApp() {
   const handleSettingsUpdate = useCallback(
     async (subject: string, patch: DashboardSettingsPatch) => {
       const result = await updateDashboardSettings(patch, dataMode);
-      const nextData = await loadMirrorOverviewData(dataMode);
 
       if (isMountedRef.current) {
         setLoadError(null);
-        setMirrorData(nextData);
+        setMirrorData((current) => (current ? applyMirrorSettingsSnapshot(current, result.snapshot) : current));
       }
 
       return formatDashboardSettingsMutationFeedback(result, subject);

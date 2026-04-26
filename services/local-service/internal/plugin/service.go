@@ -11,6 +11,19 @@ type SidecarSpec struct {
 	Transport string
 }
 
+// Manifest is the backend read model aligned with the formal PluginManifest
+// contract so runtime visibility can point back to one versioned static asset.
+type Manifest struct {
+	PluginID     string
+	Name         string
+	Summary      string
+	Version      string
+	Entry        string
+	Source       string
+	Capabilities []string
+	Permissions  []string
+}
+
 // RuntimeHealth represents the smallest stable health surface that later
 // dashboard and query layers can consume without depending on concrete worker
 // or sidecar implementations.
@@ -56,6 +69,7 @@ type RuntimeState struct {
 	Health       RuntimeHealth
 	LastSeenAt   string
 	LastError    string
+	Manifest     *Manifest
 	Capabilities []string
 }
 
@@ -86,33 +100,93 @@ const maxRuntimeEvents = 50
 
 // Service keeps static declarations plus the current runtime state cache.
 type Service struct {
-	mu       sync.Mutex
-	order    []string
-	runtimes map[string]RuntimeState
-	metrics  map[string]MetricSnapshot
-	events   []RuntimeEvent
+	mu        sync.Mutex
+	order     []string
+	manifests map[string]Manifest
+	runtimes  map[string]RuntimeState
+	metrics   map[string]MetricSnapshot
+	events    []RuntimeEvent
 }
 
 // NewService creates the plugin runtime registry with declared workers and sidecars.
 func NewService() *Service {
 	service := &Service{
-		order:    make([]string, 0),
-		runtimes: map[string]RuntimeState{},
-		metrics:  map[string]MetricSnapshot{},
-		events:   make([]RuntimeEvent, 0),
+		order:     make([]string, 0),
+		manifests: map[string]Manifest{},
+		runtimes:  map[string]RuntimeState{},
+		metrics:   map[string]MetricSnapshot{},
+		events:    make([]RuntimeEvent, 0),
 	}
-	service.declareRuntime(RuntimeState{Name: "playwright_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "worker_process", Health: RuntimeHealthUnknown, Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}})
-	service.declareRuntime(RuntimeState{Name: "ocr_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Capabilities: []string{"extract_text", "ocr_image", "ocr_pdf"}})
-	service.declareRuntime(RuntimeState{Name: "media_worker", Kind: RuntimeKindWorker, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Capabilities: []string{"transcode_media", "normalize_recording", "extract_frames"}})
-	service.declareRuntime(RuntimeState{Name: "playwright_sidecar", Kind: RuntimeKindSidecar, Status: RuntimeStatusDeclared, Transport: "named_pipe", Health: RuntimeHealthUnknown, Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"}})
+	entries := BuiltinCatalogEntries()
+	for _, entry := range entries {
+		manifest := manifestFromCatalogEntry(entry)
+		for _, ref := range entry.RuntimeRefs {
+			if ref.Kind != RuntimeKindWorker {
+				continue
+			}
+			service.declareRuntime(RuntimeState{
+				Name:         ref.Name,
+				Kind:         ref.Kind,
+				Status:       RuntimeStatusDeclared,
+				Transport:    ref.Transport,
+				Health:       RuntimeHealthUnknown,
+				Manifest:     &manifest,
+				Capabilities: append([]string(nil), entry.Capabilities...),
+			})
+		}
+	}
+	for _, entry := range entries {
+		manifest := manifestFromCatalogEntry(entry)
+		for _, ref := range entry.RuntimeRefs {
+			if ref.Kind != RuntimeKindSidecar {
+				continue
+			}
+			service.declareRuntime(RuntimeState{
+				Name:         ref.Name,
+				Kind:         ref.Kind,
+				Status:       RuntimeStatusDeclared,
+				Transport:    ref.Transport,
+				Health:       RuntimeHealthUnknown,
+				Manifest:     &manifest,
+				Capabilities: append([]string(nil), entry.Capabilities...),
+			})
+		}
+	}
 	return service
 }
 
 func (s *Service) declareRuntime(state RuntimeState) {
 	key := runtimeKey(state.Kind, state.Name)
 	s.order = append(s.order, key)
+	if state.Manifest != nil && strings.TrimSpace(state.Manifest.PluginID) != "" {
+		s.manifests[strings.TrimSpace(state.Manifest.PluginID)] = cloneManifest(state.Manifest)
+	}
 	s.runtimes[key] = state
 	s.metrics[key] = MetricSnapshot{Name: state.Name, Kind: state.Kind}
+}
+
+// Manifests returns the current static plugin manifest catalog in stable order.
+func (s *Service) Manifests() []Manifest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]Manifest, 0, len(s.manifests))
+	seen := map[string]struct{}{}
+	for _, key := range s.order {
+		runtime, ok := s.runtimes[key]
+		if !ok || runtime.Manifest == nil {
+			continue
+		}
+		pluginID := strings.TrimSpace(runtime.Manifest.PluginID)
+		if pluginID == "" {
+			continue
+		}
+		if _, ok := seen[pluginID]; ok {
+			continue
+		}
+		seen[pluginID] = struct{}{}
+		result = append(result, cloneManifest(runtime.Manifest))
+	}
+	return result
 }
 
 func (s *Service) Workers() []string {
@@ -320,7 +394,32 @@ func cloneRuntimeState(state RuntimeState) RuntimeState {
 		Health:       state.Health,
 		LastSeenAt:   state.LastSeenAt,
 		LastError:    state.LastError,
+		Manifest:     cloneManifestPointer(state.Manifest),
 		Capabilities: append([]string(nil), state.Capabilities...),
+	}
+}
+
+func cloneManifestPointer(manifest *Manifest) *Manifest {
+	if manifest == nil {
+		return nil
+	}
+	cloned := cloneManifest(manifest)
+	return &cloned
+}
+
+func cloneManifest(manifest *Manifest) Manifest {
+	if manifest == nil {
+		return Manifest{}
+	}
+	return Manifest{
+		PluginID:     manifest.PluginID,
+		Name:         manifest.Name,
+		Summary:      manifest.Summary,
+		Version:      manifest.Version,
+		Entry:        manifest.Entry,
+		Source:       manifest.Source,
+		Capabilities: append([]string(nil), manifest.Capabilities...),
+		Permissions:  append([]string(nil), manifest.Permissions...),
 	}
 }
 

@@ -32,6 +32,7 @@ type CaptureInput struct {
 	OutputText      string
 	DeliveryResult  map[string]any
 	Artifacts       []map[string]any
+	ExtensionAssets []storage.ExtensionAssetReference
 	ModelInvocation map[string]any
 	ToolCalls       []tools.ToolCallRecord
 	TokenUsage      map[string]any
@@ -93,23 +94,30 @@ func (s *Service) Capture(input CaptureInput) (CaptureResult, error) {
 		evalStatus = "passed"
 	}
 	ruleHits := buildRuleHits(input, doomLoop, reviewResult)
+	normalizedAssets := storage.NormalizeExtensionAssetReferences(input.ExtensionAssets)
 	ruleHitsJSON, err := json.Marshal(ruleHits)
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("marshal trace rule hits: %w", err)
 	}
+	assetRefsJSON, err := json.Marshal(normalizedAssets)
+	if err != nil {
+		return CaptureResult{}, fmt.Errorf("marshal extension asset refs: %w", err)
+	}
 	traceID := fmt.Sprintf("trace_%d", now.UnixNano())
 	metrics := map[string]any{
-		"latency_ms":          resolveLatency(input),
-		"tool_call_count":     len(input.ToolCalls),
-		"failed_tool_calls":   countFailedToolCalls(input.ToolCalls),
-		"artifact_count":      len(input.Artifacts),
-		"loop_round":          maxLoopRound(input.ToolCalls),
-		"doom_loop_triggered": doomLoop.Triggered,
-		"review_result":       reviewResult,
-		"human_in_loop":       doomLoop.Triggered,
-		"delivery_type":       stringValue(input.DeliveryResult, "type"),
-		"error_present":       input.ExecutionError != nil,
+		"latency_ms":            resolveLatency(input),
+		"tool_call_count":       len(input.ToolCalls),
+		"failed_tool_calls":     countFailedToolCalls(input.ToolCalls),
+		"artifact_count":        len(input.Artifacts),
+		"loop_round":            maxLoopRound(input.ToolCalls),
+		"doom_loop_triggered":   doomLoop.Triggered,
+		"review_result":         reviewResult,
+		"human_in_loop":         doomLoop.Triggered,
+		"delivery_type":         stringValue(input.DeliveryResult, "type"),
+		"error_present":         input.ExecutionError != nil,
+		"extension_asset_count": len(normalizedAssets),
 	}
+	mergeExtensionAssetMetrics(metrics, normalizedAssets)
 	mergeTokenMetrics(metrics, input.TokenUsage, input.ModelInvocation)
 	metricsJSON, err := json.Marshal(metrics)
 	if err != nil {
@@ -124,6 +132,7 @@ func (s *Service) Capture(input CaptureInput) (CaptureResult, error) {
 		LLMOutputSummary: buildOutputSummary(input),
 		LatencyMS:        resolveLatency(input),
 		Cost:             resolveCost(input.TokenUsage),
+		AssetRefsJSON:    string(assetRefsJSON),
 		RuleHitsJSON:     string(ruleHitsJSON),
 		ReviewResult:     reviewResult,
 		CreatedAt:        now.Format(time.RFC3339),
@@ -133,6 +142,7 @@ func (s *Service) Capture(input CaptureInput) (CaptureResult, error) {
 		TraceID:        traceID,
 		TaskID:         input.TaskID,
 		Status:         evalStatus,
+		AssetRefsJSON:  string(assetRefsJSON),
 		MetricsJSON:    string(metricsJSON),
 		CreatedAt:      now.Format(time.RFC3339),
 	}
@@ -153,7 +163,7 @@ func (s *Service) Capture(input CaptureInput) (CaptureResult, error) {
 			Reason:          doomLoop.Reason,
 			ReviewResult:    reviewResult,
 			Status:          "pending",
-			Summary:         fmt.Sprintf("检测到疑似 Doom Loop：%s，需要人工介入。", doomLoop.Reason),
+			Summary:         fmt.Sprintf("Potential Doom Loop detected: %s. Human review is required.", doomLoop.Reason),
 			SuggestedAction: "review_and_replan",
 			CreatedAt:       now.Format(time.RFC3339),
 		}
@@ -374,6 +384,19 @@ func mergeTokenMetrics(metrics map[string]any, tokenUsage map[string]any, modelI
 		if value, ok := usage[key]; ok {
 			metrics[key] = value
 		}
+	}
+}
+
+func mergeExtensionAssetMetrics(metrics map[string]any, refs []storage.ExtensionAssetReference) {
+	if len(refs) == 0 {
+		return
+	}
+	counts := map[string]int{}
+	for _, ref := range refs {
+		counts[ref.AssetKind]++
+	}
+	for kind, count := range counts {
+		metrics[kind+"_count"] = count
 	}
 }
 

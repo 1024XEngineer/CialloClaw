@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -40,11 +42,15 @@ func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].TaskID != record.TaskID || records[0].RunID != record.RunID {
 		t.Fatalf("unexpected task run record: %+v", records[0])
 	}
+	loadedRecord, err := store.GetTaskRun(context.Background(), record.TaskID)
+	if err != nil || loadedRecord.RequestSource != "floating_ball" || loadedRecord.RequestTrigger != "hover_text_input" {
+		t.Fatalf("expected GetTaskRun to preserve request metadata, record=%+v err=%v", loadedRecord, err)
+	}
 	taskItems, taskTotal, err := store.taskStore.ListTasks(context.Background(), 10, 0)
 	if err != nil || taskTotal != 1 || len(taskItems) != 1 {
 		t.Fatalf("expected one first-class task record, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
 	}
-	if taskItems[0].TaskID != record.TaskID || taskItems[0].IntentName != "summarize" {
+	if taskItems[0].TaskID != record.TaskID || taskItems[0].IntentName != "summarize" || taskItems[0].PrimaryRunID != record.RunID || taskItems[0].RequestSource != "floating_ball" || taskItems[0].RequestTrigger != "hover_text_input" {
 		t.Fatalf("unexpected first-class task record: %+v", taskItems[0])
 	}
 	stepItems, stepTotal, err := store.stepStore.ListTaskSteps(context.Background(), record.TaskID, 10, 0)
@@ -129,6 +135,10 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	if records[0].TaskID != taskID || records[0].RunID != runID {
 		t.Fatalf("unexpected loaded record: %+v", records[0])
 	}
+	loadedRecord, err := store.GetTaskRun(context.Background(), taskID)
+	if err != nil || loadedRecord.RequestSource != "floating_ball" || loadedRecord.RequestTrigger != "hover_text_input" {
+		t.Fatalf("expected sqlite GetTaskRun to preserve request metadata, record=%+v err=%v", loadedRecord, err)
+	}
 	if records[0].ExecutionAttempt != 1 {
 		t.Fatalf("expected execution attempt to default to 1, got %d", records[0].ExecutionAttempt)
 	}
@@ -198,6 +208,111 @@ func TestSQLiteTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
 	}
 }
 
+func TestTaskRunStoresLoadLegacyTaskRunsOnlyForMissingStructuredRows(t *testing.T) {
+	inMemory := NewInMemoryTaskRunStore()
+	first := sampleTaskRunRecord()
+	second := sampleTaskRunRecord()
+	second.TaskID = "task_legacy_only"
+	second.RunID = "run_legacy_only"
+	second.Timeline[0].StepID = "step_legacy_only"
+	second.Timeline[0].TaskID = second.TaskID
+	second.StartedAt = second.StartedAt.Add(5 * time.Minute)
+	second.UpdatedAt = second.UpdatedAt.Add(5 * time.Minute)
+	if err := inMemory.SaveTaskRun(context.Background(), first); err != nil {
+		t.Fatalf("in-memory SaveTaskRun first returned error: %v", err)
+	}
+	if err := inMemory.SaveTaskRun(context.Background(), second); err != nil {
+		t.Fatalf("in-memory SaveTaskRun second returned error: %v", err)
+	}
+	if err := inMemory.taskStore.DeleteTask(context.Background(), second.TaskID); err != nil {
+		t.Fatalf("in-memory DeleteTask returned error: %v", err)
+	}
+	legacyRecords, err := inMemory.LoadLegacyTaskRuns(context.Background(), []string{first.TaskID})
+	if err != nil || len(legacyRecords) != 1 || legacyRecords[0].TaskID != second.TaskID {
+		t.Fatalf("expected in-memory legacy task run filter to keep only missing structured rows, records=%+v err=%v", legacyRecords, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "task-runs-legacy.db")
+	sqliteStore, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = sqliteStore.Close() }()
+	if err := sqliteStore.SaveTaskRun(context.Background(), first); err != nil {
+		t.Fatalf("sqlite SaveTaskRun first returned error: %v", err)
+	}
+	if err := sqliteStore.SaveTaskRun(context.Background(), second); err != nil {
+		t.Fatalf("sqlite SaveTaskRun second returned error: %v", err)
+	}
+	if err := sqliteStore.taskStore.DeleteTask(context.Background(), second.TaskID); err != nil {
+		t.Fatalf("sqlite DeleteTask returned error: %v", err)
+	}
+	legacyRecords, err = sqliteStore.LoadLegacyTaskRuns(context.Background(), []string{first.TaskID})
+	if err != nil || len(legacyRecords) != 1 || legacyRecords[0].TaskID != second.TaskID {
+		t.Fatalf("expected sqlite legacy task run filter to keep only missing structured rows, records=%+v err=%v", legacyRecords, err)
+	}
+}
+
+func TestTaskRunStoresCoverGetTaskRunMissesAndSnapshotFallbacks(t *testing.T) {
+	inMemory := NewInMemoryTaskRunStore()
+	if _, err := inMemory.GetTaskRun(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing in-memory task run to return sql.ErrNoRows, got %v", err)
+	}
+	record := sampleTaskRunRecord()
+	record.RequestSource = ""
+	record.RequestTrigger = ""
+	record.Snapshot.Source = "selection_toolbar"
+	record.Snapshot.Trigger = "selection_click"
+	if err := inMemory.SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("in-memory SaveTaskRun returned error: %v", err)
+	}
+	taskRecord, err := inMemory.taskStore.GetTask(context.Background(), record.TaskID)
+	if err != nil || taskRecord.RequestSource != "selection_toolbar" || taskRecord.RequestTrigger != "selection_click" {
+		t.Fatalf("expected task snapshot projection to fall back to snapshot request metadata, record=%+v err=%v", taskRecord, err)
+	}
+	second := sampleTaskRunRecord()
+	second.TaskID = "task_same_started_b"
+	second.RunID = "run_same_started_b"
+	second.StartedAt = record.StartedAt
+	second.UpdatedAt = record.UpdatedAt
+	if err := inMemory.SaveTaskRun(context.Background(), second); err != nil {
+		t.Fatalf("in-memory SaveTaskRun second returned error: %v", err)
+	}
+	legacyRecords, err := inMemory.LoadLegacyTaskRuns(context.Background(), []string{"", "   "})
+	if err != nil || len(legacyRecords) != 2 || legacyRecords[0].TaskID != second.TaskID {
+		t.Fatalf("expected blank structured ids to be ignored and equal timestamps to sort by task id, records=%+v err=%v", legacyRecords, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "task-runs-missing.db")
+	sqliteStore, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = sqliteStore.Close() }()
+	if _, err := sqliteStore.GetTaskRun(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing sqlite task run to return sql.ErrNoRows, got %v", err)
+	}
+}
+
+func TestSQLiteTaskRunStoreLoadLegacyTaskRunsHandlesErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-runs-errors.db")
+	store, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO task_runs (task_id, run_id, session_id, status, started_at, updated_at, record_json) VALUES (?, ?, ?, ?, ?, ?, ?)`, "task_bad_json", "run_bad_json", "sess_bad_json", "completed", "2026-04-22T10:00:00Z", "2026-04-22T10:00:00Z", `{bad-json}`); err != nil {
+		t.Fatalf("insert malformed task run row failed: %v", err)
+	}
+	if _, err := store.LoadLegacyTaskRuns(context.Background(), []string{"", "   "}); err == nil {
+		t.Fatal("expected malformed task run row to surface an error")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if _, err := store.LoadLegacyTaskRuns(context.Background(), nil); err == nil {
+		t.Fatal("expected closed sqlite task run store to fail legacy load")
+	}
+}
 func TestSQLiteTaskRunStorePersistsExecutionAttempt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-run-attempt.db")
 	store, err := NewSQLiteTaskRunStore(path)
@@ -453,6 +568,8 @@ func sampleTaskRunRecord() TaskRunRecord {
 		TaskID:            "task_001",
 		SessionID:         "sess_001",
 		RunID:             "run_001",
+		RequestSource:     "floating_ball",
+		RequestTrigger:    "hover_text_input",
 		ExecutionAttempt:  1,
 		Title:             "sqlite task record",
 		SourceType:        "hover_input",
@@ -477,6 +594,7 @@ func sampleTaskRunRecord() TaskRunRecord {
 		BubbleMessage:  map[string]any{"task_id": "task_001", "type": "result", "text": "completed"},
 		DeliveryResult: map[string]any{"type": "workspace_document", "payload": map[string]any{"path": "workspace/result.md"}},
 		Artifacts:      []map[string]any{{"artifact_id": "art_001", "task_id": "task_001"}},
+		Citations:      []map[string]any{{"citation_id": "cit_001", "task_id": "task_001", "run_id": "run_001", "source_type": "file", "source_ref": "art_001", "label": "workspace evidence"}},
 		Snapshot: contextsvc.TaskContextSnapshot{
 			Source:        "floating_ball",
 			Trigger:       "hover_text_input",

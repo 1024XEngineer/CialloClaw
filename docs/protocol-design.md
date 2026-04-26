@@ -79,7 +79,7 @@
 
 ### 3.3 关键对象说明
 
-- `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点。
+- `task`：对外主对象，是前端任务列表、详情页、正式交付和安全摘要的统一锚点；当前允许后端写回隐藏协作会话的 `session_id`，用于延续同一轮桌面任务。
 - `run`：执行对象，是后端编排和工具链的运行实例。
 - `bubble_message`：轻量承接对象，用于状态反馈和短结果返回。
 - `delivery_result`：正式交付对象，统一描述结果以气泡、文档、结果页、打开文件或任务详情交付。
@@ -87,6 +87,12 @@
 - `approval_request`：待授权对象，高风险动作必须先落到这里。
 - `audit_record`：审计对象，用于记录真实动作和结果。
 - `memory_summary`：长期记忆对象，用于镜子、偏好、阶段总结。
+- `plugin`：对外插件主对象，用于插件列表页和详情页承接插件基础信息、来源、权限与能力概览。
+- `plugin_runtime_state`：插件运行态对象，用于展示运行状态、健康度、传输方式、最近可见时间和能力摘要。
+- `plugin_metric_snapshot`：插件指标快照对象，用于展示启动次数、成功失败次数和最近运行时间。
+- `plugin_runtime_event`：插件运行事件对象，用于展示最近状态变化和健康事件。
+- `plugin_tool_contract`：插件工具合同对象，用于描述单个工具的输入合同、输出合同、风险提示与交付映射。
+- `plugin_data_contract`：插件数据合同对象，用于冻结 `schema_ref / schema_json / fields` 三层展示结构。
 
 ### 3.4 方法族说明
 
@@ -101,7 +107,13 @@
 - `agent.security.*`：安全卫士、授权、审计、恢复。
 - `agent.settings.*`：设置中心。
 - `agent.screen.*`：屏幕感知与场景推荐分析。
-- `agent.plugin.* / agent.model.* / agent.skill.*`：扩展能力方法组，当前多数为 planned。
+- `agent.plugin.*`：插件扩展能力方法组，负责插件列表、详情与运行态查询。
+- `agent.model.* / agent.skill.*`：扩展能力方法组，当前多数为 planned。
+
+补充说明：
+
+- 当前仓库实现里，部分场景感知信号也会通过 `agent.input.*`、`agent.task.*` 与 `agent.recommendation.*` 的 `context / scene` 字段并入主链。
+- 多模型与 Skill 安装当前仍主要停留在路线图阶段，正式方法与协议资产后续仍需继续冻结。
 
 ---
 
@@ -118,7 +130,7 @@
     "request_meta": {
       "trace_id": "trace_xxx",
       "client_time": "2026-04-09T10:00:00+08:00"
-    }
+	      }
   }
 }
 ```
@@ -306,10 +318,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `dragged_file`
 - `todo`
 - `error_signal`
+- `screen_capture`
 
 ### 5.13 气泡类型 `bubble_message_type`
 
 - `status`
+- `intent_confirm`
 - `result`
 
 ### 5.14 授权决策 / 状态
@@ -343,6 +357,14 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 悬浮球主状态机、承接状态机、气泡生命周期都属于前端局部状态，不直接进入正式状态枚举。
 - 文档中未登记的状态值不得进入实现。
 
+### 5.18 插件扩展相关
+
+- `plugin_kind`：`worker / sidecar`
+- `plugin_source_type`：`builtin / local_dir / github / marketplace`
+- `plugin_health_status`：`unknown / healthy / degraded / failed / stopped / unavailable`
+- `plugin_tool_source_type`：`builtin / worker / sidecar`
+- `plugin_tool_contract.risk_hint`：对齐 `risk_level` 语义，当前允许返回 `green / yellow / red`
+
 ## 6. 错误码设计
 
 ### 6.1 分段
@@ -370,7 +392,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：数据库、Artifact、恢复点、Stronghold、RAG 等落盘能力异常。
 - `1006xxx`：worker / sidecar / plugin 进程不可用或输出非法。
 - `1007xxx`：平台和执行环境问题。
-- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常，当前为预留段。
+- `1008xxx`：模型与前馈配置异常；其中 `1008001`、`1008002`、`1008003` 已登记到错误码真源，其余编号继续预留。
 - `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常，当前为预留段。
 
 ### 6.3 推荐错误码表
@@ -441,14 +463,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1007004` `SANDBOX_PROFILE_INVALID`
 - `1007005` `PATH_POLICY_VIOLATION`
 
-##### 模型与前馈配置预留
+##### 模型与前馈配置
 
 - `1008001` `MODEL_PROVIDER_NOT_FOUND`
 - `1008002` `MODEL_NOT_ALLOWED`
-- `1008003` `SKILL_NOT_FOUND`
-- `1008004` `BLUEPRINT_NOT_FOUND`
-- `1008005` `PROMPT_TEMPLATE_NOT_FOUND`
-- `1008006` `LSP_DIAGNOSTIC_UNAVAILABLE`
+- `1008003` `MODEL_RUNTIME_UNAVAILABLE`
+
+##### 模型与前馈配置预留
+
+- `1008004` `SKILL_NOT_FOUND`
+- `1008005` `BLUEPRINT_NOT_FOUND`
+- `1008006` `PROMPT_TEMPLATE_NOT_FOUND`
+- `1008007` `LSP_DIAGNOSTIC_UNAVAILABLE`
 
 ##### 评估与升级预留
 
@@ -485,6 +511,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.detail.get`
 - `agent.task.control`
 - `agent.task.events.list`
+- `agent.task.tool_calls.list`
 - `agent.task.steer`
 - `agent.task.artifact.list`
 - `agent.task.artifact.open`
@@ -514,16 +541,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.settings.get`
 - `agent.settings.update`
 
+#### E. 插件扩展
+
+- `agent.plugin.runtime.list`
+- `agent.plugin.list`
+- `agent.plugin.detail.get`
+
 ### 7.2 planned
 
 - `agent.mirror.memory.manage`
-- `agent.plugin.list`
 - `agent.plugin.enable`
 - `agent.plugin.disable`
 - `agent.model.list`
 - `agent.model.activate`
 - `agent.skill.install`
 - `agent.skill.list`
+
+补充说明：
+
+- 上述多模型与 Skill 方法当前仍以 planned 为准；实际冻结顺序仍以后续 `/packages/protocol` 真源为准。
 
 ### 7.3 原子功能与方法映射说明
 
@@ -540,7 +576,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 一键中断：复用 `agent.task.control`
 - **运行中补充 follow-up 指令** 统一使用 `agent.task.steer`，用于向当前任务追加 steering 信息。
 - **运行时事件查看与调试观察** 统一使用 `agent.task.events.list`，用于补充查看正式事件流，不替代 `task` 主对象查询。
-- **插件、多模型、技能安装** 当前阶段先通过 `agent.settings.get / update` 与仪表盘模块承接，待对象、权限与来源字段完全冻结后再升级为独立正式接口。
+- **任务工具调用查看与排障观察** 统一使用 `agent.task.tool_calls.list`，用于补充查看正式 `tool_call` 记录，不替代 `task` 主对象查询。
+- **插件扩展列表、插件详情与运行态展示** 统一使用 `agent.plugin.list`、`agent.plugin.detail.get`、`agent.plugin.runtime.list`；插件启停、安装以及多模型、技能安装当前阶段仍优先通过 `agent.settings.get / update` 与仪表盘模块承接，待对象、权限与来源字段完全冻结后再升级为独立正式接口。
 - **任务巡检、事项转任务** 统一使用 `agent.task_inspector.*` 与 `agent.notepad.*`。
 - **仪表盘首页、镜子、安全卫士** 统一使用 `agent.dashboard.*`、`agent.mirror.*`、`agent.security.*`。
 
@@ -577,10 +614,27 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.text`                 | 用户输入文本                   |
 | `input.input_mode`           | 输入模式，语音或文字           |
 | `context.page`               | 当前页面上下文                 |
+| `context.page.title`         | 当前页面标题                   |
+| `context.page.url`           | 当前页面 URL                   |
+| `context.page.app_name`      | 当前宿主应用名                 |
+| `context.page.window_title`  | 当前窗口标题                   |
+| `context.page.visible_text`  | 当前页面可见文本摘录           |
 | `context.selection.text`     | 当前选中文本                   |
 | `context.files`              | 当前附带文件列表               |
+| `context.screen.summary`     | 当前屏幕摘要，可用于视觉型任务上下文 |
+| `context.screen.visible_text` | 当前屏幕可见文本摘录          |
+| `context.behavior.last_action` | 最近行为信号，例如 `copy`    |
+| `context.behavior.dwell_millis` | 当前场景停留时长             |
 | `voice_meta`                 | 语音会话元信息                 |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
+
+补充约束：
+
+- 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
+- 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
+- `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
+- 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
+- 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 
 ### agent.input.submit 入参示例
 
@@ -606,7 +660,17 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "page": {
         "title": "Q3 复盘草稿",
         "app_name": "browser",
-        "url": "local://current-page"
+        "url": "local://current-page",
+        "window_title": "Chrome - Q3 复盘草稿",
+        "visible_text": "发布说明缺少回滚策略和验收结论。"
+      },
+      "screen": {
+        "summary": "浏览器中打开了一页发布清单，页面中有缺失项提示。",
+        "visible_text": "Warning: release notes are incomplete."
+      },
+      "behavior": {
+        "last_action": "copy",
+        "dwell_millis": 18000
       },
       "selection": {
         "text": "这里是一段当前选中的补充上下文"
@@ -625,6 +689,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
 | `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
 | `data.task.title`        | 任务标题                         |
 | `data.task.source_type`  | 任务来源类型                     |
 | `data.task.status`       | 当前任务状态                     |
@@ -643,6 +708,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_001",
+        "session_id": "sess_001",
         "title": "整理当前页面内容",
         "source_type": "hover_input",
         "status": "processing",
@@ -692,10 +758,30 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
 | `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
 | `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
+| `input.page_context.title` | 当前页面标题，可用于页面级任务标题与上下文冻结 |
+| `input.page_context.url`   | 当前页面 URL |
+| `input.page_context.app_name` | 当前宿主应用名 |
+| `input.page_context.window_title` | 当前窗口标题 |
+| `input.page_context.visible_text` | 当前页面可见文本摘录 |
 | `context.selection.text`   | 当前选区补充文本，按需传入 |
 | `context.files`            | 补充文件上下文，按需传入 |
+| `context.screen.summary`   | 当前屏幕摘要，可用于视觉型任务上下文 |
+| `context.screen.visible_text` | 当前屏幕可见文本摘录 |
+| `context.behavior.last_action` | 最近行为信号，例如 `copy` |
+| `context.behavior.dwell_millis` | 当前场景停留时长 |
 | `delivery.preferred`       | 优先交付方式 |
 | `delivery.fallback`        | 兜底交付方式 |
+
+补充约束：
+
+- 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
+- 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
+- `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
+- 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
+- `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
+- 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
+- 当后端在正式主链路中已经解析出结构化意图或视觉任务信号时，不得仅凭“当前只有一个 waiting task”就把新输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或本次输入本身就是结构化补充证据时，才允许视为旧 task 的 continuation。
+- continuation 分类发给模型的信号必须至少带上当前输入解析后的 `intent_name / delivery_type` 和候选 task 的 `intent_name / delivery_type`；仅靠 `explicit_intent_present=true` 之类布尔位不足以支撑正式路由判断。
 
 ### agent.task.start 入参示例
 
@@ -742,6 +828,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
 | `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
 | `data.task.title`        | 任务标题                         |
 | `data.task.source_type`  | 任务来源类型                     |
 | `data.task.status`       | 当前任务状态                     |
@@ -760,6 +847,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_101",
+        "session_id": "sess_001",
         "title": "解释选中文本",
         "source_type": "selected_text",
         "status": "processing",
@@ -780,6 +868,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   }
 }
 ```
+
+---
+
+补充说明：
+
+- `task.source_type` 当前稳定取值至少包括 `voice`、`hover_input`、`selected_text`、`dragged_file`、`todo`、`error_signal`、`screen_capture`。
+- 其中 `screen_capture` 表示该任务虽然可能由自然语言触发，但其正式执行对象已经切换为“当前屏幕/页面采样证据”，因此后续会进入授权、artifact 证据和交付链。
 
 ---
 
@@ -1360,6 +1455,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 }
 ```
 
+补充说明：
+
+- 当前实现里，部分屏幕/页面/剪贴板信号也会进入 `agent.input.submit`、`agent.task.start` 和 `agent.recommendation.get` 的上下文字段；这属于实现侧复用，不影响本文保留 `agent.screen.analyze` 的原始设计口径。
+
 
 ## 8.2 任务状态 / 任务巡检
 
@@ -1408,6 +1507,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------------- | -------- |
 | `data.items`                | 任务列表 |
 | `data.items[].task_id`      | 任务 ID  |
+| `data.items[].session_id`   | 任务归属的隐藏协作会话 ID |
 | `data.items[].title`        | 任务标题 |
 | `data.items[].status`       | 任务状态 |
 | `data.items[].current_step` | 当前步骤 |
@@ -1425,6 +1525,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "items": [
         {
           "task_id": "task_201",
+          "session_id": "sess_001",
           "title": "整理 Q3 复盘要点",
           "source_type": "hover_input",
           "status": "processing",
@@ -1455,16 +1556,22 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入任务详情页时
-- **系统处理**：返回任务头部、时间线、成果、记忆引用、安全摘要与单个正式安全锚点
+- **系统处理**：返回任务头部、时间线、成果、正式引用、记忆引用、安全摘要与单个正式安全锚点
 - **入参**：任务 ID
 - **出参**：任务详情对象
 
 补充约束：
 
 - `approval_request` 是任务详情里的单个安全锚点，只在当前任务处于 `waiting_auth` 且仍持有活跃正式授权对象时返回；否则返回 `null`。
+- `authorization_record` 返回当前任务最近一条正式授权记录；若任务还没有进入授权决策阶段则返回 `null`。
+- `audit_record` 返回当前任务最近一条正式审计记录；若当前任务还没有正式审计记录则返回 `null`。
 - 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
 - `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
+- 对屏幕感知类任务，任务详情应通过正式 `delivery_result`、`artifact`、事件和治理对象回看模型结论、截图证据、OCR 摘要和授权过程，而不是直接渲染平台采样结果或裸 worker 输出。
+- 当 `task_run.snapshot_json` 与一等运行态存储同时存在时，`delivery_result` 与 `citations` 必须以前者的正式一等存储记录为准，兼容快照只能作为缺省回退，不能覆盖更新后的正式交付或引用链。
+- 若任务存在正式视觉或上下文引用，`citations` 应返回稳定 `citation` 对象列表，并在需要时补齐 `artifact_id / artifact_type / evidence_role / excerpt_text / screen_session_id` 等结构化字段，用于区分截图证据、OCR 摘要和引用片段，而不是把引用信息混进 artifact 扩展字段或裸 tool output。
+- 当 `tasks / task_steps` 已进入结构化读取路径时，`citations` 仍必须可从一等存储重建；不能把 `task_run` 兼容快照当作任务详情正式引用链的唯一来源。
 
 ### agent.task.detail.get 入参说明
 
@@ -1494,11 +1601,17 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                     | 中文说明       |
 | ------------------------ | -------------- |
 | `data.task`              | 任务基础信息   |
+| `data.task.session_id`   | 任务归属的隐藏协作会话 ID |
 | `data.timeline`          | 步骤时间线     |
+| `data.delivery_result`   | 最新正式交付结果；若当前任务尚未形成正式交付则返回 `null` |
 | `data.artifacts`         | 产出物列表     |
+| `data.citations`         | 正式引用列表；可携带截图证据、OCR 摘要和引用片段的结构化元信息 |
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.approval_request`  | 当前任务的正式安全锚点 |
+| `data.authorization_record` | 当前任务最近一条正式授权记录 |
+| `data.audit_record`      | 当前任务最近一条正式审计记录 |
 | `data.security_summary`  | 安全摘要       |
+| `data.runtime_summary`   | 运行态摘要，包含最新 runtime event、停止原因、最近失败错误码 / 分类 / 摘要与 observation signals |
 
 其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
 
@@ -1512,6 +1625,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_201",
+        "session_id": "sess_001",
         "title": "整理 Q3 复盘要点",
         "status": "processing",
         "source_type": "hover_input",
@@ -1539,6 +1653,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "output_summary": "正在生成摘要"
         }
       ],
+      "delivery_result": {
+        "type": "task_detail",
+        "title": "屏幕分析结果",
+        "payload": {
+          "path": "D:/CialloClawWorkspace/screen-artifacts/frame_001.png",
+          "url": null,
+          "task_id": "task_201"
+        },
+        "preview_text": "当前屏幕主要错误为缺少 release asset。"
+      },
       "artifacts": [
         {
           "artifact_id": "art_001",
@@ -1549,6 +1673,21 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "mime_type": "text/markdown"
         }
       ],
+      "citations": [
+        {
+          "citation_id": "cit_001",
+          "task_id": "task_201",
+          "run_id": "run_201",
+          "source_type": "file",
+          "source_ref": "art_001",
+          "label": "error_evidence | screen_capture | release asset missing",
+          "artifact_id": "art_001",
+          "artifact_type": "screen_capture",
+          "evidence_role": "error_evidence",
+          "excerpt_text": "release asset missing",
+          "screen_session_id": "screen_sess_001"
+        }
+      ],
       "mirror_references": [
         {
           "memory_id": "pref_001",
@@ -1557,6 +1696,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         }
       ],
       "approval_request": null,
+      "authorization_record": {
+        "authorization_record_id": "auth_001",
+        "task_id": "task_201",
+        "approval_id": "appr_001",
+        "decision": "allow_once",
+        "remember_rule": false,
+        "operator": "user",
+        "created_at": "2026-04-07T10:39:40+08:00"
+      },
+      "audit_record": {
+        "audit_id": "audit_001",
+        "task_id": "task_201",
+        "type": "execution",
+        "action": "execute_task",
+        "summary": "已根据正式授权完成摘要生成。",
+        "target": "workspace/Q3复盘.md",
+        "result": "success",
+        "created_at": "2026-04-07T10:40:10+08:00"
+      },
       "security_summary": {
         "security_status": "normal",
         "risk_level": "green",
@@ -1568,6 +1726,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "created_at": "2026-04-07T10:39:58+08:00",
           "objects": ["workspace/Q3复盘.md"]
         }
+      },
+      "runtime_summary": {
+        "events_count": 4,
+        "latest_event_type": "loop.round.completed",
+        "active_steering_count": 0,
+        "latest_failure_code": null,
+        "latest_failure_category": null,
+        "latest_failure_summary": null,
+        "loop_stop_reason": null,
+        "observation_signals": ["page_title", "visible_text"]
       }
     },
     "meta": {
@@ -1739,7 +1907,110 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.5 `agent.task.steer`
+### 8.2.5 `agent.task.tool_calls.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：任务详情页、巡检页或排障入口需要查看正式 `tool_call` 记录时
+- **系统处理**：按 `task_id` 返回结构化 `tool_call` 列表，补充查看工具输入、输出摘要、状态与耗时
+- **入参**：任务 ID、可选 run ID、分页参数
+- **出参**：工具调用列表、分页信息
+
+### agent.task.tool_calls.list 入参说明
+
+| 字段      | 中文说明         |
+| --------- | ---------------- |
+| `task_id` | 目标任务 ID      |
+| `run_id`  | 可选的 run 过滤  |
+| `limit`   | 每页条数         |
+| `offset`  | 偏移量           |
+
+### agent.task.tool_calls.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_task_tool_calls_001",
+  "method": "agent.task.tool_calls.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_task_tool_calls_001",
+      "client_time": "2026-04-18T10:45:00+08:00"
+    },
+    "task_id": "task_201",
+    "run_id": "run_201",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.task.tool_calls.list 出参说明
+
+| 字段                         | 中文说明 |
+| ---------------------------- | -------- |
+| `data.items`                 | 工具调用列表 |
+| `data.items[].tool_call_id`  | 工具调用 ID |
+| `data.items[].run_id`        | 关联 run |
+| `data.items[].task_id`       | 关联 task |
+| `data.items[].step_id`       | 关联 step |
+| `data.items[].created_at`    | 创建时间 |
+| `data.items[].tool_name`     | 工具名 |
+| `data.items[].status`        | 调用状态 |
+| `data.items[].input`         | 输入摘要 |
+| `data.items[].output`        | 输出摘要 |
+| `data.items[].error_code`    | 错误码 |
+| `data.items[].duration_ms`   | 耗时 |
+| `data.page`                  | 分页信息 |
+
+### agent.task.tool_calls.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_task_tool_calls_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "tool_call_id": "tool_call_001",
+          "run_id": "run_201",
+          "task_id": "task_201",
+          "step_id": null,
+          "created_at": "2026-04-18T10:45:00+08:00",
+          "tool_name": "read_file",
+          "status": "succeeded",
+          "input": {
+            "path": "notes/source.txt"
+          },
+          "output": {
+            "path": "notes/source.txt",
+            "summary_output": {
+              "path": "notes/source.txt",
+              "excerpt": "hello from file"
+            }
+          },
+          "error_code": null,
+          "duration_ms": 12
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-18T10:45:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.2.6 `agent.task.steer`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在任务运行中补充新的 follow-up 指令时
@@ -1807,7 +2078,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 }
 ```
 
-### 8.2.6 Agent Loop 运行时通知
+### 8.2.7 Agent Loop 运行时通知
 
 当前阶段，以下通知方法已进入正式调试/流式通道，可用于前端或调试观察运行时进展：
 
@@ -1822,12 +2093,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `loop.round.completed`
 - `loop.completed`
 - `loop.failed`
+- `task.session_queued`
+- `task.session_resumed`
+- `mirror.overview.updated`
 
 其中 `loop.*` 事件服务于 Agent Loop / ReAct 运行时观察，不替代正式 `task` 对象本身；当前 query 读侧仍以 `task` 为主对象、以 `agent.task.events.list` 为事件补充视图。
 
 ---
 
-### 8.2.7 `agent.task_inspector.config.get`
+### 8.2.8 `agent.task_inspector.config.get`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入巡检配置页时
@@ -1890,7 +2164,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.8 `agent.task_inspector.config.update`
+### 8.2.9 `agent.task_inspector.config.update`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改巡检配置并保存时
@@ -1972,7 +2246,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.9 `agent.task_inspector.run`
+### 8.2.10 `agent.task_inspector.run`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户手动点击“立即巡检”时
@@ -2044,7 +2318,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.10 `agent.notepad.list`
+### 8.2.11 `agent.notepad.list`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户查看近期要做、后续安排、重复事项、已结束时
@@ -2162,7 +2436,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.11 `agent.notepad.update`
+### 8.2.12 `agent.notepad.update`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在 notes 详情页对事项执行状态变更动作时
@@ -2240,7 +2514,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-### 8.2.12 `agent.notepad.convert_to_task`
+### 8.2.13 `agent.notepad.convert_to_task`
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
@@ -2472,6 +2746,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   }
 }
 ```
+
+补充说明：
+
+- 当前桌面实现中，仪表盘首页的数据获取主要仍由 `agent.dashboard.overview.get`、`agent.dashboard.module.get` 与 `agent.recommendation.get` 组合承接；本文保留 `agent.dashboard.input.start` 原始设计说明，供后续协议冻结时继续对齐。
 
 ---
 
@@ -3355,7 +3633,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改设置并点击保存时
-- **系统处理**：写入设置并返回生效结果；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文
+- **系统处理**：写入设置并返回当前生效快照与生效方式；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文。模型路由与凭证更新会在不打断当前任务的前提下重建 future-task 运行时模型配置。
 - **入参**：要更新的设置项
 - **出参**：已更新字段、生效设置、生效方式、是否需重启
 
@@ -3364,6 +3642,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.settings.update` 的 `models` 采用写入导向结构，使用扁平字段提交提供方、凭证和模型选择。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
+- `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
 
 ### agent.settings.update 入参说明
 
@@ -3432,8 +3711,36 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.effective_settings.models.base_url`              | 生效后的模型服务基地址 |
 | `data.effective_settings.models.model`                 | 生效后的模型名 |
 | `data.apply_mode`                                      | 配置生效方式，取值来自 `apply_mode` |
-| `data.need_restart`                                    | 当前更新是否需要重启客户端 |
-| `meta.server_time`                                     | 服务端响应时间 |
+
+---
+
+### 8.4.3 `agent.settings.model.validate`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：控制面板点击“测试连接”时，以及模型设置保存前的只读预校验阶段
+- **系统处理**：使用当前草稿中的 `models` 路由字段与已保存密钥（或本次请求临时提供的 `models.api_key`）构建一次只读探测，检查文本生成与工具调用是否可用
+- **入参**：可选模型草稿字段；未提供的字段沿用当前运行时有效配置
+- **出参**：结构化校验结果、失败原因、规范化后的 provider 与文本/工具调用就绪状态
+
+补充约束：
+
+- 本接口是只读探测，不会修改正式设置快照、Stronghold 密钥或当前任务状态。
+- `models.api_key` 若在本次请求中提供，仅用于本次校验，不会回显明文。
+- 返回 `ok = true` 时表示当前模型配置已通过文本生成与工具调用校验；返回 `ok = false` 时，控制面板应阻止本次保存并直接展示校验失败原因。
+
+### agent.settings.model.validate 出参关键字段
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `data.ok` | 当前模型配置是否通过校验 |
+| `data.status` | 结构化校验状态，例如缺少 API Key、鉴权失败、接口不存在、工具调用不可用 |
+| `data.message` | 面向用户的校验说明文案 |
+| `data.provider` | 前端提交或当前设置中展示的 provider 文本 |
+| `data.canonical_provider` | 后端规范化后实际走的 provider 路由 |
+| `data.base_url` | 本次校验使用的模型基地址 |
+| `data.model` | 本次校验使用的模型名 |
+| `data.text_generation_ready` | 文本生成探测是否成功 |
+| `data.tool_calling_ready` | 工具调用探测是否成功 |
 
 ### agent.settings.update 出参示例
 
@@ -3467,9 +3774,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "provider_api_key_configured": true,
           "base_url": "https://api.openai.com/v1",
           "model": "gpt-3.5-turbo"
-      	}
+        }
       },
-      "apply_mode": "immediate",
+      "apply_mode": "next_task_effective",
       "need_restart": false
     },
     "meta": {
@@ -3484,13 +3791,487 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
+## 8.5 插件扩展
+
+以下内容在不改变前述插件边界、Go service 统一编排与事件流约束的前提下，对插件扩展模块的 stable 查询接口进行详细展开。当前阶段只冻结列表、详情与运行态查询，不允许前端绕过协议直接触发插件执行。
+
+### 8.5.1 `agent.plugin.runtime.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户打开插件扩展首页的运行态概览区时
+  - 用户进入插件详情页，需要刷新健康状态、指标和最近事件时
+  - 仪表盘或调试视图需要统一查看插件运行态时
+- **系统处理**：
+  - 查询当前已声明插件运行态
+  - 返回运行态列表、指标快照和最近事件
+  - 该接口只用于展示运行态，不承接插件执行
+- **入参**：请求链路头
+- **出参**：运行态列表、指标快照、最近事件
+
+补充约束：
+
+- `agent.plugin.runtime.list` 是插件扩展模块的运行态读侧接口，前端不得把它误解为“可直接调插件”的入口。
+- `data.items`、`data.metrics`、`data.events` 分别代表当前运行态快照、指标快照和最近事件列表；三者允许为空数组，但返回结构必须稳定。
+- 插件运行态事件仍通过统一 Notification 通道补充刷新；读侧查询以本接口为准。
+
+### agent.plugin.runtime.list 入参说明
+
+| 字段                        | 中文说明 |
+| --------------------------- | -------- |
+| `request_meta.trace_id`     | 请求链路追踪 ID |
+| `request_meta.client_time`  | 前端发起时间 |
+
+### agent.plugin.runtime.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_runtime_001",
+  "method": "agent.plugin.runtime.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_plugin_runtime_001",
+      "client_time": "2026-04-20T10:08:00Z"
+    }
+  }
+}
+```
+
+### agent.plugin.runtime.list 出参说明
+
+| 字段                            | 中文说明 |
+| ------------------------------- | -------- |
+| `data.items`                    | 插件运行态列表，对应 `plugin_runtime_state` 视图对象 |
+| `data.metrics`                  | 插件指标快照列表，对应 `plugin_metric_snapshot` 视图对象 |
+| `data.events`                   | 最近插件运行事件列表，对应 `plugin_runtime_event` 视图对象 |
+| `meta.server_time`              | 服务端响应时间 |
+
+### agent.plugin.runtime.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_runtime_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "name": "ocr_worker",
+          "kind": "worker",
+          "status": "running",
+          "transport": "named_pipe",
+          "health": "healthy",
+          "last_seen_at": "2026-04-20T10:08:01Z",
+          "last_error": null,
+          "capabilities": ["extract_text", "ocr_image", "ocr_pdf"]
+        }
+      ],
+      "metrics": [
+        {
+          "name": "ocr_worker",
+          "kind": "worker",
+          "start_count": 3,
+          "success_count": 12,
+          "failure_count": 1,
+          "last_started_at": "2026-04-20T09:58:10Z",
+          "last_failed_at": "2026-04-20T09:20:00Z",
+          "last_seen_at": "2026-04-20T10:08:01Z"
+        }
+      ],
+      "events": [
+        {
+          "name": "ocr_worker",
+          "kind": "worker",
+          "event_type": "plugin.runtime.healthy",
+          "payload": {
+            "health": "healthy"
+          },
+          "created_at": "2026-04-20T10:08:01Z"
+        }
+      ]
+    },
+    "meta": {
+      "server_time": "2026-04-20T10:08:01Z"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.5.2 `agent.plugin.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户打开插件扩展首页或插件列表页时
+  - 前端需要按关键字、插件类型或健康状态筛选插件卡片时
+- **系统处理**：
+  - 聚合插件基础信息、来源、权限、能力概览与当前运行态摘要
+  - 返回插件视图模型列表，而不是裸 `worker / sidecar` 运行实例列表
+- **入参**：分页参数、查询条件、插件类型过滤、健康状态过滤
+- **出参**：插件列表、分页信息
+
+补充约束：
+
+- `agent.plugin.list` 的目标对象是 `plugin`，不是运行中实例行；前端插件首页应以本接口返回的 `plugin_id` 作为主列表锚点。
+- 当前阶段插件来源可优先返回 `builtin`，`enabled` 也可先按真实后端能力返回稳定布尔值；前端不得因为当前多为内置插件而绕过正式字段。
+- 本接口只承接插件列表与筛选查询，不替代 `agent.plugin.runtime.list` 的运行态明细，也不承接插件启停。
+
+### agent.plugin.list 入参说明
+
+| 字段                        | 中文说明 |
+| --------------------------- | -------- |
+| `request_meta.trace_id`     | 请求链路追踪 ID |
+| `request_meta.client_time`  | 前端发起时间 |
+| `page.limit`                | 每页条数 |
+| `page.offset`               | 偏移量 |
+| `query`                     | 按插件名、展示名或摘要做模糊查询 |
+| `kinds`                     | 插件类型过滤，取值来自 `plugin_kind` |
+| `health`                    | 健康状态过滤，取值来自 `plugin_health_status` |
+
+### agent.plugin.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_list_001",
+  "method": "agent.plugin.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_plugin_list_001",
+      "client_time": "2026-04-20T10:00:00Z"
+    },
+    "page": {
+      "limit": 20,
+      "offset": 0
+    },
+    "query": "ocr",
+    "kinds": ["worker"],
+    "health": ["healthy", "unknown"]
+  }
+}
+```
+
+### agent.plugin.list 出参说明
+
+| 字段                                  | 中文说明 |
+| ------------------------------------- | -------- |
+| `data.items`                          | 插件列表，对应 `plugin` 视图对象列表 |
+| `data.items[].plugin_id`              | 插件稳定主键 |
+| `data.items[].display_name`           | 前端展示名称 |
+| `data.items[].summary`                | 插件摘要 |
+| `data.items[].version`                | 当前插件版本 |
+| `data.items[].source`                 | 插件来源，取值来自 `plugin_source_type` |
+| `data.items[].entry`                  | 插件入口描述 |
+| `data.items[].enabled`                | 是否启用 |
+| `data.items[].permissions`            | 权限声明列表 |
+| `data.items[].capabilities`           | 插件能力概览列表 |
+| `data.items[].runtimes`               | 关联运行态快照列表 |
+| `data.page`                           | 分页信息 |
+| `meta.server_time`                    | 服务端响应时间 |
+
+### agent.plugin.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_list_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "plugin_id": "ocr",
+          "name": "ocr",
+          "display_name": "OCR Worker",
+          "summary": "Extract text from files, images and PDFs.",
+          "version": "builtin-1",
+          "source": "builtin",
+          "entry": "worker://ocr_worker",
+          "enabled": true,
+          "permissions": ["workspace:read"],
+          "capabilities": [
+            {
+              "tool_name": "extract_text",
+              "display_name": "文本提取",
+              "description": "通过 OCR worker 从文本文件、PDF 或图片中提取正文内容",
+              "source": "worker",
+              "risk_hint": "green"
+            },
+            {
+              "tool_name": "ocr_image",
+              "display_name": "图片 OCR",
+              "description": "通过 OCR worker 对图片执行文字识别",
+              "source": "worker",
+              "risk_hint": "green"
+            },
+            {
+              "tool_name": "ocr_pdf",
+              "display_name": "PDF OCR",
+              "description": "通过 OCR worker 对 PDF 执行文本提取或 OCR 识别",
+              "source": "worker",
+              "risk_hint": "green"
+            }
+          ],
+          "runtimes": [
+            {
+              "name": "ocr_worker",
+              "kind": "worker",
+              "status": "running",
+              "transport": "named_pipe",
+              "health": "healthy",
+              "last_seen_at": "2026-04-20T10:00:02Z",
+              "last_error": null,
+              "capabilities": ["extract_text", "ocr_image", "ocr_pdf"]
+            }
+          ]
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-20T10:00:02Z"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.5.3 `agent.plugin.detail.get`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：
+  - 用户进入插件详情页时
+  - 前端需要展示某个插件下全部工具的入参合同、出参合同与交付映射时
+  - 详情页需要按需带出运行态、指标和最近事件时
+- **系统处理**：
+  - 查询插件基础信息
+  - 按需聚合运行态、指标和最近事件
+  - 一次性返回插件下全部工具的 `input_contract / output_contract`
+- **入参**：插件 ID、是否包含运行态、是否包含指标、是否包含最近事件
+- **出参**：插件详情、运行态、指标、最近事件、工具合同列表
+
+补充约束：
+
+- `agent.plugin.detail.get` 是插件详情页的核心接口；当前阶段不单独拆 `agent.plugin.input.get`、`agent.plugin.output.get`。
+- `input_contract` 与 `output_contract` 由后端聚合整理后返回；前端不得解析后端源码或假设存在独立 schema 文件仓库。
+- `schema_ref` 作为后续正式 schema 文件化的兼容锚点保留；当前允许 `schema_json = null`。
+- 当后端仅冻结了 `ToolMetadata` 而尚未补齐字段级 schema 展开时，`input_contract.fields` 与 `output_contract.fields` 允许返回空数组，前端应优先消费 `schema_ref`、展示名、来源与风险信息。
+- `include_runtime`、`include_metrics`、`include_events` 省略时按 `true` 处理；若显式传 `false`，对应返回字段应保持空数组而不是缺字段。
+- 本接口只返回展示和合同信息，不允许前端借由详情页直接触发插件执行。
+
+### agent.plugin.detail.get 入参说明
+
+| 字段                        | 中文说明 |
+| --------------------------- | -------- |
+| `request_meta.trace_id`     | 请求链路追踪 ID |
+| `request_meta.client_time`  | 前端发起时间 |
+| `plugin_id`                 | 目标插件稳定主键 |
+| `include_runtime`           | 是否返回运行态列表；缺省按 `true` 处理 |
+| `include_metrics`           | 是否返回指标快照；缺省按 `true` 处理 |
+| `include_events`            | 是否返回最近事件；缺省按 `true` 处理 |
+
+### agent.plugin.detail.get 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_detail_001",
+  "method": "agent.plugin.detail.get",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_plugin_detail_001",
+      "client_time": "2026-04-20T10:05:00Z"
+    },
+    "plugin_id": "ocr",
+    "include_runtime": true,
+    "include_metrics": true,
+    "include_events": true
+  }
+}
+```
+
+### agent.plugin.detail.get 出参说明
+
+| 字段                                                     | 中文说明 |
+| -------------------------------------------------------- | -------- |
+| `data.plugin`                                            | 插件基础信息，对应 `plugin` 视图对象 |
+| `data.runtimes`                                          | 关联运行态列表 |
+| `data.metrics`                                           | 关联指标快照列表 |
+| `data.recent_events`                                     | 最近插件事件列表 |
+| `data.tools`                                             | 插件工具合同列表，对应 `plugin_tool_contract` 视图对象 |
+| `data.tools[].tool_name`                                 | 工具内部名 |
+| `data.tools[].display_name`                              | 工具展示名 |
+| `data.tools[].description`                               | 工具说明 |
+| `data.tools[].source`                                    | 工具来源，取值来自 `plugin_tool_source_type` |
+| `data.tools[].risk_hint`                                 | 风险提示，语义对齐 `risk_level` |
+| `data.tools[].timeout_sec`                               | 工具超时秒数 |
+| `data.tools[].supports_dry_run`                          | 是否支持 dry run |
+| `data.tools[].input_contract.schema_ref`                 | 输入合同 schema 引用 |
+| `data.tools[].input_contract.schema_json`                | 输入合同 schema JSON；当前可为 `null` |
+| `data.tools[].input_contract.fields`                     | 输入合同字段列表；若仅注册了 `schema_ref` 而未展开字段，可返回空数组 |
+| `data.tools[].output_contract.schema_ref`                | 输出合同 schema 引用 |
+| `data.tools[].output_contract.schema_json`               | 输出合同 schema JSON；当前可为 `null` |
+| `data.tools[].output_contract.fields`                    | 输出合同字段列表；若仅注册了 `schema_ref` 而未展开字段，可返回空数组 |
+| `data.tools[].delivery_mapping`                          | 该工具结果如何映射到 `tool_call / artifact / delivery_result` |
+| `meta.server_time`                                       | 服务端响应时间 |
+
+### agent.plugin.detail.get 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_detail_001",
+  "result": {
+    "data": {
+      "plugin": {
+        "plugin_id": "ocr",
+        "name": "ocr",
+        "display_name": "OCR Worker",
+        "summary": "Extract text from files, images and PDFs.",
+        "version": "builtin-1",
+        "source": "builtin",
+        "entry": "worker://ocr_worker",
+        "enabled": true,
+        "permissions": ["workspace:read"]
+      },
+      "runtimes": [
+        {
+          "name": "ocr_worker",
+          "kind": "worker",
+          "status": "running",
+          "transport": "named_pipe",
+          "health": "healthy",
+          "last_seen_at": "2026-04-20T10:05:01Z",
+          "last_error": null,
+          "capabilities": ["extract_text", "ocr_image", "ocr_pdf"]
+        }
+      ],
+      "metrics": [
+        {
+          "name": "ocr_worker",
+          "kind": "worker",
+          "start_count": 3,
+          "success_count": 12,
+          "failure_count": 1,
+          "last_started_at": "2026-04-20T09:58:10Z",
+          "last_failed_at": "2026-04-20T09:20:00Z",
+          "last_seen_at": "2026-04-20T10:05:01Z"
+        }
+      ],
+      "recent_events": [
+        {
+          "name": "ocr_worker",
+          "kind": "worker",
+          "event_type": "plugin.runtime.healthy",
+          "payload": {
+            "health": "healthy"
+          },
+          "created_at": "2026-04-20T10:05:01Z"
+        }
+      ],
+      "tools": [
+        {
+          "tool_name": "ocr_image",
+          "display_name": "图片 OCR",
+          "description": "通过 OCR worker 对图片执行文字识别",
+          "source": "worker",
+          "risk_hint": "green",
+          "timeout_sec": 30,
+          "supports_dry_run": false,
+          "input_contract": {
+            "schema_ref": "tools/ocr_image/input",
+            "schema_json": null,
+            "fields": [
+              {
+                "name": "path",
+                "type": "string",
+                "required": true,
+                "description": "待识别图片路径",
+                "example": "D:/workspace/invoice.png"
+              },
+              {
+                "name": "language",
+                "type": "string",
+                "required": false,
+                "description": "OCR 语言提示",
+                "example": "zh-CN"
+              }
+            ]
+          },
+          "output_contract": {
+            "schema_ref": "tools/ocr_image/output",
+            "schema_json": null,
+            "fields": [
+              {
+                "name": "path",
+                "type": "string",
+                "required": true,
+                "description": "原始输入路径"
+              },
+              {
+                "name": "text",
+                "type": "string",
+                "required": true,
+                "description": "识别后的正文文本"
+              },
+              {
+                "name": "language",
+                "type": "string",
+                "required": false,
+                "description": "识别语言"
+              },
+              {
+                "name": "page_count",
+                "type": "integer",
+                "required": true,
+                "description": "页数"
+              },
+              {
+                "name": "source",
+                "type": "string",
+                "required": true,
+                "description": "来源运行时，默认 ocr_worker"
+              }
+            ]
+          },
+          "delivery_mapping": {
+            "emits_tool_call": true,
+            "artifact_types": [],
+            "delivery_types": ["task_detail"],
+            "citation_source_types": []
+          }
+        }
+      ]
+    },
+    "meta": {
+      "server_time": "2026-04-20T10:05:01Z"
+    },
+    "warnings": []
+  }
+}
+```
+
 ## 9. Notification / Subscription 说明
 
 ### 9.1 事件语义
 
-- `task.updated`：任务主状态或关键摘要变化
+- `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
+- `task.steered`：运行中补充要求已经写入任务链
+- `task.session_queued`：同一 `session` 下的新任务进入串行等待
+- `task.session_resumed`：队列中的任务重新恢复执行
+- `mirror.overview.updated`：镜子概览摘要刷新，前端可按 `revision` 触发回拉
+- `loop.*`：Agent Loop / ReAct 运行时通知集合，用于调试与任务详情观察
 - `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）
 - `plugin.metric.updated`：插件指标变化
 - `plugin.task.updated`：插件关联任务变化
@@ -3502,7 +4283,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 9.2 前端使用约束
 
 - 订阅只用于状态同步，不绕过正式请求。
-- Notification 到达后，前端应以 `task_id` 为主键刷新状态，而不是临时拼装新对象。
+- Notification 到达后，前端应按正式主键刷新对应对象：`task.*` 以 `task_id` 为主键，`plugin.*` 以 `plugin_id` 或运行态主键 `name + kind` 为锚点，而不是临时拼装新对象。
 - 若通知缺少关键主键，视为非法事件。
 
 ---

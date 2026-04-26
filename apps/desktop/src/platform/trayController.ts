@@ -1,6 +1,6 @@
-import { openOrFocusDesktopWindow } from "@/platform/windowController";
+import { invoke } from "@tauri-apps/api/core";
 
 // 该文件封装托盘入口控制能力。
 export function openControlPanelFromTray() {
-  return openOrFocusDesktopWindow("control-panel");
+  return invoke<void>("desktop_open_or_focus_control_panel");
 }

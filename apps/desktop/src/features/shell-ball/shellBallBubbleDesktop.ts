@@ -1,4 +1,4 @@
-import type { BubbleMessage } from "@cialloclaw/protocol";
+import type { ApprovalDecision, BubbleMessage } from "@cialloclaw/protocol";
 
 export type ShellBallBubbleRole = "user" | "agent";
 
@@ -10,6 +10,17 @@ export type ShellBallBubbleDesktopLifecycleState = "visible" | "fading" | "hidde
 
 export type ShellBallBubbleDesktopPresentationHint = "loading";
 
+/**
+ * Inline approval metadata is shell-ball-local UI state. It mirrors one active
+ * approval request so the bubble can submit the formal decision RPC without
+ * promoting extra approval objects into the protocol boundary.
+ */
+export type ShellBallBubbleInlineApprovalState = {
+  approvalId: string;
+  status: "idle" | "submitting";
+  pendingDecision?: ApprovalDecision;
+};
+
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
@@ -17,6 +28,7 @@ export type ShellBallBubbleDesktopState = {
   presentationHint?: ShellBallBubbleDesktopPresentationHint;
   turnIndex?: number;
   turnPhase?: number;
+  inlineApproval?: ShellBallBubbleInlineApprovalState;
 };
 
 export type ShellBallBubbleItem = {
@@ -25,8 +37,17 @@ export type ShellBallBubbleItem = {
   desktop: ShellBallBubbleDesktopState;
 };
 
-export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
+function cloneShellBallBubbleInlineApprovalState(
+  state: ShellBallBubbleInlineApprovalState,
+): ShellBallBubbleInlineApprovalState {
   return { ...state };
+}
+
+export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
+  return {
+    ...state,
+    ...(state.inlineApproval ? { inlineApproval: cloneShellBallBubbleInlineApprovalState(state.inlineApproval) } : {}),
+  };
 }
 
 export function cloneShellBallBubbleItem(item: ShellBallBubbleItem): ShellBallBubbleItem {

@@ -14,6 +14,7 @@ type RunRecord struct {
 	RunID      string
 	TaskID     string
 	SessionID  string
+	SourceType string
 	Status     string
 	IntentName string
 	StartedAt  string
@@ -68,12 +69,29 @@ type DeliveryResultRecord struct {
 	CreatedAt        string
 }
 
+// CitationRecord persists one formal citation snapshot outside task_runs.
+type CitationRecord struct {
+	CitationID      string
+	TaskID          string
+	RunID           string
+	SourceType      string
+	SourceRef       string
+	Label           string
+	ArtifactID      string
+	ArtifactType    string
+	EvidenceRole    string
+	ExcerptText     string
+	ScreenSessionID string
+	OrderIndex      int
+}
+
 type inMemoryLoopRuntimeStore struct {
 	mu              sync.Mutex
 	runs            map[string]RunRecord
 	steps           map[string]StepRecord
 	events          []EventRecord
 	deliveryResults map[string]DeliveryResultRecord
+	citations       map[string][]CitationRecord
 }
 
 func newInMemoryLoopRuntimeStore() *inMemoryLoopRuntimeStore {
@@ -82,6 +100,7 @@ func newInMemoryLoopRuntimeStore() *inMemoryLoopRuntimeStore {
 		steps:           map[string]StepRecord{},
 		events:          []EventRecord{},
 		deliveryResults: map[string]DeliveryResultRecord{},
+		citations:       map[string][]CitationRecord{},
 	}
 }
 
@@ -113,6 +132,81 @@ func (s *inMemoryLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record 
 	defer s.mu.Unlock()
 	s.deliveryResults[record.DeliveryResultID] = record
 	return nil
+}
+
+func (s *inMemoryLoopRuntimeStore) GetRun(_ context.Context, runID string) (RunRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.runs[runID]
+	if !ok {
+		return RunRecord{}, sql.ErrNoRows
+	}
+	return record, nil
+}
+
+func (s *inMemoryLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]DeliveryResultRecord, 0, len(s.deliveryResults))
+	for _, record := range s.deliveryResults {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		items = append(items, record)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CreatedAt > items[j].CreatedAt
+	})
+	total := len(items)
+	if offset >= total {
+		return []DeliveryResultRecord{}, total, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return append([]DeliveryResultRecord(nil), items[offset:end]...), total, nil
+}
+
+func (s *inMemoryLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, taskID string, records []CitationRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cloned := make([]CitationRecord, 0, len(records))
+	for _, record := range records {
+		cloned = append(cloned, record)
+	}
+	s.citations[taskID] = cloned
+	return nil
+}
+
+func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (DeliveryResultRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	latest := DeliveryResultRecord{}
+	found := false
+	for _, record := range s.deliveryResults {
+		if record.TaskID != taskID {
+			continue
+		}
+		if !found || parseGovernanceTime(record.CreatedAt).After(parseGovernanceTime(latest.CreatedAt)) {
+			latest = record
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
+func (s *inMemoryLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID string) ([]CitationRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := append([]CitationRecord(nil), s.citations[taskID]...)
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].OrderIndex == records[j].OrderIndex {
+			return records[i].CitationID < records[j].CitationID
+		}
+		return records[i].OrderIndex < records[j].OrderIndex
+	})
+	return records, nil
 }
 
 func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
@@ -172,9 +266,9 @@ func NewSQLiteLoopRuntimeStore(databasePath string) (*SQLiteLoopRuntimeStore, er
 
 func (s *SQLiteLoopRuntimeStore) SaveRun(ctx context.Context, record RunRecord) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO runs (run_id, task_id, session_id, status, intent_name, started_at, updated_at, finished_at, stop_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.RunID, record.TaskID, record.SessionID, record.Status, record.IntentName, record.StartedAt, record.UpdatedAt, nullableRuntimeString(record.FinishedAt), nullableRuntimeString(record.StopReason))
+		INSERT OR REPLACE INTO runs (run_id, task_id, session_id, source_type, status, intent_name, started_at, updated_at, finished_at, stop_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.RunID, record.TaskID, record.SessionID, strings.TrimSpace(record.SourceType), record.Status, record.IntentName, record.StartedAt, record.UpdatedAt, nullableRuntimeString(record.FinishedAt), nullableRuntimeString(record.StopReason))
 	if err != nil {
 		return fmt.Errorf("write run record: %w", err)
 	}
@@ -216,6 +310,139 @@ func (s *SQLiteLoopRuntimeStore) SaveDeliveryResult(ctx context.Context, record 
 		return fmt.Errorf("write delivery_result record: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteLoopRuntimeStore) GetRun(ctx context.Context, runID string) (RunRecord, error) {
+	var record RunRecord
+	err := s.db.QueryRowContext(ctx, `SELECT run_id, task_id, session_id, COALESCE(source_type, ''), status, intent_name, started_at, updated_at, COALESCE(finished_at, ''), COALESCE(stop_reason, '') FROM runs WHERE run_id = ?`, runID).Scan(&record.RunID, &record.TaskID, &record.SessionID, &record.SourceType, &record.Status, &record.IntentName, &record.StartedAt, &record.UpdatedAt, &record.FinishedAt, &record.StopReason)
+	if err != nil {
+		return RunRecord{}, err
+	}
+	return record, nil
+}
+
+func (s *SQLiteLoopRuntimeStore) ListDeliveryResults(ctx context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
+	countQuery := `SELECT COUNT(1) FROM delivery_results WHERE task_id = ?`
+	query := `SELECT delivery_result_id, task_id, type, title, payload_json, COALESCE(preview_text, ''), created_at FROM delivery_results WHERE task_id = ? ORDER BY created_at DESC, delivery_result_id DESC`
+	args := []any{taskID}
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, taskID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count delivery results: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list delivery results: %w", err)
+	}
+	defer rows.Close()
+	items := make([]DeliveryResultRecord, 0)
+	for rows.Next() {
+		var record DeliveryResultRecord
+		if err := rows.Scan(&record.DeliveryResultID, &record.TaskID, &record.Type, &record.Title, &record.PayloadJSON, &record.PreviewText, &record.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan delivery result: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate delivery results: %w", err)
+	}
+	return items, total, nil
+}
+
+func (s *SQLiteLoopRuntimeStore) ReplaceTaskCitations(ctx context.Context, taskID string, records []CitationRecord) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin task citation replace: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM task_citations WHERE task_id = ?`, taskID); err != nil {
+		return fmt.Errorf("delete task citations: %w", err)
+	}
+	for _, record := range records {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO task_citations (
+				citation_id, task_id, run_id, source_type, source_ref, label,
+				artifact_id, artifact_type, evidence_role, excerpt_text, screen_session_id, order_index
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, record.CitationID, record.TaskID, nullableRuntimeString(record.RunID), record.SourceType, record.SourceRef, record.Label,
+			nullableRuntimeString(record.ArtifactID), nullableRuntimeString(record.ArtifactType), nullableRuntimeString(record.EvidenceRole),
+			nullableRuntimeString(record.ExcerptText), nullableRuntimeString(record.ScreenSessionID), record.OrderIndex); err != nil {
+			return fmt.Errorf("insert task citation %s: %w", record.CitationID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task citation replace: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT delivery_result_id, task_id, type, title, payload_json, preview_text, created_at
+		FROM delivery_results
+		WHERE task_id = ?
+		ORDER BY created_at DESC, delivery_result_id DESC
+		LIMIT 1
+	`, taskID)
+	var record DeliveryResultRecord
+	var previewText sql.NullString
+	if err := row.Scan(&record.DeliveryResultID, &record.TaskID, &record.Type, &record.Title, &record.PayloadJSON, &previewText, &record.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return DeliveryResultRecord{}, false, nil
+		}
+		return DeliveryResultRecord{}, false, fmt.Errorf("get latest delivery_result: %w", err)
+	}
+	record.PreviewText = previewText.String
+	return record, true, nil
+}
+
+func (s *SQLiteLoopRuntimeStore) ListTaskCitations(ctx context.Context, taskID string) ([]CitationRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT citation_id, task_id, run_id, source_type, source_ref, label,
+		       artifact_id, artifact_type, evidence_role, excerpt_text, screen_session_id, order_index
+		FROM task_citations
+		WHERE task_id = ?
+		ORDER BY order_index ASC, citation_id ASC
+	`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list task citations: %w", err)
+	}
+	defer rows.Close()
+	items := make([]CitationRecord, 0)
+	for rows.Next() {
+		var record CitationRecord
+		var runID, artifactID, artifactType, evidenceRole, excerptText, screenSessionID sql.NullString
+		if err := rows.Scan(
+			&record.CitationID,
+			&record.TaskID,
+			&runID,
+			&record.SourceType,
+			&record.SourceRef,
+			&record.Label,
+			&artifactID,
+			&artifactType,
+			&evidenceRole,
+			&excerptText,
+			&screenSessionID,
+			&record.OrderIndex,
+		); err != nil {
+			return nil, fmt.Errorf("scan task citation: %w", err)
+		}
+		record.RunID = runID.String
+		record.ArtifactID = artifactID.String
+		record.ArtifactType = artifactType.String
+		record.EvidenceRole = evidenceRole.String
+		record.ExcerptText = excerptText.String
+		record.ScreenSessionID = screenSessionID.String
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task citations: %w", err)
+	}
+	return items, nil
 }
 
 func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
@@ -287,7 +514,8 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 		return fmt.Errorf("set sqlite busy timeout: %w", err)
 	}
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, intent_name TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, stop_reason TEXT);`,
+		`CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, source_type TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, intent_name TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, stop_reason TEXT);`,
+		`ALTER TABLE runs ADD COLUMN source_type TEXT NOT NULL DEFAULT '';`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_task_time ON runs(task_id, started_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS steps (step_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, order_index INTEGER NOT NULL, attempt_index INTEGER NOT NULL DEFAULT 1, segment_kind TEXT NOT NULL DEFAULT 'initial', loop_round INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, status TEXT NOT NULL, input_summary TEXT, output_summary TEXT, stop_reason TEXT, started_at TEXT NOT NULL, completed_at TEXT, planner_input TEXT, planner_output TEXT, observation TEXT, tool_name TEXT, tool_call_id TEXT);`,
 		`ALTER TABLE steps ADD COLUMN attempt_index INTEGER NOT NULL DEFAULT 1;`,
@@ -297,6 +525,8 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_events_task_time ON events(task_id, created_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS delivery_results (delivery_result_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, preview_text TEXT, created_at TEXT NOT NULL);`,
 		`CREATE INDEX IF NOT EXISTS idx_delivery_results_task_time ON delivery_results(task_id, created_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS task_citations (citation_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT, source_type TEXT NOT NULL, source_ref TEXT NOT NULL, label TEXT NOT NULL, artifact_id TEXT, artifact_type TEXT, evidence_role TEXT, excerpt_text TEXT, screen_session_id TEXT, order_index INTEGER NOT NULL DEFAULT 0);`,
+		`CREATE INDEX IF NOT EXISTS idx_task_citations_task_order ON task_citations(task_id, order_index ASC, citation_id ASC);`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {

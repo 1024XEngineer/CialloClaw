@@ -3,15 +3,19 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
@@ -41,6 +45,7 @@ var (
 	ErrStorageQueryFailed     = errors.New("storage query failed")
 	ErrStrongholdAccessFailed = errors.New("stronghold access failed")
 	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
+	persistedToolCallEventSeq atomic.Uint64
 )
 
 const (
@@ -67,6 +72,7 @@ type Service struct {
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
+	modelMu        sync.RWMutex
 	runtimeMu      sync.RWMutex
 	runtimeNextID  uint64
 	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
@@ -84,6 +90,12 @@ type budgetDowngradeDecision struct {
 	DegradeActions []string
 	Summary        string
 	Trace          map[string]any
+}
+
+type modelSecretRollback struct {
+	provider string
+	record   storage.SecretRecord
+	existed  bool
 }
 
 // NewService wires the main orchestration dependencies.
@@ -270,7 +282,7 @@ func (s *Service) Snapshot() map[string]any {
 		"delivery_type":           s.delivery.DefaultResultType(),
 		"memory_backend":          s.memory.RetrievalBackend(),
 		"risk_level":              s.risk.DefaultLevel(),
-		"model":                   s.model.Descriptor(),
+		"model":                   s.currentModelDescriptor(),
 		"tool_count":              len(s.tools.Names()),
 		"primary_worker":          primaryWorker,
 		"pending_approvals":       pendingTotal,
@@ -289,9 +301,22 @@ func (s *Service) RunEngine() *runengine.Engine {
 // waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
+		return nil, err
+	} else if handled {
+		return response, nil
+	} else if strings.TrimSpace(resolvedSessionID) != "" {
+		params = withResolvedSessionID(params, resolvedSessionID)
+	}
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
+	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
+		return nil, err
+	} else if handled {
+		return handledResponse, nil
+	}
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
 	if !suggestion.RequiresConfirm {
 		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)
@@ -299,6 +324,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	if s.intent.AnalyzeSnapshot(snapshot) == "waiting_input" {
 		task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 			SessionID:         stringValue(params, "session_id", ""),
+			RequestSource:     stringValue(params, "source", ""),
+			RequestTrigger:    stringValue(params, "trigger", ""),
 			Title:             "等待补充输入",
 			SourceType:        suggestion.TaskSourceType,
 			Status:            "waiting_input",
@@ -325,6 +352,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             suggestion.TaskTitle,
 		SourceType:        suggestion.TaskSourceType,
 		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -385,12 +414,25 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+		return nil, err
+	} else if handled {
+		return response, nil
+	} else if strings.TrimSpace(resolvedSessionID) != "" {
+		params = withResolvedSessionID(params, resolvedSessionID)
+	}
 	if handledResponse, handled, err := s.handleScreenAnalyzeStart(params, snapshot, explicitIntent); err != nil {
 		return nil, err
 	} else if handled {
 		return handledResponse, nil
 	}
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
+	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
+		return nil, err
+	} else if handled {
+		return handledResponse, nil
+	}
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
 	if len(explicitIntent) == 0 && !suggestion.RequiresConfirm {
 		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)
@@ -398,6 +440,8 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             suggestion.TaskTitle,
 		SourceType:        suggestion.TaskSourceType,
 		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -452,7 +496,11 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 	response["task"] = taskMap(task)
 	response["bubble_message"] = bubble
-	response["delivery_result"] = deliveryResult
+	if len(deliveryResult) > 0 {
+		response["delivery_result"] = deliveryResult
+	} else {
+		response["delivery_result"] = nil
+	}
 	return response, nil
 }
 
@@ -460,12 +508,15 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || s.executor.ScreenCapabilitySnapshot().Available == false {
 		return nil, false, nil
 	}
+	resolvedIntent := s.resolveScreenAnalyzeIntent(snapshot, explicitIntent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
-		Title:             firstNonEmptyString(stringValue(explicitIntent, "title", ""), "分析屏幕截图"),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
+		Title:             firstNonEmptyString(stringValue(resolvedIntent, "title", ""), inferredScreenTaskTitle(snapshot)),
 		SourceType:        "screen_capture",
 		Status:            "waiting_auth",
-		Intent:            cloneMap(explicitIntent),
+		Intent:            cloneMap(resolvedIntent),
 		PreferredDelivery: "bubble",
 		FallbackDelivery:  "bubble",
 		CurrentStep:       "waiting_authorization",
@@ -500,21 +551,57 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 	}, true, nil
 }
 
+func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) (map[string]any, bool, error) {
+	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" || suggestion.RequiresConfirm {
+		return nil, false, nil
+	}
+	return s.handleScreenAnalyzeStart(params, snapshot, suggestion.Intent)
+}
+
+func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) intent.Suggestion {
+	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" {
+		return suggestion
+	}
+	if s.executor != nil && s.executor.ScreenCapabilitySnapshot().Available {
+		return suggestion
+	}
+	fallback := suggestion
+	fallback.Intent = map[string]any{
+		"name":      "agent_loop",
+		"arguments": map[string]any{},
+	}
+	fallback.IntentConfirmed = true
+	// Preserve the caller's confirmation gate when screen-specific handling is
+	// unavailable so the downgrade does not auto-execute a generic task.
+	fallback.RequiresConfirm = confirmRequired
+	fallback.TaskSourceType = "hover_input"
+	fallback.TaskTitle = "处理：" + inferredScreenFallbackSubject(snapshot)
+	fallback.DirectDeliveryType = "bubble"
+	fallback.ResultTitle = "处理结果"
+	fallback.ResultPreview = "结果已通过气泡返回"
+	fallback.ResultBubbleText = "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。"
+	return fallback
+}
+
+func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+}
+
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
 // from the task intent so queued resumes can re-enter the same authorization
 // path instead of falling through to the generic executor.
 func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (map[string]any, map[string]any, map[string]any, error) {
 	arguments := mapValue(task.Intent, "arguments")
 	sourcePath := stringValue(arguments, "path", "")
-	if strings.TrimSpace(sourcePath) == "" {
-		return nil, nil, nil, fmt.Errorf("screen_analyze requires intent.arguments.path")
-	}
+	captureMode := screenCaptureModeForIntent(arguments)
+	source := firstNonEmptyString(stringValue(arguments, "source", ""), "screen_capture")
+	targetObject := screenTargetObject(arguments)
 	approvalRequest := map[string]any{
 		"approval_id":    fmt.Sprintf("appr_%s", task.TaskID),
 		"task_id":        task.TaskID,
 		"operation_name": "screen_capture",
 		"risk_level":     "yellow",
-		"target_object":  sourcePath,
+		"target_object":  targetObject,
 		"reason":         "screen_capture_requires_authorization",
 		"status":         "pending",
 		"created_at":     time.Now().Format(dateTimeLayout),
@@ -523,13 +610,16 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 		"kind":           "screen_analysis",
 		"operation_name": "screen_capture",
 		"source_path":    sourcePath,
+		"capture_mode":   string(captureMode),
+		"source":         source,
+		"target_object":  targetObject,
 		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
 		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
 		"delivery_type":  "bubble",
 		"result_title":   "屏幕分析结果",
-		"preview_text":   "已准备分析屏幕截图",
+		"preview_text":   screenAnalysisPreviewText(captureMode),
 		"impact_scope": map[string]any{
-			"files":                    []string{sourcePath},
+			"files":                    impactFilesForScreenTarget(sourcePath),
 			"webpages":                 []string{},
 			"apps":                     []string{},
 			"out_of_workspace":         false,
@@ -538,6 +628,135 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "屏幕截图分析属于敏感能力，请先确认授权。", task.UpdatedAt.Format(dateTimeLayout))
 	return approvalRequest, pendingExecution, bubble, nil
+}
+
+func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnapshot, current map[string]any) map[string]any {
+	updatedIntent := cloneMap(current)
+	arguments := cloneMap(mapValue(updatedIntent, "arguments"))
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	if strings.TrimSpace(stringValue(arguments, "language", "")) == "" {
+		arguments["language"] = "eng"
+	}
+	if strings.TrimSpace(stringValue(arguments, "capture_mode", "")) == "" {
+		arguments["capture_mode"] = string(screenCaptureModeForIntent(arguments))
+	}
+	if strings.TrimSpace(stringValue(arguments, "evidence_role", "")) == "" {
+		arguments["evidence_role"] = inferredScreenEvidenceRole(snapshot, arguments)
+	}
+	if strings.TrimSpace(stringValue(arguments, "page_title", "")) == "" && strings.TrimSpace(snapshot.PageTitle) != "" {
+		arguments["page_title"] = snapshot.PageTitle
+	}
+	if strings.TrimSpace(stringValue(arguments, "window_title", "")) == "" && strings.TrimSpace(snapshot.WindowTitle) != "" {
+		arguments["window_title"] = snapshot.WindowTitle
+	}
+	if strings.TrimSpace(stringValue(arguments, "visible_text", "")) == "" && strings.TrimSpace(snapshot.VisibleText) != "" {
+		arguments["visible_text"] = snapshot.VisibleText
+	}
+	if strings.TrimSpace(stringValue(arguments, "screen_summary", "")) == "" && strings.TrimSpace(snapshot.ScreenSummary) != "" {
+		arguments["screen_summary"] = snapshot.ScreenSummary
+	}
+	updatedIntent["arguments"] = arguments
+	if strings.TrimSpace(stringValue(updatedIntent, "title", "")) == "" {
+		updatedIntent["title"] = inferredScreenTaskTitle(snapshot)
+	}
+	return updatedIntent
+}
+
+func screenCaptureModeForIntent(arguments map[string]any) tools.ScreenCaptureMode {
+	switch strings.ToLower(strings.TrimSpace(stringValue(arguments, "capture_mode", ""))) {
+	case string(tools.ScreenCaptureModeClip):
+		return tools.ScreenCaptureModeClip
+	case string(tools.ScreenCaptureModeKeyframe):
+		return tools.ScreenCaptureModeKeyframe
+	case string(tools.ScreenCaptureModeScreenshot):
+		return tools.ScreenCaptureModeScreenshot
+	}
+	if isClipScreenSourcePath(stringValue(arguments, "path", "")) {
+		return tools.ScreenCaptureModeClip
+	}
+	return tools.ScreenCaptureModeScreenshot
+}
+
+func isClipScreenSourcePath(pathValue string) bool {
+	trimmedPath := strings.ToLower(strings.TrimSpace(pathValue))
+	switch path.Ext(trimmedPath) {
+	case ".mp4", ".webm", ".mov", ".mkv", ".avi":
+		return true
+	default:
+		return false
+	}
+}
+
+func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
+	target := screenSubjectFromSnapshot(snapshot)
+	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
+		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
+	}
+	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+}
+
+func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+	return firstNonEmptyString(
+		snapshot.PageTitle,
+		firstNonEmptyString(
+			snapshot.WindowTitle,
+			firstNonEmptyString(snapshot.ScreenSummary, firstNonEmptyString(snapshot.VisibleText, "当前屏幕")),
+		),
+	)
+}
+
+func screenTargetObject(arguments map[string]any) string {
+	if sourcePath := stringValue(arguments, "path", ""); strings.TrimSpace(sourcePath) != "" {
+		return sourcePath
+	}
+	for _, value := range []string{
+		stringValue(arguments, "page_title", ""),
+		stringValue(arguments, "window_title", ""),
+		stringValue(arguments, "screen_summary", ""),
+		stringValue(arguments, "visible_text", ""),
+	} {
+		if strings.TrimSpace(value) != "" {
+			return truncateText(value, 64)
+		}
+	}
+	return "current_screen"
+}
+
+func screenCaptureModeFromArguments(arguments map[string]any) tools.ScreenCaptureMode {
+	mode := tools.ScreenCaptureMode(strings.TrimSpace(stringValue(arguments, "capture_mode", string(tools.ScreenCaptureModeScreenshot))))
+	switch mode {
+	case tools.ScreenCaptureModeScreenshot, tools.ScreenCaptureModeKeyframe, tools.ScreenCaptureModeClip:
+		return mode
+	default:
+		return tools.ScreenCaptureModeScreenshot
+	}
+}
+
+func screenAnalysisPreviewText(captureMode tools.ScreenCaptureMode) string {
+	if captureMode == tools.ScreenCaptureModeClip {
+		return "已准备分析屏幕录屏片段"
+	}
+	return "已准备分析屏幕截图"
+}
+
+func impactFilesForScreenTarget(sourcePath string) []string {
+	if strings.TrimSpace(sourcePath) == "" {
+		return []string{}
+	}
+	return []string{sourcePath}
+}
+
+func inferredScreenEvidenceRole(snapshot contextsvc.TaskContextSnapshot, arguments map[string]any) string {
+	if role := stringValue(arguments, "evidence_role", ""); strings.TrimSpace(role) != "" {
+		return role
+	}
+	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.ErrorText, snapshot.VisibleText, snapshot.ScreenSummary}, " "))
+	if strings.Contains(combined, "error") || strings.Contains(combined, "warning") || strings.Contains(combined, "报错") || strings.Contains(combined, "错误") || strings.Contains(combined, "异常") {
+		return "error_evidence"
+	}
+	return "page_context"
 }
 
 func (s *Service) resumeQueuedControlledTask(task runengine.TaskRecord) (runengine.TaskRecord, bool, error) {
@@ -732,7 +951,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	return map[string]any{
 		"task":            taskMap(updatedTask),
 		"bubble_message":  resultBubble,
-		"delivery_result": deliveryResult,
+		"delivery_result": optionalFormalDeliveryResult(deliveryResult),
 	}, nil
 }
 
@@ -771,6 +990,7 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 		WindowSwitches:  signals.WindowSwitchCount,
 		PageSwitches:    signals.PageSwitchCount,
 		CopyCount:       signals.CopyCount,
+		Observations:    s.recommendationObservations(signals),
 		Signals:         signals,
 		UnfinishedTasks: unfinishedTasks,
 		FinishedTasks:   finishedTasks,
@@ -780,6 +1000,40 @@ func (s *Service) RecommendationGet(params map[string]any) (map[string]any, erro
 		"cooldown_hit": result.CooldownHit,
 		"items":        result.Items,
 	}, nil
+}
+
+func (s *Service) recommendationObservations(signals perception.SignalSnapshot) []string {
+	observations := perception.BehaviorSignals(signals)
+	if hasErrorOpportunity := strings.TrimSpace(signals.ErrorText) != "" || strings.Contains(strings.ToLower(strings.Join([]string{signals.VisibleText, signals.ScreenSummary}, " ")), "error") || strings.Contains(strings.ToLower(strings.Join([]string{signals.VisibleText, signals.ScreenSummary}, " ")), "报错"); hasErrorOpportunity {
+		observations = append(observations, "当前上下文包含可解释的视觉错误信号。")
+	}
+	if strings.TrimSpace(signals.ScreenSummary) != "" {
+		observations = append(observations, fmt.Sprintf("screen:%s", truncateText(signals.ScreenSummary, 48)))
+	}
+	if strings.TrimSpace(signals.VisibleText) != "" {
+		observations = append(observations, fmt.Sprintf("visible:%s", truncateText(signals.VisibleText, 48)))
+	}
+	return uniqueTrimmedStrings(observations)
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 // RecommendationFeedbackSubmit handles agent.recommendation.feedback.submit.
@@ -802,12 +1056,15 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	offset := clampListOffset(intValue(params, "offset", 0))
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
-	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
-	if total == 0 {
-		if persistedTasks, persistedTotal, ok := s.listTasksFromStorage(group, sortBy, sortOrder, limit, offset); ok {
-			tasks = persistedTasks
-			total = persistedTotal
+	allTasks := newTaskQueryViews(s).tasks(group, sortBy, sortOrder)
+	total := len(allTasks)
+	tasks := []runengine.TaskRecord{}
+	if offset < total {
+		end := offset + limit
+		if limit <= 0 || end > total {
+			end = total
 		}
+		tasks = allTasks[offset:end]
 	}
 
 	items := make([]map[string]any, 0, len(tasks))
@@ -826,9 +1083,14 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 // the JSON-RPC boundary.
 func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
-	task, ok := s.runEngine.TaskDetail(taskID)
-	if !ok {
-		task, ok = s.taskDetailFromStorage(taskID)
+	task, ok := s.taskDetailFromStorage(taskID)
+	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
+		if ok {
+			task = mergeRuntimeTaskDetail(task, runtimeTask)
+		} else {
+			task = runtimeTask
+			ok = true
+		}
 	}
 	if !ok {
 		return nil, ErrTaskNotFound
@@ -838,13 +1100,28 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if securitySummary == nil {
 		securitySummary = map[string]any{}
 	}
-	approvalRequest := activeTaskDetailApprovalRequest(task)
+	approvalRequest := s.pendingApprovalRequestFromStorage(task.TaskID, task.RiskLevel)
+	if approvalRequest == nil {
+		approvalRequest = activeTaskDetailApprovalRequest(task)
+	}
 	if task.Status != "waiting_auth" {
 		approvalRequest = nil
 	}
 	approvalRequestValue := any(nil)
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest
+	}
+	storageAuthorizationRecord := s.latestAuthorizationRecordFromStorage(task.TaskID)
+	authorizationRecord := selectTaskDetailAuthorizationRecord(task.TaskID, task.Authorization, storageAuthorizationRecord)
+	authorizationRecordValue := any(nil)
+	if authorizationRecord != nil {
+		authorizationRecordValue = authorizationRecord
+	}
+	storageAuditRecords := s.loadAuditRecordsFromStorage(task.TaskID, 0, 0)
+	auditRecord := selectTaskDetailAuditRecord(task, task.AuditRecords, storageAuditRecords)
+	auditRecordValue := any(nil)
+	if auditRecord != nil {
+		auditRecordValue = auditRecord
 	}
 	securitySummary["pending_authorizations"] = 0
 	if approvalRequest != nil {
@@ -857,27 +1134,107 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		securitySummary["latest_restore_point"] = latestRestorePoint
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
+	deliveryResultValue := any(nil)
+	deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID)
+	if len(deliveryResult) == 0 {
+		deliveryResult = task.DeliveryResult
+	}
+	normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, deliveryResult)
+	if len(normalizedDelivery) > 0 {
+		deliveryResultValue = normalizedDelivery
+	}
 
 	return map[string]any{
-		"task":              taskMap(task),
-		"timeline":          protocolTaskStepList(timelineMap(task.Timeline)),
-		"artifacts":         protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
-		"mirror_references": protocolMirrorReferenceList(task.MirrorReferences),
-		"approval_request":  approvalRequestValue,
-		"security_summary":  securitySummary,
-		"runtime_summary":   runtimeSummary,
+		"task":                 taskMap(task),
+		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
+		"delivery_result":      deliveryResultValue,
+		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
+		"citations":            protocolCitationList(s.citationsForTask(task.TaskID, task.Citations)),
+		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
+		"approval_request":     approvalRequestValue,
+		"authorization_record": authorizationRecordValue,
+		"audit_record":         auditRecordValue,
+		"security_summary":     securitySummary,
+		"runtime_summary":      runtimeSummary,
 	}, nil
+}
+
+// mergeRuntimeTaskDetail keeps first-class structured evidence authoritative but
+// lets the live runtime state win for task status fields when persistence is
+// temporarily stale.
+func mergeRuntimeTaskDetail(structuredTask, runtimeTask runengine.TaskRecord) runengine.TaskRecord {
+	merged := mergeStructuredTaskDetailCompatibility(structuredTask, runtimeTask)
+	if runtimeTask.Status != "" {
+		merged.Status = runtimeTask.Status
+	}
+	if runtimeTask.CurrentStep != "" {
+		merged.CurrentStep = runtimeTask.CurrentStep
+	}
+	if runtimeTask.CurrentStepStatus != "" {
+		merged.CurrentStepStatus = runtimeTask.CurrentStepStatus
+	}
+	if runtimeTask.UpdatedAt.After(merged.UpdatedAt) {
+		merged.UpdatedAt = runtimeTask.UpdatedAt
+	}
+	if runtimeTask.FinishedAt != nil {
+		if merged.FinishedAt == nil || runtimeTask.FinishedAt.After(*merged.FinishedAt) {
+			merged.FinishedAt = cloneTimePointer(runtimeTask.FinishedAt)
+		}
+	}
+	if runtimeTask.LoopStopReason != "" {
+		merged.LoopStopReason = runtimeTask.LoopStopReason
+	}
+	if len(runtimeTask.BubbleMessage) > 0 {
+		merged.BubbleMessage = cloneMap(runtimeTask.BubbleMessage)
+	}
+	if len(runtimeTask.PendingExecution) > 0 {
+		merged.PendingExecution = cloneMap(runtimeTask.PendingExecution)
+	}
+	if len(runtimeTask.TokenUsage) > 0 {
+		merged.TokenUsage = cloneMap(runtimeTask.TokenUsage)
+	}
+	if len(runtimeTask.LatestEvent) > 0 {
+		merged.LatestEvent = cloneMap(runtimeTask.LatestEvent)
+	}
+	if len(runtimeTask.LatestToolCall) > 0 {
+		merged.LatestToolCall = cloneMap(runtimeTask.LatestToolCall)
+	}
+	if len(runtimeTask.SteeringMessages) > 0 {
+		merged.SteeringMessages = append([]string(nil), runtimeTask.SteeringMessages...)
+	}
+	if !isEmptySnapshot(runtimeTask.Snapshot) {
+		merged.Snapshot = cloneTaskSnapshot(runtimeTask.Snapshot)
+	}
+	return merged
 }
 
 func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]any {
 	summary := map[string]any{
-		"loop_stop_reason":      nil,
-		"events_count":          0,
-		"latest_event_type":     nil,
-		"active_steering_count": len(task.SteeringMessages),
+		"loop_stop_reason":        nil,
+		"events_count":            0,
+		"latest_event_type":       nil,
+		"active_steering_count":   len(task.SteeringMessages),
+		"latest_failure_code":     nil,
+		"latest_failure_category": nil,
+		"latest_failure_summary":  nil,
+		"observation_signals":     []string{},
 	}
 	if strings.TrimSpace(task.LoopStopReason) != "" {
 		summary["loop_stop_reason"] = task.LoopStopReason
+	}
+	if failureCode, failureCategory, failureSummary := latestTaskFailure(task); failureCode != "" || failureSummary != "" {
+		if failureCode != "" {
+			summary["latest_failure_code"] = failureCode
+		}
+		if failureCategory != "" {
+			summary["latest_failure_category"] = failureCategory
+		}
+		if failureSummary != "" {
+			summary["latest_failure_summary"] = failureSummary
+		}
+	}
+	if observationSignals := taskObservationSignals(task); len(observationSignals) > 0 {
+		summary["observation_signals"] = observationSignals
 	}
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return summary
@@ -893,6 +1250,57 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 		}
 	}
 	return summary
+}
+
+func latestTaskFailure(task runengine.TaskRecord) (string, string, string) {
+	var fallbackCode string
+	var fallbackCategory string
+	var fallbackSummary string
+	for index := len(task.AuditRecords) - 1; index >= 0; index-- {
+		record := task.AuditRecords[index]
+		if stringValue(record, "result", "") != "failed" {
+			continue
+		}
+		metadata := mapValue(record, "metadata")
+		failureCode := strings.TrimSpace(stringValue(metadata, "failure_code", ""))
+		failureCategory := strings.TrimSpace(stringValue(metadata, "failure_category", ""))
+		failureSummary := firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
+		if failureCode != "" || failureCategory != "" {
+			return firstNonEmptyString(failureCode, stringValue(record, "action", "")), firstNonEmptyString(failureCategory, firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", ""))), failureSummary
+		}
+		if fallbackCode == "" && fallbackCategory == "" && fallbackSummary == "" {
+			fallbackCode = firstNonEmptyString(stringValue(record, "action", ""), firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", "")))
+			fallbackCategory = firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", ""))
+			fallbackSummary = failureSummary
+		}
+	}
+	if fallbackCode != "" || fallbackCategory != "" || fallbackSummary != "" {
+		return fallbackCode, fallbackCategory, fallbackSummary
+	}
+	if task.Status == "failed" {
+		return firstNonEmptyString(task.CurrentStep, "execution_failed"), "task_execution", firstNonEmptyString(stringValue(task.BubbleMessage, "text", ""), "任务执行失败")
+	}
+	return "", "", ""
+}
+
+func taskObservationSignals(task runengine.TaskRecord) []string {
+	result := make([]string, 0, 4)
+	observationSources := []struct {
+		signal string
+		value  string
+	}{
+		{signal: "screen_summary", value: task.Snapshot.ScreenSummary},
+		{signal: "visible_text", value: task.Snapshot.VisibleText},
+		{signal: "page_title", value: task.Snapshot.PageTitle},
+		{signal: "window_title", value: task.Snapshot.WindowTitle},
+	}
+	for _, item := range observationSources {
+		if strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		result = append(result, item.signal)
+	}
+	return uniqueTrimmedStrings(result)
 }
 
 // TaskEventsList handles agent.task.events.list and exposes normalized runtime
@@ -941,6 +1349,153 @@ func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) 
 		"items": items,
 		"page":  pageMap(limit, offset, total),
 	}, nil
+}
+
+// TaskToolCallsList handles agent.task.tool_calls.list and exposes persisted
+// tool_call records through one task-centric query surface.
+func (s *Service) TaskToolCallsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	runID := stringValue(params, "run_id", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if s.storage == nil || s.storage.ToolCallStore() == nil {
+		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
+		return map[string]any{
+			"items": paginateTaskToolCallItems(compatibilityItems, limit, offset),
+			"page":  pageMap(limit, offset, len(compatibilityItems)),
+		}, nil
+	}
+	items, total, err := s.storage.ToolCallStore().ListToolCalls(context.Background(), taskID, runID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	if total == 0 {
+		compatibilityItems := compatibilityTaskToolCalls(s, taskID, runID)
+		return map[string]any{
+			"items": paginateTaskToolCallItems(compatibilityItems, limit, offset),
+			"page":  pageMap(limit, offset, len(compatibilityItems)),
+		}, nil
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, taskToolCallMap(item))
+	}
+	return map[string]any{
+		"items": result,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+func compatibilityTaskToolCalls(s *Service, taskID, runID string) []map[string]any {
+	if s == nil {
+		return nil
+	}
+	task, ok := s.taskDetailFromStorage(taskID)
+	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
+		if ok {
+			task = mergeRuntimeTaskDetail(task, runtimeTask)
+		} else {
+			task = runtimeTask
+			ok = true
+		}
+	}
+	if !ok || len(task.LatestToolCall) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(runID) != "" && stringValue(task.LatestToolCall, "run_id", "") != runID {
+		return nil
+	}
+	return []map[string]any{normalizeTaskToolCallMap(task.LatestToolCall)}
+}
+
+func paginateTaskToolCallItems(items []map[string]any, limit, offset int) []map[string]any {
+	if len(items) == 0 || offset >= len(items) {
+		return []map[string]any{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return cloneMapSlice(items[offset:end])
+}
+
+func normalizeTaskToolCallMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	stepID := any(nil)
+	if candidate := stringValue(value, "step_id", ""); strings.TrimSpace(candidate) != "" {
+		stepID = candidate
+	}
+	createdAt := any(nil)
+	if candidate := stringValue(value, "created_at", ""); strings.TrimSpace(candidate) != "" {
+		createdAt = candidate
+	}
+	errorCode := value["error_code"]
+	return map[string]any{
+		"tool_call_id": stringValue(value, "tool_call_id", ""),
+		"run_id":       stringValue(value, "run_id", ""),
+		"task_id":      stringValue(value, "task_id", ""),
+		"step_id":      stepID,
+		"created_at":   createdAt,
+		"tool_name":    stringValue(value, "tool_name", ""),
+		"status":       outwardToolCallStatus(stringValue(value, "status", "pending")),
+		"input":        cloneMapOrEmpty(mapValue(value, "input")),
+		"output":       cloneMapOrEmpty(mapValue(value, "output")),
+		"error_code":   errorCode,
+		"duration_ms":  intValue(value, "duration_ms", 0),
+	}
+}
+
+func taskToolCallMap(record tools.ToolCallRecord) map[string]any {
+	stepID := any(nil)
+	if strings.TrimSpace(record.StepID) != "" {
+		stepID = record.StepID
+	}
+	createdAt := any(nil)
+	if strings.TrimSpace(record.CreatedAt) != "" {
+		createdAt = record.CreatedAt
+	}
+	errorCode := any(nil)
+	if record.ErrorCode != nil {
+		errorCode = *record.ErrorCode
+	}
+	return map[string]any{
+		"tool_call_id": record.ToolCallID,
+		"run_id":       record.RunID,
+		"task_id":      record.TaskID,
+		"step_id":      stepID,
+		"created_at":   createdAt,
+		"tool_name":    record.ToolName,
+		"status":       outwardToolCallStatus(string(record.Status)),
+		"input":        cloneMapOrEmpty(record.Input),
+		"output":       cloneMapOrEmpty(record.Output),
+		"error_code":   errorCode,
+		"duration_ms":  record.DurationMS,
+	}
+}
+
+func cloneMapOrEmpty(values map[string]any) map[string]any {
+	if cloned := cloneMap(values); cloned != nil {
+		return cloned
+	}
+	return map[string]any{}
+}
+
+func outwardToolCallStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "started":
+		return "running"
+	case "succeeded":
+		return "succeeded"
+	case "failed", "timeout":
+		return "failed"
+	default:
+		return "pending"
+	}
 }
 
 func normalizeEventTimeFilter(value string) (string, error) {
@@ -1096,6 +1651,44 @@ func protocolArtifactList(artifacts []map[string]any) []map[string]any {
 	return result
 }
 
+func protocolCitationList(citations []map[string]any) []map[string]any {
+	if len(citations) == 0 {
+		return []map[string]any{}
+	}
+	result := make([]map[string]any, 0, len(citations))
+	for _, citation := range citations {
+		result = append(result, protocolCitationMap(citation))
+	}
+	return result
+}
+
+func protocolCitationMap(citation map[string]any) map[string]any {
+	result := map[string]any{
+		"citation_id": stringValue(citation, "citation_id", ""),
+		"task_id":     stringValue(citation, "task_id", ""),
+		"run_id":      stringValue(citation, "run_id", ""),
+		"source_type": stringValue(citation, "source_type", "context"),
+		"source_ref":  stringValue(citation, "source_ref", ""),
+		"label":       stringValue(citation, "label", ""),
+	}
+	if artifactID := strings.TrimSpace(stringValue(citation, "artifact_id", "")); artifactID != "" {
+		result["artifact_id"] = artifactID
+	}
+	if artifactType := strings.TrimSpace(stringValue(citation, "artifact_type", "")); artifactType != "" {
+		result["artifact_type"] = artifactType
+	}
+	if evidenceRole := strings.TrimSpace(stringValue(citation, "evidence_role", "")); evidenceRole != "" {
+		result["evidence_role"] = evidenceRole
+	}
+	if excerptText := strings.TrimSpace(stringValue(citation, "excerpt_text", "")); excerptText != "" {
+		result["excerpt_text"] = excerptText
+	}
+	if screenSessionID := strings.TrimSpace(stringValue(citation, "screen_session_id", "")); screenSessionID != "" {
+		result["screen_session_id"] = screenSessionID
+	}
+	return result
+}
+
 // protocolArtifactMap trims one artifact to the formal Artifact contract.
 func protocolArtifactMap(artifact map[string]any) map[string]any {
 	if len(artifact) == 0 {
@@ -1159,7 +1752,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		return map[string]any{
 			"type":         firstNonEmptyString(stringValue(artifact, "delivery_type", ""), inferArtifactDeliveryType(artifact)),
 			"title":        stringValue(artifact, "title", ""),
-			"payload":      payload,
+			"payload":      normalizeFormalDeliveryPayload(payload, taskID),
 			"preview_text": stringValue(artifact, "title", ""),
 		}
 	}
@@ -1168,10 +1761,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if payload["task_id"] == nil {
-		payload["task_id"] = taskID
-	}
-	resolved["payload"] = payload
+	resolved["payload"] = normalizeFormalDeliveryPayload(payload, taskID)
 	if stringValue(resolved, "type", "") == "" {
 		resolved["type"] = "task_detail"
 	}
@@ -1182,6 +1772,38 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		resolved["preview_text"] = stringValue(resolved, "title", "")
 	}
 	return resolved
+}
+
+// normalizeFormalDeliveryPayload keeps formal delivery payload keys stable for
+// protocol consumers even when historical storage records omitted sparse fields.
+func normalizeFormalDeliveryPayload(payload map[string]any, taskID string) map[string]any {
+	normalized := cloneMap(payload)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	if normalized["path"] == nil {
+		normalized["path"] = nil
+	}
+	if normalized["url"] == nil {
+		normalized["url"] = nil
+	}
+	if normalized["task_id"] == nil {
+		if strings.TrimSpace(taskID) == "" {
+			normalized["task_id"] = nil
+		} else {
+			normalized["task_id"] = taskID
+		}
+	}
+	return normalized
+}
+
+// normalizeTaskDetailDeliveryResult keeps task detail aligned with the formal
+// delivery contract without forcing the dashboard to infer missing payload fields.
+func normalizeTaskDetailDeliveryResult(taskID string, deliveryResult map[string]any) map[string]any {
+	if len(deliveryResult) == 0 {
+		return nil
+	}
+	return normalizeDeliveryOpenResult(nil, cloneMap(deliveryResult), taskID)
 }
 
 // TaskControl handles agent.task.control and converts user actions into runtime
@@ -1367,13 +1989,14 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	itemTitle := stringValue(item, "title", "待办事项")
 	taskIntent := notepadIntent(item)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		Title:       itemTitle,
-		SourceType:  "todo",
-		Status:      "confirming_intent",
-		Intent:      taskIntent,
-		CurrentStep: "intent_confirmation",
-		RiskLevel:   s.risk.DefaultLevel(),
-		Timeline:    initialTimeline("confirming_intent", "intent_confirmation"),
+		RequestSource: "dashboard",
+		Title:         itemTitle,
+		SourceType:    "todo",
+		Status:        "confirming_intent",
+		Intent:        taskIntent,
+		CurrentStep:   "intent_confirmation",
+		RiskLevel:     s.risk.DefaultLevel(),
+		Timeline:      initialTimeline("confirming_intent", "intent_confirmation"),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
@@ -1667,12 +2290,13 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 // without depending on static worker declarations only.
 func (s *Service) PluginRuntimeList(params map[string]any) (map[string]any, error) {
 	_ = params
-	if s.plugin == nil {
+	snapshots := pluginCatalogSnapshots(s.plugin)
+	if len(snapshots) == 0 {
 		return map[string]any{"items": []map[string]any{}, "metrics": []map[string]any{}, "events": []map[string]any{}}, nil
 	}
-	runtimes := s.plugin.RuntimeStates()
-	metrics := s.plugin.MetricSnapshots()
-	events := s.plugin.RuntimeEvents()
+	runtimes := pluginSnapshotRuntimes(snapshots)
+	metrics := pluginSnapshotMetrics(snapshots)
+	events := pluginSnapshotEvents(snapshots)
 	return map[string]any{
 		"items":   pluginRuntimeItems(runtimes),
 		"metrics": pluginMetricItems(metrics),
@@ -1688,7 +2312,7 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
 	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
-	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
+	modelCredentials := modelCredentialSettings(s.runEngine.Settings())
 	latestRestorePoint := latestRestorePointFromTasks(allTasks)
 	if latestRestorePoint == nil {
 		latestRestorePoint = s.latestRestorePointFromStorage("")
@@ -1698,13 +2322,14 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 			"security_status":        aggregateSecurityStatus(allTasks, pendingTotal),
 			"pending_authorizations": pendingTotal,
 			"latest_restore_point":   latestRestorePoint,
-			"token_cost_summary":     aggregateTokenCostSummary(unfinishedTasks, finishedTasks, boolValue(dataLogSettings, "budget_auto_downgrade", true)),
+			"token_cost_summary":     aggregateTokenCostSummary(unfinishedTasks, finishedTasks, boolValue(modelCredentials, "budget_auto_downgrade", true)),
 		},
 	}, nil
 }
 
 func (s *Service) pluginRuntimeSummary() map[string]any {
-	if s.plugin == nil {
+	snapshots := pluginCatalogSnapshots(s.plugin)
+	if len(snapshots) == 0 {
 		return map[string]any{
 			"total":       0,
 			"healthy":     0,
@@ -1712,7 +2337,7 @@ func (s *Service) pluginRuntimeSummary() map[string]any {
 			"unavailable": 0,
 		}
 	}
-	runtimes := s.plugin.RuntimeStates()
+	runtimes := pluginSnapshotRuntimes(snapshots)
 	summary := map[string]any{
 		"total":       len(runtimes),
 		"healthy":     0,
@@ -1735,7 +2360,7 @@ func (s *Service) pluginRuntimeSummary() map[string]any {
 func pluginRuntimeItems(items []plugin.RuntimeState) []map[string]any {
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		result = append(result, map[string]any{
+		entry := map[string]any{
 			"name":         item.Name,
 			"kind":         item.Kind,
 			"status":       item.Status,
@@ -1744,7 +2369,19 @@ func pluginRuntimeItems(items []plugin.RuntimeState) []map[string]any {
 			"last_seen_at": item.LastSeenAt,
 			"last_error":   item.LastError,
 			"capabilities": append([]string(nil), item.Capabilities...),
-		})
+		}
+		if item.Manifest != nil {
+			entry["manifest"] = map[string]any{
+				"plugin_id":    item.Manifest.PluginID,
+				"name":         item.Manifest.Name,
+				"version":      item.Manifest.Version,
+				"entry":        item.Manifest.Entry,
+				"source":       item.Manifest.Source,
+				"capabilities": append([]string(nil), item.Manifest.Capabilities...),
+				"permissions":  append([]string(nil), item.Manifest.Permissions...),
+			}
+		}
+		result = append(result, entry)
 	}
 	return result
 }
@@ -1890,18 +2527,11 @@ func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, e
 	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
 	task, ok := s.runEngine.GetTask(resolvedTaskID)
 	if !ok {
-		if s.storage == nil {
-			return nil, ErrTaskNotFound
-		}
-		persisted, loadErr := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
-		if loadErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, loadErr)
-		}
-		loadedTask, found := findTaskRecordFromStorage(persisted, resolvedTaskID)
+		persistedTask, found := s.taskDetailFromStorage(resolvedTaskID)
 		if !found {
 			return nil, ErrTaskNotFound
 		}
-		task = s.runEngine.HydrateTaskFromStorage(loadedTask)
+		task = s.runEngine.HydrateTaskFromStorage(persistedTask)
 	}
 
 	recoveryPoint := recoveryPointMap(point)
@@ -2165,9 +2795,9 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 
 // SettingsGet handles agent.settings.get.
 func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
-	settings := s.runEngine.Settings()
-	scope := stringValue(params, "scope", "all")
-	if scope == "all" || scope == "data_log" {
+	settings := normalizeSettingsSnapshot(s.runEngine.Settings())
+	scope := normalizeSettingsScope(stringValue(params, "scope", "all"))
+	if scope == "all" || scope == "models" {
 		settingsWithSecrets, err := s.attachSensitiveSettingAvailability(settings)
 		if err != nil {
 			return nil, err
@@ -2189,32 +2819,71 @@ func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 // SettingsUpdate handles agent.settings.update and returns the effective
 // settings patch plus apply-mode metadata.
 func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) {
-	if dataLog := mapValue(params, "data_log"); len(dataLog) > 0 {
-		if deleteAPIKey := boolValue(dataLog, "delete_api_key", false); deleteAPIKey {
-			provider := s.providerForSettingsUpdate(dataLog)
+	normalizedParams := normalizeSettingsUpdateParams(params)
+	previewSettings, updatedKeys, applyMode, needRestart, err := s.previewSettingsUpdate(normalizedParams)
+	if err != nil {
+		return nil, err
+	}
+	modelSecretTouched := false
+	secretUpdatedKeys := make([]string, 0, 2)
+	rollbacks := make([]modelSecretRollback, 0, 2)
+	previousModel := s.currentModel()
+	if models := cloneMap(mapValue(normalizedParams, "models")); len(models) > 0 {
+		if deleteAPIKey := boolValue(models, "delete_api_key", false); deleteAPIKey {
+			provider := s.providerForSettingsUpdate(models)
+			rollback, rollbackErr := s.captureModelSecretRollback(provider)
+			if rollbackErr != nil {
+				return nil, rollbackErr
+			}
 			if err := s.deleteModelSecret(provider); err != nil {
 				return nil, err
 			}
-			delete(dataLog, "delete_api_key")
-			params["data_log"] = dataLog
+			rollbacks = append(rollbacks, rollback)
+			delete(models, "delete_api_key")
+			normalizedParams["models"] = models
+			modelSecretTouched = true
+			secretUpdatedKeys = append(secretUpdatedKeys, "models.delete_api_key")
 		}
-		if apiKey := stringValue(dataLog, "api_key", ""); apiKey != "" {
-			provider := s.providerForSettingsUpdate(dataLog)
+		if apiKey := stringValue(models, "api_key", ""); apiKey != "" {
+			provider := s.providerForSettingsUpdate(models)
+			rollback, rollbackErr := s.captureModelSecretRollback(provider)
+			if rollbackErr != nil {
+				return nil, rollbackErr
+			}
 			if err := s.persistModelSecret(provider, apiKey); err != nil {
 				return nil, err
 			}
-			delete(dataLog, "api_key")
-			params["data_log"] = dataLog
+			rollbacks = append(rollbacks, rollback)
+			delete(models, "api_key")
+			normalizedParams["models"] = models
+			modelSecretTouched = true
+			secretUpdatedKeys = append(secretUpdatedKeys, "models.api_key")
 		}
 	}
-	effectiveSettings, updatedKeys, applyMode, needRestart := s.runEngine.UpdateSettings(params)
-	if _, ok := effectiveSettings["data_log"]; ok {
-		effectiveSettingsWithSecrets, err := s.attachSensitiveSettingAvailability(effectiveSettings)
-		if err != nil {
+	if modelSettingsTouched(updatedKeys) {
+		applyMode = "next_task_effective"
+		needRestart = false
+		if err := s.reloadRuntimeModelForSettings(previewSettings); err != nil {
+			s.rollbackModelSecretMutations(rollbacks)
 			return nil, err
 		}
-		effectiveSettings = effectiveSettingsWithSecrets
 	}
+	effectiveSettings, updatedKeys, applyMode, needRestart, err := s.runEngine.UpdateSettings(normalizedParams)
+	if err != nil {
+		s.ReplaceModel(previousModel)
+		s.rollbackModelSecretMutations(rollbacks)
+		return nil, err
+	}
+	if modelSecretTouched {
+		if _, ok := effectiveSettings["models"]; !ok {
+			effectiveSettings["models"] = map[string]any{}
+		}
+	}
+	if _, ok := effectiveSettings["models"]; ok {
+		effectiveSettings = s.attachSensitiveSettingAvailabilityForCommittedUpdate(effectiveSettings, secretUpdatedKeys)
+	}
+	effectiveSettings = outwardSettingsUpdatePatch(effectiveSettings)
+	updatedKeys = outwardSettingsUpdateKeys(updatedKeys, secretUpdatedKeys)
 	return map[string]any{
 		"updated_keys":       updatedKeys,
 		"effective_settings": effectiveSettings,
@@ -2223,31 +2892,64 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 	}, nil
 }
 
+// attachSensitiveSettingAvailabilityForCommittedUpdate decorates the response
+// payload after a settings update has already committed. At this point the
+// runtime model, secrets, and settings snapshot may already be live, so a
+// follow-up Stronghold read must not turn the committed save back into an RPC
+// error. When the readonly secret probe fails, the response degrades to stable
+// metadata derived from the just-applied mutation hints and current Stronghold
+// descriptor instead of reopening a partial-apply path.
+func (s *Service) attachSensitiveSettingAvailabilityForCommittedUpdate(settings map[string]any, secretUpdatedKeys []string) map[string]any {
+	decorated, err := s.attachSensitiveSettingAvailability(settings)
+	if err == nil {
+		return decorated
+	}
+	return attachSensitiveSettingAvailabilityFallback(settings, strongholdStatusFromStorage(s.storage), settingsUpdateSecretAvailabilityHint(secretUpdatedKeys))
+}
+
+// previewSettingsUpdate computes the future settings snapshot without mutating
+// runengine state so SettingsUpdate can validate runtime model reloads before
+// persisting a next-task-effective model route.
+func (s *Service) previewSettingsUpdate(values map[string]any) (map[string]any, []string, string, bool, error) {
+	if s == nil || s.runEngine == nil {
+		return nil, nil, "", false, nil
+	}
+	currentSettings := s.runEngine.Settings()
+	nextSettings := cloneMap(currentSettings)
+	if nextSettings == nil {
+		nextSettings = map[string]any{}
+	}
+	previewPatch := cloneMap(values)
+	mergeSettingsPreview(nextSettings, previewPatch)
+	updatedKeys := settingsPatchPathsFromPreview(previewPatch)
+	applyMode := previewApplyMode(currentSettings, previewPatch, updatedKeys)
+	needRestart := previewNeedsRestart(currentSettings, previewPatch)
+	return normalizeSettingsSnapshot(nextSettings), updatedKeys, applyMode, needRestart, nil
+}
+
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
 	if s.executor == nil || s.executor.ScreenClient() == nil {
-		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, errors.New("screen capability unavailable"))
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, tools.ErrScreenCaptureNotSupported)
 		return failedTask, failureBubble, nil, nil
 	}
-	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
+	screenClient := s.executor.ScreenClient()
+	cleanupExpiredScreenTemps(screenClient, "expired_session_scan", time.Now().UTC())
+	captureMode := screenCaptureModeFromArguments(pendingExecution)
+	source := firstNonEmptyString(stringValue(pendingExecution, "source", ""), "screen_capture")
+	screenSession, err := screenClient.StartSession(context.Background(), tools.ScreenSessionStartInput{
 		SessionID:   task.SessionID,
 		TaskID:      task.TaskID,
 		RunID:       task.RunID,
-		Source:      "screen_capture",
-		CaptureMode: tools.ScreenCaptureModeScreenshot,
+		Source:      source,
+		CaptureMode: captureMode,
 	})
 	if err != nil {
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
-	candidate, err := s.executor.ScreenClient().CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
-		ScreenSessionID: screenSession.ScreenSessionID,
-		TaskID:          task.TaskID,
-		RunID:           task.RunID,
-		CaptureMode:     tools.ScreenCaptureModeScreenshot,
-		Source:          "screen_capture",
-		SourcePath:      stringValue(pendingExecution, "source_path", ""),
-	})
+	candidate, err := captureScreenCandidateAfterApproval(screenClient, screenSession.ScreenSessionID, task, pendingExecution, captureMode)
 	if err != nil {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "capture_failed")
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
@@ -2265,19 +2967,105 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 			"retention_policy":  string(candidate.RetentionPolicy),
 			"language":          stringValue(pendingExecution, "language", "eng"),
 			"evidence_role":     stringValue(pendingExecution, "evidence_role", "error_evidence"),
+			"target_object":     stringValue(pendingExecution, "target_object", "current_screen"),
 		},
 	}
 	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), execIntent)
 	if err != nil {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
 		return runengine.TaskRecord{}, nil, nil, err
 	}
+	// Successful analyses stop the session so stale authorizations do not linger.
+	// Failed terminal attempts still expire and clean temp session outputs because
+	// no durable artifact handoff completed for that branch.
+	if updatedTask.Status == "completed" {
+		stopScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_completed")
+		cleanupSuccessfulScreenSession(screenClient, screenSession.ScreenSessionID, candidate.Path)
+	} else if taskIsTerminal(updatedTask.Status) {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
+	}
 	return updatedTask, bubble, deliveryResult, nil
+}
+
+// captureScreenCandidateAfterApproval keeps the controlled screen entry on one
+// orchestrator path while still selecting the owner-5 capture primitive that
+// matches the approved screen analysis mode.
+func captureScreenCandidateAfterApproval(screenClient tools.ScreenCaptureClient, screenSessionID string, task runengine.TaskRecord, pendingExecution map[string]any, captureMode tools.ScreenCaptureMode) (tools.ScreenFrameCandidate, error) {
+	input := tools.ScreenCaptureInput{
+		ScreenSessionID: screenSessionID,
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		CaptureMode:     captureMode,
+		Source:          firstNonEmptyString(stringValue(pendingExecution, "source", ""), "screen_capture"),
+		SourcePath:      stringValue(pendingExecution, "source_path", ""),
+	}
+	switch captureMode {
+	case tools.ScreenCaptureModeKeyframe:
+		result, err := screenClient.CaptureKeyframe(context.Background(), input)
+		if err != nil {
+			return tools.ScreenFrameCandidate{}, err
+		}
+		return result.Candidate, nil
+	default:
+		return screenClient.CaptureScreenshot(context.Background(), input)
+	}
+}
+
+func stopScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" {
+		return
+	}
+	_, _ = screenClient.StopSession(context.Background(), screenSessionID, reason)
+}
+
+// cleanupSuccessfulScreenSession only clears the tracked capture file that the
+// screen client still owns after execution has already promoted durable
+// artifacts. Deferred execution cleanup plans keep managing any extra temp clip
+// derivatives, so this path must not recursively wipe the whole session dir.
+func cleanupSuccessfulScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, capturePath string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" || strings.TrimSpace(capturePath) == "" {
+		return
+	}
+	_, _ = screenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{
+		ScreenSessionID: screenSessionID,
+		Reason:          "analysis_completed",
+		Paths:           []string{capturePath},
+	})
+}
+
+// expireAndCleanupScreenSession keeps failed screen-analysis attempts from
+// leaving temporary session state behind when no durable artifact is produced.
+func expireAndCleanupScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" {
+		return
+	}
+	_, _ = screenClient.ExpireSession(context.Background(), screenSessionID, reason)
+	_, _ = screenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{
+		ScreenSessionID: screenSessionID,
+		Reason:          reason,
+	})
+}
+
+// cleanupExpiredScreenTemps keeps new screen-analysis executions from piling up
+// abandoned temp outputs left behind by older expired sessions.
+func cleanupExpiredScreenTemps(screenClient tools.ScreenCaptureClient, reason string, expiredBefore time.Time) {
+	if screenClient == nil {
+		return
+	}
+	if expiredBefore.IsZero() {
+		expiredBefore = time.Now().UTC()
+	}
+	_, _ = screenClient.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{
+		Reason:        reason,
+		ExpiredBefore: expiredBefore.UTC(),
+	})
 }
 
 // taskMap converts a runengine task record into the protocol-facing task shape.
 func taskMap(record runengine.TaskRecord) map[string]any {
 	result := map[string]any{
 		"task_id":          record.TaskID,
+		"session_id":       taskSessionValue(record.SessionID),
 		"title":            record.Title,
 		"source_type":      record.SourceType,
 		"status":           record.Status,
@@ -2293,6 +3081,13 @@ func taskMap(record runengine.TaskRecord) map[string]any {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
 	}
 	return result
+}
+
+func taskSessionValue(sessionID string) any {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	return strings.TrimSpace(sessionID)
 }
 
 func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, bool, error) {
@@ -2412,7 +3207,7 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 			return tasks, total, true
 		}
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), nil)
 	if err != nil || len(records) == 0 {
 		return nil, 0, false
 	}
@@ -2443,7 +3238,7 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record)
+		task, ok := s.structuredTaskRecordToRuntime(record, false)
 		if !ok {
 			continue
 		}
@@ -2471,12 +3266,25 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	if s.storage == nil {
 		return nil
 	}
+	structuredTasks := []runengine.TaskRecord(nil)
 	if s.storage.TaskStore() != nil {
-		if tasks := s.loadAllTasksFromStructuredStorage(); len(tasks) > 0 {
-			return tasks
-		}
+		structuredTasks = s.loadAllTasksFromStructuredStorage()
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if len(structuredTasks) == 0 {
+		return s.loadAllTasksFromTaskRunStorage()
+	}
+	legacyTasks := s.loadLegacyTaskRunsFromStorage(structuredTasks)
+	if len(legacyTasks) == 0 {
+		return structuredTasks
+	}
+	return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks)
+}
+
+func (s *Service) loadAllTasksFromTaskRunStorage() []runengine.TaskRecord {
+	if s.storage == nil || s.storage.TaskRunStore() == nil {
+		return nil
+	}
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), nil)
 	if err != nil || len(records) == 0 {
 		return nil
 	}
@@ -2487,6 +3295,53 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	return tasks
 }
 
+func (s *Service) loadLegacyTaskRunsFromStorage(structuredTasks []runengine.TaskRecord) []runengine.TaskRecord {
+	if s.storage == nil || s.storage.TaskRunStore() == nil {
+		return nil
+	}
+	structuredTaskIDs := make([]string, 0, len(structuredTasks))
+	for _, task := range structuredTasks {
+		if strings.TrimSpace(task.TaskID) == "" {
+			continue
+		}
+		structuredTaskIDs = append(structuredTaskIDs, task.TaskID)
+	}
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), structuredTaskIDs)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		tasks = append(tasks, taskRecordFromStorage(record))
+	}
+	return tasks
+}
+
+// mergeStructuredTaskListCompatibility keeps first-class task rows authoritative
+// while still appending legacy task_run-only entries so partially migrated
+// databases do not lose pre-structured history in task-centric overview queries.
+func mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks []runengine.TaskRecord) []runengine.TaskRecord {
+	if len(structuredTasks) == 0 {
+		return taskRunTasks
+	}
+	if len(taskRunTasks) == 0 {
+		return structuredTasks
+	}
+	merged := make([]runengine.TaskRecord, 0, len(structuredTasks)+len(taskRunTasks))
+	seen := make(map[string]struct{}, len(structuredTasks)+len(taskRunTasks))
+	for _, task := range structuredTasks {
+		merged = append(merged, task)
+		seen[task.TaskID] = struct{}{}
+	}
+	for _, task := range taskRunTasks {
+		if _, ok := seen[task.TaskID]; ok {
+			continue
+		}
+		merged = append(merged, task)
+	}
+	return merged
+}
+
 func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
 	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
 	if err != nil || len(records) == 0 {
@@ -2494,7 +3349,7 @@ func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record)
+		task, ok := s.structuredTaskRecordToRuntime(record, false)
 		if !ok {
 			continue
 		}
@@ -2587,20 +3442,44 @@ func mergeTaskLists(runtimeTasks, storageTasks []runengine.TaskRecord) []runengi
 	if len(storageTasks) == 0 {
 		return runtimeTasks
 	}
-	// Build map of runtime task IDs for deduplication
-	runtimeIDs := make(map[string]struct{}, len(runtimeTasks))
+	runtimeByID := make(map[string]runengine.TaskRecord, len(runtimeTasks))
 	for _, task := range runtimeTasks {
-		runtimeIDs[task.TaskID] = struct{}{}
+		runtimeByID[task.TaskID] = task
 	}
-	// Merge: runtime tasks take precedence, add storage tasks not in runtime
 	merged := make([]runengine.TaskRecord, 0, len(runtimeTasks)+len(storageTasks))
-	merged = append(merged, runtimeTasks...)
+	seen := make(map[string]struct{}, len(runtimeTasks)+len(storageTasks))
 	for _, task := range storageTasks {
-		if _, exists := runtimeIDs[task.TaskID]; !exists {
-			merged = append(merged, task)
+		if runtimeTask, ok := runtimeByID[task.TaskID]; ok {
+			merged = append(merged, fresherTaskRecord(runtimeTask, task))
+			seen[task.TaskID] = struct{}{}
+			continue
 		}
+		merged = append(merged, task)
+		seen[task.TaskID] = struct{}{}
+	}
+	for _, task := range runtimeTasks {
+		if _, ok := seen[task.TaskID]; ok {
+			continue
+		}
+		merged = append(merged, task)
 	}
 	return merged
+}
+
+func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	if runtimeTask.UpdatedAt.After(storageTask.UpdatedAt) {
+		return runtimeTask
+	}
+	if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
+		return storageTask
+	}
+	if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
+		return runtimeTask
+	}
+	if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
+		return storageTask
+	}
+	return storageTask
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
@@ -2608,59 +3487,226 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 		return runengine.TaskRecord{}, false
 	}
 	if s.storage.TaskStore() != nil {
-		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+		if task, record, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			if structuredTaskNeedsTaskRunFallback(record, task) {
+				if taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID); taskRunOK {
+					task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+				}
+			}
 			return task, true
 		}
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
-	if err != nil {
-		return runengine.TaskRecord{}, false
-	}
-	for _, record := range records {
-		if record.TaskID == taskID {
-			return taskRecordFromStorage(record), true
-		}
+	if taskRunTask, ok := s.taskDetailFromTaskRunStorage(taskID); ok {
+		return taskRunTask, true
 	}
 	return runengine.TaskRecord{}, false
 }
 
-func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
+func (s *Service) taskDetailFromTaskRunStorage(taskID string) (runengine.TaskRecord, bool) {
+	if s.storage == nil || s.storage.TaskRunStore() == nil || strings.TrimSpace(taskID) == "" {
+		return runengine.TaskRecord{}, false
+	}
+	record, err := s.storage.TaskRunStore().GetTaskRun(context.Background(), taskID)
+	if err != nil {
+		return runengine.TaskRecord{}, false
+	}
+	return taskRecordFromStorage(record), true
+}
+
+// structuredTaskNeedsTaskRunFallback keeps task-run reads as a recovery path
+// whenever snapshot_json is missing or malformed because several legacy detail
+// fields still only exist in compatibility snapshots today.
+func structuredTaskNeedsTaskRunFallback(record storage.TaskRecord, _ runengine.TaskRecord) bool {
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		if _, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeStructuredTaskDetailCompatibility fills task-detail fields that are
+// still sourced from task-run snapshots while the first-class task tables are
+// being rolled out. The structured row stays authoritative and the task-run
+// snapshot only backfills fields the structured read could not rebuild.
+func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskRecord) runengine.TaskRecord {
+	if task.FinishedAt == nil && taskRunTask.FinishedAt != nil {
+		task.FinishedAt = cloneTimePointer(taskRunTask.FinishedAt)
+	}
+	if len(task.Timeline) == 0 {
+		task.Timeline = append([]runengine.TaskStepRecord(nil), taskRunTask.Timeline...)
+	}
+	if isEmptySnapshot(task.Snapshot) {
+		task.Snapshot = cloneTaskSnapshot(taskRunTask.Snapshot)
+	}
+	if len(task.BubbleMessage) == 0 {
+		task.BubbleMessage = cloneMap(taskRunTask.BubbleMessage)
+	}
+	if len(task.DeliveryResult) == 0 {
+		task.DeliveryResult = cloneMap(taskRunTask.DeliveryResult)
+	}
+	if len(task.Artifacts) == 0 {
+		task.Artifacts = cloneMapSlice(taskRunTask.Artifacts)
+	}
+	if len(task.Citations) == 0 {
+		task.Citations = cloneMapSlice(taskRunTask.Citations)
+	}
+	if len(task.AuditRecords) == 0 {
+		task.AuditRecords = cloneMapSlice(taskRunTask.AuditRecords)
+	}
+	if len(task.MirrorReferences) == 0 {
+		task.MirrorReferences = cloneMapSlice(taskRunTask.MirrorReferences)
+	}
+	if len(task.SecuritySummary) == 0 {
+		task.SecuritySummary = cloneMap(taskRunTask.SecuritySummary)
+	} else {
+		for key, value := range taskRunTask.SecuritySummary {
+			if _, exists := task.SecuritySummary[key]; !exists {
+				task.SecuritySummary[key] = value
+			}
+		}
+	}
+	if len(task.ApprovalRequest) == 0 {
+		task.ApprovalRequest = cloneMap(taskRunTask.ApprovalRequest)
+	}
+	if len(task.PendingExecution) == 0 {
+		task.PendingExecution = cloneMap(taskRunTask.PendingExecution)
+	}
+	if len(task.Authorization) == 0 {
+		task.Authorization = cloneMap(taskRunTask.Authorization)
+	}
+	if len(task.ImpactScope) == 0 {
+		task.ImpactScope = cloneMap(taskRunTask.ImpactScope)
+	}
+	if len(task.TokenUsage) == 0 {
+		task.TokenUsage = cloneMap(taskRunTask.TokenUsage)
+	}
+	if len(task.LatestEvent) == 0 {
+		task.LatestEvent = cloneMap(taskRunTask.LatestEvent)
+	}
+	if len(task.LatestToolCall) == 0 {
+		task.LatestToolCall = cloneMap(taskRunTask.LatestToolCall)
+	}
+	if strings.TrimSpace(task.LoopStopReason) == "" {
+		task.LoopStopReason = taskRunTask.LoopStopReason
+	}
+	if len(task.SteeringMessages) == 0 {
+		task.SteeringMessages = append([]string(nil), taskRunTask.SteeringMessages...)
+	}
+	if strings.TrimSpace(task.CurrentStepStatus) == "" {
+		task.CurrentStepStatus = taskRunTask.CurrentStepStatus
+	}
+	return task
+}
+
+// latestDeliveryResultFromStorage restores the newest first-class
+// delivery_result when structured task detail cannot rely on task_run
+// compatibility snapshots anymore.
+func (s *Service) latestDeliveryResultFromStorage(taskID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	record, ok, err := s.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil || !ok {
+		return nil
+	}
+	payload := map[string]any{}
+	if strings.TrimSpace(record.PayloadJSON) != "" {
+		if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
+			payload = map[string]any{}
+		}
+	}
+	return map[string]any{
+		"type":         record.Type,
+		"title":        record.Title,
+		"payload":      payload,
+		"preview_text": record.PreviewText,
+	}
+}
+
+// loadTaskCitationsFromStorage restores the current formal citation chain from
+// first-class loop runtime storage when task_run snapshots are unavailable.
+func (s *Service) loadTaskCitationsFromStorage(taskID string) []map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID)
+	if err != nil {
+		return nil
+	}
+	citations := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		citation := map[string]any{
+			"citation_id": record.CitationID,
+			"task_id":     record.TaskID,
+			"run_id":      record.RunID,
+			"source_type": record.SourceType,
+			"source_ref":  record.SourceRef,
+			"label":       record.Label,
+		}
+		if strings.TrimSpace(record.ArtifactID) != "" {
+			citation["artifact_id"] = record.ArtifactID
+		}
+		if strings.TrimSpace(record.ArtifactType) != "" {
+			citation["artifact_type"] = record.ArtifactType
+		}
+		if strings.TrimSpace(record.EvidenceRole) != "" {
+			citation["evidence_role"] = record.EvidenceRole
+		}
+		if strings.TrimSpace(record.ExcerptText) != "" {
+			citation["excerpt_text"] = record.ExcerptText
+		}
+		if strings.TrimSpace(record.ScreenSessionID) != "" {
+			citation["screen_session_id"] = record.ScreenSessionID
+		}
+		citations = append(citations, citation)
+	}
+	return citations
+}
+
+func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, storage.TaskRecord, bool) {
 	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
 		if storage.IsTaskRecordNotFound(err) {
-			return runengine.TaskRecord{}, false
+			return runengine.TaskRecord{}, storage.TaskRecord{}, false
 		}
-		return runengine.TaskRecord{}, false
+		return runengine.TaskRecord{}, storage.TaskRecord{}, false
 	}
-	return s.structuredTaskRecordToRuntime(record)
+	task, ok := s.structuredTaskRecordToRuntime(record, true)
+	return task, record, ok
 }
 
 func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (map[string]any, error) {
-	cloned := cloneMap(settings)
+	cloned := normalizeSettingsSnapshot(cloneMap(settings))
 	if cloned == nil {
 		cloned = map[string]any{}
 	}
-	dataLog := cloneMap(mapValue(cloned, "data_log"))
-	if dataLog == nil {
-		dataLog = map[string]any{}
+	models := cloneMap(mapValue(cloned, "models"))
+	if models == nil {
+		models = map[string]any{}
 	}
-	provider, configured, err := s.modelSecretConfigured(providerFromSettings(dataLog, s.defaultSettingsProvider()))
+	credentials := cloneMap(mapValue(models, "credentials"))
+	if credentials == nil {
+		credentials = map[string]any{}
+	}
+	provider, configured, err := s.modelSecretConfigured(providerFromSettings(models, s.defaultSettingsProvider()))
 	if err != nil {
 		return nil, err
 	}
-	if stringValue(dataLog, "provider", "") == "" && provider != "" {
-		dataLog["provider"] = provider
+	if stringValue(models, "provider", "") == "" && provider != "" {
+		models["provider"] = provider
 	}
-	dataLog["provider_api_key_configured"] = configured
+	credentials["provider_api_key_configured"] = configured
 	if stronghold := strongholdStatusFromStorage(s.storage); len(stronghold) > 0 {
-		dataLog["stronghold"] = stronghold
+		credentials["stronghold"] = stronghold
 	}
-	cloned["data_log"] = dataLog
+	models["credentials"] = credentials
+	cloned["models"] = models
 	return cloned, nil
 }
 
 func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return resolvedProvider, false, nil
 	}
@@ -2680,8 +3726,48 @@ func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
 	return resolvedProvider, false, err
 }
 
+func attachSensitiveSettingAvailabilityFallback(settings map[string]any, stronghold map[string]any, providerConfigured *bool) map[string]any {
+	cloned := normalizeSettingsSnapshot(cloneMap(settings))
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	models := cloneMap(mapValue(cloned, "models"))
+	if models == nil {
+		models = map[string]any{}
+	}
+	credentials := cloneMap(mapValue(models, "credentials"))
+	if credentials == nil {
+		credentials = map[string]any{}
+	}
+	if providerConfigured != nil {
+		credentials["provider_api_key_configured"] = *providerConfigured
+	} else if _, ok := credentials["provider_api_key_configured"]; !ok {
+		credentials["provider_api_key_configured"] = false
+	}
+	if len(stronghold) > 0 {
+		credentials["stronghold"] = cloneMap(stronghold)
+	}
+	models["credentials"] = credentials
+	cloned["models"] = models
+	return cloned
+}
+
+func settingsUpdateSecretAvailabilityHint(secretUpdatedKeys []string) *bool {
+	for _, key := range secretUpdatedKeys {
+		switch key {
+		case "models.api_key":
+			configured := true
+			return &configured
+		case "models.delete_api_key":
+			configured := false
+			return &configured
+		}
+	}
+	return nil
+}
+
 func (s *Service) persistModelSecret(provider, apiKey string) error {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return ErrStrongholdAccessFailed
 	}
@@ -2701,7 +3787,7 @@ func (s *Service) persistModelSecret(provider, apiKey string) error {
 }
 
 func (s *Service) deleteModelSecret(provider string) error {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return ErrStrongholdAccessFailed
 	}
@@ -2713,6 +3799,125 @@ func (s *Service) deleteModelSecret(provider string) error {
 		return normalizedErr
 	}
 	return nil
+}
+
+func (s *Service) captureModelSecretRollback(provider string) (modelSecretRollback, error) {
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
+	rollback := modelSecretRollback{provider: resolvedProvider}
+	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
+		return rollback, nil
+	}
+	record, err := s.storage.SecretStore().GetSecret(context.Background(), "model", resolvedProvider+"_api_key")
+	if err == nil {
+		rollback.record = record
+		rollback.existed = true
+		return rollback, nil
+	}
+	normalizedErr := storage.NormalizeSecretStoreError(err)
+	if errors.Is(normalizedErr, storage.ErrSecretNotFound) {
+		return rollback, nil
+	}
+	if errors.Is(normalizedErr, storage.ErrStrongholdAccessFailed) {
+		return rollback, ErrStrongholdAccessFailed
+	}
+	return rollback, normalizedErr
+}
+
+func (s *Service) rollbackModelSecretMutations(rollbacks []modelSecretRollback) {
+	for index := len(rollbacks) - 1; index >= 0; index-- {
+		rollback := rollbacks[index]
+		if rollback.provider == "" || s == nil || s.storage == nil || s.storage.SecretStore() == nil {
+			continue
+		}
+		if rollback.existed {
+			_ = s.storage.SecretStore().PutSecret(context.Background(), rollback.record)
+			continue
+		}
+		_ = s.storage.SecretStore().DeleteSecret(context.Background(), "model", rollback.provider+"_api_key")
+	}
+}
+
+func (s *Service) reloadRuntimeModelForSettings(settings map[string]any) error {
+	if s == nil || s.runEngine == nil {
+		return nil
+	}
+	resolvedConfig := model.RuntimeConfigFromSettings(s.currentModelConfig(), settings)
+	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+		ModelConfig:  resolvedConfig,
+		SecretSource: model.NewStaticSecretSource(s.storage),
+	})
+	if err != nil {
+		if shouldFallbackRuntimeModelReload(err) {
+			modelService = model.NewService(resolvedConfig)
+		} else {
+			return err
+		}
+	}
+	s.ReplaceModel(modelService)
+	return nil
+}
+
+func settingsPatchPathsFromPreview(patch map[string]any) []string {
+	if len(patch) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(patch))
+	for key := range patch {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	paths := make([]string, 0, len(keys))
+	for _, key := range keys {
+		nextPrefix := key
+		if nested, ok := patch[key].(map[string]any); ok && len(nested) > 0 {
+			for _, child := range settingsPatchPathsFromPreview(nested) {
+				paths = append(paths, nextPrefix+"."+child)
+			}
+			continue
+		}
+		paths = append(paths, nextPrefix)
+	}
+	return paths
+}
+
+func mergeSettingsPreview(target map[string]any, patch map[string]any) {
+	for key, value := range patch {
+		patchMap, ok := value.(map[string]any)
+		if ok {
+			currentMap, currentOK := target[key].(map[string]any)
+			if !currentOK {
+				currentMap = map[string]any{}
+			}
+			mergeSettingsPreview(currentMap, patchMap)
+			target[key] = currentMap
+			continue
+		}
+		target[key] = value
+	}
+}
+
+func previewNeedsRestart(currentSettings, patch map[string]any) bool {
+	generalPatch := cloneMap(mapValue(patch, "general"))
+	if len(generalPatch) == 0 {
+		return false
+	}
+	nextLanguage, ok := generalPatch["language"]
+	if !ok {
+		return false
+	}
+	currentGeneral := cloneMap(mapValue(currentSettings, "general"))
+	currentLanguage, hasCurrentLanguage := currentGeneral["language"]
+	return !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage)
+}
+
+func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []string) string {
+	if previewNeedsRestart(currentSettings, patch) {
+		return "restart_required"
+	}
+	if modelSettingsTouched(updatedKeys) {
+		return "next_task_effective"
+	}
+	return "immediate"
 }
 
 func strongholdStatusFromStorage(store *storage.Service) map[string]any {
@@ -2735,23 +3940,173 @@ func strongholdStatusFromStorage(store *storage.Service) map[string]any {
 	}
 }
 
-func (s *Service) providerForSettingsUpdate(dataLog map[string]any) string {
-	return providerFromSettings(dataLog, s.defaultSettingsProvider())
+func normalizeSettingsScope(scope string) string {
+	switch strings.TrimSpace(scope) {
+	case "", "all":
+		return "all"
+	case "data_log":
+		return "models"
+	default:
+		return strings.TrimSpace(scope)
+	}
+}
+
+func normalizeSettingsSnapshot(settings map[string]any) map[string]any {
+	cloned := cloneMap(settings)
+	if cloned == nil {
+		return map[string]any{}
+	}
+	models := cloneMap(mapValue(cloned, "models"))
+	if models == nil {
+		models = map[string]any{}
+	}
+	if legacy := cloneMap(mapValue(cloned, "data_log")); len(legacy) > 0 {
+		for key, value := range legacy {
+			if key == "provider" {
+				models[key] = value
+				continue
+			}
+			credentials := cloneMap(mapValue(models, "credentials"))
+			if credentials == nil {
+				credentials = map[string]any{}
+			}
+			credentials[key] = value
+			models["credentials"] = credentials
+		}
+		delete(cloned, "data_log")
+	}
+	models = normalizeModelSettingsSection(models)
+	if len(models) > 0 {
+		cloned["models"] = models
+	}
+	return cloned
+}
+
+func normalizeSettingsUpdateParams(params map[string]any) map[string]any {
+	cloned := cloneMap(params)
+	if cloned == nil {
+		return map[string]any{}
+	}
+	models := cloneMap(mapValue(cloned, "models"))
+	if models == nil {
+		models = map[string]any{}
+	}
+	if legacy := cloneMap(mapValue(cloned, "data_log")); len(legacy) > 0 {
+		for key, value := range legacy {
+			if key == "provider_api_key_configured" || key == "stronghold" {
+				continue
+			}
+			models[key] = value
+		}
+		delete(cloned, "data_log")
+	}
+	if credentials := cloneMap(mapValue(models, "credentials")); len(credentials) > 0 {
+		for key, value := range credentials {
+			if key == "provider_api_key_configured" || key == "stronghold" {
+				continue
+			}
+			models[key] = value
+		}
+		delete(models, "credentials")
+	}
+	if len(models) > 0 {
+		cloned["models"] = models
+	}
+	return cloned
+}
+
+func normalizeModelSettingsSection(models map[string]any) map[string]any {
+	cloned := cloneMap(models)
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	credentials := cloneMap(mapValue(cloned, "credentials"))
+	if credentials == nil {
+		credentials = map[string]any{}
+	}
+	for _, key := range []string{"budget_auto_downgrade", "base_url", "model", "budget_policy"} {
+		if value, ok := cloned[key]; ok {
+			credentials[key] = value
+			delete(cloned, key)
+		}
+	}
+	if len(credentials) > 0 {
+		cloned["credentials"] = credentials
+	}
+	return cloned
+}
+
+func modelSettingsSection(settings map[string]any) map[string]any {
+	return cloneMap(mapValue(normalizeSettingsSnapshot(settings), "models"))
+}
+
+func modelCredentialSettings(settings map[string]any) map[string]any {
+	return cloneMap(mapValue(modelSettingsSection(settings), "credentials"))
+}
+
+func outwardSettingsUpdatePatch(settings map[string]any) map[string]any {
+	cloned := normalizeSettingsSnapshot(settings)
+	models := cloneMap(mapValue(cloned, "models"))
+	if len(models) == 0 {
+		return cloned
+	}
+	credentials := cloneMap(mapValue(models, "credentials"))
+	delete(models, "credentials")
+	for _, key := range []string{"budget_auto_downgrade", "provider_api_key_configured", "base_url", "model", "stronghold"} {
+		if value, ok := credentials[key]; ok {
+			models[key] = value
+		}
+	}
+	cloned["models"] = models
+	return cloned
+}
+
+func outwardSettingsUpdateKeys(internalKeys, secretUpdatedKeys []string) []string {
+	seen := make(map[string]struct{}, len(internalKeys)+len(secretUpdatedKeys))
+	result := make([]string, 0, len(internalKeys)+len(secretUpdatedKeys))
+	for _, key := range internalKeys {
+		mapped := key
+		if strings.HasPrefix(mapped, "models.credentials.") {
+			mapped = "models." + strings.TrimPrefix(mapped, "models.credentials.")
+		}
+		if _, ok := seen[mapped]; ok {
+			continue
+		}
+		seen[mapped] = struct{}{}
+		result = append(result, mapped)
+	}
+	for _, key := range secretUpdatedKeys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (s *Service) providerForSettingsUpdate(models map[string]any) string {
+	merged := modelSettingsSection(s.runEngine.Settings())
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for key, value := range normalizeModelSettingsSection(models) {
+		merged[key] = value
+	}
+	return providerFromSettings(merged, s.defaultSettingsProvider())
 }
 
 func (s *Service) defaultSettingsProvider() string {
-	if s.model == nil {
+	if s.currentModel() == nil {
 		return ""
 	}
-	return strings.TrimSpace(s.model.Provider())
+	return strings.TrimSpace(s.currentModel().Provider())
 }
 
-func providerFromSettings(dataLog map[string]any, fallback string) string {
-	provider := firstNonEmptyString(stringValue(dataLog, "provider", ""), fallback)
-	if provider == "openai" {
-		return model.OpenAIResponsesProvider
-	}
-	return provider
+func providerFromSettings(models map[string]any, fallback string) string {
+	provider := firstNonEmptyString(stringValue(models, "provider", ""), fallback)
+	return model.CanonicalProviderName(provider)
 }
 
 func matchesTaskGroup(task runengine.TaskRecord, group string) bool {
@@ -2834,6 +4189,8 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		RequestSource:     firstNonEmptyString(strings.TrimSpace(record.RequestSource), strings.TrimSpace(record.Snapshot.Source)),
+		RequestTrigger:    firstNonEmptyString(strings.TrimSpace(record.RequestTrigger), strings.TrimSpace(record.Snapshot.Trigger)),
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -2849,6 +4206,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		BubbleMessage:     cloneMap(record.BubbleMessage),
 		DeliveryResult:    cloneMap(record.DeliveryResult),
 		Artifacts:         cloneMapSlice(record.Artifacts),
+		Citations:         cloneMapSlice(record.Citations),
 		AuditRecords:      cloneMapSlice(record.AuditRecords),
 		MirrorReferences:  cloneMapSlice(record.MirrorReferences),
 		SecuritySummary:   cloneMap(record.SecuritySummary),
@@ -2870,17 +4228,16 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 }
 
 // structuredTaskRecordToRuntime hydrates one task-centric read model from the
-// new first-class tasks/task_steps tables while still honoring snapshot_json as
-// the compatibility bridge during the migration away from task_runs-only reads.
-func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (runengine.TaskRecord, bool) {
+// new first-class tasks/task_steps tables while still reusing snapshot_json as
+// the compatibility bridge for fields that are not fully normalized yet.
+func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, includeCompatibility bool) (runengine.TaskRecord, bool) {
+	var snapshotCompatibility runengine.TaskRecord
+	var snapshotCompatibilityOK bool
 	if strings.TrimSpace(record.SnapshotJSON) != "" {
 		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
 		if err == nil {
-			runtime := taskRecordFromStorage(snapshot)
-			if len(runtime.Timeline) == 0 {
-				runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
-			}
-			return runtime, true
+			snapshotCompatibility = taskRecordFromStorage(snapshot)
+			snapshotCompatibilityOK = true
 		}
 	}
 	startedAt, err := time.Parse(time.RFC3339Nano, record.StartedAt)
@@ -2907,7 +4264,9 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 	runtime := runengine.TaskRecord{
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
-		RunID:             record.RunID,
+		RunID:             strings.TrimSpace(record.RunID),
+		RequestSource:     record.RequestSource,
+		RequestTrigger:    record.RequestTrigger,
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -2922,8 +4281,57 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 		Timeline:          s.taskTimelineFromStructuredStorage(record.TaskID),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
+	s.hydrateStructuredTaskFormalArtifacts(&runtime)
+	s.hydrateStructuredTaskSessionAndRun(&runtime)
 	s.hydrateStructuredTaskGovernance(&runtime)
+	if snapshotCompatibilityOK {
+		runtime = mergeStructuredTaskDetailCompatibility(runtime, snapshotCompatibility)
+	}
 	return runtime, true
+}
+
+// hydrateStructuredTaskFormalArtifacts rebuilds task-facing evidence fields from
+// first-class stores before any task_run compatibility fallback is considered.
+func (s *Service) hydrateStructuredTaskFormalArtifacts(task *runengine.TaskRecord) {
+	if s == nil || s.storage == nil || task == nil {
+		return
+	}
+	task.Artifacts = s.loadArtifactsFromStorage(task.TaskID, 0, 0)
+	task.Citations = s.loadTaskCitationsFromStorage(task.TaskID)
+	task.AuditRecords = s.loadAuditRecordsFromStorage(task.TaskID, 0, 0)
+	task.LatestToolCall = s.latestToolCallFromStorage(task.TaskID, task.RunID)
+	if deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID); deliveryResult != nil {
+		task.DeliveryResult = deliveryResult
+	}
+}
+
+// hydrateStructuredTaskSessionAndRun uses the first-class sessions/runs stores
+// to keep the formal `session -> task -> run` linkage queryable even when the
+// legacy task_run snapshot bridge is absent.
+func (s *Service) hydrateStructuredTaskSessionAndRun(task *runengine.TaskRecord) {
+	if s == nil || s.storage == nil || task == nil {
+		return
+	}
+	if s.storage.SessionStore() != nil && strings.TrimSpace(task.SessionID) != "" {
+		if session, err := s.storage.SessionStore().GetSession(context.Background(), task.SessionID); err == nil {
+			if strings.TrimSpace(task.Title) == "" {
+				task.Title = session.Title
+			}
+			if strings.TrimSpace(task.SessionID) == "" {
+				task.SessionID = session.SessionID
+			}
+		}
+	}
+	if s.storage.LoopRuntimeStore() != nil && strings.TrimSpace(task.RunID) != "" {
+		if runRecord, err := s.storage.LoopRuntimeStore().GetRun(context.Background(), task.RunID); err == nil {
+			if strings.TrimSpace(task.SessionID) == "" {
+				task.SessionID = runRecord.SessionID
+			}
+			if strings.TrimSpace(task.LoopStopReason) == "" {
+				task.LoopStopReason = runRecord.StopReason
+			}
+		}
+	}
 }
 
 // hydrateStructuredTaskGovernance rebuilds the task-facing governance fields
@@ -2931,6 +4339,15 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	if s == nil || s.storage == nil || task == nil {
 		return
+	}
+	if authorizationRecord := s.latestAuthorizationRecordFromStorage(task.TaskID); authorizationRecord != nil {
+		task.Authorization = authorizationRecord
+	}
+	if deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID); len(deliveryResult) > 0 {
+		task.DeliveryResult = deliveryResult
+	}
+	if citations := s.loadTaskCitationsFromStorage(task.TaskID); len(citations) > 0 {
+		task.Citations = citations
 	}
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {
@@ -2951,6 +4368,161 @@ func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	task.SecuritySummary = securitySummary
 }
 
+// selectTaskDetailAuthorizationRecord prefers the newest formal authorization
+// record so task detail does not regress to snapshot-era governance anchors once
+// first-class authorization storage is available.
+func selectTaskDetailAuthorizationRecord(taskID string, runtimeRecord map[string]any, storageRecord map[string]any) map[string]any {
+	normalizedRuntime := normalizeTaskDetailAuthorizationRecord(taskID, runtimeRecord)
+	normalizedStorage := normalizeTaskDetailAuthorizationRecord(taskID, storageRecord)
+	return preferNewerTaskDetailRecord(normalizedRuntime, normalizedStorage, "created_at")
+}
+
+// selectTaskDetailAuditRecord keeps screen tasks anchored to the screen-evidence
+// audit chain even when newer generic delivery/runtime audits exist later in the
+// same task. Non-screen tasks still use the latest normalized audit record.
+func selectTaskDetailAuditRecord(task runengine.TaskRecord, runtimeAuditRecords []map[string]any, storageAuditRecords []map[string]any) map[string]any {
+	latestOverall := latestNormalizedTaskAuditRecord(task.TaskID, runtimeAuditRecords, storageAuditRecords)
+	if !isScreenTaskDetail(task) {
+		return latestOverall
+	}
+	latestScreen := latestScreenTaskAuditRecord(task.TaskID, runtimeAuditRecords, storageAuditRecords)
+	if latestScreen == nil {
+		return latestOverall
+	}
+	if shouldPreferLatestTaskAuditOverScreenAudit(latestOverall, latestScreen) {
+		return latestOverall
+	}
+	return latestScreen
+}
+
+// shouldPreferLatestTaskAuditOverScreenAudit keeps screen tasks anchored to
+// screen evidence by default, but lets newer terminal governance records such as
+// failures or restore_apply outcomes override stale screen-capture success logs.
+func shouldPreferLatestTaskAuditOverScreenAudit(latestOverall map[string]any, latestScreen map[string]any) bool {
+	if len(latestOverall) == 0 {
+		return false
+	}
+	if len(latestScreen) == 0 {
+		return true
+	}
+	if !parseTaskDetailRecordTime(stringValue(latestOverall, "created_at", "")).After(parseTaskDetailRecordTime(stringValue(latestScreen, "created_at", ""))) {
+		return false
+	}
+	if isScreenTaskAuditRecord(latestOverall) {
+		return true
+	}
+	return isTerminalGovernanceAuditRecord(latestOverall)
+}
+
+func latestNormalizedTaskAuditRecord(taskID string, auditGroups ...[]map[string]any) map[string]any {
+	var latest map[string]any
+	for _, group := range auditGroups {
+		for _, auditRecord := range group {
+			normalized := normalizeTaskDetailAuditRecord(taskID, auditRecord)
+			if normalized == nil {
+				continue
+			}
+			latest = preferNewerTaskDetailRecord(latest, normalized, "created_at")
+		}
+	}
+	return latest
+}
+
+func latestScreenTaskAuditRecord(taskID string, auditGroups ...[]map[string]any) map[string]any {
+	var latest map[string]any
+	for _, group := range auditGroups {
+		for _, auditRecord := range group {
+			normalized := normalizeTaskDetailAuditRecord(taskID, auditRecord)
+			if normalized == nil || !isScreenTaskAuditRecord(normalized) {
+				continue
+			}
+			latest = preferNewerTaskDetailRecord(latest, normalized, "created_at")
+		}
+	}
+	return latest
+}
+
+func isScreenTaskAuditRecord(auditRecord map[string]any) bool {
+	if len(auditRecord) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(auditRecord, "type", "")) == "screen_capture" {
+		return true
+	}
+	if strings.HasPrefix(strings.TrimSpace(stringValue(auditRecord, "action", "")), "screen.capture.") {
+		return true
+	}
+	target := strings.ToLower(strings.TrimSpace(stringValue(auditRecord, "target", "")))
+	return strings.Contains(target, "screen")
+}
+
+func isTerminalGovernanceAuditRecord(auditRecord map[string]any) bool {
+	if len(auditRecord) == 0 {
+		return false
+	}
+	result := strings.TrimSpace(stringValue(auditRecord, "result", ""))
+	if result != "" && result != "success" {
+		return true
+	}
+	action := strings.TrimSpace(stringValue(auditRecord, "action", ""))
+	if strings.HasPrefix(action, "restore_") || strings.HasPrefix(action, "authorization_") {
+		return true
+	}
+	return strings.TrimSpace(stringValue(auditRecord, "type", "")) == "recovery"
+}
+
+func isScreenTaskDetail(task runengine.TaskRecord) bool {
+	if stringValue(task.Intent, "name", "") == "screen_analyze" || strings.TrimSpace(task.SourceType) == "screen_capture" {
+		return true
+	}
+	if strings.TrimSpace(stringValue(task.PendingExecution, "kind", "")) == "screen_analysis" {
+		return true
+	}
+	for _, artifact := range task.Artifacts {
+		if strings.TrimSpace(stringValue(artifact, "artifact_type", "")) == "screen_capture" {
+			return true
+		}
+	}
+	for _, citation := range task.Citations {
+		if strings.TrimSpace(stringValue(citation, "artifact_type", "")) == "screen_capture" || strings.TrimSpace(stringValue(citation, "screen_session_id", "")) != "" {
+			return true
+		}
+	}
+	if strings.TrimSpace(stringValue(task.ApprovalRequest, "operation_name", "")) == "screen_capture" {
+		return true
+	}
+	return false
+}
+
+func preferNewerTaskDetailRecord(left map[string]any, right map[string]any, timeKey string) map[string]any {
+	if len(left) == 0 {
+		return cloneMap(right)
+	}
+	if len(right) == 0 {
+		return cloneMap(left)
+	}
+	leftTime := parseTaskDetailRecordTime(stringValue(left, timeKey, ""))
+	rightTime := parseTaskDetailRecordTime(stringValue(right, timeKey, ""))
+	if rightTime.After(leftTime) {
+		return cloneMap(right)
+	}
+	return cloneMap(left)
+}
+
+func parseTaskDetailRecordTime(value string) time.Time {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+		return parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return parsed
+	}
+	return time.Time{}
+}
+
 func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel string) map[string]any {
 	if s == nil || s.storage == nil || s.storage.ApprovalRequestStore() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
@@ -2966,6 +4538,17 @@ func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel st
 		}
 	}
 	return nil
+}
+
+func (s *Service) latestAuthorizationRecordFromStorage(taskID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.AuthorizationRecordStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	items, _, err := s.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 1, 0)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	return normalizeTaskDetailAuthorizationRecord(taskID, authorizationRecordRecordToMap(items[0]))
 }
 
 func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string]any {
@@ -2987,6 +4570,18 @@ func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string
 		}
 	}
 	return result
+}
+
+func authorizationRecordRecordToMap(record storage.AuthorizationRecordRecord) map[string]any {
+	return map[string]any{
+		"authorization_record_id": record.AuthorizationRecordID,
+		"task_id":                 record.TaskID,
+		"approval_id":             record.ApprovalID,
+		"decision":                record.Decision,
+		"remember_rule":           record.RememberRule,
+		"operator":                record.Operator,
+		"created_at":              record.CreatedAt,
+	}
 }
 
 func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.TaskStepRecord {
@@ -3579,7 +5174,45 @@ func (s *Service) latestAuditRecordFromStorage(taskID string) map[string]any {
 	if err != nil || len(items) == 0 {
 		return nil
 	}
-	return items[0].Map()
+	return normalizeTaskDetailAuditRecord(taskID, items[0].Map())
+}
+
+func (s *Service) loadAuditRecordsFromStorage(taskID string, limit, offset int) []map[string]any {
+	if s == nil || s.storage == nil || s.storage.AuditStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.Map())
+	}
+	return result
+}
+
+func (s *Service) latestToolCallFromStorage(taskID, runID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.ToolCallSink() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	items, _, err := s.storage.ToolCallStore().ListToolCalls(context.Background(), taskID, runID, 1, 0)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	item := items[0]
+	return map[string]any{
+		"tool_call_id": item.ToolCallID,
+		"run_id":       item.RunID,
+		"task_id":      item.TaskID,
+		"step_id":      item.StepID,
+		"tool_name":    item.ToolName,
+		"status":       item.Status,
+		"input":        cloneMap(item.Input),
+		"output":       cloneMap(item.Output),
+		"error_code":   item.ErrorCode,
+		"duration_ms":  item.DurationMS,
+	}
 }
 
 func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool) map[string]any {
@@ -3891,67 +5524,79 @@ func (s *Service) writeRestoreAuditRecord(taskID string, point checkpoint.Recove
 	return nil
 }
 
-func findTaskRecordFromStorage(records []storage.TaskRunRecord, taskID string) (runengine.TaskRecord, bool) {
-	for _, record := range records {
-		if record.TaskID == taskID {
-			return runengine.TaskRecord{
-				TaskID:            record.TaskID,
-				SessionID:         record.SessionID,
-				RunID:             record.RunID,
-				Title:             record.Title,
-				SourceType:        record.SourceType,
-				Status:            record.Status,
-				Intent:            cloneMap(record.Intent),
-				PreferredDelivery: record.PreferredDelivery,
-				FallbackDelivery:  record.FallbackDelivery,
-				CurrentStep:       record.CurrentStep,
-				RiskLevel:         record.RiskLevel,
-				StartedAt:         record.StartedAt,
-				UpdatedAt:         record.UpdatedAt,
-				FinishedAt:        cloneStorageTimePointer(record.FinishedAt),
-				Timeline:          taskTimelineFromStorage(record.Timeline),
-				BubbleMessage:     cloneMap(record.BubbleMessage),
-				DeliveryResult:    cloneMap(record.DeliveryResult),
-				Artifacts:         cloneMapSlice(record.Artifacts),
-				AuditRecords:      cloneMapSlice(record.AuditRecords),
-				MirrorReferences:  cloneMapSlice(record.MirrorReferences),
-				SecuritySummary:   cloneMap(record.SecuritySummary),
-				ApprovalRequest:   cloneMap(record.ApprovalRequest),
-				PendingExecution:  cloneMap(record.PendingExecution),
-				Authorization:     cloneMap(record.Authorization),
-				ImpactScope:       cloneMap(record.ImpactScope),
-				TokenUsage:        cloneMap(record.TokenUsage),
-				MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
-				MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
-				StorageWritePlan:  cloneMap(record.StorageWritePlan),
-				ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
-				Notifications:     taskNotificationsFromStorage(record.Notifications),
-				LatestEvent:       cloneMap(record.LatestEvent),
-				LatestToolCall:    cloneMap(record.LatestToolCall),
-				CurrentStepStatus: record.CurrentStepStatus,
-			}, true
-		}
-	}
-	return runengine.TaskRecord{}, false
-}
-
-func taskTimelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
-	if len(timeline) == 0 {
+func normalizeTaskDetailAuthorizationRecord(taskID string, authorizationRecord map[string]any) map[string]any {
+	if len(authorizationRecord) == 0 {
 		return nil
 	}
-	result := make([]runengine.TaskStepRecord, len(timeline))
-	for index, step := range timeline {
-		result[index] = runengine.TaskStepRecord{
-			StepID:        step.StepID,
-			TaskID:        step.TaskID,
-			Name:          step.Name,
-			Status:        step.Status,
-			OrderIndex:    step.OrderIndex,
-			InputSummary:  step.InputSummary,
-			OutputSummary: step.OutputSummary,
+
+	recordID := strings.TrimSpace(stringValue(authorizationRecord, "authorization_record_id", ""))
+	recordTaskID := strings.TrimSpace(stringValue(authorizationRecord, "task_id", ""))
+	approvalID := strings.TrimSpace(stringValue(authorizationRecord, "approval_id", ""))
+	decision := normalizeTaskDetailAuthorizationDecision(stringValue(authorizationRecord, "decision", ""))
+	operator := strings.TrimSpace(stringValue(authorizationRecord, "operator", ""))
+	createdAt := strings.TrimSpace(stringValue(authorizationRecord, "created_at", ""))
+	if recordID == "" || recordTaskID != taskID || approvalID == "" || decision == "" || operator == "" || createdAt == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"authorization_record_id": recordID,
+		"task_id":                 recordTaskID,
+		"approval_id":             approvalID,
+		"decision":                decision,
+		"remember_rule":           boolValue(authorizationRecord, "remember_rule", false),
+		"operator":                operator,
+		"created_at":              createdAt,
+	}
+}
+
+func normalizeTaskDetailAuthorizationDecision(decision string) string {
+	switch strings.TrimSpace(decision) {
+	case "allow_once", "allow_always":
+		return "allow_once"
+	case "deny_once", "deny_always":
+		return "deny_once"
+	default:
+		return ""
+	}
+}
+
+func latestFormalTaskAuditRecord(taskID string, auditRecords []map[string]any) map[string]any {
+	for index := len(auditRecords) - 1; index >= 0; index-- {
+		if normalized := normalizeTaskDetailAuditRecord(taskID, auditRecords[index]); normalized != nil {
+			return normalized
 		}
 	}
-	return result
+	return nil
+}
+
+func normalizeTaskDetailAuditRecord(taskID string, auditRecord map[string]any) map[string]any {
+	if len(auditRecord) == 0 {
+		return nil
+	}
+
+	recordID := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "audit_id", ""), stringValue(auditRecord, "audit_record_id", "")))
+	recordTaskID := strings.TrimSpace(stringValue(auditRecord, "task_id", ""))
+	recordType := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "type", ""), stringValue(auditRecord, "category", "")))
+	action := strings.TrimSpace(stringValue(auditRecord, "action", ""))
+	summary := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "summary", ""), stringValue(auditRecord, "reason", "")))
+	target := strings.TrimSpace(firstNonEmptyString(stringValue(auditRecord, "target", ""), impactScopeTarget(mapValue(auditRecord, "impact_scope"), "")))
+	result := strings.TrimSpace(stringValue(auditRecord, "result", ""))
+	createdAt := strings.TrimSpace(stringValue(auditRecord, "created_at", ""))
+	if recordID == "" || recordTaskID != taskID || recordType == "" || action == "" || summary == "" || target == "" || result == "" || createdAt == "" {
+		return nil
+	}
+
+	return map[string]any{
+		"audit_id":   recordID,
+		"task_id":    recordTaskID,
+		"type":       recordType,
+		"action":     action,
+		"summary":    summary,
+		"target":     target,
+		"result":     result,
+		"created_at": createdAt,
+	}
 }
 
 func taskNotificationsFromStorage(values []storage.NotificationSnapshot) []runengine.NotificationRecord {
@@ -4551,6 +6196,7 @@ func (s *Service) assessTaskGovernance(task runengine.TaskRecord, taskIntent map
 	return s.executor.AssessGovernance(context.Background(), execution.Request{
 		TaskID:       task.TaskID,
 		RunID:        task.RunID,
+		SourceType:   task.SourceType,
 		Title:        task.Title,
 		Intent:       taskIntent,
 		Snapshot:     snapshotFromTask(task),
@@ -4707,6 +6353,10 @@ func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]
 	return mergeArtifactsWithStored(delivery.EnsureArtifactIdentifiers(taskID, runtimeArtifacts), s.loadArtifactsFromStorage(taskID, 0, 0))
 }
 
+func (s *Service) citationsForTask(taskID string, runtimeCitations []map[string]any) []map[string]any {
+	return mergeCitationsWithStored(s.loadTaskCitationsFromStorage(taskID), runtimeCitations)
+}
+
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
 	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
@@ -4819,6 +6469,43 @@ func mergeArtifactsWithStored(runtimeArtifacts, storedArtifacts []map[string]any
 	return merged
 }
 
+func mergeCitationsWithStored(storedCitations, runtimeCitations []map[string]any) []map[string]any {
+	if len(storedCitations) == 0 && len(runtimeCitations) == 0 {
+		return nil
+	}
+	merged := make([]map[string]any, 0, len(storedCitations)+len(runtimeCitations))
+	seen := make(map[string]struct{})
+	for _, group := range [][]map[string]any{storedCitations, runtimeCitations} {
+		for index, citation := range group {
+			mergeKey := citationMergeKey(citation, index)
+			if _, ok := seen[mergeKey]; ok {
+				continue
+			}
+			seen[mergeKey] = struct{}{}
+			merged = append(merged, cloneMap(citation))
+		}
+	}
+	return merged
+}
+
+func citationMergeKey(citation map[string]any, index int) string {
+	if citationID := strings.TrimSpace(stringValue(citation, "citation_id", "")); citationID != "" {
+		return citationID
+	}
+	parts := []string{
+		strings.TrimSpace(stringValue(citation, "task_id", "")),
+		strings.TrimSpace(stringValue(citation, "source_ref", "")),
+		strings.TrimSpace(stringValue(citation, "artifact_id", "")),
+		strings.TrimSpace(stringValue(citation, "label", "")),
+		strings.TrimSpace(stringValue(citation, "excerpt_text", "")),
+	}
+	key := strings.Join(parts, "|")
+	if strings.Trim(key, "|") != "" {
+		return key
+	}
+	return fmt.Sprintf("citation_%d", index)
+}
+
 func artifactMapFromStorage(record storage.ArtifactRecord) map[string]any {
 	payload := map[string]any{}
 	if strings.TrimSpace(record.DeliveryPayloadJSON) != "" {
@@ -4918,16 +6605,17 @@ func previewTextForDeliveryType(deliveryType string) string {
 // The first P1 slice keeps the trigger set intentionally small and auditable:
 // provider/API-key unavailability and token/cost pressure on the current task.
 func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskIntent map[string]any) budgetDowngradeDecision {
-	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
-	if !boolValue(dataLogSettings, "budget_auto_downgrade", true) {
+	modelSettings := modelSettingsSection(s.runEngine.Settings())
+	modelCredentials := modelCredentialSettings(s.runEngine.Settings())
+	if !boolValue(modelCredentials, "budget_auto_downgrade", true) {
 		return budgetDowngradeDecision{}
 	}
-	policy := budgetPolicySettings(dataLogSettings)
+	policy := budgetPolicySettings(modelCredentials)
 	decision := budgetDowngradeDecision{
 		Enabled:      true,
 		TriggerStage: "execution_preflight",
 	}
-	provider := providerFromSettings(dataLogSettings, model.OpenAIResponsesProvider)
+	provider := providerFromSettings(modelSettings, model.OpenAIResponsesProvider)
 	if !supportsBudgetProvider(provider) {
 		decision.Applied = true
 		decision.TriggerReason = "provider_unavailable"
@@ -5007,7 +6695,7 @@ func containsString(values []string, expected string) bool {
 }
 
 func supportsBudgetProvider(provider string) bool {
-	switch strings.TrimSpace(provider) {
+	switch model.CanonicalProviderName(provider) {
 	case "", model.OpenAIResponsesProvider:
 		return true
 	default:
@@ -5015,8 +6703,8 @@ func supportsBudgetProvider(provider string) bool {
 	}
 }
 
-func budgetPolicySettings(dataLogSettings map[string]any) map[string]any {
-	policy := cloneMap(mapValue(dataLogSettings, "budget_policy"))
+func budgetPolicySettings(modelCredentials map[string]any) map[string]any {
+	policy := cloneMap(mapValue(modelCredentials, "budget_policy"))
 	if policy == nil {
 		policy = map[string]any{}
 	}
@@ -5180,6 +6868,13 @@ func cloneMap(values map[string]any) map[string]any {
 	return result
 }
 
+func optionalFormalDeliveryResult(deliveryResult map[string]any) any {
+	if len(deliveryResult) == 0 {
+		return nil
+	}
+	return deliveryResult
+}
+
 // cloneMapSlice recursively copies a []map[string]any payload.
 func cloneMapSlice(values []map[string]any) []map[string]any {
 	if len(values) == 0 {
@@ -5190,6 +6885,28 @@ func cloneMapSlice(values []map[string]any) []map[string]any {
 		result = append(result, cloneMap(value))
 	}
 	return result
+}
+
+func extensionAssetReferencesFromMaps(values []map[string]any) []storage.ExtensionAssetReference {
+	if len(values) == 0 {
+		return nil
+	}
+	items := make([]storage.ExtensionAssetReference, 0, len(values))
+	for _, value := range values {
+		items = append(items, storage.ExtensionAssetReference{
+			AssetKind:    stringValue(value, "asset_kind", ""),
+			AssetID:      stringValue(value, "asset_id", ""),
+			Name:         stringValue(value, "name", ""),
+			Version:      stringValue(value, "version", ""),
+			Source:       stringValue(value, "source", ""),
+			Summary:      stringValue(value, "summary", ""),
+			Entry:        stringValue(value, "entry", ""),
+			Capabilities: stringSliceValue(value["capabilities"]),
+			Permissions:  stringSliceValue(value["permissions"]),
+			RuntimeNames: stringSliceValue(value["runtime_names"]),
+		})
+	}
+	return items
 }
 
 // mapValue safely reads a nested object field.
@@ -5311,6 +7028,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 		}
+		updatedTask = s.attachFormalCitations(processingTask, updatedTask, nil, nil, deliveryResult, artifacts)
 		s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, deliveryResult, artifacts)
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
@@ -5319,6 +7037,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
 		TaskID:               processingTask.TaskID,
 		RunID:                processingTask.RunID,
+		SourceType:           processingTask.SourceType,
 		Title:                processingTask.Title,
 		Intent:               taskIntent,
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
@@ -5341,6 +7060,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		},
 	})
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
+	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
 	if err != nil {
 		auditDeliveryResult = nil
@@ -5364,6 +7084,13 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, err)
 		return failedTask, failureBubble, nil, nil, nil
 	}
+	if executionResult.LoopStopReason == string(agentloop.StopReasonNeedUserInput) {
+		waitingTask, waitingBubble, ok := s.reopenTaskForUserInput(processingTask, taskIntent, executionResult)
+		if !ok {
+			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
+		}
+		return waitingTask, waitingBubble, nil, nil, nil
+	}
 
 	resultBubble := s.delivery.BuildBubbleMessage(
 		processingTask.TaskID,
@@ -5376,8 +7103,191 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
+	s.persistExecutionDeliveryResult(updatedTask, taskIntent, executionResult.DeliveryResult)
+	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// reopenTaskForUserInput keeps the current task open when the agent loop stops
+// because the user's goal is still underspecified. The same task/session stays
+// alive so follow-up input can continue the mainline instead of creating a fake
+// completed delivery record.
+func (s *Service) reopenTaskForUserInput(task runengine.TaskRecord, taskIntent map[string]any, executionResult execution.Result) (runengine.TaskRecord, map[string]any, bool) {
+	clarificationText := firstNonEmptyString(
+		firstNonEmptyString(executionResult.BubbleText, stringValue(executionResult.DeliveryResult, "preview_text", "")),
+		"请补充你的目标。",
+	)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.ReopenWaitingInput(task.TaskID, task.Title, taskIntent, bubble)
+	return updatedTask, bubble, ok
+}
+
+// attachFormalCitations upgrades execution-side citation seeds into protocol-facing
+// citation objects so task detail can expose stable evidence references without
+// leaking raw tool outputs or worker-only payloads.
+func (s *Service) attachFormalCitations(sourceTask runengine.TaskRecord, persistedTask runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) runengine.TaskRecord {
+	citations := buildTaskCitations(sourceTask, toolCalls, toolOutput, deliveryResult, artifacts)
+	s.persistFormalCitations(persistedTask.TaskID, citations)
+	if _, ok := s.runEngine.SetCitations(persistedTask.TaskID, citations); ok {
+		if updatedTask, exists := s.runEngine.GetTask(persistedTask.TaskID); exists {
+			return updatedTask
+		}
+	}
+	return persistedTask
+}
+
+// persistFormalCitations keeps the first-class citation chain queryable even
+// after task_run compatibility snapshots have been compacted away.
+func (s *Service) persistFormalCitations(taskID string, citations []map[string]any) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return
+	}
+	records := make([]storage.CitationRecord, 0, len(citations))
+	for index, citation := range citations {
+		records = append(records, storage.CitationRecord{
+			CitationID:      stringValue(citation, "citation_id", ""),
+			TaskID:          firstNonEmptyString(stringValue(citation, "task_id", ""), taskID),
+			RunID:           stringValue(citation, "run_id", ""),
+			SourceType:      stringValue(citation, "source_type", "context"),
+			SourceRef:       stringValue(citation, "source_ref", ""),
+			Label:           stringValue(citation, "label", ""),
+			ArtifactID:      stringValue(citation, "artifact_id", ""),
+			ArtifactType:    stringValue(citation, "artifact_type", ""),
+			EvidenceRole:    stringValue(citation, "evidence_role", ""),
+			ExcerptText:     stringValue(citation, "excerpt_text", ""),
+			ScreenSessionID: stringValue(citation, "screen_session_id", ""),
+			OrderIndex:      index,
+		})
+	}
+	_ = s.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, records)
+}
+
+func buildTaskCitations(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, toolOutput map[string]any, deliveryResult map[string]any, artifacts []map[string]any) []map[string]any {
+	citations := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	artifactsByID := make(map[string]map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactID := stringValue(artifact, "artifact_id", "")
+		if strings.TrimSpace(artifactID) != "" {
+			artifactsByID[artifactID] = cloneMap(artifact)
+		}
+	}
+	for _, call := range toolCalls {
+		seed := mapValue(call.Output, "citation_seed")
+		if len(seed) == 0 {
+			continue
+		}
+		citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+		if len(citation) == 0 {
+			continue
+		}
+		citationID := stringValue(citation, "citation_id", "")
+		if _, ok := seen[citationID]; ok {
+			continue
+		}
+		seen[citationID] = struct{}{}
+		citations = append(citations, citation)
+	}
+	if seed := mapValue(toolOutput, "citation_seed"); len(seed) > 0 {
+		citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+		if len(citation) > 0 {
+			citationID := stringValue(citation, "citation_id", "")
+			if _, ok := seen[citationID]; !ok {
+				seen[citationID] = struct{}{}
+				citations = append(citations, citation)
+			}
+		}
+	}
+	if latestSeed := mapValue(task.LatestToolCall, "output"); len(latestSeed) > 0 {
+		seed := mapValue(latestSeed, "citation_seed")
+		if len(seed) > 0 {
+			citation := citationFromSeed(task, seed, artifactsByID, deliveryResult)
+			if len(citation) > 0 {
+				citationID := stringValue(citation, "citation_id", "")
+				if _, ok := seen[citationID]; !ok {
+					citations = append(citations, citation)
+				}
+			}
+		}
+	}
+	return citations
+}
+
+func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsByID map[string]map[string]any, deliveryResult map[string]any) map[string]any {
+	artifactID := stringValue(seed, "artifact_id", "")
+	artifactType := stringValue(seed, "artifact_type", "")
+	evidenceRole := stringValue(seed, "evidence_role", "")
+	ocrExcerpt := stringValue(seed, "ocr_excerpt", "")
+	sourceRef := firstNonEmptyString(artifactID, stringValue(seed, "screen_session_id", ""))
+	if strings.TrimSpace(sourceRef) == "" {
+		sourceRef = stringValue(mapValue(deliveryResult, "payload"), "task_id", task.TaskID)
+	}
+	labelParts := make([]string, 0, 3)
+	if strings.TrimSpace(evidenceRole) != "" {
+		labelParts = append(labelParts, evidenceRole)
+	}
+	if strings.TrimSpace(artifactType) != "" {
+		labelParts = append(labelParts, artifactType)
+	}
+	if strings.TrimSpace(ocrExcerpt) != "" {
+		labelParts = append(labelParts, truncateText(ocrExcerpt, 64))
+	}
+	label := strings.Join(labelParts, " | ")
+	if strings.TrimSpace(label) == "" {
+		label = "screen evidence"
+	}
+	sourceType := "context"
+	if _, ok := artifactsByID[artifactID]; ok {
+		sourceType = "file"
+	}
+	identity := stableCitationIdentity(task.TaskID, sourceType, sourceRef, seed)
+	result := map[string]any{
+		"citation_id": fmt.Sprintf("cit_%s_%s", task.TaskID, identity),
+		"task_id":     task.TaskID,
+		"run_id":      task.RunID,
+		"source_type": sourceType,
+		"source_ref":  sourceRef,
+		"label":       label,
+	}
+	if strings.TrimSpace(artifactID) != "" {
+		result["artifact_id"] = artifactID
+	}
+	if strings.TrimSpace(artifactType) != "" {
+		result["artifact_type"] = artifactType
+	}
+	if strings.TrimSpace(evidenceRole) != "" {
+		result["evidence_role"] = evidenceRole
+	}
+	if strings.TrimSpace(ocrExcerpt) != "" {
+		result["excerpt_text"] = ocrExcerpt
+	}
+	if screenSessionID := strings.TrimSpace(stringValue(seed, "screen_session_id", "")); screenSessionID != "" {
+		result["screen_session_id"] = screenSessionID
+	}
+	return result
+}
+
+// stableCitationIdentity derives a deterministic citation fingerprint from the
+// full formal seed so identical seeds collapse while distinct references on the
+// same artifact remain separately addressable.
+func stableCitationIdentity(taskID, sourceType, sourceRef string, seed map[string]any) string {
+	normalized := map[string]any{
+		"task_id":           taskID,
+		"source_type":       strings.TrimSpace(sourceType),
+		"source_ref":        strings.TrimSpace(sourceRef),
+		"artifact_id":       strings.TrimSpace(stringValue(seed, "artifact_id", "")),
+		"artifact_type":     strings.TrimSpace(stringValue(seed, "artifact_type", "")),
+		"evidence_role":     strings.TrimSpace(stringValue(seed, "evidence_role", "")),
+		"ocr_excerpt":       strings.TrimSpace(stringValue(seed, "ocr_excerpt", "")),
+		"screen_session_id": strings.TrimSpace(stringValue(seed, "screen_session_id", "")),
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return "evidence"
+	}
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:8])
 }
 
 func executionAttemptIndex(previousTask, processingTask runengine.TaskRecord) int {
@@ -5421,6 +7331,7 @@ func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot cont
 		OutputText:      result.Content,
 		DeliveryResult:  cloneMap(result.DeliveryResult),
 		Artifacts:       cloneMapSlice(result.Artifacts),
+		ExtensionAssets: extensionAssetReferencesFromMaps(result.ExtensionAssets),
 		ModelInvocation: cloneMap(result.ModelInvocation),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), result.ToolCalls...),
 		TokenUsage:      cloneMap(task.TokenUsage),
@@ -5597,6 +7508,148 @@ func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls 
 	return task
 }
 
+func (s *Service) persistExecutionToolCallEvents(task runengine.TaskRecord, taskIntent map[string]any, toolCalls []tools.ToolCallRecord) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || isAgentLoopTaskIntent(taskIntent) || len(toolCalls) == 0 {
+		return
+	}
+	startedAt := time.Now().UTC()
+	records := make([]storage.EventRecord, 0, len(toolCalls))
+	for index, toolCall := range toolCalls {
+		if strings.TrimSpace(toolCall.ToolName) == "" {
+			continue
+		}
+		createdAt := startedAt.Add(time.Duration(index) * time.Millisecond)
+		records = append(records, storage.EventRecord{
+			EventID:     executionToolCallEventID(task.TaskID, toolCall, index, createdAt),
+			RunID:       task.RunID,
+			TaskID:      task.TaskID,
+			StepID:      toolCall.StepID,
+			Type:        "tool_call.completed",
+			Level:       executionToolCallEventLevel(toolCall),
+			PayloadJSON: marshalOrchestratorEventPayload(executionToolCallEventPayload(task.TaskID, toolCall)),
+			CreatedAt:   createdAt.Format(time.RFC3339Nano),
+		})
+	}
+	if len(records) == 0 {
+		return
+	}
+	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), records)
+}
+
+func executionToolCallEventID(taskID string, toolCall tools.ToolCallRecord, index int, createdAt time.Time) string {
+	if sanitizedToolCallID := strings.TrimSpace(strings.ReplaceAll(toolCall.ToolCallID, ".", "_")); sanitizedToolCallID != "" {
+		return fmt.Sprintf("evt_%s_%s_%d", taskID, sanitizedToolCallID, index)
+	}
+	sanitizedToolName := strings.TrimSpace(strings.ReplaceAll(toolCall.ToolName, ".", "_"))
+	if sanitizedToolName == "" {
+		sanitizedToolName = "tool_call"
+	}
+	sanitizedStepID := strings.TrimSpace(strings.ReplaceAll(toolCall.StepID, ".", "_"))
+	if sanitizedStepID == "" {
+		sanitizedStepID = "task_scope"
+	}
+	return fmt.Sprintf("evt_%s_%s_%s_%d_%d_%d", taskID, sanitizedToolName, sanitizedStepID, index, createdAt.UnixNano(), persistedToolCallEventSeq.Add(1))
+}
+
+func (s *Service) persistExecutionDeliveryResult(task runengine.TaskRecord, taskIntent map[string]any, deliveryResult map[string]any) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || isAgentLoopTaskIntent(taskIntent) || len(deliveryResult) == 0 {
+		return
+	}
+	createdAt := time.Now().UTC()
+	deliveryResultID := fmt.Sprintf("delivery_result_%s_%d", task.TaskID, createdAt.UnixNano())
+	payloadJSON := marshalOrchestratorEventPayload(mapValue(deliveryResult, "payload"))
+	_ = s.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: deliveryResultID,
+		TaskID:           task.TaskID,
+		Type:             stringValue(deliveryResult, "type", "bubble"),
+		Title:            stringValue(deliveryResult, "title", ""),
+		PayloadJSON:      payloadJSON,
+		PreviewText:      stringValue(deliveryResult, "preview_text", ""),
+		CreatedAt:        createdAt.Format(time.RFC3339Nano),
+	})
+	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     fmt.Sprintf("evt_%s_delivery_ready_%d", task.TaskID, createdAt.UnixNano()),
+		RunID:       task.RunID,
+		TaskID:      task.TaskID,
+		Type:        "delivery.ready",
+		Level:       "info",
+		PayloadJSON: marshalOrchestratorEventPayload(executionDeliveryReadyPayload(task.TaskID, deliveryResultID, deliveryResult)),
+		CreatedAt:   createdAt.Add(time.Millisecond).Format(time.RFC3339Nano),
+	}})
+}
+
+func executionToolCallEventLevel(toolCall tools.ToolCallRecord) string {
+	switch toolCall.Status {
+	case tools.ToolCallStatusFailed, tools.ToolCallStatusTimeout:
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+func executionToolCallEventPayload(taskID string, toolCall tools.ToolCallRecord) map[string]any {
+	payload := map[string]any{
+		"task_id":      taskID,
+		"tool_call_id": toolCall.ToolCallID,
+		"tool_name":    toolCall.ToolName,
+		"status":       string(toolCall.Status),
+		"tool_status":  string(toolCall.Status),
+		"input":        cloneMapOrEmpty(toolCall.Input),
+		"output":       cloneMapOrEmpty(toolCall.Output),
+		"duration_ms":  toolCall.DurationMS,
+	}
+	if strings.TrimSpace(toolCall.StepID) != "" {
+		payload["step_id"] = toolCall.StepID
+	}
+	if toolCall.ErrorCode != nil {
+		payload["error_code"] = *toolCall.ErrorCode
+	}
+	for _, key := range []string{"path", "url", "output_path", "output_dir", "source", "execution_backend", "page_count", "frame_count"} {
+		if value, ok := toolCall.Output[key]; ok {
+			payload[key] = value
+			continue
+		}
+		if value, ok := toolCall.Input[key]; ok {
+			payload[key] = value
+		}
+	}
+	if summaryOutput, ok := toolCall.Output["summary_output"].(map[string]any); ok && len(summaryOutput) > 0 {
+		payload["summary_output"] = cloneMap(summaryOutput)
+	}
+	return payload
+}
+
+func executionDeliveryReadyPayload(taskID, deliveryResultID string, deliveryResult map[string]any) map[string]any {
+	payload := map[string]any{
+		"task_id":            taskID,
+		"delivery_result_id": deliveryResultID,
+		"delivery_type":      stringValue(deliveryResult, "type", "bubble"),
+		"preview_text":       stringValue(deliveryResult, "preview_text", ""),
+	}
+	deliveryPayload := mapValue(deliveryResult, "payload")
+	for _, key := range []string{"path", "url"} {
+		if value, ok := deliveryPayload[key]; ok {
+			payload[key] = value
+		}
+	}
+	return payload
+}
+
+func marshalOrchestratorEventPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return "{}"
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
+	return stringValue(taskIntent, "name", "") == "agent_loop"
+}
+
 func executionStepName(taskIntent map[string]any) string {
 	if stringValue(taskIntent, "name", "") == "agent_loop" {
 		return "agent_loop"
@@ -5627,6 +7680,7 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	auditAction := "execute_task"
 	auditTarget := impactScopeTarget(impactScope, targetPathFromIntent(taskIntent))
 	auditResult := "failed"
+	failureCode, failureCategory := classifyScreenFailure(task, err)
 	if errors.Is(err, execution.ErrRecoveryPointPrepareFailed) {
 		securityStatus = "execution_error"
 		stepName = "recovery_prepare_failed"
@@ -5639,10 +7693,58 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	if !ok {
 		return task, bubble
 	}
+	updatedTask = s.attachFormalCitations(task, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionResult.Artifacts)
 	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, auditType, auditAction, bubbleText, auditTarget, auditResult)
+	if len(auditRecord) > 0 {
+		metadata := cloneMap(mapValue(auditRecord, "metadata"))
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		if failureCode != "" {
+			metadata["failure_code"] = failureCode
+		}
+		if failureCategory != "" {
+			metadata["failure_category"] = failureCategory
+		}
+		if len(metadata) > 0 {
+			auditRecord["metadata"] = metadata
+		}
+	}
 	budgetFailureAudit := s.buildBudgetFailureAudit(updatedTask, err)
 	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord, budgetFailureAudit), nil)
 	return updatedTask, bubble
+}
+
+// classifyScreenFailure keeps screen-task runtime summaries and governance
+// metadata aligned with the formal protocol error names while still exposing a
+// task-facing failure category for UI grouping.
+func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string) {
+	if stringValue(task.Intent, "name", "") != "screen_analyze" && task.SourceType != "screen_capture" {
+		return "", ""
+	}
+	lowerError := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, tools.ErrApprovalRequired), errors.Is(err, tools.ErrScreenCaptureUnauthorized):
+		return "APPROVAL_REQUIRED", "screen_authorization"
+	case errors.Is(err, tools.ErrScreenCaptureNotSupported):
+		return "PLATFORM_NOT_SUPPORTED", "screen_capability"
+	case errors.Is(err, tools.ErrOCRWorkerFailed):
+		return "OCR_WORKER_FAILED", "screen_ocr"
+	case errors.Is(err, tools.ErrMediaWorkerFailed):
+		return "MEDIA_WORKER_FAILED", "screen_media"
+	case errors.Is(err, tools.ErrPlaywrightSidecarFailed), errors.Is(err, tools.ErrScreenCaptureFailed), errors.Is(err, tools.ErrScreenKeyframeSamplingFailed):
+		return "PLAYWRIGHT_SIDECAR_FAILED", "screen_capture"
+	case errors.Is(err, tools.ErrCapabilityDenied):
+		return "CAPABILITY_DENIED", "screen_capability"
+	case errors.Is(err, tools.ErrToolOutputInvalid):
+		return "TOOL_OUTPUT_INVALID", "screen_observation"
+	case errors.Is(err, tools.ErrScreenCaptureSessionExpired), strings.Contains(lowerError, "session"):
+		return "TOOL_EXECUTION_FAILED", "screen_session"
+	case strings.Contains(lowerError, "incomplete") || strings.Contains(lowerError, "empty") || strings.Contains(lowerError, "未识别"):
+		return "TOOL_OUTPUT_INVALID", "screen_observation"
+	default:
+		return "TOOL_EXECUTION_FAILED", "screen_analysis"
+	}
 }
 
 func executionFailureBubble(err error) string {
@@ -5658,8 +7760,97 @@ func executionFailureBubble(err error) string {
 	case errors.Is(err, tools.ErrToolExecutionFailed):
 		return "执行失败：工具运行失败，请检查环境后重试。"
 	default:
+		if detail := modelExecutionFailureBubble(err); detail != "" {
+			return detail
+		}
 		return "执行失败：请稍后重试。"
 	}
+}
+
+// modelExecutionFailureBubble keeps upstream model failures actionable without
+// exposing raw transport details or secrets in the task-facing bubble copy.
+func modelExecutionFailureBubble(err error) string {
+	if err == nil {
+		return ""
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	switch {
+	case errors.Is(err, model.ErrClientNotConfigured):
+		return "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。"
+	case errors.Is(err, model.ErrToolCallingNotSupported):
+		return "执行失败：当前模型接口不支持工具调用，请切换到兼容工具调用的模型或关闭相关工具路径。"
+	case errors.Is(err, model.ErrOpenAIResponseInvalid):
+		return "执行失败：模型返回内容无法解析，请检查上游接口兼容性。"
+	case errors.Is(err, model.ErrOpenAIRequestTimeout):
+		return "执行失败：模型请求超时，请稍后重试。"
+	case errors.Is(err, model.ErrOpenAIRequestFailed):
+		return "执行失败：模型请求发送失败，请检查网络连接或上游地址。"
+	case errors.As(err, &statusErr):
+		return modelHTTPStatusFailureBubble(statusErr)
+	default:
+		return ""
+	}
+}
+
+func modelHTTPStatusFailureBubble(statusErr *model.OpenAIHTTPStatusError) string {
+	if statusErr == nil {
+		return ""
+	}
+	safeMessage := sanitizeModelProviderMessage(statusErr.Message)
+	switch statusErr.StatusCode {
+	case 400:
+		if safeMessage != "" {
+			return "执行失败：模型请求被上游拒绝（" + safeMessage + "）。"
+		}
+		return "执行失败：模型请求被上游拒绝，请检查输入内容、模型能力和接口兼容性。"
+	case 401, 403:
+		if safeMessage != "" {
+			return "执行失败：模型鉴权失败（" + safeMessage + "），请检查 API Key 或访问权限。"
+		}
+		return "执行失败：模型鉴权失败，请检查 API Key 或访问权限。"
+	case 404:
+		if safeMessage != "" {
+			return "执行失败：模型接口不存在（" + safeMessage + "），请检查 Base URL 或接口兼容性。"
+		}
+		return "执行失败：模型接口不存在，请检查 Base URL 或接口兼容性。"
+	case 408, 504:
+		return "执行失败：模型请求超时，请稍后重试。"
+	case 429:
+		if safeMessage != "" {
+			return "执行失败：模型请求过于频繁（" + safeMessage + "），请稍后重试。"
+		}
+		return "执行失败：模型请求过于频繁，请稍后重试。"
+	case 500, 502, 503:
+		if safeMessage != "" {
+			return "执行失败：模型服务暂时不可用（" + safeMessage + "），请稍后重试。"
+		}
+		return "执行失败：模型服务暂时不可用，请稍后重试。"
+	default:
+		if safeMessage != "" {
+			return "执行失败：模型调用失败（" + safeMessage + "）。"
+		}
+		return "执行失败：模型调用失败，请稍后重试。"
+	}
+}
+
+func sanitizeModelProviderMessage(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	trimmed = strings.ReplaceAll(trimmed, "\r", " ")
+	trimmed = strings.ReplaceAll(trimmed, "\n", " ")
+	lowerTrimmed := strings.ToLower(trimmed)
+	for _, secretMarker := range []string{"api key", "authorization", "bearer ", "sk-"} {
+		if strings.Contains(lowerTrimmed, secretMarker) {
+			return ""
+		}
+	}
+	if len(trimmed) > 120 {
+		trimmed = strings.TrimSpace(trimmed[:120]) + "..."
+	}
+	return trimmed
 }
 
 func (s *Service) buildExecutionAudit(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, deliveryResult map[string]any) ([]map[string]any, map[string]any) {

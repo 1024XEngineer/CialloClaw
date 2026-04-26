@@ -3,9 +3,8 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, SetWindowsHookExW, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
-    WM_RBUTTONUP,
+    CallNextHookEx, SetWindowsHookExW, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
 };
 
 static MOUSE_ACTIVITY_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
@@ -48,13 +47,11 @@ unsafe extern "system" fn mouse_activity_hook(
     l_param: LPARAM,
 ) -> LRESULT {
     if n_code >= 0 && should_record_mouse_activity(w_param.0 as u32) {
-      let snapshot = MouseActivitySnapshotPayload::now();
+        let snapshot = MouseActivitySnapshotPayload::now();
 
-      if let Ok(mut state) = LAST_MOUSE_ACTIVITY.lock() {
-          *state = Some(snapshot.clone());
-      }
-
-      println!("mouse activity at {}", snapshot.updated_at);
+        if let Ok(mut state) = LAST_MOUSE_ACTIVITY.lock() {
+            *state = Some(snapshot);
+        }
     }
 
     CallNextHookEx(None, n_code, w_param, l_param)

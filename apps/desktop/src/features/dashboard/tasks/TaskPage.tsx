@@ -2,16 +2,38 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, CircleDashed, LayoutList, RefreshCcw } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import {
+  AlertTriangle,
+  Archive,
+  ArrowLeft,
+  Clock3,
+  PlaneTakeoff,
+  Radar,
+  RefreshCcw,
+  X,
+} from "lucide-react";
+import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
-import { describeCurrentStep, getFinishedTaskGroups, isTaskEnded, sortTasksByLatest } from "./taskPage.mapper";
+import {
+  buildTaskTowerCode,
+  describeCurrentStep,
+  formatTaskSourceLabel,
+  getFinishedTaskGroups,
+  getTaskPreviewStatusLabel,
+  getTaskPriorityLabel,
+  getTaskProgress,
+  getTaskStateVoice,
+  getTaskStatusBadgeClass,
+  isTaskEnded,
+  sortTasksByLatest,
+} from "./taskPage.mapper";
 import {
   buildDashboardTaskArtifactQueryKey,
   buildDashboardTaskBucketQueryKey,
@@ -21,24 +43,69 @@ import {
   resolveDashboardTaskSafetyOpenPlan,
   shouldEnableDashboardTaskDetailQuery,
 } from "./taskPage.query";
-import { buildFallbackTaskDetailData, controlTaskByAction, DEFAULT_TASK_EVENT_FILTERS, loadTaskBucketPage, loadTaskDetailData, loadTaskEventPage, steerTaskByMessage, type TaskPageDataMode } from "./taskPage.service";
-import { describeTaskOpenResultForCurrentTask, loadTaskArtifactPage, openTaskArtifactForTask, openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "./taskOutput.service";
+import {
+  buildFallbackTaskDetailData,
+  controlTaskByAction,
+  DEFAULT_TASK_EVENT_FILTERS,
+  loadTaskBucketPage,
+  loadTaskDetailData,
+  loadTaskEventPage,
+  steerTaskByMessage,
+  type TaskPageDataMode,
+} from "./taskPage.service";
+import {
+  describeTaskOpenResultForCurrentTask,
+  loadTaskArtifactPage,
+  openTaskArtifactForTask,
+  openTaskDeliveryForTask,
+  performTaskOpenExecution,
+  resolveTaskOpenExecutionPlan,
+} from "./taskOutput.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
-import type { TaskEventFilters } from "./taskPage.types";
+import type { TaskEventFilters, TaskListItem } from "./taskPage.types";
 import "./taskPage.css";
 
+type TaskClusterKey = "archive" | "departure" | "holding" | "irregular";
+
+type TaskClusterSection = {
+  code: string;
+  emptyCopy: string;
+  items: TaskListItem[];
+  key: TaskClusterKey;
+  subtitle: string;
+  title: string;
+};
+
+const CLUSTER_PREVIEW_LIMIT = 3;
+const INITIAL_UNFINISHED_LIMIT = 12;
+const INITIAL_FINISHED_LIMIT = 24;
+const LOAD_MORE_UNFINISHED_STEP = 12;
+const LOAD_MORE_FINISHED_STEP = 24;
+
+const clusterIcons = {
+  archive: Archive,
+  departure: PlaneTakeoff,
+  holding: Clock3,
+  irregular: AlertTriangle,
+} as const;
+
+/**
+ * Presents the task dashboard as a center-stage scene while keeping task
+ * detail, artifact, delivery, and safety flows wired to the stable contracts.
+ */
 export function TaskPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const INITIAL_UNFINISHED_LIMIT = 12;
-  const INITIAL_FINISHED_LIMIT = 24;
-  const LOAD_MORE_UNFINISHED_STEP = 12;
-  const LOAD_MORE_FINISHED_STEP = 24;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Keep the current task focus stable across transient bucket refreshes so
+  // the detail modal does not snap back to an auto-picked fallback selection.
+  const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
+  const [stageInitialized, setStageInitialized] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showMoreFinished, setShowMoreFinished] = useState(false);
+  const [expandedClusterKey, setExpandedClusterKey] = useState<TaskClusterKey | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [dataMode, setDataMode] = useState<TaskPageDataMode>(() => loadDashboardDataMode("tasks") as TaskPageDataMode);
   const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
@@ -46,6 +113,8 @@ export function TaskPage() {
   const [taskEventFilters, setTaskEventFilters] = useState<TaskEventFilters>(DEFAULT_TASK_EVENT_FILTERS);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const securityRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
+  const detailRouteState = readDashboardTaskDetailRouteState(location.state);
+  const routeFocusTaskId = detailRouteState?.focusTaskId ?? null;
 
   const unfinishedQuery = useQuery({
     queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit),
@@ -67,25 +136,90 @@ export function TaskPage() {
     retry: false,
   });
 
-  const unfinishedTasks = sortTasksByLatest(unfinishedQuery.data?.items ?? []);
-  const finishedTasks = sortTasksByLatest(finishedQuery.data?.items ?? []);
-  const finishedGroups = useMemo(() => getFinishedTaskGroups(finishedTasks, showMoreFinished), [finishedTasks, showMoreFinished]);
+  const unfinishedTasks = useMemo(() => sortTasksByLatest(unfinishedQuery.data?.items ?? []), [unfinishedQuery.data?.items]);
+  const finishedTasks = useMemo(() => sortTasksByLatest(finishedQuery.data?.items ?? []), [finishedQuery.data?.items]);
   const unfinishedPage = unfinishedQuery.data?.page;
   const finishedPage = finishedQuery.data?.page;
   const allTasks = useMemo(() => [...unfinishedTasks, ...finishedTasks], [finishedTasks, unfinishedTasks]);
   const selectedTaskItem = useMemo(() => allTasks.find((item) => item.task.task_id === selectedTaskId) ?? null, [allTasks, selectedTaskId]);
+  const departureTasks = useMemo(
+    () => unfinishedTasks.filter((item) => item.task.status === "confirming_intent" || item.task.status === "processing"),
+    [unfinishedTasks],
+  );
+  const holdingTasks = useMemo(
+    () => unfinishedTasks.filter((item) => item.task.status === "waiting_auth" || item.task.status === "waiting_input" || item.task.status === "paused"),
+    [unfinishedTasks],
+  );
+  const irregularTasks = useMemo(() => allTasks.filter((item) => item.task.status === "blocked" || item.task.status === "failed"), [allTasks]);
+  const archiveTasks = useMemo(
+    () => finishedTasks.filter((item) => item.task.status === "completed" || item.task.status === "cancelled" || item.task.status === "ended_unfinished"),
+    [finishedTasks],
+  );
+  const hasArchiveOlderItems = useMemo(() => {
+    const now = Date.now();
+    return archiveTasks.some((item) => {
+      const finishedAt = item.task.finished_at ? new Date(item.task.finished_at).getTime() : now;
+      const diffDays = (now - finishedAt) / (1000 * 60 * 60 * 24);
+      return diffDays > 7;
+    });
+  }, [archiveTasks]);
+  const archiveGroups = useMemo(() => getFinishedTaskGroups(archiveTasks, showMoreFinished), [archiveTasks, showMoreFinished]);
+  const clusterSections = useMemo<TaskClusterSection[]>(
+    () => [
+      {
+        code: "Flow",
+        emptyCopy: "当前还没有正在顺滑推进的任务。",
+        items: departureTasks,
+        key: "departure",
+        subtitle: "优先关注已经进入推进节奏的任务。",
+        title: "推进",
+      },
+      {
+        code: "Pause",
+        emptyCopy: "当前没有等待补充或授权的任务。",
+        items: holdingTasks,
+        key: "holding",
+        subtitle: "这里聚合等待补充、授权或继续指令的事项。",
+        title: "待命",
+      },
+      {
+        code: "Edge",
+        emptyCopy: "当前没有需要排障解释的异常任务。",
+        items: irregularTasks,
+        key: "irregular",
+        subtitle: "把阻塞和失败集中收拢，方便快速看清原因。",
+        title: "异常",
+      },
+      {
+        code: "Shelf",
+        emptyCopy: "当前还没有可回看的已结束任务。",
+        items: archiveTasks,
+        key: "archive",
+        subtitle: "把最近几天已经收束的任务留在底部书架里。",
+        title: "归档",
+      },
+    ],
+    [archiveTasks, departureTasks, holdingTasks, irregularTasks],
+  );
+
+  const departureSection = clusterSections[0];
+  const holdingSection = clusterSections[1];
+  const irregularSection = clusterSections[2];
+  const archiveSection = clusterSections[3];
+
   const pageStyle = {
-    "--task-accent": "#9FB7D8",
-    "--task-accent-glow": "rgba(159, 183, 216, 0.18)",
-    "--task-accent-soft": "rgba(229, 236, 245, 0.64)",
-    "--task-accent-surface": "rgba(241, 245, 250, 0.62)",
-    "--task-accent-border": "rgba(159, 183, 216, 0.24)",
-    "--task-accent-shadow": "rgba(120, 132, 148, 0.12)",
-    "--task-paper": "rgba(255, 250, 244, 0.78)",
-    "--task-paper-strong": "rgba(255, 247, 238, 0.9)",
-    "--task-line": "rgba(156, 133, 113, 0.16)",
-    "--task-ink": "#5f544b",
-    "--task-copy": "rgba(95, 84, 75, 0.68)",
+    "--task-accent": "#92abc1",
+    "--task-accent-strong": "#5c7894",
+    "--task-accent-soft": "#90a98e",
+    "--task-alert": "#d1ad78",
+    "--task-danger": "#c9877b",
+    "--task-success": "#86a889",
+    "--task-ink": "#32444c",
+    "--task-copy": "rgba(68, 81, 88, 0.74)",
+    "--task-line": "rgba(146, 171, 193, 0.18)",
+    "--task-panel": "rgba(252, 248, 242, 0.9)",
+    "--task-panel-strong": "rgba(255, 253, 249, 0.97)",
+    "--task-panel-soft": "rgba(255, 255, 255, 0.58)",
   } as CSSProperties;
 
   useEffect(() => {
@@ -93,31 +227,25 @@ export function TaskPage() {
   }, [selectedTaskId]);
 
   useEffect(() => {
-    if (allTasks.length === 0) {
-      return;
-    }
-
-    const focusTaskId = (location.state as { focusTaskId?: string; openDetail?: boolean } | null)?.focusTaskId;
-    if (focusTaskId && allTasks.some((item) => item.task.task_id === focusTaskId)) {
-      setSelectedTaskId(focusTaskId);
-      if ((location.state as { openDetail?: boolean } | null)?.openDetail) {
+    /**
+     * Routed task-detail opens can legitimately target tasks outside the
+     * currently loaded preview buckets. Accept the routed task id first and let
+     * the canonical detail query load it instead of blocking on paginated list data.
+     */
+    if (detailRouteState) {
+      setRequestedTaskId(detailRouteState.focusTaskId);
+      setSelectedTaskId(detailRouteState.focusTaskId);
+      if (detailRouteState.openDetail) {
         setDetailOpen(true);
       }
       navigate(location.pathname, { replace: true, state: null });
       return;
     }
 
-    const selectedExists = selectedTaskId ? allTasks.some((item) => item.task.task_id === selectedTaskId) : false;
-    if (selectedExists) {
+    if (selectedTaskId && detailOpen) {
       return;
     }
-
-    const nextTask = unfinishedTasks.find((item) => item.task.status === "processing") ?? unfinishedTasks[0] ?? finishedTasks[0];
-    if (nextTask) {
-      setSelectedTaskId(nextTask.task.task_id);
-    }
-  }, [allTasks, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
-
+  }, [detailOpen, detailRouteState, location.pathname, navigate, selectedTaskId]);
   const taskDetailQuery = useQuery({
     enabled: shouldEnableDashboardTaskDetailQuery(selectedTaskId, detailOpen),
     queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId ?? ""),
@@ -128,6 +256,7 @@ export function TaskPage() {
     retry: false,
   });
 
+  const selectedDetailTaskId = taskDetailQuery.data?.task.task_id ?? null;
   const detailData = taskDetailQuery.data ?? (selectedTaskItem ? buildFallbackTaskDetailData(selectedTaskItem) : null);
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "任务详情请求失败") : null;
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
@@ -149,17 +278,57 @@ export function TaskPage() {
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const bucketErrors = [
-    { error: unfinishedQuery.error, label: "未完成任务" },
-    { error: finishedQuery.error, label: "已结束任务" },
-  ].filter((item) => item.error);
-  const heroTask = detailData?.task ?? selectedTaskItem?.task ?? null;
 
-  const pageNotice =
-    feedback ??
-    (selectedTaskItem
-      ? describeCurrentStep(selectedTaskItem.task, selectedTaskItem.experience)
-      : "先浏览任务，再点开查看完整进展与上下文。");
+  const bucketErrors = [
+    { error: unfinishedQuery.error, label: "在场任务" },
+    { error: finishedQuery.error, label: "归档任务" },
+  ].filter((item) => item.error);
+  const selectedProgress = detailData ? getTaskProgress(detailData.detail.timeline) : null;
+  const selectedStateVoice = detailData ? getTaskStateVoice(detailData.task, detailData.experience, detailData.detail.timeline) : null;
+  const selectedTaskEnded = detailData ? isTaskEnded(detailData.task) : false;
+  const selectedStageDescription = detailData
+    ? selectedTaskEnded
+      ? detailData.experience.endedSummary ?? selectedStateVoice?.body ?? describeCurrentStep(detailData.task, detailData.experience)
+      : `${describeCurrentStep(detailData.task, detailData.experience)} 下一步：${detailData.experience.nextAction}`
+    : null;
+  const selectedUpdateLabel = detailData ? new Date(detailData.task.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "--";
+
+  useEffect(() => {
+    if (routeFocusTaskId || stageInitialized || selectedTaskId) {
+      return;
+    }
+
+    // Seed the stage with the current highest-priority task on first entry so
+    // the workspace opens with a concrete focal task instead of an empty dock.
+    const stageEntryTask = departureTasks[0] ?? holdingTasks[0] ?? irregularTasks[0] ?? archiveTasks[0] ?? allTasks[0] ?? null;
+    if (!stageEntryTask) {
+      return;
+    }
+
+    focusTaskDetail(stageEntryTask.task.task_id, false);
+    setStageInitialized(true);
+  }, [allTasks, archiveTasks, departureTasks, holdingTasks, irregularTasks, routeFocusTaskId, selectedTaskId, stageInitialized]);
+
+  useEffect(() => {
+    if (routeFocusTaskId) {
+      return;
+    }
+
+    if (!selectedTaskId) {
+      setDetailOpen(false);
+      return;
+    }
+
+    const selectedExists = allTasks.some((item) => item.task.task_id === selectedTaskId);
+    const stageTaskStillResolved = selectedDetailTaskId === selectedTaskId;
+    if (selectedExists || requestedTaskId === selectedTaskId || stageTaskStillResolved) {
+      return;
+    }
+
+    setSelectedTaskId(null);
+    setRequestedTaskId(null);
+    setDetailOpen(false);
+  }, [allTasks, requestedTaskId, routeFocusTaskId, selectedDetailTaskId, selectedTaskId]);
 
   useEffect(() => {
     saveDashboardDataMode("tasks", dataMode);
@@ -216,12 +385,52 @@ export function TaskPage() {
     };
   }, []);
 
-  function showFeedback(message: string) {
-    setFeedback(message);
+  function clearFeedbackTimeout() {
     if (feedbackTimeoutRef.current) {
       window.clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = null;
     }
+  }
+
+  function showFeedback(message: string, autoHide = true) {
+    setFeedback(message);
+    clearFeedbackTimeout();
+
+    if (!autoHide) {
+      return;
+    }
+
     feedbackTimeoutRef.current = window.setTimeout(() => setFeedback(null), 2400);
+  }
+
+  /**
+   * Routes every task focus change through the same guarded local state so the
+   * requested task stays selected while detail queries catch up for the modal.
+   */
+  function focusTaskDetail(taskId: string, openDetail = true) {
+    setRequestedTaskId(taskId);
+    setSelectedTaskId(taskId);
+    setDetailOpen(openDetail);
+  }
+
+  /**
+   * The center stage is a local presentation dock only. Clicking or dropping a
+   * card here should never mutate formal task state; it only swaps the stage
+   * preview while keeping detail opening as a separate action.
+   */
+  function placeTaskOnStage(taskId: string) {
+    focusTaskDetail(taskId, false);
+  }
+
+  function openTaskDetail(taskId: string) {
+    focusTaskDetail(taskId, true);
+  }
+
+  function clearStagePreview() {
+    setRequestedTaskId(null);
+    setSelectedTaskId(null);
+    setStageInitialized(true);
+    setDetailOpen(false);
   }
 
   const taskControlMutation = useMutation({
@@ -240,16 +449,19 @@ export function TaskPage() {
 
   async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>) {
     const plan = resolveTaskOpenExecutionPlan(result);
-    const openResultMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
-
-    if (plan.mode === "task_detail" && plan.taskId) {
-      setSelectedTaskId(plan.taskId);
+    const sameTaskMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
+    if (sameTaskMessage) {
       setDetailOpen(true);
-      showFeedback(openResultMessage ?? plan.feedback);
+      showFeedback(sameTaskMessage);
       return;
     }
 
-    showFeedback(await performTaskOpenExecution(plan));
+    showFeedback(await performTaskOpenExecution(plan, {
+      onOpenTaskDetail: ({ taskId }) => {
+        focusTaskDetail(taskId);
+        return plan.feedback;
+      },
+    }));
   }
 
   const artifactOpenMutation = useMutation({
@@ -349,16 +561,7 @@ export function TaskPage() {
       return;
     }
 
-    taskSteerMutation.mutate(
-      { message, taskId: detailData.task.task_id },
-      {
-        onSuccess: () => {
-          // Keep the only editable draft intact until the formal steering request succeeds.
-          // This prevents user input loss when the local service is temporarily unavailable.
-          setFeedback((current) => current);
-        },
-      },
-    );
+    taskSteerMutation.mutate({ message, taskId: detailData.task.task_id });
   }
 
   function handleApplyTaskEventFilters(nextFilters: TaskEventFilters) {
@@ -383,13 +586,114 @@ export function TaskPage() {
     setFinishedLimit((current) => current + LOAD_MORE_FINISHED_STEP);
   }
 
+  function handleSelectTask(taskId: string) {
+    placeTaskOnStage(taskId);
+  }
+
+  function handleOpenTaskDetail(taskId: string) {
+    openTaskDetail(taskId);
+  }
+
+  function toggleCluster(key: TaskClusterKey) {
+    setExpandedClusterKey((current) => (current === key ? null : key));
+  }
+
+  function renderClusterCards(section: TaskClusterSection) {
+    if (section.items.length === 0) {
+      return <div className="task-runway__empty">{section.emptyCopy}</div>;
+    }
+
+    if (section.key === "archive") {
+      return (
+        <div className="task-runway__archive-groups">
+          {archiveGroups.map((group) => (
+            <section key={group.key} className="task-runway__archive-group">
+              <div className="task-runway__archive-head">
+                <p className="task-runway__archive-title">{group.title}</p>
+                <p className="task-runway__archive-copy">{group.description}</p>
+              </div>
+              <div className="task-runway__manifest task-runway__manifest--archive">
+                {group.items.map((item) => (
+                  <TaskPreviewCard
+                    key={item.task.task_id}
+                    isActive={item.task.task_id === selectedTaskId}
+                    item={item}
+                    onOpenDetail={handleOpenTaskDetail}
+                    onStage={handleSelectTask}
+                    runwayLabel={section.code}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      );
+    }
+
+    const isExpanded = expandedClusterKey === section.key;
+    const visibleItems = isExpanded ? section.items : section.items.slice(0, CLUSTER_PREVIEW_LIMIT);
+
+    return (
+      <div className={cn("task-runway__manifest", !isExpanded && "is-condensed")}>
+        {visibleItems.map((item, index) => (
+          <TaskPreviewCard
+            key={item.task.task_id}
+            isActive={item.task.task_id === selectedTaskId}
+            isPeeked={!isExpanded && index > 0}
+            item={item}
+            onOpenDetail={handleOpenTaskDetail}
+            onStage={handleSelectTask}
+            runwayLabel={section.code}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  function renderClusterSection(section: TaskClusterSection) {
+    const Icon = clusterIcons[section.key];
+    const isExpanded = expandedClusterKey === section.key;
+    const shouldShowToggle = section.key === "archive" ? hasArchiveOlderItems : section.items.length > CLUSTER_PREVIEW_LIMIT;
+    const isFocused = selectedTaskId ? section.items.some((item) => item.task.task_id === selectedTaskId) : false;
+
+    return (
+      <article key={section.key} className={cn("task-runway", "task-cluster", `is-${section.key}`, isFocused && "is-focused")}>
+        <header className="task-runway__header">
+          <div className="task-cluster__header-copy">
+            <span className="task-cluster__icon">
+              <Icon className="h-4 w-4" />
+            </span>
+            <div>
+              <span className="task-runway__code">{section.code}</span>
+              <h2>{section.title}</h2>
+              <p>{section.subtitle}</p>
+            </div>
+          </div>
+
+          <div className="task-runway__header-actions">
+            <span className="task-runway__count">{section.items.length}</span>
+            {shouldShowToggle ? (
+              <button className="task-runway__toggle" onClick={() => (section.key === "archive" ? setShowMoreFinished((current) => !current) : toggleCluster(section.key))} type="button">
+                {section.key === "archive" ? (showMoreFinished ? "收起" : "更多") : isExpanded ? "收起" : "更多"}
+              </button>
+            ) : null}
+          </div>
+        </header>
+
+        <div className="task-runway__content">{renderClusterCards(section)}</div>
+      </article>
+    );
+  }
+
   return (
-    <main className="dashboard-page task-preview-page" style={pageStyle}>
+    <main className="dashboard-page task-tower-page task-cloud-page" style={pageStyle}>
       <header className="dashboard-page__topbar">
-        <Link className="dashboard-page__home-link" to={resolveDashboardRoutePath("home")}>
-          <ArrowLeft className="h-4 w-4" />
-          返回首页
-        </Link>
+        <div className="task-tower__topbar-actions">
+          <Link className="dashboard-page__home-link" to={resolveDashboardRoutePath("home")}>
+            <ArrowLeft className="h-4 w-4" />
+            返回首页
+          </Link>
+        </div>
 
         <nav aria-label="Dashboard modules" className="dashboard-page__module-nav">
           {dashboardModules.map((item) => (
@@ -400,136 +704,93 @@ export function TaskPage() {
         </nav>
       </header>
 
-      <section className="dashboard-page__hero">
-        <div className="dashboard-page__hero-copy">
-          <p className="dashboard-page__eyebrow">Task Preview</p>
-          <div className="dashboard-page__title-row">
-            <LayoutList className="dashboard-page__title-icon" />
-            <h1>任务</h1>
-          </div>
-          <p className="dashboard-page__description">先浏览任务，再点开看详细信息。未完成任务强调状态和当前执行步骤，已结束任务只保留最终状态。</p>
-        </div>
+      <section className="task-tower task-cloud">
+        <LayoutGroup id="task-cloud-layout">
+          <div className="task-cloud__scene">
+            {renderClusterSection(departureSection)}
 
-          <div className="dashboard-card dashboard-card--status task-preview-page__hero-status">
-            <p className="dashboard-card__kicker">当前聚焦</p>
-            {pageNotice ? <p className="task-preview-page__hero-notice">{pageNotice}</p> : null}
-            {heroTask ? (
-              <>
-                <p className="task-preview-page__hero-title">{heroTask.title}</p>
-                <div className="dashboard-card__status-row">
-                  <CircleDashed className="h-4 w-4" />
-                  <span>{isTaskEnded(heroTask) ? "这条任务已经结束，可点开回看结果。" : "当前正在推进，点开可查看完整进展与上下文。"}</span>
-                </div>
-              </>
-            ) : (
-              <div className="dashboard-card__status-row">
-                <CircleDashed className="h-4 w-4" />
-                <span>当前还没有可展示的任务，列表成功返回后会显示在左侧。</span>
-              </div>
-            )}
-          </div>
-      </section>
+            <aside className="task-tower__deck task-cloud__stage">
+              {detailData && selectedProgress && selectedStateVoice ? (
+                <motion.div className="task-cloud__stage-shell" layout>
+                  <header className="task-cloud__stage-header">
+                    <div className="task-cloud__stage-lockup">
+                      <motion.span className="task-cloud__stage-signal" layoutId={`task-cloud-signal-${detailData.task.task_id}`} />
+                      <motion.span className="task-cloud__stage-code" layoutId={`task-cloud-code-${detailData.task.task_id}`}>
+                        {buildTaskTowerCode(detailData.task.task_id)}
+                      </motion.span>
+                      <span className={cn("task-cloud__stage-status", getTaskStatusBadgeClass(detailData.task.status))}>{getTaskPreviewStatusLabel(detailData.task.status)}</span>
+                    </div>
 
-      <section className="dashboard-page__grid task-preview-page__grid">
-        <article className="dashboard-card task-preview-card-shell">
-          <div className="task-preview-card-shell__header">
-            <div>
-              <p className="dashboard-card__kicker">未完成任务</p>
-              <p className="task-preview-card-shell__description">任务名称、任务状态，以及当前执行到哪一步。</p>
-            </div>
-            <span className="task-preview-card-shell__count">{unfinishedQuery.isPending && !unfinishedQuery.data ? "..." : unfinishedTasks.length}</span>
-          </div>
-          <div className="task-preview-card-shell__list">
-            {unfinishedQuery.isError && unfinishedTasks.length === 0 ? (
-              <div className="task-preview-card-shell__empty task-preview-card-shell__empty--error">
-                {unfinishedQuery.error instanceof Error ? unfinishedQuery.error.message : "请求失败"}
-              </div>
-            ) : unfinishedTasks.length > 0 ? (
-              unfinishedTasks.map((item) => (
-                <TaskPreviewCard
-                  key={item.task.task_id}
-                  isActive={item.task.task_id === selectedTaskId}
-                  item={item}
-                  onSelect={(taskId) => {
-                    setSelectedTaskId(taskId);
-                    setDetailOpen(true);
-                  }}
-                />
-              ))
-            ) : (
-              <div className="task-preview-card-shell__empty">{unfinishedQuery.isPending && !unfinishedQuery.data ? "加载中" : "无"}</div>
-            )}
-          </div>
-          {unfinishedPage?.has_more ? (
-            <div className="task-preview-card-shell__footer">
-              <button className="task-preview-card-shell__toggle" disabled={unfinishedQuery.isFetching} onClick={() => handleLoadMore("unfinished")} type="button">
-                {unfinishedQuery.isFetching ? "加载中..." : "加载更多"}
-              </button>
-            </div>
-          ) : null}
-        </article>
+                    <div className="task-cloud__stage-actions">
+                      <button className="task-runway__toggle task-cloud__stage-toggle" onClick={() => openTaskDetail(detailData.task.task_id)} type="button">
+                        打开详情
+                      </button>
+                      <button aria-label="移除舞台卡片" className="task-cloud__stage-close" onClick={clearStagePreview} type="button">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </header>
 
-        <article className="dashboard-card task-preview-card-shell">
-          <div className="task-preview-card-shell__header">
-            <div>
-              <p className="dashboard-card__kicker">已结束任务</p>
-              <p className="task-preview-card-shell__description">默认展示近 3 天，可展开到近 7 天和更早。</p>
-            </div>
-                <button className="task-preview-card-shell__toggle" onClick={() => setShowMoreFinished((current) => !current)} type="button">
-                  {showMoreFinished ? "收起" : "更多"}
-                </button>
-              </div>
+                  <section className="task-cloud__stage-dock">
+                    <div className="task-cloud__stage-title-row">
+                      <div>
+                        <p className="task-cloud__stage-kicker">
+                          {formatTaskSourceLabel(detailData.task.source_type)} · {getTaskPriorityLabel(detailData.experience.priority)} · 已放到舞台
+                        </p>
+                        <h2>{detailData.task.title}</h2>
+                        <p className="task-cloud__stage-copy">{selectedStateVoice.body}</p>
+                      </div>
 
-          <div className="task-preview-finished-groups">
-            {finishedQuery.isError && finishedTasks.length === 0 ? (
-              <div className="task-preview-card-shell__empty task-preview-card-shell__empty--error">
-                {finishedQuery.error instanceof Error ? finishedQuery.error.message : "请求失败"}
-              </div>
-            ) : finishedGroups.length > 0 ? (
-              finishedGroups.map((group) => (
-                <section key={group.key} className="task-preview-finished-group">
-                  <div>
-                    <p className="task-preview-finished-group__title">{group.title}</p>
-                    <p className="task-preview-finished-group__description">{group.description}</p>
-                  </div>
+                      <div className="task-cloud__stage-progress-pill">{selectedProgress.percent}%</div>
+                    </div>
 
-                  <div className="task-preview-card-shell__list">
-                    {group.items.map((item) => (
-                      <TaskPreviewCard
-                        key={item.task.task_id}
-                        isActive={item.task.task_id === selectedTaskId}
-                        item={item}
-                        onSelect={(taskId) => {
-                          setSelectedTaskId(taskId);
-                          setDetailOpen(true);
-                        }}
+                    <div className="task-cloud__stage-progress-track" aria-hidden="true">
+                      <motion.span
+                        className="task-cloud__stage-progress-fill"
+                        layout
+                        style={{ width: `${Math.max(selectedProgress.percent, 8)}%` }}
+                        transition={{ bounce: 0.2, damping: 26, stiffness: 260, type: "spring" }}
                       />
-                    ))}
-                  </div>
-                </section>
-              ))
-            ) : (
-              <div className="task-preview-card-shell__empty">{finishedQuery.isPending && !finishedQuery.data ? "加载中" : "无"}</div>
-            )}
-          </div>
-          {finishedPage?.has_more ? (
-            <div className="task-preview-card-shell__footer">
-              <button className="task-preview-card-shell__toggle" disabled={finishedQuery.isFetching} onClick={() => handleLoadMore("finished")} type="button">
-                {finishedQuery.isFetching ? "加载中..." : "加载更多历史"}
-              </button>
-            </div>
-          ) : null}
-        </article>
+                    </div>
 
-        <article className="dashboard-card task-preview-card-shell task-preview-card-shell--hint">
-          <p className="dashboard-card__kicker">说明</p>
-          <ul className="dashboard-card__list">
-            <li>未完成任务会直接展示当前执行步骤，方便判断是否需要立即介入。</li>
-            <li>等待授权、暂停、失败等任务会保留停住原因，避免只有一个“失败”状态。</li>
-            <li>更多的上下文、成果区与操作按钮，都放在点击任务后的详情弹窗中。</li>
-            <li>如需修改或补充当前任务，请到悬浮球继续处理。</li>
-          </ul>
-        </article>
+                    <div className="task-cloud__stage-dock-meta">
+                      <span className="task-cloud__stage-chip">{getTaskPreviewStatusLabel(detailData.task.status)}</span>
+                      <span className="task-cloud__stage-chip">{selectedProgress.currentLabel}</span>
+                      <span className="task-cloud__stage-chip">{selectedTaskEnded ? "已结束" : `更新于 ${selectedUpdateLabel}`}</span>
+                    </div>
+                    <p className="task-cloud__stage-description">{selectedStageDescription ?? selectedStateVoice.body}</p>
+                  </section>
+                </motion.div>
+              ) : (
+                <div className="task-cloud__stage-empty">
+                  <Radar className="h-6 w-6" />
+                  <h2>中央舞台现在还是空的</h2>
+                  <p>单击任务卡片会把它放到舞台，双击任务卡片会直接打开完整详情。</p>
+                </div>
+              )}
+            </aside>
+
+            {renderClusterSection(holdingSection)}
+            {renderClusterSection(irregularSection)}
+          </div>
+        </LayoutGroup>
+
+        {renderClusterSection(archiveSection)}
+
+        {unfinishedPage?.has_more || finishedPage?.has_more ? (
+          <div className="task-tower__load-more">
+            {unfinishedPage?.has_more ? (
+              <button className="task-runway__toggle" disabled={unfinishedQuery.isFetching} onClick={() => handleLoadMore("unfinished")} type="button">
+                {unfinishedQuery.isFetching ? "加载中..." : "更多任务"}
+              </button>
+            ) : null}
+            {finishedPage?.has_more ? (
+              <button className="task-runway__toggle" disabled={finishedQuery.isFetching} onClick={() => handleLoadMore("finished")} type="button">
+                {finishedQuery.isFetching ? "加载中..." : "更多归档"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       <AnimatePresence>
@@ -543,39 +804,41 @@ export function TaskPage() {
               onClick={() => setDetailOpen(false)}
               type="button"
             />
-            <motion.div
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              className="task-detail-modal"
-              exit={{ opacity: 0, scale: 0.98, y: 20 }}
-              initial={{ opacity: 0, scale: 0.98, y: 16 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <TaskDetailPanel
-                artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
-                artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
-                artifactItems={artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? []}
-                artifactLoading={artifactListQuery.isPending}
-                detailData={detailData}
-                detailWarningMessage={detailData.detailWarningMessage ?? null}
-                detailErrorMessage={detailErrorMessage}
-                eventErrorMessage={taskEventsQuery.isError ? (taskEventsQuery.error instanceof Error ? taskEventsQuery.error.message : "运行时事件请求失败") : null}
-                eventFilters={taskEventFilters}
-                eventItems={taskEventsQuery.data?.items ?? []}
-                eventLoading={taskEventsQuery.isPending}
-                detailState={detailState}
-                deliveryActionPending={deliveryOpenMutation.isPending}
-                feedback={feedback}
-                onAction={handlePrimaryAction}
-                onClose={() => setDetailOpen(false)}
-                onOpenArtifact={handleOpenArtifact}
-                onOpenLatestDelivery={handleOpenLatestDelivery}
-                onApplyEventFilters={handleApplyTaskEventFilters}
-                onResetEventFilters={handleResetTaskEventFilters}
-                onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
-                onSteerTask={handleSteerTask}
-                steeringPending={taskSteerMutation.isPending}
-              />
-            </motion.div>
+            <div className="task-detail-modal__frame">
+              <motion.div
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                className="task-detail-modal"
+                exit={{ opacity: 0, scale: 0.98, y: 20 }}
+                initial={{ opacity: 0, scale: 0.98, y: 16 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <TaskDetailPanel
+                  artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
+                  artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
+                  artifactItems={artifactListQuery.data?.items ?? detailData.detail.artifacts ?? []}
+                  artifactLoading={artifactListQuery.isPending}
+                  detailData={detailData}
+                  detailWarningMessage={detailData.detailWarningMessage ?? null}
+                  detailErrorMessage={detailErrorMessage}
+                  eventErrorMessage={taskEventsQuery.isError ? (taskEventsQuery.error instanceof Error ? taskEventsQuery.error.message : "运行时事件请求失败") : null}
+                  eventFilters={taskEventFilters}
+                  eventItems={taskEventsQuery.data?.items ?? []}
+                  eventLoading={taskEventsQuery.isPending}
+                  detailState={detailState}
+                  deliveryActionPending={deliveryOpenMutation.isPending}
+                  feedback={feedback}
+                  onAction={handlePrimaryAction}
+                  onClose={() => setDetailOpen(false)}
+                  onOpenArtifact={handleOpenArtifact}
+                  onOpenLatestDelivery={handleOpenLatestDelivery}
+                  onApplyEventFilters={handleApplyTaskEventFilters}
+                  onResetEventFilters={handleResetTaskEventFilters}
+                  onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
+                  onSteerTask={handleSteerTask}
+                  steeringPending={taskSteerMutation.isPending}
+                />
+              </motion.div>
+            </div>
           </>
         ) : null}
       </AnimatePresence>
@@ -584,28 +847,27 @@ export function TaskPage() {
         {feedback || bucketErrors.length > 0 ? (
           <motion.aside
             animate={{ opacity: 1, y: 0 }}
-            className="task-preview-page__floating-card"
+            className="task-tower__floating-card"
             exit={{ opacity: 0, y: 12 }}
-            initial={{ opacity: 0, y: 16 }}
-            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            initial={{ opacity: 0, y: 18 }}
+            transition={{ bounce: 0.18, damping: 24, stiffness: 250, type: "spring" }}
           >
-            <div className="task-preview-page__floating-card-icon">
+            <div className="task-tower__floating-icon">
               <AlertTriangle className="h-4 w-4" />
             </div>
-            <div className="task-preview-page__floating-card-copy">
-              <p className="task-preview-page__floating-card-title">{feedback ? "操作提示" : "任务同步失败"}</p>
-              <p className="task-preview-page__floating-card-text">
+            <div className="task-tower__floating-copy">
+              <p className="task-tower__floating-title">{feedback ? "柔雾提示" : "任务同步失败"}</p>
+              <p className="task-tower__floating-text">
                 {feedback ??
                   (bucketErrors.length === 1
                     ? `${bucketErrors[0].label}：${bucketErrors[0].error instanceof Error ? bucketErrors[0].error.message : "请求失败"}`
-                    : `${bucketErrors.length} 个分区加载失败：${bucketErrors
-                        .map((item) => `${item.label}${item.error instanceof Error ? `(${item.error.message})` : ""}`)
-                        .join("、")}`)}
+                    : `${bucketErrors.length} 个分组加载失败：${bucketErrors.map((item) => `${item.label}${item.error instanceof Error ? `（${item.error.message}）` : ""}`).join("；")}`)}
               </p>
             </div>
+
             {!feedback ? (
               <button
-                className="task-preview-page__floating-card-action"
+                className="task-tower__floating-action"
                 onClick={() => {
                   void unfinishedQuery.refetch();
                   void finishedQuery.refetch();

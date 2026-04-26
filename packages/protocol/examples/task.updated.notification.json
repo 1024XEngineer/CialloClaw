@@ -3,6 +3,7 @@
   "method": "task.updated",
   "params": {
     "task_id": "task_demo_001",
+    "session_id": "sess_demo_001",
     "status": "processing"
   }
 }

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 // registerHandlers binds stable agent.* JSON-RPC methods to orchestrator entry
@@ -23,6 +26,7 @@ func (s *Server) registerHandlers() {
 		"agent.task.list":                      s.handleAgentTaskList,
 		"agent.task.detail.get":                s.handleAgentTaskDetailGet,
 		"agent.task.events.list":               s.handleAgentTaskEventsList,
+		"agent.task.tool_calls.list":           s.handleAgentTaskToolCallsList,
 		"agent.task.steer":                     s.handleAgentTaskSteer,
 		"agent.task.control":                   s.handleAgentTaskControl,
 		"agent.task_inspector.config.get":      s.handleAgentTaskInspectorConfigGet,
@@ -42,7 +46,10 @@ func (s *Server) registerHandlers() {
 		"agent.security.respond":               s.handleAgentSecurityRespond,
 		"agent.settings.get":                   s.handleAgentSettingsGet,
 		"agent.settings.update":                s.handleAgentSettingsUpdate,
+		"agent.settings.model.validate":        s.handleAgentSettingsModelValidate,
 		"agent.plugin.runtime.list":            s.handleAgentPluginRuntimeList,
+		"agent.plugin.list":                    s.handleAgentPluginList,
+		"agent.plugin.detail.get":              s.handleAgentPluginDetailGet,
 	}
 }
 
@@ -110,6 +117,12 @@ func (s *Server) handleAgentTaskDetailGet(params map[string]any) (any, *rpcError
 // handleAgentTaskEventsList handles agent.task.events.list.
 func (s *Server) handleAgentTaskEventsList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.TaskEventsList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentTaskToolCallsList handles agent.task.tool_calls.list.
+func (s *Server) handleAgentTaskToolCallsList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.TaskToolCallsList(params)
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -231,9 +244,27 @@ func (s *Server) handleAgentSettingsUpdate(params map[string]any) (any, *rpcErro
 	return wrapOrchestratorResult(data, err)
 }
 
+// handleAgentSettingsModelValidate handles agent.settings.model.validate.
+func (s *Server) handleAgentSettingsModelValidate(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SettingsModelValidate(params)
+	return wrapOrchestratorResult(data, err)
+}
+
 // handleAgentPluginRuntimeList handles agent.plugin.runtime.list.
 func (s *Server) handleAgentPluginRuntimeList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.PluginRuntimeList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentPluginList handles agent.plugin.list.
+func (s *Server) handleAgentPluginList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.PluginList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentPluginDetailGet handles agent.plugin.detail.get.
+func (s *Server) handleAgentPluginDetailGet(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.PluginDetailGet(params)
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -303,7 +334,23 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_storage_query_failed",
 		}
 	}
+	if errors.Is(err, storage.ErrStructuredStoreUnavailable) || errors.Is(err, storage.ErrDatabasePathRequired) {
+		return nil, &rpcError{
+			Code:    1005001,
+			Message: "SQLITE_WRITE_FAILED",
+			Detail:  err.Error(),
+			TraceID: "trace_sqlite_write_failed",
+		}
+	}
 	if errors.Is(err, orchestrator.ErrStrongholdAccessFailed) {
+		return nil, &rpcError{
+			Code:    1005004,
+			Message: "STRONGHOLD_ACCESS_FAILED",
+			Detail:  err.Error(),
+			TraceID: "trace_stronghold_access_failed",
+		}
+	}
+	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) {
 		return nil, &rpcError{
 			Code:    1005004,
 			Message: "STRONGHOLD_ACCESS_FAILED",
@@ -317,6 +364,38 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			Message: "RECOVERY_POINT_NOT_FOUND",
 			Detail:  err.Error(),
 			TraceID: "trace_recovery_point_not_found",
+		}
+	}
+	if errors.Is(err, model.ErrModelProviderRequired) || errors.Is(err, model.ErrModelProviderUnsupported) {
+		return nil, &rpcError{
+			Code:    1008001,
+			Message: "MODEL_PROVIDER_NOT_FOUND",
+			Detail:  err.Error(),
+			TraceID: "trace_model_provider_not_found",
+		}
+	}
+	if errors.Is(err, tools.ErrToolOutputInvalid) {
+		return nil, &rpcError{
+			Code:    1003004,
+			Message: "TOOL_OUTPUT_INVALID",
+			Detail:  err.Error(),
+			TraceID: "trace_tool_output_invalid",
+		}
+	}
+	if model.IsProviderRuntimeUnavailable(err) {
+		return nil, &rpcError{
+			Code:    1008003,
+			Message: "MODEL_RUNTIME_UNAVAILABLE",
+			Detail:  err.Error(),
+			TraceID: "trace_model_runtime_unavailable",
+		}
+	}
+	if errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrSecretSourceFailed) {
+		return nil, &rpcError{
+			Code:    1008002,
+			Message: "MODEL_NOT_ALLOWED",
+			Detail:  err.Error(),
+			TraceID: "trace_model_not_allowed",
 		}
 	}
 

@@ -1,10 +1,14 @@
-// 该文件负责本地服务依赖装配与启动初始化。
+// Package bootstrap assembles local-service dependencies and startup wiring.
 package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
+	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -29,7 +33,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
-// App 定义当前模块的数据结构。
+// App keeps the assembled local-service runtime dependencies.
 type App struct {
 	server       *rpc.Server
 	storage      *storage.Service
@@ -44,20 +48,50 @@ type runtimeStarter interface {
 	Start() error
 }
 
-// New 创建并返回当前能力。
+var (
+	newLocalPathPolicyForBootstrap        = platform.NewLocalPathPolicy
+	registerBuiltinToolsForBootstrap      = builtin.RegisterBuiltinTools
+	registerPlaywrightToolsForBootstrap   = sidecarclient.RegisterPlaywrightTools
+	registerOCRToolsForBootstrap          = sidecarclient.RegisterOCRTools
+	registerMediaToolsForBootstrap        = sidecarclient.RegisterMediaTools
+	newModelServiceFromConfigForBootstrap = model.NewServiceFromConfig
+)
+
+// New assembles a fully wired local-service application.
 func New(cfg config.Config) (*App, error) {
-	pathPolicy, err := platform.NewLocalPathPolicy(cfg.WorkspaceRoot)
+	if strings.ContainsRune(cfg.WorkspaceRoot, '\x00') {
+		return nil, fmt.Errorf("workspace root contains invalid null byte")
+	}
+
+	pathPolicy, err := newLocalPathPolicyForBootstrap(cfg.WorkspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	// Bootstrap builds a working client from the canonical runtime route, but an
+	// unsupported persisted provider still needs a clientless placeholder that
+	// preserves the user-facing provider identity for diagnostics and follow-up
+	// settings edits.
+	resolvedModelConfig, placeholderModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 	auditService := audit.NewService(storageService.AuditWriter())
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executionBackend := platform.NewControlledExecutionBackend(cfg.WorkspaceRoot)
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	pluginService := plugin.NewService()
+	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	if err := persistPluginManifests(context.Background(), storageService, pluginService); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
 	playwrightRuntime = chooseRuntimeOnStart(playwrightRuntime, err, func() *sidecarclient.PlaywrightSidecarRuntime {
 		return sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
@@ -75,16 +109,20 @@ func New(cfg config.Config) (*App, error) {
 	mediaClient := mediaRuntime.Client()
 	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	toolRegistry := tools.NewRegistry()
-	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+	if err := registerBuiltinToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
-	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+	if err := registerPlaywrightToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
-	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+	if err := registerOCRToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
-	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+	if err := registerMediaToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
 	toolExecutor := tools.NewToolExecutor(
@@ -92,13 +130,13 @@ func New(cfg config.Config) (*App, error) {
 		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
 	)
 
-	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-		ModelConfig:  cfg.Model,
+	modelService, err := newModelServiceFromConfigForBootstrap(model.ServiceConfig{
+		ModelConfig:  resolvedModelConfig,
 		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
-		if errors.Is(err, model.ErrSecretSourceFailed) && (errors.Is(err, model.ErrSecretNotFound) || errors.Is(err, storage.ErrSecretNotFound)) {
-			modelService = model.NewService(cfg.Model)
+		if shouldFallbackBootstrapModelService(err, persistedModelRouteChanged) {
+			modelService = model.NewService(placeholderModelConfig)
 		} else {
 			_ = storageService.Close()
 			return nil, err
@@ -109,7 +147,8 @@ func New(cfg config.Config) (*App, error) {
 	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
 	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
 		WithArtifactStore(storageService.ArtifactStore()).
-		WithLoopRuntimeStore(storageService.LoopRuntimeStore())
+		WithLoopRuntimeStore(storageService.LoopRuntimeStore()).
+		WithExtensionAssetCatalog(storageService)
 	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
@@ -117,6 +156,14 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	if err := runEngine.WithTodoStore(storageService.TodoStore()); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	if err := runEngine.WithSettingsStore(storageService.SettingsStore()); err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
+	if err := runEngine.WithSessionStore(storageService.SessionStore()); err != nil {
 		_ = storageService.Close()
 		return nil, err
 	}
@@ -144,7 +191,110 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
-// Start 启动当前能力。
+func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, config.ModelConfig, bool, error) {
+	if settingsStore == nil {
+		return base, base, false, nil
+	}
+	snapshot, err := settingsStore.LoadSettingsSnapshot(context.Background())
+	if err != nil {
+		return config.ModelConfig{}, config.ModelConfig{}, false, err
+	}
+	resolved := model.RuntimeConfigFromSettings(base, snapshot)
+	placeholder := resolved
+	if provider := bootstrapPersistedModelProvider(snapshot); provider != "" {
+		placeholder.Provider = provider
+	}
+	persistedRouteChanged := placeholder.Provider != base.Provider || placeholder.Endpoint != base.Endpoint || placeholder.ModelID != base.ModelID
+	return resolved, placeholder, persistedRouteChanged, nil
+}
+
+func bootstrapPersistedModelProvider(snapshot map[string]any) string {
+	models, ok := snapshot["models"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if provider, ok := models["provider"].(string); ok {
+		if trimmed := strings.TrimSpace(provider); trimmed != "" {
+			return trimmed
+		}
+	}
+	credentials, ok := models["credentials"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	provider, _ := credentials["provider"].(string)
+	return strings.TrimSpace(provider)
+}
+
+func shouldFallbackBootstrapModelService(err error, allowPersistedRoutePlaceholder bool) bool {
+	if allowPersistedRoutePlaceholder && errors.Is(err, model.ErrModelProviderUnsupported) {
+		return true
+	}
+	if !errors.Is(err, model.ErrSecretSourceFailed) {
+		return false
+	}
+	return errors.Is(err, model.ErrSecretNotFound) ||
+		errors.Is(err, storage.ErrSecretNotFound) ||
+		errors.Is(err, storage.ErrSecretStoreAccessFailed) ||
+		errors.Is(err, storage.ErrStrongholdUnavailable) ||
+		errors.Is(err, storage.ErrStrongholdAccessFailed)
+}
+
+func persistPluginManifests(ctx context.Context, storageService *storage.Service, pluginService *plugin.Service) error {
+	if storageService == nil || pluginService == nil || storageService.PluginManifestStore() == nil {
+		return nil
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	runtimeNamesByPluginID := map[string][]string{}
+	for _, runtime := range pluginService.RuntimeStates() {
+		if runtime.Manifest == nil || runtime.Manifest.PluginID == "" {
+			continue
+		}
+		runtimeNamesByPluginID[runtime.Manifest.PluginID] = append(runtimeNamesByPluginID[runtime.Manifest.PluginID], runtime.Name)
+	}
+	for _, manifest := range pluginService.Manifests() {
+		capabilitiesJSON, err := json.Marshal(manifest.Capabilities)
+		if err != nil {
+			return fmt.Errorf("marshal plugin manifest capabilities for %s: %w", manifest.PluginID, err)
+		}
+		permissionsJSON, err := json.Marshal(manifest.Permissions)
+		if err != nil {
+			return fmt.Errorf("marshal plugin manifest permissions for %s: %w", manifest.PluginID, err)
+		}
+		runtimeNamesJSON, err := json.Marshal(runtimeNamesByPluginID[manifest.PluginID])
+		if err != nil {
+			return fmt.Errorf("marshal plugin manifest runtime names for %s: %w", manifest.PluginID, err)
+		}
+		record := storage.PluginManifestRecord{
+			PluginID:         manifest.PluginID,
+			Name:             manifest.Name,
+			Version:          manifest.Version,
+			Entry:            manifest.Entry,
+			Source:           manifest.Source,
+			Summary:          firstNonEmptyBootstrap(strings.TrimSpace(manifest.Summary), fmt.Sprintf("Built-in plugin manifest for %s.", manifest.Name)),
+			CapabilitiesJSON: string(capabilitiesJSON),
+			PermissionsJSON:  string(permissionsJSON),
+			RuntimeNamesJSON: string(runtimeNamesJSON),
+			CreatedAt:        timestamp,
+			UpdatedAt:        timestamp,
+		}
+		if err := storageService.PluginManifestStore().WritePluginManifest(ctx, record); err != nil {
+			return fmt.Errorf("write plugin manifest %s: %w", manifest.PluginID, err)
+		}
+	}
+	return nil
+}
+
+func firstNonEmptyBootstrap(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// Start launches the RPC server and background runtimes.
 func (a *App) Start(ctx context.Context) error {
 	return a.server.Start(ctx)
 }

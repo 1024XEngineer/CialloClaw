@@ -1,8 +1,9 @@
-import { APPROVAL_STATUSES, RISK_LEVELS, TASK_SOURCE_TYPES, TASK_STATUSES } from "@cialloclaw/protocol";
-import type { ApprovalRequest, Artifact, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
+import { APPROVAL_STATUSES, DELIVERY_TYPES, RISK_LEVELS, TASK_SOURCE_TYPES, TASK_STATUSES } from "@cialloclaw/protocol";
+import type { ApprovalRequest, Artifact, AuditRecord, AuthorizationRecord, Citation, DeliveryResult, MirrorReference, RecoveryPoint, Task, TaskEvent, TaskStep } from "@cialloclaw/protocol";
 
 type Guard<T> = (value: unknown) => value is T;
 const approvalStatuses = new Set<string>(APPROVAL_STATUSES);
+const deliveryTypes = new Set<string>(DELIVERY_TYPES);
 const riskLevels = new Set<string>(RISK_LEVELS);
 const taskSourceTypes = new Set<string>(TASK_SOURCE_TYPES);
 const taskStatuses = new Set<string>(TASK_STATUSES);
@@ -33,6 +34,41 @@ export function isApprovalRequest(value: unknown): value is ApprovalRequest {
 
 export function isActiveApprovalRequest(value: ApprovalRequest): boolean {
   return value.status === "pending";
+}
+
+export function isAuthorizationRecord(value: unknown): value is AuthorizationRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AuthorizationRecord>;
+  return (
+    typeof candidate.authorization_record_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.approval_id === "string" &&
+    (candidate.decision === "allow_once" || candidate.decision === "deny_once") &&
+    typeof candidate.remember_rule === "boolean" &&
+    typeof candidate.operator === "string" &&
+    typeof candidate.created_at === "string"
+  );
+}
+
+export function isAuditRecord(value: unknown): value is AuditRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AuditRecord>;
+  return (
+    typeof candidate.audit_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.type === "string" &&
+    typeof candidate.action === "string" &&
+    typeof candidate.summary === "string" &&
+    typeof candidate.target === "string" &&
+    typeof candidate.result === "string" &&
+    typeof candidate.created_at === "string"
+  );
 }
 
 export function isRecoveryPoint(value: unknown): value is RecoveryPoint {
@@ -87,6 +123,47 @@ export function isArtifact(value: unknown): value is Artifact {
     typeof candidate.title === "string" &&
     typeof candidate.path === "string" &&
     typeof candidate.mime_type === "string"
+  );
+}
+
+export function isDeliveryResult(value: unknown): value is DeliveryResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<DeliveryResult>;
+  const payload = candidate.payload;
+  return (
+    typeof candidate.type === "string" &&
+    deliveryTypes.has(candidate.type) &&
+    typeof candidate.title === "string" &&
+    typeof candidate.preview_text === "string" &&
+    Boolean(payload) &&
+    typeof payload === "object" &&
+    ((payload as DeliveryResult["payload"]).path === null || typeof (payload as DeliveryResult["payload"]).path === "string") &&
+    ((payload as DeliveryResult["payload"]).url === null || typeof (payload as DeliveryResult["payload"]).url === "string") &&
+    ((payload as DeliveryResult["payload"]).task_id === null || typeof (payload as DeliveryResult["payload"]).task_id === "string")
+  );
+}
+
+export function isCitation(value: unknown): value is Citation {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Citation>;
+  return (
+    typeof candidate.citation_id === "string" &&
+    typeof candidate.task_id === "string" &&
+    typeof candidate.run_id === "string" &&
+    (candidate.source_type === "file" || candidate.source_type === "web" || candidate.source_type === "context") &&
+    typeof candidate.source_ref === "string" &&
+    typeof candidate.label === "string" &&
+    (candidate.artifact_id === undefined || candidate.artifact_id === null || typeof candidate.artifact_id === "string") &&
+    (candidate.artifact_type === undefined || candidate.artifact_type === null || typeof candidate.artifact_type === "string") &&
+    (candidate.evidence_role === undefined || candidate.evidence_role === null || typeof candidate.evidence_role === "string") &&
+    (candidate.excerpt_text === undefined || candidate.excerpt_text === null || typeof candidate.excerpt_text === "string") &&
+    (candidate.screen_session_id === undefined || candidate.screen_session_id === null || typeof candidate.screen_session_id === "string")
   );
 }
 

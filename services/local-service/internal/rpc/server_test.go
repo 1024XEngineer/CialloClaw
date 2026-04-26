@@ -1307,6 +1307,16 @@ func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
 	}
 }
 
+func TestDispatchMapsWrappedStructuredStoreErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, fmt.Errorf("settings snapshot write failed: %w", storage.ErrStructuredStoreUnavailable))
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1005001 || rpcErr.Message != "SQLITE_WRITE_FAILED" {
+		t.Fatalf("expected wrapped structured store error to map to SQLITE_WRITE_FAILED, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
 func TestDispatchMapsRecoveryPointNotFoundErrors(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrRecoveryPointNotFound)
 	if rpcErr == nil {
@@ -1327,6 +1337,125 @@ func TestDispatchMapsStrongholdErrors(t *testing.T) {
 	}
 }
 
+func TestDispatchMapsModelProviderErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, model.ErrModelProviderUnsupported)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1008001 || rpcErr.Message != "MODEL_PROVIDER_NOT_FOUND" {
+		t.Fatalf("expected MODEL_PROVIDER_NOT_FOUND mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestDispatchMapsModelConfigurationErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, model.ErrOpenAIEndpointRequired)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1008002 || rpcErr.Message != "MODEL_NOT_ALLOWED" {
+		t.Fatalf("expected MODEL_NOT_ALLOWED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestDispatchMapsModelRuntimeUnavailableErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, model.ErrOpenAIRequestTimeout)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1008003 || rpcErr.Message != "MODEL_RUNTIME_UNAVAILABLE" {
+		t.Fatalf("expected MODEL_RUNTIME_UNAVAILABLE mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+
+	_, rpcErr = wrapOrchestratorResult(nil, &model.OpenAIHTTPStatusError{StatusCode: 503, Message: "upstream unavailable"})
+	if rpcErr == nil || rpcErr.Code != 1008003 {
+		t.Fatalf("expected 5xx provider failure to map as runtime unavailable, got %+v", rpcErr)
+	}
+}
+
+func TestDispatchMapsToolOutputInvalidExplicitly(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, tools.ErrToolOutputInvalid)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1003004 || rpcErr.Message != "TOOL_OUTPUT_INVALID" {
+		t.Fatalf("expected TOOL_OUTPUT_INVALID mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(t *testing.T) {
+	server := newTestServer()
+	handlerCalls := []struct {
+		name   string
+		invoke func() (any, *rpcError)
+	}{
+		{name: "recommendation.get", invoke: func() (any, *rpcError) { return server.handleAgentRecommendationGet(map[string]any{}) }},
+		{name: "recommendation.feedback.submit", invoke: func() (any, *rpcError) { return server.handleAgentRecommendationFeedbackSubmit(map[string]any{}) }},
+		{name: "task_inspector.config.get", invoke: func() (any, *rpcError) { return server.handleAgentTaskInspectorConfigGet(nil) }},
+		{name: "task_inspector.config.update", invoke: func() (any, *rpcError) {
+			return server.handleAgentTaskInspectorConfigUpdate(map[string]any{"task_sources": []any{"D:/workspace/todos"}, "inspection_interval": map[string]any{"unit": "minute", "value": 10}})
+		}},
+		{name: "task_inspector.run", invoke: func() (any, *rpcError) { return server.handleAgentTaskInspectorRun(map[string]any{}) }},
+		{name: "notepad.list", invoke: func() (any, *rpcError) { return server.handleAgentNotepadList(map[string]any{}) }},
+		{name: "notepad.convert_to_task", invoke: func() (any, *rpcError) {
+			return server.handleAgentNotepadConvertToTask(map[string]any{"item_id": "missing"})
+		}},
+		{name: "dashboard.overview.get", invoke: func() (any, *rpcError) { return server.handleAgentDashboardOverviewGet(map[string]any{}) }},
+		{name: "dashboard.module.get", invoke: func() (any, *rpcError) { return server.handleAgentDashboardModuleGet(map[string]any{"module": "task"}) }},
+		{name: "mirror.overview.get", invoke: func() (any, *rpcError) { return server.handleAgentMirrorOverviewGet(map[string]any{}) }},
+		{name: "security.summary.get", invoke: func() (any, *rpcError) { return server.handleAgentSecuritySummaryGet(nil) }},
+		{name: "security.pending.list", invoke: func() (any, *rpcError) { return server.handleAgentSecurityPendingList(map[string]any{}) }},
+		{name: "security.respond", invoke: func() (any, *rpcError) {
+			return server.handleAgentSecurityRespond(map[string]any{"task_id": "missing", "decision": "approve"})
+		}},
+		{name: "settings.model.validate", invoke: func() (any, *rpcError) { return server.handleAgentSettingsModelValidate(map[string]any{}) }},
+	}
+	for _, call := range handlerCalls {
+		data, rpcErr := call.invoke()
+		if data == nil && rpcErr == nil {
+			t.Fatalf("expected %s handler to return either data or rpc error", call.name)
+		}
+		if rpcErr != nil && rpcErr.TraceID == "" {
+			t.Fatalf("expected %s handler rpc error to include trace id, got %+v", call.name, rpcErr)
+		}
+	}
+}
+
+func TestJSONRPCHandlerWrappersCoverPrimitiveDecodersAndTracingHelpers(t *testing.T) {
+	req := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`1`),
+		Method:  "agent.settings.update",
+		Params:  mustMarshal(t, map[string]any{"request_meta": map[string]any{"trace_id": "trace_rpc_helpers"}, "enabled": true, "count": 3, "labels": []string{"a", "b"}}),
+	}
+	decoded, err := decodeRequest(strings.NewReader(string(mustMarshal(t, req))))
+	if err != nil {
+		t.Fatalf("decodeRequest returned error: %v", err)
+	}
+	params, err := decodeParams(decoded.Params)
+	if err != nil {
+		t.Fatalf("decodeParams returned error: %v", err)
+	}
+	if requestTraceID(params) != "trace_rpc_helpers" || traceIDFromRequest(decoded.Params) != "trace_rpc_helpers" {
+		t.Fatalf("expected trace helpers to extract request trace ids, params=%+v", params)
+	}
+	if !boolValue(params, "enabled", false) || intValue(params, "count", 0) != 3 {
+		t.Fatalf("expected primitive decoders to round-trip values, params=%+v", params)
+	}
+	labels := stringSliceValue(params["labels"])
+	if len(labels) != 2 || labels[1] != "b" {
+		t.Fatalf("expected stringSliceValue to decode labels, got %+v", labels)
+	}
+	if boolValue(nil, "enabled", false) || intValue(nil, "count", 0) != 0 || len(stringSliceValue(map[string]any{"labels": 7}["labels"])) != 0 {
+		t.Fatal("expected primitive decoders to handle nil and invalid inputs")
+	}
+	if _, err := decodeRequest(strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"agent.settings.get","params":`)); err == nil {
+		t.Fatal("expected malformed request to fail decodeRequest")
+	}
+	if _, err := decodeParams(json.RawMessage(`{"broken":`)); err == nil {
+		t.Fatal("expected malformed params to fail decodeParams")
+	}
+}
+
 func TestDispatchReturnsSettingsGet(t *testing.T) {
 	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-get.db")})
@@ -1342,9 +1471,10 @@ func TestDispatchReturnsSettingsGet(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	dataLog := success.Result.Data.(map[string]any)["settings"].(map[string]any)["data_log"].(map[string]any)
-	if _, ok := dataLog["stronghold"].(map[string]any); !ok {
-		t.Fatalf("expected settings get to include stronghold status, got %+v", dataLog)
+	models := success.Result.Data.(map[string]any)["settings"].(map[string]any)["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if _, ok := credentials["stronghold"].(map[string]any); !ok {
+		t.Fatalf("expected settings get to include stronghold status, got %+v", credentials)
 	}
 }
 
@@ -1358,7 +1488,7 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 		ID:      json.RawMessage(`"req-settings-update"`),
 		Method:  "agent.settings.update",
 		Params: mustMarshal(t, map[string]any{
-			"data_log": map[string]any{
+			"models": map[string]any{
 				"provider": "openai",
 				"api_key":  "rpc-secret-key",
 			},
@@ -1368,12 +1498,39 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	dataLog := success.Result.Data.(map[string]any)["effective_settings"].(map[string]any)["data_log"].(map[string]any)
-	if dataLog["provider_api_key_configured"] != true {
-		t.Fatalf("expected settings update to mark provider key configured, got %+v", dataLog)
+	models := success.Result.Data.(map[string]any)["effective_settings"].(map[string]any)["models"].(map[string]any)
+	if models["provider_api_key_configured"] != true {
+		t.Fatalf("expected settings update to mark provider key configured, got %+v", models)
 	}
-	if _, exists := dataLog["api_key"]; exists {
-		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", dataLog)
+	if _, exists := models["api_key"]; exists {
+		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", models)
+	}
+	if success.Result.Data.(map[string]any)["apply_mode"] != "next_task_effective" || success.Result.Data.(map[string]any)["need_restart"] != false {
+		t.Fatalf("expected model settings update to be next_task_effective, got %+v", success.Result.Data)
+	}
+}
+
+func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-settings-model-validate"`),
+		Method:  "agent.settings.model.validate",
+		Params: mustMarshal(t, map[string]any{
+			"models": map[string]any{
+				"provider": "openai",
+				"base_url": "https://api.example.com/v1",
+				"model":    "gpt-4.1-mini",
+			},
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["ok"] != false || data["status"] != "missing_api_key" {
+		t.Fatalf("expected structured validation failure result, got %+v", data)
 	}
 }
 
@@ -1394,9 +1551,74 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatalf("expected plugin runtime query to return declared runtimes, got %+v", data)
 	}
+	manifest, ok := items[0]["manifest"].(map[string]any)
+	if !ok || manifest["plugin_id"] == nil || manifest["source"] == nil {
+		t.Fatalf("expected plugin runtime items to include formal manifest linkage, got %+v", items[0])
+	}
 	metrics := data["metrics"].([]map[string]any)
 	if len(metrics) == 0 {
 		t.Fatalf("expected plugin runtime query to return metric snapshots, got %+v", data)
+	}
+}
+
+func TestDispatchReturnsPluginList(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-plugin-list"`),
+		Method:  "agent.plugin.list",
+		Params: mustMarshal(t, map[string]any{
+			"query": "ocr",
+			"page":  map[string]any{"limit": 10, "offset": 0},
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "ocr" {
+		t.Fatalf("expected plugin list query to return filtered ocr plugin, got %+v", data)
+	}
+}
+
+func TestDispatchReturnsPluginDetail(t *testing.T) {
+	server, toolRegistry, pluginService := newTestServerWithDependencies(nil)
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-plugin-detail"`),
+		Method:  "agent.plugin.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"plugin_id": "ocr",
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["plugin"].(map[string]any)["plugin_id"] != "ocr" {
+		t.Fatalf("expected plugin detail query to resolve ocr plugin, got %+v", data)
+	}
+	runtime, ok := pluginService.RuntimeState(plugin.RuntimeKindWorker, "ocr_worker")
+	if !ok {
+		t.Fatalf("expected ocr worker runtime to exist")
+	}
+	toolItems := data["tools"].([]map[string]any)
+	if len(toolItems) != len(runtime.Capabilities) {
+		t.Fatalf("expected plugin detail query to return one contract per declared capability, got %+v", data)
+	}
+	for _, item := range toolItems {
+		toolName := item["tool_name"].(string)
+		tool, err := toolRegistry.Get(toolName)
+		if err != nil {
+			t.Fatalf("expected tool %q to exist in registry: %v", toolName, err)
+		}
+		metadata := tool.Metadata()
+		if item["display_name"] != metadata.DisplayName || item["source"] != string(metadata.Source) {
+			t.Fatalf("expected plugin detail payload to mirror registry metadata for %q, got %+v", toolName, item)
+		}
 	}
 }
 
@@ -1601,6 +1823,46 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-tool-calls.db")})
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	if err := storageService.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_rpc_001",
+		RunID:      "run_rpc_tool_001",
+		TaskID:     "task_rpc_tool_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "notes/source.txt"},
+		Output:     map[string]any{"path": "notes/source.txt"},
+		DurationMS: 9,
+	}); err != nil {
+		t.Fatalf("save tool call failed: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-tool-calls-list"`),
+		Method:  "agent.task.tool_calls.list",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": "task_rpc_tool_001",
+			"limit":   20,
+			"offset":  0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected rpc task tool calls list to return read_file, got %+v", items)
+	}
+}
+
 func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 	server := newTestServer()
 	startResult, err := server.orchestrator.StartTask(map[string]any{
@@ -1644,15 +1906,25 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 }
 
 func newTestServer() *Server {
-	return newTestServerWithModelClient(nil)
+	server, _, _ := newTestServerWithDependencies(nil)
+	return server
 }
 
 func newTestServerWithModelClient(client model.Client) *Server {
+	server, _, _ := newTestServerWithDependencies(client)
+	return server
+}
+
+func newTestServerWithDependencies(client model.Client) (*Server, *tools.Registry, *plugin.Service) {
 	toolRegistry := tools.NewRegistry()
 	_ = builtin.RegisterBuiltinTools(toolRegistry)
+	_ = sidecarclient.RegisterPlaywrightTools(toolRegistry)
+	_ = sidecarclient.RegisterOCRTools(toolRegistry)
+	_ = sidecarclient.RegisterMediaTools(toolRegistry)
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pathPolicy, _ := platform.NewLocalPathPolicy(filepath.Join("workspace", "rpc-test"))
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	pluginService := plugin.NewService()
 	executionService := execution.NewService(
 		fileSystem,
 		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
@@ -1666,7 +1938,7 @@ func newTestServerWithModelClient(client model.Client) *Server {
 		delivery.NewService(),
 		toolRegistry,
 		toolExecutor,
-		plugin.NewService(),
+		pluginService,
 	)
 	orch := orchestrator.NewService(
 		contextsvc.NewService(),
@@ -1681,7 +1953,7 @@ func newTestServerWithModelClient(client model.Client) *Server {
 			Endpoint: "https://api.openai.com/v1/responses",
 		}),
 		toolRegistry,
-		plugin.NewService(),
+		pluginService,
 	).WithExecutor(executionService)
 
 	server := NewServer(serviceconfig.RPCConfig{
@@ -1692,7 +1964,7 @@ func newTestServerWithModelClient(client model.Client) *Server {
 	server.now = func() time.Time {
 		return time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
 	}
-	return server
+	return server, toolRegistry, pluginService
 }
 
 func mustMarshal(t *testing.T, value any) json.RawMessage {

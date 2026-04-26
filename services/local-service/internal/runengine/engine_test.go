@@ -5,11 +5,37 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
+
+type storageTestAdapter struct {
+	databasePath string
+}
+
+type failingSettingsStore struct{}
+
+func (failingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
+	return errors.New("settings snapshot write failed")
+}
+
+func (failingSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
+	return nil, nil
+}
+
+func (s storageTestAdapter) DatabasePath() string {
+	return s.databasePath
+}
+
+func (s storageTestAdapter) SecretStorePath() string {
+	if s.databasePath == "" {
+		return ""
+	}
+	return s.databasePath + ".stronghold"
+}
 
 // TestEngineTaskLifecycle verifies the end-to-end task lifecycle.
 func TestEngineTaskLifecycle(t *testing.T) {
@@ -81,6 +107,10 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	}
 	if len(notifications) < 3 {
 		t.Fatalf("expected lifecycle notifications to be queued, got %d", len(notifications))
+	}
+	first := notifications[0]
+	if first.Method != "task.updated" || first.Params["session_id"] != "sess_test" {
+		t.Fatalf("expected task.updated notification to include session_id, got %+v", first)
 	}
 }
 
@@ -265,10 +295,11 @@ func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
 func TestEngineDefaultSettingsIncludeBudgetPolicy(t *testing.T) {
 	engine := NewEngine()
 	settings := engine.Settings()
-	dataLog := settings["data_log"].(map[string]any)
-	policy := dataLog["budget_policy"].(map[string]any)
-	if dataLog["budget_auto_downgrade"] != true {
-		t.Fatalf("expected budget_auto_downgrade default to remain true, got %+v", dataLog)
+	models := settings["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	policy := credentials["budget_policy"].(map[string]any)
+	if credentials["budget_auto_downgrade"] != true {
+		t.Fatalf("expected budget_auto_downgrade default to remain true, got %+v", credentials)
 	}
 	if policy["planner_retry_budget"] != 1 || policy["failure_signal_window"] != 2 || policy["token_pressure_threshold"] != 64 {
 		t.Fatalf("expected default budget policy thresholds, got %+v", policy)
@@ -281,8 +312,8 @@ func TestEngineDefaultSettingsIncludeBudgetPolicy(t *testing.T) {
 
 func TestEngineUpdateSettingsMergesNestedBudgetPolicy(t *testing.T) {
 	engine := NewEngine()
-	effective, updatedKeys, applyMode, needRestart := engine.UpdateSettings(map[string]any{
-		"data_log": map[string]any{
+	effective, updatedKeys, applyMode, needRestart, err := engine.UpdateSettings(map[string]any{
+		"models": map[string]any{
 			"budget_policy": map[string]any{
 				"failure_signal_window":     3,
 				"planner_retry_budget":      2,
@@ -290,24 +321,285 @@ func TestEngineUpdateSettingsMergesNestedBudgetPolicy(t *testing.T) {
 			},
 		},
 	})
+	if err != nil {
+		t.Fatalf("update settings returned error: %v", err)
+	}
 	if applyMode != "immediate" || needRestart {
 		t.Fatalf("expected budget policy update to stay immediate, got applyMode=%s needRestart=%v", applyMode, needRestart)
 	}
-	if len(updatedKeys) != 1 || updatedKeys[0] != "data_log.budget_policy" {
-		t.Fatalf("expected nested budget policy update key, got %+v", updatedKeys)
+	expectedKeys := []string{
+		"models.credentials.budget_policy.expensive_tool_categories",
+		"models.credentials.budget_policy.failure_signal_window",
+		"models.credentials.budget_policy.planner_retry_budget",
 	}
-	policyPatch := effective["data_log"].(map[string]any)["budget_policy"].(map[string]any)
+	if !reflect.DeepEqual(updatedKeys, expectedKeys) {
+		t.Fatalf("expected nested budget policy leaf keys, got %+v", updatedKeys)
+	}
+	policyPatch := effective["models"].(map[string]any)["credentials"].(map[string]any)["budget_policy"].(map[string]any)
 	if policyPatch["failure_signal_window"] != 3 || policyPatch["planner_retry_budget"] != 2 {
 		t.Fatalf("expected effective settings to expose nested budget policy patch, got %+v", effective)
 	}
 	settings := engine.Settings()
-	policy := settings["data_log"].(map[string]any)["budget_policy"].(map[string]any)
+	policy := settings["models"].(map[string]any)["credentials"].(map[string]any)["budget_policy"].(map[string]any)
 	if policy["failure_signal_window"] != 3 || policy["planner_retry_budget"] != 2 {
 		t.Fatalf("expected nested budget policy merge to persist, got %+v", policy)
 	}
 	categories := policy["expensive_tool_categories"].([]any)
 	if len(categories) != 3 {
 		t.Fatalf("expected updated expensive tool categories, got %+v", categories)
+	}
+}
+
+func TestEngineUpdateSettingsEmitsLeafModelKeys(t *testing.T) {
+	engine := NewEngine()
+	_, updatedKeys, _, _, err := engine.UpdateSettings(map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"base_url": "https://example.invalid/v1",
+			"model":    "claude-test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update settings returned error: %v", err)
+	}
+	expectedKeys := []string{
+		"models.credentials.base_url",
+		"models.credentials.model",
+		"models.provider",
+	}
+	if !reflect.DeepEqual(updatedKeys, expectedKeys) {
+		t.Fatalf("expected leaf model keys, got %+v", updatedKeys)
+	}
+}
+
+func TestEngineUpdateSettingsAccumulatesLegacyDataLogFields(t *testing.T) {
+	engine := NewEngine()
+	effective, updatedKeys, _, _, err := engine.UpdateSettings(map[string]any{
+		"data_log": map[string]any{
+			"provider":              "anthropic",
+			"budget_auto_downgrade": false,
+			"base_url":              "https://example.invalid/v1",
+			"model":                 "claude-test",
+			"budget_policy": map[string]any{
+				"failure_signal_window": 4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update settings returned error: %v", err)
+	}
+	expectedKeys := []string{
+		"models.credentials.base_url",
+		"models.credentials.budget_auto_downgrade",
+		"models.credentials.budget_policy.failure_signal_window",
+		"models.credentials.model",
+		"models.provider",
+	}
+	if !reflect.DeepEqual(updatedKeys, expectedKeys) {
+		t.Fatalf("expected legacy data_log keys to normalize into models credentials, got %+v", updatedKeys)
+	}
+	models := effective["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "anthropic" {
+		t.Fatalf("expected provider to normalize from legacy data_log, got %+v", models)
+	}
+	if credentials["budget_auto_downgrade"] != false || credentials["base_url"] != "https://example.invalid/v1" || credentials["model"] != "claude-test" {
+		t.Fatalf("expected legacy data_log credentials to accumulate, got %+v", credentials)
+	}
+	budgetPolicy := credentials["budget_policy"].(map[string]any)
+	if budgetPolicy["failure_signal_window"] != 4 {
+		t.Fatalf("expected legacy budget policy to accumulate, got %+v", budgetPolicy)
+	}
+}
+
+func TestEngineUpdateSettingsOnlyRequestsRestartWhenLanguageChanges(t *testing.T) {
+	engine := NewEngine()
+	_, updatedKeys, applyMode, needRestart, err := engine.UpdateSettings(map[string]any{
+		"general": map[string]any{"language": "zh-CN"},
+	})
+	if err != nil {
+		t.Fatalf("unchanged language update returned error: %v", err)
+	}
+	if applyMode != "immediate" || needRestart {
+		t.Fatalf("expected unchanged language update to stay immediate, got applyMode=%s needRestart=%v updatedKeys=%+v", applyMode, needRestart, updatedKeys)
+	}
+
+	_, updatedKeys, applyMode, needRestart, err = engine.UpdateSettings(map[string]any{
+		"general": map[string]any{"language": "en-US"},
+	})
+	if err != nil {
+		t.Fatalf("changed language update returned error: %v", err)
+	}
+	if applyMode != "restart_required" || !needRestart {
+		t.Fatalf("expected changed language update to require restart, got applyMode=%s needRestart=%v updatedKeys=%+v", applyMode, needRestart, updatedKeys)
+	}
+}
+
+func TestEngineSettingsStorePersistsAndReloadsSnapshot(t *testing.T) {
+	storageService := storage.NewService(storageTestAdapter{databasePath: filepath.Join(t.TempDir(), "settings-persist.db")})
+	defer func() { _ = storageService.Close() }()
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(storageService.SettingsStore()); err != nil {
+		t.Fatalf("attach settings store failed: %v", err)
+	}
+	if _, _, _, _, err := engine.UpdateSettings(map[string]any{
+		"general": map[string]any{"language": "en-US"},
+		"models":  map[string]any{"provider": "anthropic", "budget_auto_downgrade": false, "model": "claude-3-7-sonnet"},
+	}); err != nil {
+		t.Fatalf("update settings with persistence returned error: %v", err)
+	}
+	reloaded := NewEngine()
+	if err := reloaded.WithSettingsStore(storageService.SettingsStore()); err != nil {
+		t.Fatalf("reload settings store failed: %v", err)
+	}
+	settings := reloaded.Settings()
+	if settings["general"].(map[string]any)["language"] != "en-US" {
+		t.Fatalf("expected persisted general settings, got %+v", settings)
+	}
+	models := settings["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "anthropic" || credentials["budget_auto_downgrade"] != false || credentials["model"] != "claude-3-7-sonnet" {
+		t.Fatalf("expected persisted model settings, got %+v", settings)
+	}
+}
+
+func TestEngineUpdateSettingsDoesNotMutateRuntimeWhenSnapshotPersistenceFails(t *testing.T) {
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(failingSettingsStore{}); err != nil {
+		t.Fatalf("attach failing settings store failed: %v", err)
+	}
+	before := engine.Settings()
+	if _, _, _, _, err := engine.UpdateSettings(map[string]any{
+		"general": map[string]any{"language": "en-US"},
+		"models":  map[string]any{"provider": "anthropic", "model": "claude-3-7-sonnet"},
+	}); err == nil {
+		t.Fatal("expected update settings to fail when snapshot persistence fails")
+	}
+	after := engine.Settings()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("expected runtime settings to remain unchanged on persistence failure, before=%+v after=%+v", before, after)
+	}
+}
+
+func TestEngineSessionStorePersistsSessionLifecycle(t *testing.T) {
+	storageService := storage.NewService(storageTestAdapter{databasePath: filepath.Join(t.TempDir(), "sessions-persist.db")})
+	defer func() { _ = storageService.Close() }()
+	engine := NewEngine()
+	if err := engine.WithSessionStore(storageService.SessionStore()); err != nil {
+		t.Fatalf("attach session store failed: %v", err)
+	}
+	task := engine.CreateTask(CreateTaskInput{SessionID: "sess_001", Title: "Session task", SourceType: "hover_input", Status: "processing", CurrentStep: "run", RiskLevel: "green"})
+	session, err := storageService.SessionStore().GetSession(context.Background(), "sess_001")
+	if err != nil || session.Status != "active" || session.Title != "Session task" {
+		t.Fatalf("expected active session record after task creation, session=%+v err=%v", session, err)
+	}
+	if _, ok := engine.CompleteTask(task.TaskID, nil, nil, nil); !ok {
+		t.Fatal("expected complete task to succeed")
+	}
+	session, err = storageService.SessionStore().GetSession(context.Background(), "sess_001")
+	if err != nil || session.Status != "idle" {
+		t.Fatalf("expected idle session record after completion, session=%+v err=%v", session, err)
+	}
+}
+
+func TestEngineSessionStoreUsesMostRecentlyUpdatedTaskForSessionSnapshot(t *testing.T) {
+	storageService := storage.NewService(storageTestAdapter{databasePath: filepath.Join(t.TempDir(), "sessions-freshness.db")})
+	defer func() { _ = storageService.Close() }()
+	engine := NewEngine()
+	baseTime := time.Date(2026, 4, 22, 1, 23, 54, 0, time.UTC)
+	tick := 0
+	engine.now = func() time.Time {
+		value := baseTime.Add(time.Duration(tick) * time.Second)
+		tick++
+		return value
+	}
+	if err := engine.WithSessionStore(storageService.SessionStore()); err != nil {
+		t.Fatalf("attach session store failed: %v", err)
+	}
+	olderTask := engine.CreateTask(CreateTaskInput{SessionID: "sess_latest", Title: "Older task", SourceType: "hover_input", Status: "processing", CurrentStep: "collect_input", RiskLevel: "green"})
+	newerTask := engine.CreateTask(CreateTaskInput{SessionID: "sess_latest", Title: "Newer task", SourceType: "hover_input", Status: "processing", CurrentStep: "collect_input", RiskLevel: "green"})
+	if _, ok := engine.UpdateIntent(olderTask.TaskID, "Older task updated", map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}}); !ok {
+		t.Fatal("expected UpdateIntent to succeed for older task")
+	}
+	session, err := storageService.SessionStore().GetSession(context.Background(), "sess_latest")
+	if err != nil {
+		t.Fatalf("get session failed: %v", err)
+	}
+	if session.Title != "Older task updated" {
+		t.Fatalf("expected session title to come from most recently updated task, got %+v", session)
+	}
+	newerRecord, ok := engine.GetTask(newerTask.TaskID)
+	if !ok {
+		t.Fatal("expected newer task to remain in runtime")
+	}
+	if session.UpdatedAt == newerRecord.UpdatedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("expected session updated_at to move beyond stale newer task snapshot, got %+v newer=%+v", session, newerRecord)
+	}
+}
+
+func TestEngineInspectorConfigAndRuntimeBuffers(t *testing.T) {
+	engine := NewEngine()
+	updatedInspector := engine.UpdateInspectorConfig(map[string]any{
+		"task_sources":           []any{"D:/workspace/todos", "D:/workspace/backlog"},
+		"inspection_interval":    map[string]any{"unit": "minute", "value": 10},
+		"inspect_on_file_change": false,
+		"inspect_on_startup":     true,
+		"remind_before_deadline": false,
+		"remind_when_stale":      true,
+	})
+	if !reflect.DeepEqual(updatedInspector["task_sources"], []string{"D:/workspace/todos", "D:/workspace/backlog"}) {
+		t.Fatalf("expected inspector task sources to update, got %+v", updatedInspector)
+	}
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_runtime_buffers",
+		Title:       "Runtime buffer task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	if _, ok := engine.SetCitations(task.TaskID, []map[string]any{{"citation_id": "cit_001"}}); !ok {
+		t.Fatal("expected SetCitations to succeed")
+	}
+	if _, ok := engine.RecordLoopLifecycle(task.TaskID, "loop.round.completed", "waiting_for_retry", map[string]any{"round": 1}); !ok {
+		t.Fatal("expected RecordLoopLifecycle to succeed")
+	}
+	if _, ok := engine.AppendSteeringMessage(task.TaskID, "Please adjust the summary.", map[string]any{"type": "status", "text": "Adjusting summary"}); !ok {
+		t.Fatal("expected AppendSteeringMessage to succeed")
+	}
+	if _, ok := engine.UpdateSecuritySummary(task.TaskID, map[string]any{"security_status": "warning", "risk_level": "yellow"}); !ok {
+		t.Fatal("expected UpdateSecuritySummary to succeed")
+	}
+	if _, ok := engine.MarkWaitingApproval(task.TaskID, map[string]any{"approval_id": "appr_001"}, map[string]any{"type": "status", "text": "Waiting approval"}); !ok {
+		t.Fatal("expected MarkWaitingApproval to succeed")
+	}
+	approvals, total := engine.PendingApprovalRequests(10, 0)
+	if total != 1 || len(approvals) != 1 || approvals[0]["approval_id"] != "appr_001" {
+		t.Fatalf("expected one pending approval request, got total=%d approvals=%+v", total, approvals)
+	}
+	detail, ok := engine.TaskDetail(task.TaskID)
+	if !ok || len(detail.Citations) != 1 || detail.SecuritySummary["pending_authorizations"] != 1 {
+		t.Fatalf("expected task detail snapshot to expose citations and security summary, got %+v", detail)
+	}
+	notifications, ok := engine.PendingNotifications(task.TaskID)
+	if !ok || len(notifications) == 0 {
+		t.Fatalf("expected pending notifications after runtime events, got %+v ok=%v", notifications, ok)
+	}
+	drained, ok := engine.DrainNotifications(task.TaskID)
+	if !ok || len(drained) != len(notifications) {
+		t.Fatalf("expected DrainNotifications to return all buffered notifications, got %+v ok=%v", drained, ok)
+	}
+	notifications, ok = engine.PendingNotifications(task.TaskID)
+	if !ok || len(notifications) != 0 {
+		t.Fatalf("expected notification buffer to be empty after draining, got %+v ok=%v", notifications, ok)
+	}
+	if err := engine.DeleteTask(task.TaskID); err != nil {
+		t.Fatalf("expected DeleteTask to succeed, got %v", err)
+	}
+	if _, ok := engine.TaskDetail(task.TaskID); ok {
+		t.Fatal("expected deleted task to be removed from runtime")
 	}
 }
 

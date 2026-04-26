@@ -29,6 +29,13 @@ func TestServiceCaptureBuildsTraceAndEvalRecords(t *testing.T) {
 			"type": "workspace_document",
 		},
 		Artifacts: []map[string]any{{"artifact_id": "art_001"}},
+		ExtensionAssets: []storage.ExtensionAssetReference{{
+			AssetKind: storage.ExtensionAssetKindSkillManifest,
+			AssetID:   "skill_builtin_default_agent_loop",
+			Name:      "default_agent_loop_skill",
+			Version:   "builtin-v1",
+			Source:    "builtin",
+		}},
 		ModelInvocation: map[string]any{
 			"latency_ms": int64(321),
 			"usage": map[string]any{
@@ -56,6 +63,12 @@ func TestServiceCaptureBuildsTraceAndEvalRecords(t *testing.T) {
 	}
 	if result.TraceRecord.LoopRound != 1 || result.TraceRecord.Cost != 0.012 {
 		t.Fatalf("expected loop/cost metrics to be captured, got %+v", result.TraceRecord)
+	}
+	if result.TraceRecord.AssetRefsJSON == "" || result.EvalSnapshot.AssetRefsJSON == "" {
+		t.Fatalf("expected asset refs to be persisted into trace/eval records, got %+v", result)
+	}
+	if result.Metrics["skill_manifest_count"] != 1 {
+		t.Fatalf("expected extension asset metrics to count skill manifest usage, got %+v", result.Metrics)
 	}
 	if result.Metrics["worker_calls"] != nil {
 		// worker_calls is stored in rule hits, not metrics
@@ -214,6 +227,76 @@ func TestServiceRecordReturnsRollbackErrorWhenTraceCleanupFails(t *testing.T) {
 	err = service.Record(context.Background(), result)
 	if err == nil || !strings.Contains(err.Error(), "trace rollback failed") {
 		t.Fatalf("expected rollback failure to surface, got %v", err)
+	}
+}
+
+func TestTraceEvalHelperBranches(t *testing.T) {
+	toolCall := tools.ToolCallRecord{ToolName: "read_file", Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Input: map[string]any{"path": "workspace/a.md"}}
+	if signature := failureSignature(toolCall); !strings.Contains(signature, "read_file:1001:") {
+		t.Fatalf("expected failureSignature to include tool and error code, got %q", signature)
+	}
+	if failureSignature(tools.ToolCallRecord{ToolName: "read_file", Status: tools.ToolCallStatusSucceeded}) != "" {
+		t.Fatal("expected failureSignature to ignore successful tool calls")
+	}
+	if !isNoProgressFailure(tools.ToolCallRecord{Status: tools.ToolCallStatusTimeout}) {
+		t.Fatal("expected timeout to count as no-progress failure")
+	}
+	if got := truncateText("  hello world  ", 5); got != "hello..." {
+		t.Fatalf("unexpected truncateText output: %q", got)
+	}
+	if got := truncateText("  hi  ", 5); got != "hi" {
+		t.Fatalf("expected short strings to stay intact, got %q", got)
+	}
+	if intValue(map[string]any{"count": int64(3)}, "count") != 3 || intValue(map[string]any{"count": 4.0}, "count") != 4 || intValue(map[string]any{"count": "bad"}, "count") != 0 {
+		t.Fatal("expected intValue to handle int64, float64, and invalid inputs")
+	}
+	if int64Value(map[string]any{"count": int(3)}, "count") != 3 || int64Value(map[string]any{"count": 4.0}, "count") != 4 || int64Value(map[string]any{"count": "bad"}, "count") != 0 {
+		t.Fatal("expected int64Value to handle int, float64, and invalid inputs")
+	}
+	if callSignature(tools.ToolCallRecord{ToolName: "read_file", Input: map[string]any{"bad": func() {}}}) != "read_file" {
+		t.Fatal("expected callSignature to fall back to tool name when input cannot be marshaled")
+	}
+	if repeatedNoProgressFailure([]tools.ToolCallRecord{{ToolName: "read_file", Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Input: map[string]any{"path": "a"}}, {ToolName: "read_file", Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1002), Input: map[string]any{"path": "a"}}}).count != 0 {
+		t.Fatal("expected repeatedNoProgressFailure to ignore mismatched failure signatures")
+	}
+}
+
+func TestTraceEvalAdditionalHelperBranches(t *testing.T) {
+	metrics := map[string]any{}
+	mergeExtensionAssetMetrics(metrics, []storage.ExtensionAssetReference{
+		{AssetKind: storage.ExtensionAssetKindSkillManifest},
+		{AssetKind: storage.ExtensionAssetKindSkillManifest},
+		{AssetKind: storage.ExtensionAssetKindPluginManifest},
+	})
+	if metrics[storage.ExtensionAssetKindSkillManifest+"_count"] != 2 || metrics[storage.ExtensionAssetKindPluginManifest+"_count"] != 1 {
+		t.Fatalf("expected extension asset metrics to count asset kinds, got %+v", metrics)
+	}
+	if resolveCost(map[string]any{"estimated_cost": 2}) != 2 || resolveCost(map[string]any{}) != 0 {
+		t.Fatal("expected resolveCost to handle integer and missing values")
+	}
+	if resolveLatency(CaptureInput{ModelInvocation: map[string]any{"latency_ms": int64(25)}}) != 25 {
+		t.Fatal("expected resolveLatency to prefer model invocation latency")
+	}
+	if resolveLatency(CaptureInput{DurationMS: 17}) != 17 {
+		t.Fatal("expected resolveLatency to fall back to capture duration")
+	}
+	if maxLoopRound([]tools.ToolCallRecord{{Output: map[string]any{"loop_round": int64(1)}}, {Output: map[string]any{"loop_round": float64(3)}}}) != 3 {
+		t.Fatal("expected maxLoopRound to read int64 and float64 loop rounds")
+	}
+	if repeatedCallSignature([]tools.ToolCallRecord{{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}}, {ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}}}).count != 2 {
+		t.Fatal("expected repeatedCallSignature to count matching adjacent tool calls")
+	}
+	if repeatedCallSignature([]tools.ToolCallRecord{{ToolName: "read_file", Input: map[string]any{"bad": func() {}}}, {ToolName: "read_file", Input: map[string]any{"bad": func() {}}}}).count != 2 {
+		t.Fatal("expected repeatedCallSignature to fall back to tool name when marshal fails")
+	}
+	if countWorkerCalls([]tools.ToolCallRecord{{Output: map[string]any{"source": "playwright_sidecar"}}}) != 1 {
+		t.Fatal("expected sidecar source to count as worker-style call")
+	}
+	if mapValue(nil, "missing") == nil || stringValue(nil, "missing") != "" || intValue(map[string]any{"count": int64(3)}, "count") != 3 || int64Value(map[string]any{"count": int(3)}, "count") != 3 {
+		t.Fatal("expected primitive helpers to tolerate nil maps and mixed numeric types")
+	}
+	if truncateText("  hello world  ", 5) != "hello..." || truncateText(" hi ", 5) != "hi" {
+		t.Fatal("expected truncateText to trim and truncate appropriately")
 	}
 }
 

@@ -26,6 +26,7 @@
     "src/features/dashboard/tasks/taskPage.service.ts",
     "src/features/dashboard/tasks/taskPage.mock.ts",
     "src/features/dashboard/tasks/taskPage.types.ts",
+    "src/features/dashboard/memory/mirrorService.ts",
     "src/features/shell-ball/test-stubs/rpcFallback.ts",
     "src/features/shell-ball/test-stubs/rpcMethods.ts",
     "src/services/settingsService.ts"

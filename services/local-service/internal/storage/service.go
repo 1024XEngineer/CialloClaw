@@ -1,4 +1,4 @@
-// 该文件负责存储层的数据接口或落盘实现。
+// Package storage wires the formal persistence backends used by local-service.
 package storage
 
 import (
@@ -9,26 +9,27 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// backendName 定义当前模块的基础变量。
+// backendName identifies the formal storage backend.
 const backendName = "sqlite_wal"
 
-// ErrAdapterNotConfigured 定义当前模块的基础变量。
+// ErrAdapterNotConfigured reports that no storage adapter was wired.
 var ErrAdapterNotConfigured = errors.New("storage adapter not configured")
 
-// ErrDatabasePathRequired 定义当前模块的基础变量。
+// ErrDatabasePathRequired reports that the storage backend needs a database path.
 var ErrDatabasePathRequired = errors.New("storage database path is required")
 
-// ErrStructuredStoreUnavailable 定义当前模块的基础变量。
+// ErrStructuredStoreUnavailable reports that structured persistence could not be initialized.
 var ErrStructuredStoreUnavailable = errors.New("storage structured store unavailable")
 
-// memoryStoreBackendInMemory 定义当前模块的基础变量。
+// memoryStoreBackendInMemory identifies the in-memory fallback backend.
 const memoryStoreBackendInMemory = "in_memory"
 
-// memoryStoreBackendSQLite 定义当前模块的基础变量。
+// memoryStoreBackendSQLite identifies the SQLite-backed formal store.
 const memoryStoreBackendSQLite = "sqlite_wal"
 
 const memoryRetrievalBackendInMemory = "in_memory"
@@ -42,7 +43,26 @@ var newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) 
 	return NewSQLiteEvalStore(databasePath)
 }
 
-// Descriptor 定义当前模块的数据结构。
+// strongholdBootstrapConfig keeps Stronghold provider injection scoped to one
+// service bootstrap so tests can validate formal/fallback semantics without
+// mutating shared package state.
+type strongholdBootstrapConfig struct {
+	formalProvider   func(databasePath string) StrongholdProvider
+	fallbackProvider func(databasePath string) StrongholdProvider
+}
+
+func defaultStrongholdBootstrapConfig() strongholdBootstrapConfig {
+	return strongholdBootstrapConfig{
+		formalProvider: func(databasePath string) StrongholdProvider {
+			return NewStrongholdSQLiteProvider(databasePath)
+		},
+		fallbackProvider: func(databasePath string) StrongholdProvider {
+			return NewStrongholdSQLiteFallbackProvider(databasePath)
+		},
+	}
+}
+
+// Descriptor captures the configured storage backend state.
 type Descriptor struct {
 	Backend      string
 	DatabasePath string
@@ -50,22 +70,25 @@ type Descriptor struct {
 	StoreReady   bool
 }
 
-// Service 提供当前模块的服务能力。
+// Service exposes the composed storage dependencies for local-service.
 type Service struct {
 	adapter                  platform.StorageAdapter
 	memoryStore              MemoryStore
 	taskRunStore             TaskRunStore
 	toolCallStore            ToolCallStore
 	loopRuntimeStore         LoopRuntimeStore
+	sessionStore             SessionStore
 	taskStore                TaskStore
 	taskStepStore            TaskStepStore
 	artifactStore            ArtifactStore
 	todoStore                TodoStore
+	settingsStore            SettingsStore
 	traceStore               TraceStore
 	evalStore                EvalStore
 	skillManifestStore       SkillManifestStore
 	blueprintDefinitionStore BlueprintDefinitionStore
 	promptTemplateStore      PromptTemplateVersionStore
+	pluginManifestStore      PluginManifestStore
 	secretStore              SecretStore
 	stronghold               StrongholdProvider
 	auditStore               AuditStore
@@ -82,21 +105,37 @@ type Service struct {
 	fallbackActive           bool
 }
 
-// NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
+	return newServiceWithStrongholdBootstrap(adapter, defaultStrongholdBootstrapConfig())
+}
+
+func newServiceWithStrongholdBootstrap(adapter platform.StorageAdapter, bootstrap strongholdBootstrapConfig) *Service {
+	if bootstrap.formalProvider == nil || bootstrap.fallbackProvider == nil {
+		defaults := defaultStrongholdBootstrapConfig()
+		if bootstrap.formalProvider == nil {
+			bootstrap.formalProvider = defaults.formalProvider
+		}
+		if bootstrap.fallbackProvider == nil {
+			bootstrap.fallbackProvider = defaults.fallbackProvider
+		}
+	}
+
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	loopRuntimeStore := LoopRuntimeStore(newInMemoryLoopRuntimeStore())
+	sessionStore := SessionStore(newInMemorySessionStore())
 	taskStore := TaskStore(newInMemoryTaskStore())
 	taskStepStore := TaskStepStore(newInMemoryTaskStepStore())
 	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore().WithStructuredStores(taskStore, taskStepStore))
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
 	todoStore := TodoStore(NewInMemoryTodoStore())
+	settingsStore := SettingsStore(newInMemorySettingsStore())
 	traceStore := TraceStore(newInMemoryTraceStore())
 	evalStore := EvalStore(newInMemoryEvalStore())
 	skillManifestStore := SkillManifestStore(newInMemorySkillManifestStore())
 	blueprintDefinitionStore := BlueprintDefinitionStore(newInMemoryBlueprintDefinitionStore())
 	promptTemplateStore := PromptTemplateVersionStore(newInMemoryPromptTemplateVersionStore())
+	pluginManifestStore := PluginManifestStore(newInMemoryPluginManifestStore())
 	secretStore := SecretStore(newInMemorySecretStore())
 	strongholdProvider := StrongholdProvider(nil)
 	auditStore := AuditStore(newInMemoryAuditStore())
@@ -158,6 +197,15 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			sqliteSessionStore, err := NewSQLiteSessionStore(databasePath)
+			if err == nil {
+				sessionStore = sqliteSessionStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite session store: %w", err))
+				fallbackActive = true
+			}
+
 			sqliteTaskStore, err := NewSQLiteTaskStore(databasePath)
 			if err == nil {
 				taskStore = sqliteTaskStore
@@ -192,6 +240,15 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			}
 			if err != nil {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite todo store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteSettingsStore, err := NewSQLiteSettingsStore(databasePath)
+			if err == nil {
+				settingsStore = sqliteSettingsStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite settings store: %w", err))
 				fallbackActive = true
 			}
 
@@ -232,18 +289,43 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			sqlitePluginManifestStore, err := NewSQLitePluginManifestStore(databasePath)
+			if err == nil {
+				pluginManifestStore = sqlitePluginManifestStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite plugin manifest store: %w", err))
+				fallbackActive = true
+			}
+
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
-				strongholdProvider = NewStrongholdSQLiteFallbackProvider(secretPath)
-				strongholdStore, err := strongholdProvider.Open(context.Background())
+				formalStrongholdProvider := bootstrap.formalProvider(secretPath)
+				strongholdProvider = formalStrongholdProvider
+				strongholdStore, err := formalStrongholdProvider.Open(context.Background())
 				if err == nil {
 					secretStore = strongholdStore
-					secretStoreName = strongholdProvider.Descriptor().Backend
+					secretStoreName = formalStrongholdProvider.Descriptor().Backend
 				}
 				if err != nil {
-					secretStore = SecretStore(UnavailableSecretStore{})
-					secretStoreName = strongholdProvider.Descriptor().Backend
-					storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize stronghold secret store: %w", err))
-					fallbackActive = true
+					formalStrongholdErr := fmt.Errorf("initialize formal stronghold secret store: %w", err)
+					fallbackProvider := bootstrap.fallbackProvider(secretPath)
+					fallbackStore, fallbackErr := fallbackProvider.Open(context.Background())
+					if fallbackErr == nil {
+						// A working fallback keeps the overall storage service healthy in
+						// CI and unsupported environments. The formal backend failure is
+						// still exposed through fallbackActive/descriptor state instead
+						// of poisoning Validate() for the entire structured store.
+						strongholdProvider = fallbackProvider
+						secretStore = fallbackStore
+						secretStoreName = fallbackProvider.Descriptor().Backend
+						fallbackActive = true
+					} else {
+						secretStore = SecretStore(UnavailableSecretStore{})
+						secretStoreName = formalStrongholdProvider.Descriptor().Backend
+						storeInitErrors = append(storeInitErrors, formalStrongholdErr)
+						storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize fallback stronghold secret store: %w", fallbackErr))
+						fallbackActive = true
+					}
 				}
 			}
 
@@ -293,15 +375,18 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		taskRunStore:             taskRunStore,
 		toolCallStore:            toolCallStore,
 		loopRuntimeStore:         loopRuntimeStore,
+		sessionStore:             sessionStore,
 		taskStore:                taskStore,
 		taskStepStore:            taskStepStore,
 		artifactStore:            artifactStore,
 		todoStore:                todoStore,
+		settingsStore:            settingsStore,
 		traceStore:               traceStore,
 		evalStore:                evalStore,
 		skillManifestStore:       skillManifestStore,
 		blueprintDefinitionStore: blueprintDefinitionStore,
 		promptTemplateStore:      promptTemplateStore,
+		pluginManifestStore:      pluginManifestStore,
 		secretStore:              secretStore,
 		stronghold:               strongholdProvider,
 		auditStore:               auditStore,
@@ -364,12 +449,17 @@ func (s *Service) PromptTemplateVersionStore() PromptTemplateVersionStore {
 	return s.promptTemplateStore
 }
 
-// Backend 处理当前模块的相关逻辑。
+// PluginManifestStore returns the configured plugin manifest asset store.
+func (s *Service) PluginManifestStore() PluginManifestStore {
+	return s.pluginManifestStore
+}
+
+// Backend returns the configured storage backend name.
 func (s *Service) Backend() string {
 	return backendName
 }
 
-// DatabasePath 处理当前模块的相关逻辑。
+// DatabasePath returns the backing database path.
 func (s *Service) DatabasePath() string {
 	if s.adapter == nil {
 		return ""
@@ -378,12 +468,12 @@ func (s *Service) DatabasePath() string {
 	return strings.TrimSpace(s.adapter.DatabasePath())
 }
 
-// Configured 处理当前模块的相关逻辑。
+// Configured reports whether a concrete storage backend is configured.
 func (s *Service) Configured() bool {
 	return s.adapter != nil && s.DatabasePath() != ""
 }
 
-// Validate 处理当前模块的相关逻辑。
+// Validate checks whether the configured storage backend is ready for use.
 func (s *Service) Validate() error {
 	if s.adapter == nil {
 		return ErrAdapterNotConfigured
@@ -400,7 +490,7 @@ func (s *Service) Validate() error {
 	return nil
 }
 
-// Descriptor 处理当前模块的相关逻辑。
+// Descriptor returns a snapshot of the storage backend state.
 func (s *Service) Descriptor() Descriptor {
 	return Descriptor{
 		Backend:      s.Backend(),
@@ -410,7 +500,7 @@ func (s *Service) Descriptor() Descriptor {
 	}
 }
 
-// Capabilities 处理当前模块的相关逻辑。
+// Capabilities returns the storage capability snapshot.
 func (s *Service) Capabilities() CapabilitySnapshot {
 	configured := s.Configured()
 	structuredReady := configured && s.storeInitErr == nil && s.memoryStoreName == memoryStoreBackendSQLite && s.taskRunStoreName == memoryStoreBackendSQLite
@@ -436,7 +526,7 @@ func (s *Service) Capabilities() CapabilitySnapshot {
 	}
 }
 
-// MemoryStore 处理当前模块的相关逻辑。
+// MemoryStore returns the configured memory persistence store.
 func (s *Service) MemoryStore() MemoryStore {
 	return s.memoryStore
 }
@@ -449,9 +539,19 @@ func (s *Service) ToolCallSink() tools.ToolCallSink {
 	return s.toolCallStore
 }
 
+// ToolCallStore returns the configured tool_call persistence store.
+func (s *Service) ToolCallStore() ToolCallStore {
+	return s.toolCallStore
+}
+
 // LoopRuntimeStore returns the normalized loop runtime persistence store.
 func (s *Service) LoopRuntimeStore() LoopRuntimeStore {
 	return s.loopRuntimeStore
+}
+
+// SessionStore returns the configured first-class sessions store.
+func (s *Service) SessionStore() SessionStore {
+	return s.sessionStore
 }
 
 // TaskStore returns the configured first-class tasks store.
@@ -474,6 +574,11 @@ func (s *Service) TodoStore() TodoStore {
 	return s.todoStore
 }
 
+// SettingsStore returns the configured ordinary settings persistence store.
+func (s *Service) SettingsStore() SettingsStore {
+	return s.settingsStore
+}
+
 // SecretStore returns the configured secret store.
 func (s *Service) SecretStore() SecretStore {
 	return s.secretStore
@@ -484,7 +589,8 @@ func (s *Service) ResolveModelAPIKey(provider string) (string, error) {
 	if s.secretStore == nil {
 		return "", ErrSecretStoreAccessFailed
 	}
-	record, err := s.secretStore.GetSecret(context.Background(), "model", strings.TrimSpace(provider)+"_api_key")
+	canonicalProvider := model.CanonicalProviderName(provider)
+	record, err := s.secretStore.GetSecret(context.Background(), "model", strings.TrimSpace(canonicalProvider)+"_api_key")
 	if err != nil {
 		if errors.Is(err, ErrSecretNotFound) {
 			return "", err
@@ -520,7 +626,7 @@ func (s *Service) AuthorizationRecordStore() AuthorizationRecordStore {
 	return s.authorizationRecordStore
 }
 
-// Close 处理当前模块的相关逻辑。
+// Close releases all configured storage handles.
 func (s *Service) Close() error {
 	errs := make([]error, 0, 2)
 	if closer, ok := s.memoryStore.(interface{ Close() error }); ok {
@@ -535,6 +641,9 @@ func (s *Service) Close() error {
 	if closer, ok := s.loopRuntimeStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
+	if closer, ok := s.sessionStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
 	if closer, ok := s.taskStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
@@ -545,6 +654,9 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.todoStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.settingsStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.traceStore.(interface{ Close() error }); ok {
@@ -560,6 +672,9 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.promptTemplateStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.pluginManifestStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.secretStore.(interface{ Close() error }); ok {

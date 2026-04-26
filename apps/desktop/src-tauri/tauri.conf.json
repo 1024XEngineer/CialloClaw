@@ -6,8 +6,17 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "corepack pnpm dev",
-    "beforeBuildCommand": "corepack pnpm build"
+    "beforeDevCommand": "node ./src-tauri/scripts/runWithSidecar.mjs dev",
+    "beforeBuildCommand": "node ./src-tauri/scripts/runWithSidecar.mjs build"
+  },
+  "bundle": {
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/local-service"
+    ]
   },
   "app": {
     "windows": [
@@ -25,48 +34,6 @@
         "url": "shell-ball.html"
       },
       {
-        "label": "shell-ball-bubble",
-        "title": "CialloClaw Shell Ball Bubble",
-        "width": 270,
-        "height": 105,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "url": "shell-ball-bubble.html"
-      },
-      {
-        "label": "shell-ball-input",
-        "title": "CialloClaw Shell Ball Input",
-        "width": 315,
-        "height": 90,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "url": "shell-ball-input.html"
-      },
-      {
-        "label": "shell-ball-voice",
-        "title": "CialloClaw Shell Ball Voice",
-        "width": 280,
-        "height": 320,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "url": "shell-ball-voice.html"
-      },
-      {
         "label": "dashboard",
         "title": "CialloClaw Dashboard",
         "width": 1280,
@@ -74,6 +41,21 @@
         "decorations": false,
         "visible": false,
         "url": "dashboard.html"
+      },
+      {
+        "label": "onboarding",
+        "title": "CialloClaw Onboarding",
+        "width": 1280,
+        "height": 860,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false,
+        "focus": false,
+        "url": "onboarding.html"
       }
     ]
   }

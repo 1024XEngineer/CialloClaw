@@ -1,9 +1,10 @@
 import type { AgentSettingsGetParams, RequestMeta, SettingsSnapshot, TimeInterval } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getSettingsDetailed } from "@/rpc/methods";
-import { loadSettings } from "@/services/settingsService";
+import { hydrateDesktopSettings, loadSettings, toProtocolSettingsSnapshot } from "@/services/settingsService";
 
 export type DashboardSettingsSource = "rpc" | "mock";
+export type DashboardSettingsSnapshotScope = AgentSettingsGetParams["scope"];
 
 // Dashboard modules only need a read-only settings view, so this snapshot shape
 // normalizes RPC data and local fallback data into one stable contract.
@@ -38,11 +39,39 @@ function createRequestMeta(): RequestMeta {
   };
 }
 
+function mergeDashboardSettingsSnapshot(
+  baseSettings: SettingsSnapshot["settings"],
+  nextSettings: Partial<SettingsSnapshot["settings"]>,
+  scope: DashboardSettingsSnapshotScope,
+) {
+  if (scope === "all") {
+    return toProtocolSettingsSnapshot(hydrateDesktopSettings(nextSettings as SettingsSnapshot["settings"]));
+  }
+
+  return toProtocolSettingsSnapshot(
+    hydrateDesktopSettings({
+      ...baseSettings,
+      ...(scope === "general" ? { general: nextSettings.general ?? baseSettings.general } : {}),
+      ...(scope === "floating_ball" ? { floating_ball: nextSettings.floating_ball ?? baseSettings.floating_ball } : {}),
+      ...(scope === "memory" ? { memory: nextSettings.memory ?? baseSettings.memory } : {}),
+      ...(scope === "task_automation"
+        ? {
+            task_automation: nextSettings.task_automation ?? baseSettings.task_automation,
+          }
+        : {}),
+      ...(scope === "models" ? { models: nextSettings.models ?? baseSettings.models } : {}),
+    }),
+  );
+}
+
+/**
+ * Builds the dashboard-safe local settings baseline used before RPC sync.
+ */
 // Local settings are the safe bootstrap source for dashboard cards. They let the
 // UI render immediately and remain usable when the RPC pipe is unavailable.
 export function getInitialDashboardSettingsSnapshot(): DashboardSettingsSnapshotData {
   return {
-    settings: loadSettings().settings,
+    settings: toProtocolSettingsSnapshot(loadSettings().settings),
     source: "mock",
     rpcContext: {
       serverTime: null,
@@ -51,23 +80,38 @@ export function getInitialDashboardSettingsSnapshot(): DashboardSettingsSnapshot
   };
 }
 
+/**
+ * Loads one dashboard settings snapshot from JSON-RPC when available, then
+ * merges any scoped payload back into the full local baseline.
+ *
+ * @param source The preferred read source for the dashboard.
+ * @param scope The formal `agent.settings.get` scope to request.
+ */
 // Dashboard pages should not each reimplement their own settings fallback logic.
 // This helper keeps the "RPC when available, local snapshot otherwise" rule in one place.
-export async function loadDashboardSettingsSnapshot(source: DashboardSettingsSource = "rpc"): Promise<DashboardSettingsSnapshotData> {
+export async function loadDashboardSettingsSnapshot(
+  source: DashboardSettingsSource = "rpc",
+  scope: DashboardSettingsSnapshotScope = "all",
+): Promise<DashboardSettingsSnapshotData> {
   if (source === "mock") {
     return getInitialDashboardSettingsSnapshot();
   }
 
+  const baseline = getInitialDashboardSettingsSnapshot();
   const params: AgentSettingsGetParams = {
     request_meta: createRequestMeta(),
-    scope: "all",
+    scope,
   };
 
   try {
     const response = await getSettingsDetailed(params);
 
     return {
-      settings: response.data.settings,
+      settings: mergeDashboardSettingsSnapshot(
+        baseline.settings,
+        response.data.settings as unknown as Partial<SettingsSnapshot["settings"]>,
+        scope,
+      ),
       source: "rpc",
       rpcContext: {
         serverTime: response.meta?.server_time ?? null,
@@ -75,14 +119,14 @@ export async function loadDashboardSettingsSnapshot(source: DashboardSettingsSou
       },
     };
   } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("dashboard settings snapshot", error);
-    } else {
+    if (!isRpcChannelUnavailable(error)) {
       console.warn("Dashboard settings snapshot failed, using local settings fallback.", error);
+    } else {
+      logRpcMockFallback("dashboard settings snapshot", error);
     }
 
     return {
-      ...getInitialDashboardSettingsSnapshot(),
+      ...baseline,
       rpcContext: {
         serverTime: null,
         warnings: [error instanceof Error ? error.message : "settings snapshot unavailable"],
@@ -91,6 +135,9 @@ export async function loadDashboardSettingsSnapshot(source: DashboardSettingsSou
   }
 }
 
+/**
+ * Formats one shared time interval for dashboard-facing settings copy.
+ */
 // Mirror and security cards reuse the same human-readable interval labels, so the
 // formatter lives next to the shared snapshot loader.
 export function formatDashboardTimeInterval(interval: TimeInterval) {
@@ -98,6 +145,9 @@ export function formatDashboardTimeInterval(interval: TimeInterval) {
   return `${interval.value} ${unitLabel}`;
 }
 
+/**
+ * Formats the mirror memory lifecycle label from the shared settings snapshot.
+ */
 // Memory lifecycle labels are also shared by multiple dashboard modules and should
 // stay consistent with the same settings snapshot source.
 export function formatDashboardMemoryLifecycle(lifecycle: string) {

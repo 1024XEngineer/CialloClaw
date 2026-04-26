@@ -42,7 +42,14 @@ import (
 )
 
 type stubModelClient struct {
-	output string
+	output       string
+	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
+}
+
+type stubToolCallingModelClient struct {
+	output                 string
+	toolCalls              []model.ToolCallResult
+	generateToolCallsCount int
 }
 
 type failingExecutionBackend struct {
@@ -76,6 +83,21 @@ type stubMediaWorkerClient struct {
 	transcodeResult tools.MediaTranscodeResult
 	framesResult    tools.MediaFrameExtractResult
 	err             error
+}
+
+type screenSessionAction struct {
+	sessionID string
+	reason    string
+}
+
+type recordingScreenCaptureClient struct {
+	base                    tools.ScreenCaptureClient
+	startCalls              []tools.ScreenSessionStartInput
+	stopCalls               []screenSessionAction
+	expireCalls             []screenSessionAction
+	cleanupCalls            []tools.ScreenCleanupInput
+	expiredCleanupScanCalls []tools.ScreenCleanupInput
+	captureErr              error
 }
 
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
@@ -134,6 +156,46 @@ func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []m
 
 func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (c *recordingScreenCaptureClient) StartSession(ctx context.Context, input tools.ScreenSessionStartInput) (tools.ScreenSessionState, error) {
+	c.startCalls = append(c.startCalls, input)
+	return c.base.StartSession(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) GetSession(ctx context.Context, screenSessionID string) (tools.ScreenSessionState, error) {
+	return c.base.GetSession(ctx, screenSessionID)
+}
+
+func (c *recordingScreenCaptureClient) StopSession(ctx context.Context, screenSessionID, reason string) (tools.ScreenSessionState, error) {
+	c.stopCalls = append(c.stopCalls, screenSessionAction{sessionID: screenSessionID, reason: reason})
+	return c.base.StopSession(ctx, screenSessionID, reason)
+}
+
+func (c *recordingScreenCaptureClient) ExpireSession(ctx context.Context, screenSessionID, reason string) (tools.ScreenSessionState, error) {
+	c.expireCalls = append(c.expireCalls, screenSessionAction{sessionID: screenSessionID, reason: reason})
+	return c.base.ExpireSession(ctx, screenSessionID, reason)
+}
+
+func (c *recordingScreenCaptureClient) CaptureScreenshot(ctx context.Context, input tools.ScreenCaptureInput) (tools.ScreenFrameCandidate, error) {
+	if c.captureErr != nil {
+		return tools.ScreenFrameCandidate{}, c.captureErr
+	}
+	return c.base.CaptureScreenshot(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CaptureKeyframe(ctx context.Context, input tools.ScreenCaptureInput) (tools.KeyframeCaptureResult, error) {
+	return c.base.CaptureKeyframe(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CleanupSessionArtifacts(ctx context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
+	c.cleanupCalls = append(c.cleanupCalls, input)
+	return c.base.CleanupSessionArtifacts(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CleanupExpiredScreenTemps(ctx context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
+	c.expiredCleanupScanCalls = append(c.expiredCleanupScanCalls, input)
+	return c.base.CleanupExpiredScreenTemps(ctx, input)
 }
 
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
@@ -315,8 +377,17 @@ func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Co
 }
 
 type countingTaskRunStore struct {
-	base      storage.TaskRunStore
-	loadCalls int
+	base            storage.TaskRunStore
+	loadCalls       int
+	loadAllCalls    int
+	legacyLoadCalls int
+	getCalls        int
+}
+
+type stubStrongholdProvider struct {
+	descriptor storage.StrongholdDescriptor
+	store      storage.SecretStore
+	err        error
 }
 
 type countingTaskStore struct {
@@ -355,9 +426,35 @@ func (s *countingTaskRunStore) SaveTaskRun(ctx context.Context, record storage.T
 
 func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.TaskRunRecord, error) {
 	s.loadCalls++
+	s.loadAllCalls++
 	return s.base.LoadTaskRuns(ctx)
 }
 
+func (s *countingTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (storage.TaskRunRecord, error) {
+	s.loadCalls++
+	s.getCalls++
+	return s.base.GetTaskRun(ctx, taskID)
+}
+
+func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]storage.TaskRunRecord, error) {
+	s.loadCalls++
+	s.legacyLoadCalls++
+	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
+}
+
+func (s *stubStrongholdProvider) Open(context.Context) (storage.SecretStore, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.store == nil {
+		s.store = storage.UnavailableSecretStore{}
+	}
+	return s.store, nil
+}
+
+func (s *stubStrongholdProvider) Descriptor() storage.StrongholdDescriptor {
+	return s.descriptor
+}
 func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
 	return s.base.WriteTask(ctx, record)
 }
@@ -375,7 +472,14 @@ func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([
 	return s.base.ListTasks(ctx, limit, offset)
 }
 
+func (s *countingTaskStore) ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]storage.TaskRecord, int, error) {
+	return s.base.ListTasksBySession(ctx, sessionID, limit, offset)
+}
+
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.generateText != nil {
+		return s.generateText(request)
+	}
 	return model.GenerateTextResponse{
 		TaskID:     request.TaskID,
 		RunID:      request.RunID,
@@ -390,6 +494,32 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 		},
 		LatencyMS: 42,
 	}, nil
+}
+
+func (s *stubToolCallingModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_text_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
+}
+
+func (s *stubToolCallingModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	s.generateToolCallsCount++
+	if len(s.toolCalls) == 0 {
+		return model.ToolCallResult{
+			RequestID:  "req_tool_final",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: s.output,
+		}, nil
+	}
+	result := s.toolCalls[0]
+	s.toolCalls = s.toolCalls[1:]
+	return result, nil
 }
 
 func timePointer(value time.Time) *time.Time {
@@ -418,6 +548,52 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	return newTestServiceWithExecutionAndPlaywright(t, modelOutput, platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient())
 }
 
+func newTestServiceWithModelClient(t *testing.T, client model.Client) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
+	modelService := model.NewService(modelConfig(), client)
+	auditService := audit.NewService(storageService.AuditWriter())
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
+	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		mustNewStoredEngine(t, storageService.TaskRunStore()),
+		deliveryService,
+		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		risk.NewService(),
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
+	return service, workspaceRoot
+}
+
 func newTestServiceWithExecutionOptions(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer) (*Service, string) {
 	return newTestServiceWithExecutionAndPlaywright(t, modelOutput, executionBackend, checkpointWriter, sidecarclient.NewNoopPlaywrightSidecarClient())
 }
@@ -427,6 +603,10 @@ func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, 
 }
 
 func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient) (*Service, string) {
+	return newTestServiceWithExecutionWorkersAndScreen(t, modelOutput, executionBackend, checkpointWriter, playwrightClient, ocrClient, mediaClient, nil)
+}
+
+func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient, screenClient tools.ScreenCaptureClient) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -455,10 +635,14 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore())
+	if screenClient == nil {
+		screenClient = sidecarclient.NewLocalScreenCaptureClient(fileSystem)
+	}
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -473,6 +657,94 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
 
 	return service, workspaceRoot
+}
+
+func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (*Service, string, *storage.Service) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
+	auditService := audit.NewService(storageService.AuditWriter())
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
+	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		mustNewStoredEngine(t, storageService.TaskRunStore()),
+		deliveryService,
+		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		risk.NewService(),
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
+
+	return service, workspaceRoot, storageService
+}
+func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, pluginService *plugin.Service) {
+	t.Helper()
+	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
+		t.Fatalf("ensure builtin execution assets: %v", err)
+	}
+	runtimeNamesByPluginID := map[string][]string{}
+	for _, runtime := range pluginService.RuntimeStates() {
+		if runtime.Manifest == nil || runtime.Manifest.PluginID == "" {
+			continue
+		}
+		runtimeNamesByPluginID[runtime.Manifest.PluginID] = append(runtimeNamesByPluginID[runtime.Manifest.PluginID], runtime.Name)
+	}
+	for _, manifest := range pluginService.Manifests() {
+		capabilitiesJSON, err := json.Marshal(manifest.Capabilities)
+		if err != nil {
+			t.Fatalf("marshal plugin capabilities: %v", err)
+		}
+		permissionsJSON, err := json.Marshal(manifest.Permissions)
+		if err != nil {
+			t.Fatalf("marshal plugin permissions: %v", err)
+		}
+		runtimeNamesJSON, err := json.Marshal(runtimeNamesByPluginID[manifest.PluginID])
+		if err != nil {
+			t.Fatalf("marshal plugin runtime names: %v", err)
+		}
+		if err := storageService.PluginManifestStore().WritePluginManifest(context.Background(), storage.PluginManifestRecord{
+			PluginID:         manifest.PluginID,
+			Name:             manifest.Name,
+			Version:          manifest.Version,
+			Entry:            manifest.Entry,
+			Source:           manifest.Source,
+			Summary:          "test manifest",
+			CapabilitiesJSON: string(capabilitiesJSON),
+			PermissionsJSON:  string(permissionsJSON),
+			RuntimeNamesJSON: string(runtimeNamesJSON),
+			CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			t.Fatalf("write plugin manifest: %v", err)
+		}
+	}
 }
 
 func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengine.Engine {
@@ -500,6 +772,19 @@ func (s storageTestAdapter) SecretStorePath() string {
 }
 
 func newTestService() *Service {
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		panic(err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		panic(err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		panic(err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		panic(err)
+	}
 	return NewService(
 		contextsvc.NewService(),
 		intent.NewService(),
@@ -508,7 +793,7 @@ func newTestService() *Service {
 		memory.NewService(),
 		risk.NewService(),
 		model.NewService(modelConfig()),
-		tools.NewRegistry(),
+		toolRegistry,
 		plugin.NewService(),
 	)
 }
@@ -578,6 +863,14 @@ func replaceSecretStore(t *testing.T, service *storage.Service, store storage.Se
 	serviceValue := reflect.ValueOf(service).Elem()
 	field := serviceValue.FieldByName("secretStore")
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceStrongholdProvider(t *testing.T, service *storage.Service, provider storage.StrongholdProvider) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("stronghold")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(provider))
 }
 
 // TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
@@ -650,16 +943,57 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.T) {
+func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
+
+	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	for index, testCase := range testCases {
+		t.Run(testCase, func(t *testing.T) {
+			result, err := service.SubmitInput(map[string]any{
+				"session_id": fmt.Sprintf("sess_short_text_%02d", index),
+				"source":     "floating_ball",
+				"trigger":    "hover_text_input",
+				"input": map[string]any{
+					"type": "text",
+					"text": testCase,
+				},
+			})
+			if err != nil {
+				t.Fatalf("submit input failed: %v", err)
+			}
+
+			task := result["task"].(map[string]any)
+			if task["status"] != "waiting_input" {
+				t.Fatalf("expected short free text clarification to keep task open, got %v", task["status"])
+			}
+			intentValue, ok := task["intent"].(map[string]any)
+			if !ok || intentValue["name"] != "agent_loop" {
+				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
+			}
+			if result["delivery_result"] != nil {
+				t.Fatalf("expected short free text clarification not to finalize delivery_result, got %+v", result["delivery_result"])
+			}
+			bubble := result["bubble_message"].(map[string]any)
+			if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+				t.Fatalf("expected short free text clarification bubble, got %+v", bubble)
+			}
+		})
+	}
+}
+
+func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T) {
 	service := newTestService()
 
 	result, err := service.SubmitInput(map[string]any{
-		"session_id": "sess_unknown_text",
+		"session_id": "sess_confirm_free_text",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -668,21 +1002,14 @@ func TestServiceSubmitInputKeepsUnknownShortTextInIntentConfirmation(t *testing.
 
 	task := result["task"].(map[string]any)
 	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected unknown short text to remain in confirming_intent, got %v", task["status"])
+		t.Fatalf("expected explicit confirm_required to preserve confirming_intent, got %v", task["status"])
 	}
 	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || len(intentValue) != 0 {
-		t.Fatalf("expected unknown short text task to keep empty intent payload, got %+v", task["intent"])
-	}
-	bubble := result["bubble_message"].(map[string]any)
-	if bubble["text"] != "我还不确定你想如何处理这段内容，请确认目标。" {
-		t.Fatalf("expected neutral confirmation prompt, got %v", bubble["text"])
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected explicit confirm_required to keep agent_loop intent, got %+v", task["intent"])
 	}
 	if result["delivery_result"] != nil {
-		t.Fatalf("expected no delivery result before intent is confirmed, got %+v", result["delivery_result"])
-	}
-	if _, ok := service.runEngine.GetTask(task["task_id"].(string)); !ok {
-		t.Fatal("expected task to remain available in runtime")
+		t.Fatalf("expected explicit confirmation flow to defer delivery_result, got %+v", result["delivery_result"])
 	}
 }
 
@@ -836,6 +1163,9 @@ func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T
 		"input": map[string]any{
 			"type": "text",
 			"text": "ok",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1161,10 +1491,36 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	if screenResult["task"].(map[string]any)["status"] != "completed" {
 		t.Fatalf("expected queued screen task to complete after approval, got %+v", screenResult["task"])
 	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": secondTaskID})
+	if err != nil {
+		t.Fatalf("task detail get for queued screen task failed: %v", err)
+	}
+	if detailResult["approval_request"] != nil {
+		t.Fatalf("expected completed queued screen task to clear approval_request, got %+v", detailResult["approval_request"])
+	}
+	authorizationRecord, ok := detailResult["authorization_record"].(map[string]any)
+	if !ok || authorizationRecord["task_id"] != secondTaskID || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected queued screen task detail to retain authorization record, got %+v", detailResult["authorization_record"])
+	}
+	auditRecord, ok := detailResult["audit_record"].(map[string]any)
+	if !ok || auditRecord["task_id"] != secondTaskID {
+		t.Fatalf("expected queued screen task detail to retain latest audit record, got %+v", detailResult["audit_record"])
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected queued screen task detail to retain one formal citation, got %+v", citations)
+	}
+	if !strings.Contains(stringValue(citations[0], "label", ""), "error_evidence") {
+		t.Fatalf("expected queued screen task citation to preserve evidence role, got %+v", citations[0])
+	}
+	securitySummary := detailResult["security_summary"].(map[string]any)
+	if securitySummary["latest_restore_point"] == nil {
+		t.Fatalf("expected queued screen task detail to retain recovery point summary, got %+v", securitySummary)
+	}
 }
 
-func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
-	service := newTestService()
+func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
 
 	startResult, err := service.SubmitInput(map[string]any{
 		"session_id": "sess_unknown_confirm",
@@ -1173,6 +1529,9 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1189,15 +1548,26 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected task to remain in confirming_intent when no corrected intent is provided, got %v", task["status"])
+	if task["status"] != "waiting_input" {
+		t.Fatalf("expected confirmed task to stay open when agent_loop needs more input, got %v", task["status"])
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected confirmed task to keep agent_loop intent, got %+v", task["intent"])
 	}
 	bubble := confirmResult["bubble_message"].(map[string]any)
-	if bubble["text"] != "请先明确告诉我你希望执行的处理方式。" {
-		t.Fatalf("expected clarification bubble, got %v", bubble["text"])
+	if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+		t.Fatalf("expected agent_loop clarification bubble, got %v", bubble["text"])
 	}
 	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected no delivery result while intent is still missing, got %+v", confirmResult["delivery_result"])
+		t.Fatalf("expected clarification flow not to finalize delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(task["task_id"].(string))
+	if !ok {
+		t.Fatal("expected reopened waiting_input task to remain in runtime")
+	}
+	if record.FinishedAt != nil {
+		t.Fatal("expected reopened waiting_input task to keep finished_at nil")
 	}
 }
 
@@ -1211,6 +1581,9 @@ func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testi
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1255,6 +1628,9 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 		"input": map[string]any{
 			"type": "text",
 			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
 		},
 	})
 	if err != nil {
@@ -1909,12 +2285,18 @@ func TestExecuteTaskPersistsTraceAndEvalSnapshots(t *testing.T) {
 	if traces[0].ReviewResult != "passed" {
 		t.Fatalf("expected passing trace review result, got %+v", traces[0])
 	}
+	if traces[0].AssetRefsJSON == "" {
+		t.Fatalf("expected trace record to keep extension asset refs, got %+v", traces[0])
+	}
 	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), updated.TaskID, 10, 0)
 	if err != nil || total != 1 || len(evals) != 1 {
 		t.Fatalf("expected one eval snapshot, total=%d len=%d err=%v", total, len(evals), err)
 	}
 	if evals[0].Status != "passed" {
 		t.Fatalf("expected passing eval snapshot status, got %+v", evals[0])
+	}
+	if evals[0].AssetRefsJSON == "" {
+		t.Fatalf("expected eval snapshot to keep extension asset refs, got %+v", evals[0])
 	}
 }
 
@@ -2760,6 +3142,95 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	}
 	if record.StorageWritePlan != nil || len(record.ArtifactPlans) != 0 {
 		t.Fatal("expected bubble delivery not to create document persistence plans")
+	}
+}
+
+func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
+	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(readPath), 0o755); err != nil {
+		t.Fatalf("create notes dir: %v", err)
+	}
+	if err := os.WriteFile(readPath, []byte("hello from formal sample chain"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_read_file_sample",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取这个文件",
+		},
+		"intent": map[string]any{
+			"name": "read_file",
+			"arguments": map[string]any{
+				"path": "notes/source.txt",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+
+	toolCallsResult, err := service.TaskToolCallsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	toolCalls := toolCallsResult["items"].([]map[string]any)
+	if len(toolCalls) != 1 || toolCalls[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected one persisted read_file tool call, got %+v", toolCalls)
+	}
+	if _, ok := toolCalls[0]["created_at"].(string); !ok {
+		t.Fatalf("expected persisted read_file tool call to expose created_at, got %+v", toolCalls[0])
+	}
+	if mapValue(toolCalls[0], "input")["path"] != "notes/source.txt" {
+		t.Fatalf("expected persisted read_file path, got %+v", toolCalls[0])
+	}
+
+	eventsResult, err := service.TaskEventsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	events := eventsResult["items"].([]map[string]any)
+	if len(events) != 2 {
+		t.Fatalf("expected tool_call.completed plus delivery.ready, got %+v", events)
+	}
+	foundToolCompleted := false
+	foundDeliveryReady := false
+	for _, event := range events {
+		switch event["type"] {
+		case "tool_call.completed":
+			foundToolCompleted = true
+		case "delivery.ready":
+			foundDeliveryReady = true
+		}
+	}
+	if !foundToolCompleted || !foundDeliveryReady {
+		t.Fatalf("expected persisted read_file runtime events, got %+v", events)
+	}
+
+	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get latest delivery result failed: %v", err)
+	}
+	if !ok || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
+		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["events_count"] != 2 || runtimeSummary["latest_event_type"] != "delivery.ready" {
+		t.Fatalf("expected task detail runtime summary to prefer formal event chain, got %+v", runtimeSummary)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", deliveryResult)
 	}
 }
 
@@ -4041,6 +4512,98 @@ func TestServiceTaskListPrefersStructuredTaskStoreFallback(t *testing.T) {
 	}
 }
 
+func TestServiceTaskListKeepsLegacyTaskRunsAlongsideStructuredTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "merged storage task list")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_merged",
+		SessionID:   "sess_structured_merged",
+		RunID:       "run_structured_merged",
+		Title:       "legacy structured snapshot title",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 16, 9, 4, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 16, 9, 6, 0, 0, time.UTC)),
+	}); err != nil {
+		t.Fatalf("save structured compatibility task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_merged",
+		SessionID:           "sess_structured_merged",
+		RunID:               "run_structured_merged",
+		Title:               "structured finished task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 16, 9, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_legacy_only_001",
+		SessionID:   "sess_legacy_only",
+		RunID:       "run_legacy_only_001",
+		Title:       "legacy finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 9, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 9, 6, 0, 0, time.UTC)),
+	}); err != nil {
+		t.Fatalf("save legacy-only task run failed: %v", err)
+	}
+	// Emulate an upgraded database where this older task still exists only in
+	// task_runs because it predates the first-class tasks table rollout.
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), "task_legacy_only_001"); err != nil {
+		t.Fatalf("delete structured legacy-only task failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected merged structured and legacy task list items, got %+v", items)
+	}
+	itemsByID := map[string]map[string]any{}
+	for _, item := range items {
+		itemsByID[item["task_id"].(string)] = item
+	}
+	if itemsByID["task_structured_merged"]["title"] != "structured finished task" {
+		t.Fatalf("expected structured task row to stay authoritative, got %+v", itemsByID["task_structured_merged"])
+	}
+	if itemsByID["task_legacy_only_001"]["title"] != "legacy finished task" {
+		t.Fatalf("expected legacy-only task run to remain visible, got %+v", itemsByID["task_legacy_only_001"])
+	}
+	page := listResult["page"].(map[string]any)
+	if page["total"] != 2 {
+		t.Fatalf("expected merged storage total 2, got %+v", page)
+	}
+}
+
 func TestServiceTaskListUsesStructuredStoreUnlimitedPaginationInMemoryFallback(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured task list unlimited in-memory")
 	if service.storage == nil {
@@ -4074,7 +4637,7 @@ func TestServiceTaskListUsesStructuredStoreUnlimitedPaginationInMemoryFallback(t
 	}
 }
 
-func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T) {
+func TestServiceTaskListMergesStructuredStorageWhenOffsetExceedsRuntimePage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime paging")
 
 	_, err := service.StartTask(map[string]any{
@@ -4131,8 +4694,8 @@ func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T
 		t.Fatalf("expected empty page beyond runtime total, got %+v", items)
 	}
 	page := listResult["page"].(map[string]any)
-	if page["total"] != 1 {
-		t.Fatalf("expected runtime total to stay unchanged, got %+v", page)
+	if page["total"] != 2 {
+		t.Fatalf("expected structured and runtime totals to merge, got %+v", page)
 	}
 }
 
@@ -4665,6 +5228,12 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 	if runtimeSummary["active_steering_count"] != 1 {
 		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
 	}
+	if _, ok := runtimeSummary["latest_failure_code"]; !ok {
+		t.Fatalf("expected runtime_summary latest_failure_code field, got %+v", runtimeSummary)
+	}
+	if _, ok := runtimeSummary["observation_signals"]; !ok {
+		t.Fatalf("expected runtime_summary observation_signals field, got %+v", runtimeSummary)
+	}
 }
 
 func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing.T) {
@@ -4702,6 +5271,225 @@ func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing
 	}
 	if runtimeSummary["active_steering_count"] != 1 {
 		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_failure_detail",
+		Title:             "查看当前屏幕：Build Dashboard",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze"},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "generate_output"),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:     "Build Dashboard",
+			VisibleText:   "Fatal build error",
+			ScreenSummary: "release validation failed",
+		},
+	})
+	updatedTask, _ := service.failExecutionTask(task, task.Intent, execution.Result{
+		Artifacts: []map[string]any{{
+			"artifact_id":   "art_screen_failure_detail",
+			"task_id":       task.TaskID,
+			"artifact_type": "screen_capture",
+			"title":         "build-dashboard.png",
+			"path":          "workspace/build-dashboard.png",
+			"mime_type":     "image/png",
+		}},
+		ToolOutput: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_screen_failure_detail",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "Fatal build error",
+				"screen_session_id": "screen_session_failure_detail",
+			},
+		},
+	}, tools.ErrOCRWorkerFailed)
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": updatedTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "OCR_WORKER_FAILED" {
+		t.Fatalf("expected failed screen task to expose formal latest_failure_code, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_failure_category"] != "screen_ocr" {
+		t.Fatalf("expected failed screen task to expose latest_failure_category, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_failure_summary"] == nil {
+		t.Fatalf("expected failed screen task to expose latest_failure_summary, got %+v", runtimeSummary)
+	}
+	observationSignals := runtimeSummary["observation_signals"].([]string)
+	if !reflect.DeepEqual(observationSignals, []string{"screen_summary", "visible_text", "page_title"}) {
+		t.Fatalf("expected failed screen task to expose stable observation signals, got %+v", runtimeSummary)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["source_ref"] != "art_screen_failure_detail" {
+		t.Fatalf("expected failed screen task to retain formal citations, got %+v", citations)
+	}
+}
+
+func TestLatestTaskFailurePrefersStructuredFailureMetadataOverBudgetSignals(t *testing.T) {
+	task := runengine.TaskRecord{
+		TaskID: "task_failure_signal_priority",
+		Status: "failed",
+		RunID:  "run_failure_signal_priority",
+		AuditRecords: []map[string]any{{
+			"type":    "execution",
+			"action":  "execute_task",
+			"result":  "failed",
+			"summary": "OCR worker failed while analyzing the current screen.",
+			"metadata": map[string]any{
+				"failure_code":     "OCR_WORKER_FAILED",
+				"failure_category": "screen_ocr",
+			},
+		}, {
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrClientNotConfigured.Error(),
+		}},
+	}
+
+	failureCode, failureCategory, failureSummary := latestTaskFailure(task)
+	if failureCode != "OCR_WORKER_FAILED" {
+		t.Fatalf("expected latestTaskFailure to keep structured failure_code, got %q", failureCode)
+	}
+	if failureCategory != "screen_ocr" {
+		t.Fatalf("expected latestTaskFailure to keep structured failure_category, got %q", failureCategory)
+	}
+	if !strings.Contains(failureSummary, "OCR worker failed") {
+		t.Fatalf("expected latestTaskFailure to keep structured failure summary, got %q", failureSummary)
+	}
+}
+
+func TestClassifyScreenFailureMapsMediaWorkerFailures(t *testing.T) {
+	failureCode, failureCategory := classifyScreenFailure(runengine.TaskRecord{
+		SourceType: "screen_capture",
+		Intent:     map[string]any{"name": "screen_analyze"},
+	}, tools.ErrMediaWorkerFailed)
+	if failureCode != "MEDIA_WORKER_FAILED" || failureCategory != "screen_media" {
+		t.Fatalf("expected media worker failures to map to screen media failure metadata, got code=%s category=%s", failureCode, failureCategory)
+	}
+}
+
+func TestBuildTaskCitationsPreservesDistinctFormalReferencesForSameArtifact(t *testing.T) {
+	task := runengine.TaskRecord{
+		TaskID: "task_screen_multi_citation",
+		RunID:  "run_screen_multi_citation",
+	}
+	artifacts := []map[string]any{{
+		"artifact_id":   "art_screen_multi_citation",
+		"task_id":       task.TaskID,
+		"artifact_type": "screen_capture",
+		"title":         "screen.png",
+		"path":          "workspace/screen.png",
+		"mime_type":     "image/png",
+	}}
+	toolCalls := []tools.ToolCallRecord{
+		{
+			Output: map[string]any{
+				"citation_seed": map[string]any{
+					"artifact_id":   "art_screen_multi_citation",
+					"artifact_type": "screen_capture",
+					"evidence_role": "error_evidence",
+					"ocr_excerpt":   "Fatal build error",
+				},
+			},
+		},
+		{
+			Output: map[string]any{
+				"citation_seed": map[string]any{
+					"artifact_id":   "art_screen_multi_citation",
+					"artifact_type": "screen_capture",
+					"evidence_role": "page_context",
+					"ocr_excerpt":   "Release dashboard",
+				},
+			},
+		},
+		{
+			Output: map[string]any{
+				"citation_seed": map[string]any{
+					"artifact_id":   "art_screen_multi_citation",
+					"artifact_type": "screen_capture",
+					"evidence_role": "error_evidence",
+					"ocr_excerpt":   "Fatal build error",
+				},
+			},
+		},
+	}
+
+	citations := buildTaskCitations(task, toolCalls, nil, nil, artifacts)
+	if len(citations) != 2 {
+		t.Fatalf("expected exact duplicate seeds to collapse but distinct formal references to remain, got %+v", citations)
+	}
+	if citations[0]["source_ref"] != "art_screen_multi_citation" || citations[1]["source_ref"] != "art_screen_multi_citation" {
+		t.Fatalf("expected both citations to reference the same artifact, got %+v", citations)
+	}
+	if citations[0]["citation_id"] == citations[1]["citation_id"] {
+		t.Fatalf("expected distinct formal references on the same artifact to keep unique citation ids, got %+v", citations)
+	}
+	if citations[0]["artifact_id"] != "art_screen_multi_citation" || citations[1]["artifact_type"] != "screen_capture" {
+		t.Fatalf("expected structured citation metadata to survive deduping, got %+v", citations)
+	}
+	if citations[0]["excerpt_text"] == citations[1]["excerpt_text"] {
+		t.Fatalf("expected distinct citations to preserve their excerpt text, got %+v", citations)
+	}
+}
+
+func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "persist formal citations")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	task := runengine.TaskRecord{
+		TaskID: "task_persist_citations",
+		RunID:  "run_persist_citations",
+	}
+	artifacts := []map[string]any{{
+		"artifact_id":   "art_persist_citations",
+		"task_id":       task.TaskID,
+		"artifact_type": "screen_capture",
+		"title":         "persist-screen.png",
+		"path":          "workspace/persist-screen.png",
+		"mime_type":     "image/png",
+	}}
+	toolCalls := []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_persist_citations",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "Fatal build error",
+				"screen_session_id": "screen_sess_persist",
+			},
+		},
+	}}
+
+	service.attachFormalCitations(task, task, toolCalls, nil, map[string]any{
+		"payload": map[string]any{"task_id": task.TaskID},
+	}, artifacts)
+
+	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
+	if err != nil {
+		t.Fatalf("list first-class citations failed: %v", err)
+	}
+	if len(citations) != 1 {
+		t.Fatalf("expected one persisted citation, got %+v", citations)
+	}
+	if citations[0].ArtifactID != "art_persist_citations" || citations[0].EvidenceRole != "error_evidence" {
+		t.Fatalf("expected persisted citation metadata to survive, got %+v", citations[0])
+	}
+	if citations[0].ScreenSessionID != "screen_sess_persist" || citations[0].ExcerptText != "Fatal build error" {
+		t.Fatalf("expected persisted citation evidence fields to survive, got %+v", citations[0])
 	}
 }
 
@@ -5013,6 +5801,7 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write structured task failed: %v", err)
 	}
+	countingStore.listCalls = 0
 
 	if _, err := service.DashboardOverviewGet(map[string]any{}); err != nil {
 		t.Fatalf("dashboard overview failed: %v", err)
@@ -5193,6 +5982,638 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 	if payload["screen_session_id"] == "" || payload["capture_mode"] != "screenshot" || payload["retention_policy"] == "" || payload["evidence_role"] != "error_evidence" {
 		t.Fatalf("expected persisted artifact payload to retain screen metadata, got %+v", payload)
+	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task["task_id"]})
+	if err != nil {
+		t.Fatalf("task detail get for screen task failed: %v", err)
+	}
+	authorizationRecord, ok := detailResult["authorization_record"].(map[string]any)
+	if !ok || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected task detail to expose latest authorization_record, got %+v", detailResult["authorization_record"])
+	}
+	auditRecord, ok := detailResult["audit_record"].(map[string]any)
+	if !ok || auditRecord["task_id"] != task["task_id"] {
+		t.Fatalf("expected task detail to expose latest audit_record, got %+v", detailResult["audit_record"])
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected one formal citation for screen task, got %+v", citations)
+	}
+	if citations[0]["source_type"] != "file" || !strings.Contains(stringValue(citations[0], "label", ""), "error_evidence") {
+		t.Fatalf("expected citation to preserve artifact-backed screen evidence metadata, got %+v", citations[0])
+	}
+	if citations[0]["artifact_type"] != "screen_capture" || citations[0]["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected citation to expose structured screen evidence role and artifact type, got %+v", citations[0])
+	}
+	if citations[0]["excerpt_text"] == nil || citations[0]["screen_session_id"] == nil {
+		t.Fatalf("expected citation to expose OCR excerpt and screen session metadata, got %+v", citations[0])
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || stringValue(deliveryResult, "preview_text", "") == "" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", detailResult["delivery_result"])
+	}
+	record, exists = service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || len(record.Citations) != 1 {
+		t.Fatalf("expected runtime task to retain one formal citation, got %+v", record)
+	}
+}
+
+func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001_clip_frames/frame-001.jpg", Text: "fatal clip error", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_local_0001/frame_0001.webm", OutputDir: "temp/screen_local_0001/frame_0001_clip_frames", FramePaths: []string{"temp/screen_local_0001/frame_0001_clip_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inputs"), 0o755); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.webm"), []byte("fake screen clip"), 0o644); err != nil {
+		t.Fatalf("write clip input failed: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_clip_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析录屏里的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path":         "inputs/screen.webm",
+				"capture_mode": string(tools.ScreenCaptureModeClip),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start clip screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || stringValue(record.PendingExecution, "capture_mode", "") != string(tools.ScreenCaptureModeClip) {
+		t.Fatalf("expected pending execution to preserve clip capture mode, got %+v", record.PendingExecution)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  task["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "completed" {
+		t.Fatalf("expected authorized clip screen task to complete, got %+v", respondTask)
+	}
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	if err != nil || total != 1 || len(artifacts) != 1 {
+		t.Fatalf("expected one persisted clip screen artifact, total=%d len=%d err=%v", total, len(artifacts), err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(artifacts[0].DeliveryPayloadJSON), &payload); err != nil {
+		t.Fatalf("decode persisted clip payload failed: %v", err)
+	}
+	if payload["capture_mode"] != string(tools.ScreenCaptureModeClip) {
+		t.Fatalf("expected persisted clip payload to keep clip capture_mode, got %+v", payload)
+	}
+	if !strings.HasSuffix(artifacts[0].Path, ".webm") {
+		t.Fatalf("expected clip artifact path to keep webm extension, got %+v", artifacts[0])
+	}
+}
+
+func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_infer_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看看这个页面的报错",
+			"page_context": map[string]any{
+				"title":        "Build Dashboard",
+				"url":          "https://example.com/build",
+				"app_name":     "Chrome",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+		},
+		"context": map[string]any{
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start inferred screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] != "screen_capture" {
+		t.Fatalf("expected screen_capture source type, got %+v", task)
+	}
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected inferred screen analyze task to wait for auth, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "screen_analyze" {
+		t.Fatalf("expected screen_analyze intent, got %+v", intentValue)
+	}
+	arguments := intentValue["arguments"].(map[string]any)
+	if arguments["evidence_role"] != "error_evidence" || arguments["page_title"] != "Build Dashboard" {
+		t.Fatalf("expected inferred visual arguments to be preserved, got %+v", arguments)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.PendingExecution == nil {
+		t.Fatalf("expected runtime task to keep pending execution for inferred screen task, got %+v", record)
+	}
+	if stringValue(record.PendingExecution, "source_path", "") != "" {
+		t.Fatalf("expected inferred screen task to authorize current screen instead of an existing file, got %+v", record.PendingExecution)
+	}
+	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
+		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
+func TestServiceStartTaskExplicitScreenAnalyzeKeepsFreshAuthorizationBoundary(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inputs"), 0o755); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.png"), []byte("fake screen capture"), 0o644); err != nil {
+		t.Fatalf("write screen input failed: %v", err)
+	}
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_screen_follow_up",
+		Title:       "Analyze the current failure",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageURL:     "https://example.com/build/1",
+			AppName:     "Chrome",
+			WindowTitle: "Build 1",
+		},
+	})
+
+	modelCalled := false
+	service.model = model.NewService(modelConfig(), stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_continue_screen",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"same session and anchors"}`, activeTask.TaskID),
+			}, nil
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析当前屏幕里的错误",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"url":          "https://example.com/build/1",
+				"app_name":     "Chrome",
+				"window_title": "Build 1",
+			},
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start explicit screen analyze task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected explicit screen_analyze to bypass continuation classification")
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected explicit screen_analyze to open a fresh task, got %+v", task)
+	}
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected explicit screen_analyze to establish waiting_auth, got %+v", task)
+	}
+
+	approvalRequests, total := service.runEngine.PendingApprovalRequests(20, 0)
+	if total != 1 || len(approvalRequests) != 1 {
+		t.Fatalf("expected one pending approval request, got total=%d items=%+v", total, approvalRequests)
+	}
+	if approvalRequests[0]["task_id"] != task["task_id"] {
+		t.Fatalf("expected approval to target new screen task, got %+v", approvalRequests[0])
+	}
+}
+
+func TestResolveScreenAnalyzeIntentInfersClipModeFromVideoPath(t *testing.T) {
+	service := newTestService()
+	resolvedIntent := service.resolveScreenAnalyzeIntent(contextsvc.TaskContextSnapshot{}, map[string]any{
+		"name": "screen_analyze",
+		"arguments": map[string]any{
+			"path": "clips/demo.webm",
+		},
+	})
+	arguments := mapValue(resolvedIntent, "arguments")
+	if arguments["capture_mode"] != "clip" {
+		t.Fatalf("expected video-backed screen analyze intent to infer clip capture mode, got %+v", arguments)
+	}
+}
+
+func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001_frames/frame-001.jpg", Text: "release validation failed in recording", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{
+		transcodeResult: tools.MediaTranscodeResult{InputPath: "temp/screen_sess_0001/frame_0001.webm", OutputPath: "temp/screen_sess_0001/frame_0001_normalized.mp4", Format: "mp4", Source: "media_worker_ffmpeg"},
+		framesResult:    tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_0001/frame_0001_normalized.mp4", OutputDir: "temp/screen_sess_0001/frame_0001_frames", FramePaths: []string{"temp/screen_sess_0001/frame_0001_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"},
+	}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "clips"), 0o755); err != nil {
+		t.Fatalf("mkdir clip source dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "clips", "demo.webm"), []byte("fake clip"), 0o644); err != nil {
+		t.Fatalf("write clip source failed: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_clip_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析这段录屏",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "clips/demo.webm",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start clip screen analyze task failed: %v", err)
+	}
+	result, err = service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond for clip screen analyze failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" || task["source_type"] != "screen_capture" {
+		t.Fatalf("expected clip screen analyze task to complete on screen_capture path, got %+v", task)
+	}
+	taskID := task["task_id"].(string)
+	record, exists := service.runEngine.GetTask(taskID)
+	if !exists || len(record.Artifacts) != 1 {
+		t.Fatalf("expected clip screen analyze to persist one runtime artifact, got %+v", record)
+	}
+	if record.Artifacts[0]["mime_type"] != "video/webm" {
+		t.Fatalf("expected clip screen analyze to keep video artifact mime type, got %+v", record.Artifacts)
+	}
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	if err != nil || total != 1 || len(artifacts) != 1 {
+		t.Fatalf("expected one persisted clip artifact, total=%d len=%d err=%v", total, len(artifacts), err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(artifacts[0].DeliveryPayloadJSON), &payload); err != nil {
+		t.Fatalf("decode persisted clip artifact payload failed: %v", err)
+	}
+	if payload["capture_mode"] != "clip" || payload["screen_session_id"] == "" {
+		t.Fatalf("expected clip artifact payload to preserve clip capture metadata, got %+v", payload)
+	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get for clip screen task failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["artifact_type"] != "screen_capture" || citations[0]["excerpt_text"] == nil {
+		t.Fatalf("expected clip screen task detail to expose one formal citation, got %+v", citations)
+	}
+}
+
+func TestServiceScreenAnalyzeStopsSessionAfterSuccessfulApproval(t *testing.T) {
+	baseScreenClient := sidecarclient.NewInMemoryScreenCaptureClient()
+	expiredSession, err := baseScreenClient.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_expired_cleanup", TaskID: "task_expired_cleanup", RunID: "run_expired_cleanup", CaptureMode: tools.ScreenCaptureModeScreenshot, TTL: time.Millisecond})
+	if err != nil {
+		t.Fatalf("start expired cleanup seed session failed: %v", err)
+	}
+	if _, err := baseScreenClient.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: expiredSession.ScreenSessionID, CaptureMode: tools.ScreenCaptureModeScreenshot, Source: "screen_capture"}); err != nil {
+		t.Fatalf("capture expired cleanup seed frame failed: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	screenClient := &recordingScreenCaptureClient{base: baseScreenClient}
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_stop",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	_, err = service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	if len(screenClient.stopCalls) != 1 || screenClient.stopCalls[0].reason != "analysis_completed" {
+		t.Fatalf("expected one successful screen session stop, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expiredCleanupScanCalls) != 1 || screenClient.expiredCleanupScanCalls[0].Reason != "expired_session_scan" {
+		t.Fatalf("expected successful screen analysis to scan expired sessions once, got %+v", screenClient.expiredCleanupScanCalls)
+	}
+	cleanupResult, err := baseScreenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{ScreenSessionID: expiredSession.ScreenSessionID, Reason: "assert_cleanup_scan"})
+	if err != nil || cleanupResult.DeletedCount != 0 {
+		t.Fatalf("expected expired cleanup scan to reclaim old temp artifacts before new execution, result=%+v err=%v", cleanupResult, err)
+	}
+	if len(screenClient.expireCalls) != 0 {
+		t.Fatalf("expected successful screen analysis to avoid expire semantics, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "analysis_completed" || len(screenClient.cleanupCalls[0].Paths) != 1 {
+		t.Fatalf("expected successful screen analysis to cleanup only the tracked capture residue, got %+v", screenClient.cleanupCalls)
+	}
+	if _, err := screenClient.GetSession(context.Background(), screenClient.stopCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected stopped session to become terminal, got err=%v", err)
+	}
+}
+
+func TestServiceScreenAnalyzeFailureExpiresAndCleansSession(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient()}
+	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_cleanup",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected screen analysis failure to end in failed status, got %+v", respondResult)
+	}
+	if len(screenClient.stopCalls) != 0 {
+		t.Fatalf("expected failed screen analysis to avoid stop semantics, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expiredCleanupScanCalls) != 1 || screenClient.expiredCleanupScanCalls[0].Reason != "expired_session_scan" {
+		t.Fatalf("expected failed screen analysis to scan expired sessions once, got %+v", screenClient.expiredCleanupScanCalls)
+	}
+	if len(screenClient.expireCalls) != 1 || screenClient.expireCalls[0].reason != "analysis_failed" {
+		t.Fatalf("expected failed screen analysis to expire session, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "analysis_failed" || screenClient.cleanupCalls[0].ScreenSessionID != screenClient.expireCalls[0].sessionID {
+		t.Fatalf("expected failed screen analysis to cleanup the expired session, got %+v", screenClient.cleanupCalls)
+	}
+	if _, err := screenClient.GetSession(context.Background(), screenClient.expireCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected expired session to become terminal, got err=%v", err)
+	}
+}
+
+func TestServiceScreenAnalyzeCaptureFailureExpiresAndCleansSession(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient(), captureErr: tools.ErrScreenCaptureFailed}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_capture_failure",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond should surface task-centric capture failure result, got %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected screen capture failure to end in failed status, got %+v", respondResult)
+	}
+	if len(screenClient.stopCalls) != 0 {
+		t.Fatalf("expected capture failure to avoid stop semantics, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expiredCleanupScanCalls) != 1 || screenClient.expiredCleanupScanCalls[0].Reason != "expired_session_scan" {
+		t.Fatalf("expected capture failure to scan expired sessions once, got %+v", screenClient.expiredCleanupScanCalls)
+	}
+	if len(screenClient.expireCalls) != 1 || screenClient.expireCalls[0].reason != "capture_failed" {
+		t.Fatalf("expected capture failure to expire session, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "capture_failed" || screenClient.cleanupCalls[0].ScreenSessionID != screenClient.expireCalls[0].sessionID {
+		t.Fatalf("expected capture failure to cleanup the expired session, got %+v", screenClient.cleanupCalls)
+	}
+}
+
+func TestServiceStartTaskInfersScreenAnalyzeTitleFromScreenSummaryWhenTitlesAreMissing(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_summary_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "看看当前屏幕上哪里出错了",
+		},
+		"context": map[string]any{
+			"screen": map[string]any{
+				"summary":      "release validation failed before publish",
+				"visible_text": "fatal build error",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start inferred screen task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if !strings.Contains(stringValue(task, "title", ""), "release validation") {
+		t.Fatalf("expected screen summary to drive inferred task title, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	arguments := intentValue["arguments"].(map[string]any)
+	if arguments["screen_summary"] != "release validation failed before publish" || arguments["visible_text"] != "fatal build error" {
+		t.Fatalf("expected inferred intent to preserve screen summary and visible text, got %+v", arguments)
+	}
+}
+
+func TestServiceSubmitInputInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_infer_submit",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "看看当前屏幕上的报错",
+			"input_mode": "text",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Release Checklist",
+				"url":          "https://example.com/release",
+				"app_name":     "Chrome",
+				"window_title": "Browser - Release Checklist",
+				"visible_text": "Warning: release notes are incomplete.",
+			},
+			"screen_summary": "release checklist shows blocking warning",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit inferred screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "waiting_auth" || task["source_type"] != "screen_capture" {
+		t.Fatalf("expected submit input to route into waiting screen authorization, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected waiting authorization status bubble, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskFallsBackWhenScreenCapabilityUnavailable(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_capability_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看看这个页面的报错",
+			"page_context": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+		},
+		"context": map[string]any{
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task with unavailable screen capability failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] == "screen_capture" {
+		t.Fatalf("expected unavailable screen capability to avoid screen_capture task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected fallback to agent_loop, got %+v", intentValue)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected fallback task to continue through normal flow, got %+v", task)
+	}
+	if task["current_step"] == "waiting_authorization" {
+		t.Fatalf("expected fallback task to avoid visual waiting_auth flow, got %+v", task)
+	}
+}
+
+func TestServiceSubmitInputFallbackKeepsExplicitConfirmationWhenScreenCapabilityUnavailable(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_capability_confirm_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "帮我看看这个页面的报错",
+			"input_mode": "text",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input with unavailable screen capability failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected fallback task to preserve confirming_intent, got %+v", task)
+	}
+	if task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected fallback task to wait for confirmation, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected unavailable screen capability to downgrade into agent_loop, got %+v", intentValue)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected confirming fallback to skip direct delivery, got %+v", result["delivery_result"])
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected confirmation bubble for downgraded task, got %+v", bubble)
 	}
 }
 
@@ -5596,10 +7017,10 @@ func TestServiceBudgetAutoDowngradeSwitchesWorkspaceDeliveryToBubble(t *testing.
 	}
 }
 
-func TestServiceBudgetAutoDowngradeProviderUnavailableDisablesExpensiveTools(t *testing.T) {
+func TestServiceBudgetAutoDowngradeNoLongerFlagsArbitraryProviderAliasesUnavailable(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed provider unavailable")
 	if _, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+		"models": map[string]any{
 			"provider":              "unsupported_provider",
 			"budget_auto_downgrade": true,
 		},
@@ -5623,25 +7044,15 @@ func TestServiceBudgetAutoDowngradeProviderUnavailableDisablesExpensiveTools(t *
 		UpdatedAt:         time.Now().UTC(),
 	}
 	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
-	if !decision.Applied || decision.TriggerReason != "provider_unavailable" {
-		t.Fatalf("expected provider unavailable downgrade decision, got %+v", decision)
-	}
-	updatedTask, updatedSnapshot, updatedIntent := service.applyBudgetAutoDowngrade(task, contextsvc.TaskContextSnapshot{Text: strings.Repeat("provider unavailable ", 20)}, task.Intent, decision)
-	if updatedTask.PreferredDelivery != "bubble" || updatedTask.FallbackDelivery != "bubble" {
-		t.Fatalf("expected provider unavailable downgrade to force bubble delivery, got task=%+v", updatedTask)
-	}
-	if mapValue(updatedIntent, "arguments")["disable_tool_calls"] != true {
-		t.Fatalf("expected provider unavailable downgrade to disable expensive tool calls, got %+v", updatedIntent)
-	}
-	if len(updatedSnapshot.Text) == 0 {
-		t.Fatalf("expected snapshot text to survive downgrade mutation, got %+v", updatedSnapshot)
+	if decision.Applied || decision.TriggerReason != "" {
+		t.Fatalf("expected arbitrary provider alias to stay on the openai-compatible route, got %+v", decision)
 	}
 }
 
 func TestServiceBudgetAutoDowngradeDisabledKeepsWorkspaceDelivery(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed no downgrade")
 	if _, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+		"models": map[string]any{
 			"budget_auto_downgrade": false,
 		},
 	}); err != nil {
@@ -5746,6 +7157,30 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 	}
 }
 
+func TestExecutionFailureBubbleSurfacesModelConfigurationError(t *testing.T) {
+	bubbleText := executionFailureBubble(model.ErrClientNotConfigured)
+	if bubbleText != "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。" {
+		t.Fatalf("expected model configuration failure bubble, got %q", bubbleText)
+	}
+}
+
+func TestExecutionFailureBubbleSurfacesHTTPStatusDetailsSafely(t *testing.T) {
+	bubbleText := executionFailureBubble(&model.OpenAIHTTPStatusError{StatusCode: 400, Message: `Cannot read "image.png" (this model does not support image input). Inform the user.`})
+	if !strings.Contains(bubbleText, "Cannot read \"image.png\"") {
+		t.Fatalf("expected upstream model error detail in bubble, got %q", bubbleText)
+	}
+	if !strings.Contains(bubbleText, "模型请求被上游拒绝") {
+		t.Fatalf("expected 400 status bubble prefix, got %q", bubbleText)
+	}
+}
+
+func TestExecutionFailureBubbleRedactsSecretBearingProviderMessages(t *testing.T) {
+	bubbleText := executionFailureBubble(&model.OpenAIHTTPStatusError{StatusCode: 401, Message: "Authorization: Bearer sk-secret-value invalid"})
+	if bubbleText != "执行失败：模型鉴权失败，请检查 API Key 或访问权限。" {
+		t.Fatalf("expected secret-bearing provider message to be redacted, got %q", bubbleText)
+	}
+}
+
 func TestServiceBudgetFallbackSuccessStillAppendsFailureSignal(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed fallback success signal")
 	result, err := service.SubmitInput(map[string]any{
@@ -5791,8 +7226,8 @@ func TestServiceBudgetFallbackSuccessStillAppendsFailureSignal(t *testing.T) {
 
 func TestServiceBudgetAutoDowngradeUsesConfiguredPolicyThresholds(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed configured thresholds")
-	_, _, _, needRestart := service.runEngine.UpdateSettings(map[string]any{
-		"data_log": map[string]any{
+	_, _, _, needRestart, err := service.runEngine.UpdateSettings(map[string]any{
+		"models": map[string]any{
 			"budget_auto_downgrade": true,
 			"budget_policy": map[string]any{
 				"failure_signal_window":     3,
@@ -5803,6 +7238,9 @@ func TestServiceBudgetAutoDowngradeUsesConfiguredPolicyThresholds(t *testing.T) 
 			},
 		},
 	})
+	if err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
 	if needRestart {
 		t.Fatal("expected nested budget policy update to remain immediate")
 	}
@@ -7012,8 +8450,8 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 		t.Fatalf("task detail get failed: %v", err)
 	}
 
-	if _, ok := detailResult["delivery_result"]; ok {
-		t.Fatalf("expected task detail response not to expose undeclared delivery_result field, got %+v", detailResult["delivery_result"])
+	if _, ok := detailResult["delivery_result"]; !ok {
+		t.Fatal("expected task detail response to expose formal delivery_result field")
 	}
 	if _, ok := detailResult["audit_records"]; ok {
 		t.Fatalf("expected task detail response not to expose undeclared audit_records field, got %+v", detailResult["audit_records"])
@@ -7024,6 +8462,10 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	artifacts, ok := detailResult["artifacts"].([]map[string]any)
 	if !ok || len(artifacts) != 0 {
 		t.Fatalf("expected empty artifact collection array, got %+v", detailResult["artifacts"])
+	}
+	citations, ok := detailResult["citations"].([]map[string]any)
+	if !ok || len(citations) != 0 {
+		t.Fatalf("expected empty citation collection array, got %+v", detailResult["citations"])
 	}
 	mirrorReferences, ok := detailResult["mirror_references"].([]map[string]any)
 	if !ok || len(mirrorReferences) != 0 {
@@ -7095,6 +8537,10 @@ func TestServiceTaskDetailGetNormalizesProtocolCollections(t *testing.T) {
 	}
 	if _, ok := artifact["delivery_payload"]; ok {
 		t.Fatalf("expected detail artifact to omit undeclared delivery_payload, got %+v", artifact)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 0 {
+		t.Fatalf("expected no citations for generic detail payload, got %+v", citations)
 	}
 
 	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
@@ -7182,6 +8628,72 @@ func TestServiceTaskDetailGetFallsBackToStoredTaskRun(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetFallsBackToTaskRunCitationsForScreenTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored screen detail citations")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if service.storage.TaskStore() == nil {
+		t.Fatal("expected task store to be wired")
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), "task_stored_screen_detail"); err != nil && !storage.IsTaskRecordNotFound(err) {
+		t.Fatalf("delete structured task shadow failed: %v", err)
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_screen_detail",
+		SessionID:   "sess_stored_screen",
+		RunID:       "run_stored_screen_detail",
+		Title:       "stored screen detail task",
+		SourceType:  "screen_capture",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 20, 10, 6, 0, 0, time.UTC)),
+		Artifacts: []map[string]any{{
+			"artifact_id":      "art_stored_screen_detail",
+			"task_id":          "task_stored_screen_detail",
+			"artifact_type":    "screen_capture",
+			"title":            "stored-screen.png",
+			"path":             "workspace/stored-screen.png",
+			"mime_type":        "image/png",
+			"delivery_type":    "open_file",
+			"delivery_payload": map[string]any{"path": "workspace/stored-screen.png", "task_id": "task_stored_screen_detail", "evidence_role": "error_evidence"},
+			"created_at":       "2026-04-20T10:06:00Z",
+		}},
+		Citations: []map[string]any{{
+			"citation_id": "cit_task_stored_screen_detail_" + stableCitationIdentity("task_stored_screen_detail", "file", "art_stored_screen_detail", map[string]any{
+				"artifact_id":   "art_stored_screen_detail",
+				"artifact_type": "screen_capture",
+				"evidence_role": "error_evidence",
+				"ocr_excerpt":   "fatal build error",
+			}),
+			"task_id":     "task_stored_screen_detail",
+			"run_id":      "run_stored_screen_detail",
+			"source_type": "file",
+			"source_ref":  "art_stored_screen_detail",
+			"label":       "error_evidence | screen_capture | fatal build error",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("save task run with citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask("task_stored_screen_detail"); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_stored_screen_detail"})
+	if err != nil {
+		t.Fatalf("task detail get with stored citations failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["source_ref"] != "art_stored_screen_detail" {
+		t.Fatalf("expected storage-backed citation to round-trip through task detail, got %+v", citations)
+	}
+}
+
 func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured task detail")
 	if service.storage == nil {
@@ -7237,6 +8749,778 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	arguments := intent["arguments"].(map[string]any)
 	if arguments["style"] != "key_points" {
 		t.Fatalf("expected structured task detail to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured snapshot detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_snapshot",
+		SessionID:   "sess_structured_snapshot",
+		RunID:       "run_structured_snapshot",
+		Title:       "structured snapshot task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 10, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "workspace_document",
+			"title":        "Structured snapshot result",
+			"preview_text": "snapshot-backed detail",
+			"payload": map[string]any{
+				"task_id": "task_structured_snapshot",
+				"path":    "workspace/structured-snapshot.md",
+				"url":     nil,
+			},
+		},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:  "floating_ball",
+			Trigger: "hover_text_input",
+			Text:    "snapshot-backed detail",
+		},
+		MirrorReferences:  []map[string]any{{"memory_id": "mem_structured_snapshot"}},
+		SteeringMessages:  []string{"keep the current structure"},
+		CurrentStepStatus: "completed",
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_snapshot"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.loadCalls != 0 || countingStore.loadAllCalls != 0 || countingStore.legacyLoadCalls != 0 || countingStore.getCalls != 0 {
+		t.Fatalf("expected structured snapshot detail to avoid task_run reads, got total=%d full=%d legacy=%d get=%d", countingStore.loadCalls, countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	mirrorReferences := result["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_structured_snapshot" {
+		t.Fatalf("expected task detail to reuse structured snapshot mirror references, got %+v", mirrorReferences)
+	}
+	runtimeSummary := result["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected runtime summary to expose structured snapshot steering count, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetReloadsTaskRunWhenStructuredSnapshotIsInvalid(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured invalid snapshot detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_invalid_snapshot",
+		SessionID:   "sess_structured_invalid_snapshot",
+		RunID:       "run_structured_invalid_snapshot",
+		Title:       "structured invalid snapshot task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 11, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "workspace_document",
+			"title":        "Legacy reload result",
+			"preview_text": "legacy task_run detail",
+			"payload": map[string]any{
+				"task_id": "task_structured_invalid_snapshot",
+				"path":    "workspace/legacy-reload.md",
+				"url":     nil,
+			},
+		},
+		MirrorReferences:  []map[string]any{{"memory_id": "mem_legacy_snapshot"}},
+		SteeringMessages:  []string{"resume from legacy snapshot"},
+		CurrentStepStatus: "completed",
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_invalid_snapshot",
+		SessionID:           "sess_structured_invalid_snapshot",
+		RunID:               "run_structured_invalid_snapshot",
+		PrimaryRunID:        "run_structured_invalid_snapshot",
+		Title:               "structured invalid snapshot task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 11, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("overwrite structured task failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_invalid_snapshot"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.loadCalls != 1 || countingStore.getCalls != 1 || countingStore.loadAllCalls != 0 || countingStore.legacyLoadCalls != 0 {
+		t.Fatalf("expected invalid structured snapshot to trigger one direct task_run lookup, got total=%d full=%d legacy=%d get=%d", countingStore.loadCalls, countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	mirrorReferences := result["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_legacy_snapshot" {
+		t.Fatalf("expected invalid structured snapshot to backfill mirror references from task_runs, got %+v", mirrorReferences)
+	}
+	runtimeSummary := result["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected invalid structured snapshot to backfill steering count, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskListUsesLegacyTaskRunLoaderForLegacyOnlyRows(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "legacy task list loader")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	legacyTask := storage.TaskRunRecord{
+		TaskID:            "task_legacy_list_only",
+		SessionID:         "sess_legacy_list_only",
+		RunID:             "run_legacy_list_only",
+		Title:             "legacy list task",
+		SourceType:        "hover_input",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "summarize"},
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "green",
+		StartedAt:         time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC),
+		FinishedAt:        timePointer(time.Date(2026, 4, 15, 12, 6, 0, 0, time.UTC)),
+		CurrentStepStatus: "completed",
+	}
+	if err := countingStore.SaveTaskRun(context.Background(), legacyTask); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), legacyTask.TaskID); err != nil {
+		t.Fatalf("delete structured task failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{"group": "finished"})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.legacyLoadCalls != 1 || countingStore.loadAllCalls != 0 || countingStore.getCalls != 0 {
+		t.Fatalf("expected legacy-only task list to use legacy loader once, got full=%d legacy=%d get=%d", countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != legacyTask.TaskID {
+		t.Fatalf("expected task list to return legacy-only task row, got %+v", items)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackUsesSessionAndRunStores(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured session run detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.SessionStore().WriteSession(context.Background(), storage.SessionRecord{
+		SessionID: "sess_structured_link",
+		Title:     "Structured Session Title",
+		Status:    "idle",
+		CreatedAt: time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt: time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write session failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_session_run",
+		SessionID:           "sess_structured_link",
+		RunID:               "run_structured_session_run",
+		Title:               "",
+		SourceType:          "hover_input",
+		Status:              "processing",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "generate_output",
+		CurrentStepStatus:   "processing",
+		RiskLevel:           "green",
+		StartedAt:           time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_structured_session_run",
+		TaskID:     "task_structured_session_run",
+		SessionID:  "sess_structured_link",
+		Status:     "processing",
+		IntentName: "summarize",
+		StartedAt:  time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:  time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		StopReason: "paused_by_session",
+	}); err != nil {
+		t.Fatalf("write run failed: %v", err)
+	}
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_session_run"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["title"] != "Structured Session Title" {
+		t.Fatalf("expected session store to backfill task title, got %+v", task)
+	}
+	if task["loop_stop_reason"] != "paused_by_session" {
+		t.Fatalf("expected run store to backfill loop stop reason, got %+v", task)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersRuntimeStateWhenStructuredRowIsStale(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime detail beats stale storage")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_runtime_freshness",
+		Title:       "Runtime freshness task",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "confirming_intent",
+		RiskLevel:   "green",
+	})
+	runtimeTask, ok := service.runEngine.BeginExecution(runtimeTask.TaskID, "generate_output", "Working on the response.")
+	if !ok {
+		t.Fatal("expected runtime task to begin execution")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              runtimeTask.TaskID,
+		SessionID:           runtimeTask.SessionID,
+		RunID:               runtimeTask.RunID,
+		Title:               runtimeTask.Title,
+		SourceType:          runtimeTask.SourceType,
+		Status:              "confirming_intent",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   runtimeTask.PreferredDelivery,
+		FallbackDelivery:    runtimeTask.FallbackDelivery,
+		CurrentStep:         "confirming_intent",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           runtimeTask.RiskLevel,
+		StartedAt:           runtimeTask.StartedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           runtimeTask.StartedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write stale structured task failed: %v", err)
+	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	task := detailResult["task"].(map[string]any)
+	if task["status"] != "processing" || task["current_step"] != "generate_output" {
+		t.Fatalf("expected runtime task state to override stale storage, got %+v", task)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen detail evidence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_evidence"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen",
+		RunID:               "run_structured_screen_evidence",
+		Title:               "structured screen evidence task",
+		SourceType:          "screen_capture",
+		Status:              "failed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "bubble",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "generate_output",
+		CurrentStepStatus:   "failed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 13, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_screen_evidence",
+		TaskID:        taskID,
+		Name:          "generate_output",
+		Status:        "failed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      taskID,
+		SessionID:   "sess_structured_screen",
+		RunID:       "run_structured_screen_evidence",
+		Title:       "structured screen evidence task",
+		SourceType:  "screen_capture",
+		Status:      "failed",
+		Intent:      map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 13, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "屏幕分析结果",
+			"preview_text": "fatal build error",
+			"payload": map[string]any{
+				"task_id": taskID,
+				"path":    "workspace/structured-screen.png",
+				"url":     nil,
+			},
+		},
+		Citations: []map[string]any{{
+			"citation_id": "cit_" + taskID + "_" + stableCitationIdentity(taskID, "file", "art_structured_screen_evidence", map[string]any{
+				"artifact_id":   "art_structured_screen_evidence",
+				"artifact_type": "screen_capture",
+				"evidence_role": "error_evidence",
+				"ocr_excerpt":   "fatal build error",
+			}),
+			"task_id":       taskID,
+			"run_id":        "run_structured_screen_evidence",
+			"source_type":   "file",
+			"source_ref":    "art_structured_screen_evidence",
+			"label":         "error_evidence | screen_capture | fatal build error",
+			"artifact_id":   "art_structured_screen_evidence",
+			"artifact_type": "screen_capture",
+			"evidence_role": "error_evidence",
+			"excerpt_text":  "fatal build error",
+		}},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_structured_screen_evidence",
+			"task_id":    taskID,
+			"type":       "execution",
+			"action":     "execute_task",
+			"summary":    "OCR worker failed while analyzing the screen.",
+			"target":     "workspace/structured-screen.png",
+			"result":     "failed",
+			"created_at": "2026-04-15T13:05:00Z",
+			"metadata": map[string]any{
+				"failure_code":     "OCR_WORKER_FAILED",
+				"failure_category": "screen_ocr",
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("save task run with structured fallback evidence failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "OCR_WORKER_FAILED" || runtimeSummary["latest_failure_category"] != "screen_ocr" {
+		t.Fatalf("expected structured fallback to backfill failure metadata, got %+v", runtimeSummary)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["source_ref"] != "art_structured_screen_evidence" {
+		t.Fatalf("expected structured fallback to backfill citations, got %+v", citations)
+	}
+	if citations[0]["excerpt_text"] != "fatal build error" || citations[0]["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected structured fallback to preserve citation metadata, got %+v", citations[0])
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["preview_text"] != "fatal build error" {
+		t.Fatalf("expected structured fallback to backfill delivery result, got %+v", detailResult["delivery_result"])
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackReadsFormalDeliveryFromLoopStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail delivery fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_delivery_only"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_delivery",
+		RunID:               "run_structured_delivery_only",
+		Title:               "structured delivery only task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_delivery_only",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "结构化交付结果",
+		PayloadJSON:      `{"task_id":"` + taskID + `","path":"workspace/structured-delivery.md","url":null}`,
+		PreviewText:      "formal delivery from loop store",
+		CreatedAt:        "2026-04-15T14:06:00Z",
+	}); err != nil {
+		t.Fatalf("save loop runtime delivery result failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback to read delivery_result from loop store, got %+v", detailResult["delivery_result"])
+	}
+	if deliveryResult["title"] != "结构化交付结果" || deliveryResult["preview_text"] != "formal delivery from loop store" {
+		t.Fatalf("unexpected loop-store delivery result: %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != "workspace/structured-delivery.md" || payload["task_id"] != taskID {
+		t.Fatalf("expected loop-store delivery payload to stay intact, got %+v", payload)
+	}
+	if _, ok := payload["url"]; !ok || payload["url"] != nil {
+		t.Fatalf("expected loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackReadsFormalCitationsFromLoopStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail citation fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_citation_only"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_citation",
+		RunID:               "run_structured_citation_only",
+		Title:               "structured citation only task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_citation_only",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_citation_only",
+		SourceType:      "file",
+		SourceRef:       "art_structured_citation_only",
+		Label:           "error_evidence | screen_capture | fatal build error",
+		ArtifactID:      "art_structured_citation_only",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "fatal build error",
+		ScreenSessionID: "screen_sess_citation_only",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save loop runtime citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected loop-store citations to backfill task detail, got %+v", citations)
+	}
+	if citations[0]["artifact_id"] != "art_structured_citation_only" || citations[0]["source_ref"] != "art_structured_citation_only" {
+		t.Fatalf("expected loop-store citation artifact fields to survive, got %+v", citations[0])
+	}
+	if citations[0]["evidence_role"] != "error_evidence" || citations[0]["excerpt_text"] != "fatal build error" {
+		t.Fatalf("expected loop-store citation evidence metadata to survive, got %+v", citations[0])
+	}
+	if citations[0]["screen_session_id"] != "screen_sess_citation_only" {
+		t.Fatalf("expected loop-store citation screen session id to survive, got %+v", citations[0])
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackPrefersFirstClassDeliveryAndCitationsOverSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail mixed state precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_mixed_state"
+	finishedAt := time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_mixed_state",
+		RunID:             "run_structured_mixed_state",
+		Title:             "structured mixed state task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Timeline: []storage.TaskStepSnapshot{{
+			StepID:        "step_structured_mixed_state_snapshot",
+			TaskID:        taskID,
+			Name:          "deliver_result",
+			Status:        "completed",
+			OrderIndex:    1,
+			InputSummary:  "snapshot input",
+			OutputSummary: "snapshot output",
+		}},
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "snapshot delivery",
+			"preview_text": "stale snapshot delivery",
+			"payload":      map[string]any{"task_id": taskID, "path": "workspace/stale-snapshot.md", "url": nil},
+		},
+		Citations: []map[string]any{{
+			"citation_id": "cit_snapshot_" + taskID,
+			"task_id":     taskID,
+			"run_id":      "run_structured_mixed_state",
+			"source_type": "file",
+			"source_ref":  "art_snapshot_only",
+			"label":       "snapshot evidence",
+			"artifact_id": "art_snapshot_only",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_mixed_state",
+		RunID:               "run_structured_mixed_state",
+		Title:               "structured mixed state task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "first-class delivery",
+		PayloadJSON:      `{"task_id":"` + taskID + `","path":"workspace/formal-delivery.md","url":null}`,
+		PreviewText:      "newer first-class delivery",
+		CreatedAt:        "2026-04-15T14:07:00Z",
+	}); err != nil {
+		t.Fatalf("save first-class delivery result failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_mixed_state",
+		SourceType:      "file",
+		SourceRef:       "art_first_class",
+		Label:           "error_evidence | screen_capture | formal excerpt",
+		ArtifactID:      "art_first_class",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "formal excerpt",
+		ScreenSessionID: "screen_sess_first_class",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save first-class citations failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected mixed-state detail to expose formal delivery_result, got %+v", detailResult["delivery_result"])
+	}
+	if deliveryResult["title"] != "first-class delivery" || deliveryResult["preview_text"] != "newer first-class delivery" {
+		t.Fatalf("expected first-class delivery to override snapshot delivery, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != "workspace/formal-delivery.md" {
+		t.Fatalf("expected first-class delivery payload to override snapshot payload, got %+v", payload)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected first-class citations to override snapshot citations, got %+v", citations)
+	}
+	if citations[0]["source_ref"] != "art_first_class" || citations[0]["artifact_id"] != "art_first_class" {
+		t.Fatalf("expected first-class citation source to override snapshot citation, got %+v", citations[0])
+	}
+	if citations[0]["screen_session_id"] != "screen_sess_first_class" || citations[0]["excerpt_text"] != "formal excerpt" {
+		t.Fatalf("expected first-class citation metadata to override snapshot citation, got %+v", citations[0])
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKeys(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail sparse delivery fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_delivery_sparse"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_delivery_sparse",
+		RunID:             "run_structured_delivery_sparse",
+		Title:             "structured sparse delivery task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		IntentName:        "screen_analyze",
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		CurrentStepStatus: "completed",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:         time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:        time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:      "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write sparse structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_delivery_sparse",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace sparse structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "结构化稀疏交付结果",
+		PayloadJSON:      `{}`,
+		PreviewText:      "sparse formal delivery from loop store",
+		CreatedAt:        "2026-04-15T14:06:00Z",
+	}); err != nil {
+		t.Fatalf("save sparse loop runtime delivery result failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete sparse runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback to read sparse delivery_result from loop store, got %+v", detailResult["delivery_result"])
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if _, ok := payload["path"]; !ok || payload["path"] != nil {
+		t.Fatalf("expected sparse loop-store delivery payload to expose missing path as null, got %+v", payload)
+	}
+	if _, ok := payload["url"]; !ok || payload["url"] != nil {
+		t.Fatalf("expected sparse loop-store delivery payload to expose missing url as null, got %+v", payload)
+	}
+	if payload["task_id"] != taskID {
+		t.Fatalf("expected sparse loop-store delivery payload to backfill task_id, got %+v", payload)
 	}
 }
 
@@ -7305,9 +9589,882 @@ func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *test
 	if approvalRequest["approval_id"] != "appr_structured_waiting_auth" {
 		t.Fatalf("unexpected structured fallback approval request: %+v", approvalRequest)
 	}
+	if detailResult["authorization_record"] != nil {
+		t.Fatalf("expected structured fallback waiting_auth task to omit authorization_record, got %+v", detailResult["authorization_record"])
+	}
+	if detailResult["audit_record"] != nil {
+		t.Fatalf("expected structured fallback waiting_auth task to omit audit_record, got %+v", detailResult["audit_record"])
+	}
 	securitySummary := detailResult["security_summary"].(map[string]any)
 	if securitySummary["pending_authorizations"] != 1 || securitySummary["security_status"] != "pending_confirmation" {
 		t.Fatalf("expected structured fallback security summary to reflect pending approval, got %+v", securitySummary)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackRehydratesAuthorizationAndAudit(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail governance")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_governance"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_governance",
+		RunID:               "run_structured_screen_governance",
+		Title:               "structured screen governance task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "bubble",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 16, 9, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_screen_governance",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "screen analysis complete",
+		CreatedAt:     time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_structured_screen_governance",
+		TaskID:                taskID,
+		ApprovalID:            "appr_structured_screen_governance",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-16T09:04:00Z",
+	}); err != nil {
+		t.Fatalf("write structured authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_structured_screen_governance",
+		TaskID:    taskID,
+		Type:      "execution",
+		Action:    "execute_task",
+		Summary:   "screen analysis completed with stored evidence.",
+		Target:    "workspace/stored-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T09:05:00Z",
+	}); err != nil {
+		t.Fatalf("write structured audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_structured_screen_governance" {
+		t.Fatalf("expected structured fallback authorization record, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_structured_screen_governance" {
+		t.Fatalf("expected structured fallback audit record, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStoredScreenFormalObjectsOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored screen detail precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_formal_prefer",
+		Title:             "screen formal preference task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "task_detail",
+		"title":        "runtime detail result",
+		"preview_text": "runtime preview",
+		"payload": map[string]any{
+			"task_id": runtimeTask.TaskID,
+			"path":    "workspace/runtime-screen.png",
+		},
+	}, []map[string]any{{
+		"artifact_id":      "art_screen_formal_prefer",
+		"task_id":          runtimeTask.TaskID,
+		"artifact_type":    "screen_capture",
+		"title":            "runtime-screen.png",
+		"path":             "workspace/runtime-screen.png",
+		"mime_type":        "image/png",
+		"delivery_type":    "task_detail",
+		"delivery_payload": map[string]any{"path": "workspace/runtime-screen.png", "task_id": runtimeTask.TaskID},
+		"created_at":       "2026-04-21T10:05:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if _, ok := service.runEngine.SetCitations(runtimeTask.TaskID, []map[string]any{{
+		"citation_id":       "cit_screen_formal_prefer",
+		"task_id":           runtimeTask.TaskID,
+		"run_id":            runtimeTask.RunID,
+		"source_type":       "file",
+		"source_ref":        "art_screen_formal_prefer",
+		"label":             "runtime label",
+		"artifact_id":       "art_screen_formal_prefer",
+		"artifact_type":     "screen_capture",
+		"evidence_role":     "error_evidence",
+		"excerpt_text":      "runtime excerpt",
+		"screen_session_id": "screen_runtime_prefer",
+	}}); !ok {
+		t.Fatal("expected runtime citations to update")
+	}
+	if _, ok := service.runEngine.ResolveAuthorization(runtimeTask.TaskID, map[string]any{
+		"authorization_record_id": "auth_runtime_prefer",
+		"task_id":                 runtimeTask.TaskID,
+		"approval_id":             "appr_runtime_prefer",
+		"decision":                "allow_once",
+		"remember_rule":           false,
+		"operator":                "runtime",
+		"created_at":              "2026-04-21T10:04:00Z",
+	}, map[string]any{"files": []string{"runtime.txt"}}); !ok {
+		t.Fatal("expected runtime authorization to update")
+	}
+	if _, ok := service.runEngine.AppendAuditData(runtimeTask.TaskID, []map[string]any{{
+		"audit_id":   "audit_runtime_prefer",
+		"task_id":    runtimeTask.TaskID,
+		"type":       "execution",
+		"action":     "execute_task",
+		"summary":    "runtime audit summary",
+		"target":     "workspace/runtime-screen.png",
+		"result":     "success",
+		"created_at": "2026-04-21T10:05:00Z",
+	}}, nil); !ok {
+		t.Fatal("expected runtime audit records to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_screen_formal_prefer",
+		TaskID:              runtimeTask.TaskID,
+		ArtifactType:        "screen_capture",
+		Title:               "stored-screen.png",
+		Path:                "workspace/stored-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"path":"workspace/stored-screen.png","task_id":"` + runtimeTask.TaskID + `","evidence_role":"error_evidence"}`,
+		CreatedAt:           "2026-04-21T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifacts failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), runtimeTask.TaskID, []storage.CitationRecord{{
+		CitationID:      "cit_screen_formal_prefer",
+		TaskID:          runtimeTask.TaskID,
+		RunID:           runtimeTask.RunID,
+		SourceType:      "file",
+		SourceRef:       "art_screen_formal_prefer",
+		Label:           "stored label",
+		ArtifactID:      "art_screen_formal_prefer",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "stored excerpt",
+		ScreenSessionID: "screen_stored_prefer",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("replace stored citations failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + runtimeTask.TaskID,
+		TaskID:           runtimeTask.TaskID,
+		Type:             "task_detail",
+		Title:            "stored detail result",
+		PayloadJSON:      `{"task_id":"` + runtimeTask.TaskID + `","path":"workspace/stored-screen.png","url":null}`,
+		PreviewText:      "stored preview",
+		CreatedAt:        "2026-04-21T10:06:00Z",
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_stored_prefer",
+		TaskID:                runtimeTask.TaskID,
+		ApprovalID:            "appr_stored_prefer",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-21T10:04:30Z",
+	}); err != nil {
+		t.Fatalf("write stored authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_stored_prefer",
+		TaskID:    runtimeTask.TaskID,
+		Type:      "execution",
+		Action:    "execute_task",
+		Summary:   "stored audit summary",
+		Target:    "workspace/stored-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-21T10:05:30Z",
+	}); err != nil {
+		t.Fatalf("write stored audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["preview_text"] != "stored preview" {
+		t.Fatalf("expected stored delivery_result to override runtime compatibility data, got %+v", deliveryResult)
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["path"] != "workspace/stored-screen.png" {
+		t.Fatalf("expected stored artifacts to override runtime compatibility data, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["label"] != "stored label" || citations[0]["excerpt_text"] != "stored excerpt" {
+		t.Fatalf("expected stored citations to override runtime compatibility data, got %+v", citations)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_stored_prefer" {
+		t.Fatalf("expected stored authorization_record to override runtime compatibility data, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_stored_prefer" {
+		t.Fatalf("expected stored audit_record to override runtime compatibility data, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStoredApprovalRequestOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored approval precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_approval_prefer",
+		Title:             "screen approval preference task",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "intent_confirmation",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "intent_confirmation"),
+	})
+	if _, ok := service.runEngine.MarkWaitingApprovalWithPlan(runtimeTask.TaskID, map[string]any{
+		"approval_id":    "appr_runtime_prefer",
+		"task_id":        runtimeTask.TaskID,
+		"operation_name": "screen_capture",
+		"target_object":  "runtime target",
+		"reason":         "runtime reason",
+		"risk_level":     "yellow",
+		"status":         "pending",
+		"created_at":     "2026-04-21T11:00:00Z",
+		"impact_scope":   map[string]any{"files": []string{"runtime.txt"}},
+	}, map[string]any{"kind": "screen_analysis"}, nil); !ok {
+		t.Fatal("expected runtime approval request to update")
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_stored_prefer",
+		TaskID:          runtimeTask.TaskID,
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "stored target",
+		Reason:          "stored reason",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["stored.txt"]}`,
+		CreatedAt:       "2026-04-21T11:00:30Z",
+		UpdatedAt:       "2026-04-21T11:00:30Z",
+	}); err != nil {
+		t.Fatalf("write stored approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest := detailResult["approval_request"].(map[string]any)
+	if approvalRequest["approval_id"] != "appr_stored_prefer" || approvalRequest["target_object"] != "stored target" || approvalRequest["reason"] != "stored reason" {
+		t.Fatalf("expected stored approval_request to override runtime compatibility data, got %+v", approvalRequest)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenFallbackPrefersFormalEvidenceObjects(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen detail formal precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	taskID := "task_structured_screen_formal_precedence"
+	finishedAt := time.Date(2026, 4, 16, 10, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_formal_precedence",
+		RunID:             "run_structured_screen_formal_precedence",
+		Title:             "structured screen precedence task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 10, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Artifacts: []map[string]any{{
+			"artifact_id":      "art_snapshot_screen_precedence",
+			"task_id":          taskID,
+			"artifact_type":    "screen_capture",
+			"title":            "snapshot screen artifact",
+			"path":             "workspace/snapshot-screen.png",
+			"mime_type":        "image/png",
+			"delivery_type":    "task_detail",
+			"delivery_payload": map[string]any{"task_id": taskID, "screen_session_id": "screen_snapshot_precedence", "evidence_role": "error_evidence"},
+		}},
+		Citations: []map[string]any{{
+			"citation_id":       "cit_snapshot_" + taskID,
+			"task_id":           taskID,
+			"run_id":            "run_structured_screen_formal_precedence",
+			"source_type":       "file",
+			"source_ref":        "art_snapshot_screen_precedence",
+			"label":             "snapshot evidence",
+			"artifact_id":       "art_snapshot_screen_precedence",
+			"artifact_type":     "screen_capture",
+			"evidence_role":     "error_evidence",
+			"excerpt_text":      "snapshot excerpt",
+			"screen_session_id": "screen_snapshot_precedence",
+		}},
+		Authorization: map[string]any{
+			"authorization_record_id": "auth_snapshot_screen_precedence",
+			"task_id":                 taskID,
+			"approval_id":             "appr_snapshot_screen_precedence",
+			"decision":                "deny_once",
+			"operator":                "user",
+			"created_at":              "2026-04-16T10:03:00Z",
+		},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_snapshot_delivery_precedence",
+			"task_id":    taskID,
+			"type":       "delivery",
+			"action":     "publish_result",
+			"summary":    "snapshot delivery audit",
+			"target":     "task_detail",
+			"result":     "success",
+			"created_at": "2026-04-16T10:07:00Z",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_formal_precedence",
+		RunID:               "run_structured_screen_formal_precedence",
+		Title:               "structured screen precedence task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_formal_screen_precedence",
+		TaskID:              taskID,
+		ArtifactType:        "screen_capture",
+		Title:               "formal screen artifact",
+		Path:                "artifacts/screen/structured/formal-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"task_id":"` + taskID + `","screen_session_id":"screen_formal_precedence","evidence_role":"error_evidence"}`,
+		CreatedAt:           "2026-04-16T10:05:00Z",
+	}}); err != nil {
+		t.Fatalf("save formal artifact failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:      "cit_formal_" + taskID,
+		TaskID:          taskID,
+		RunID:           "run_structured_screen_formal_precedence",
+		SourceType:      "file",
+		SourceRef:       "art_formal_screen_precedence",
+		Label:           "error_evidence | screen_capture | formal excerpt",
+		ArtifactID:      "art_formal_screen_precedence",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "formal excerpt",
+		ScreenSessionID: "screen_formal_precedence",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("save formal citations failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_formal_screen_precedence",
+		TaskID:                taskID,
+		ApprovalID:            "appr_formal_screen_precedence",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-16T10:04:00Z",
+	}); err != nil {
+		t.Fatalf("write formal authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_formal_screen_precedence",
+		TaskID:    taskID,
+		Type:      "screen_capture",
+		Action:    "screen.capture.screenshot_analyze",
+		Summary:   "formal screen evidence audit",
+		Target:    "artifacts/screen/structured/formal-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T10:05:00Z",
+	}); err != nil {
+		t.Fatalf("write formal audit record failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_formal_screen_precedence" {
+		t.Fatalf("expected formal artifact to override snapshot artifact, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["artifact_id"] != "art_formal_screen_precedence" || citations[0]["screen_session_id"] != "screen_formal_precedence" {
+		t.Fatalf("expected formal citation to override snapshot citation, got %+v", citations)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_formal_screen_precedence" || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected formal authorization record to override snapshot authorization, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_formal_screen_precedence" || auditRecord["action"] != "screen.capture.screenshot_analyze" {
+		t.Fatalf("expected formal screen audit to override generic snapshot audit, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenFallbackUsesCurrentRunIDForFormalHydration(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen current run precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	taskID := "task_structured_screen_current_run"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_current_run",
+		RunID:               "run_screen_current_attempt",
+		PrimaryRunID:        "run_screen_primary_attempt",
+		Title:               "structured screen current run task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T09:00:00Z",
+		UpdatedAt:           "2026-04-22T09:05:00Z",
+		FinishedAt:          "2026-04-22T09:06:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_screen_primary_attempt",
+		TaskID:     taskID,
+		SessionID:  "sess_structured_screen_current_run",
+		SourceType: "screen_capture",
+		Status:     "completed",
+		IntentName: "screen_analyze",
+		StartedAt:  "2026-04-22T09:00:00Z",
+		UpdatedAt:  "2026-04-22T09:01:00Z",
+		FinishedAt: "2026-04-22T09:02:00Z",
+		StopReason: "superseded",
+	}); err != nil {
+		t.Fatalf("write primary run failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      "run_screen_current_attempt",
+		TaskID:     taskID,
+		SessionID:  "sess_structured_screen_current_run",
+		SourceType: "screen_capture",
+		Status:     "completed",
+		IntentName: "screen_analyze",
+		StartedAt:  "2026-04-22T09:03:00Z",
+		UpdatedAt:  "2026-04-22T09:05:00Z",
+		FinishedAt: "2026-04-22T09:06:00Z",
+		StopReason: "completed",
+	}); err != nil {
+		t.Fatalf("write current run failed: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_primary_attempt",
+		TaskID:     taskID,
+		RunID:      "run_screen_primary_attempt",
+		CreatedAt:  "2026-04-22T09:02:00Z",
+		ToolName:   "screen_analyze_candidate",
+		Status:     tools.ToolCallStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("write primary tool call failed: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_current_attempt",
+		TaskID:     taskID,
+		RunID:      "run_screen_current_attempt",
+		CreatedAt:  "2026-04-22T09:05:00Z",
+		ToolName:   "screen_analyze_candidate",
+		Status:     tools.ToolCallStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("write current tool call failed: %v", err)
+	}
+
+	task, _, ok := service.taskDetailFromStructuredStorage(taskID)
+	if !ok {
+		t.Fatal("expected structured task detail to load")
+	}
+	if task.RunID != "run_screen_current_attempt" {
+		t.Fatalf("expected structured runtime task to keep current run_id, got %+v", task)
+	}
+	if task.LoopStopReason != "completed" {
+		t.Fatalf("expected structured runtime hydration to use current run stop reason, got %+v", task)
+	}
+	if stringValue(task.LatestToolCall, "tool_call_id", "") != "tool_call_current_attempt" || stringValue(task.LatestToolCall, "run_id", "") != "run_screen_current_attempt" {
+		t.Fatalf("expected structured runtime hydration to use current run tool call, got %+v", task.LatestToolCall)
+	}
+}
+
+func TestServiceTaskDetailGetReloadsTaskRunWhenFormalScreenObjectsMaskInvalidSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen invalid snapshot with formal evidence")
+	if service.storage == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage services to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	taskID := "task_structured_screen_invalid_snapshot_formal"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_invalid_snapshot_formal",
+		RunID:               "run_structured_screen_invalid_snapshot_formal",
+		Title:               "structured screen invalid snapshot formal task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T10:00:00Z",
+		UpdatedAt:           "2026-04-22T10:05:00Z",
+		FinishedAt:          "2026-04-22T10:06:00Z",
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_structured_screen_invalid_snapshot_formal",
+		TaskID:              taskID,
+		ArtifactType:        "screen_capture",
+		Title:               "stored-screen.png",
+		Path:                "workspace/stored-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"task_id":"` + taskID + `","path":"workspace/stored-screen.png"}`,
+		CreatedAt:           "2026-04-22T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save formal artifact failed: %v", err)
+	}
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      taskID,
+		SessionID:   "sess_structured_screen_invalid_snapshot_formal",
+		RunID:       "run_structured_screen_invalid_snapshot_formal",
+		Title:       "structured screen invalid snapshot formal task",
+		SourceType:  "screen_capture",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 22, 10, 6, 0, 0, time.UTC)),
+		MirrorReferences: []map[string]any{{
+			"memory_id": "mem_structured_screen_invalid_snapshot_formal",
+		}},
+		SteeringMessages: []string{"keep inspecting the screen evidence"},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			VisibleText: "legacy visible text",
+		},
+	}); err != nil {
+		t.Fatalf("save task_run compatibility record failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_invalid_snapshot_formal",
+		RunID:               "run_structured_screen_invalid_snapshot_formal",
+		Title:               "structured screen invalid snapshot formal task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T10:00:00Z",
+		UpdatedAt:           "2026-04-22T10:05:00Z",
+		FinishedAt:          "2026-04-22T10:06:00Z",
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("rewrite structured task with invalid snapshot failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.getCalls != 1 {
+		t.Fatalf("expected malformed snapshot with formal screen objects to trigger task_run fallback once, got %+v", countingStore)
+	}
+	mirrorReferences := detailResult["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_structured_screen_invalid_snapshot_formal" {
+		t.Fatalf("expected malformed snapshot fallback to preserve legacy mirror references, got %+v", mirrorReferences)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected malformed snapshot fallback to preserve steering messages, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskDetailGetScreenAuditPrefersNewerTerminalGovernanceRecord(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "screen terminal governance audit precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_terminal_governance"
+	finishedAt := time.Date(2026, 4, 16, 12, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_terminal_governance",
+		RunID:             "run_structured_screen_terminal_governance",
+		Title:             "structured screen terminal governance task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 12, 5, 0, 0, time.UTC),
+		FinishedAt:        &finishedAt,
+		Artifacts:         []map[string]any{{"artifact_id": "art_terminal_screen", "task_id": taskID, "artifact_type": "screen_capture", "path": "artifacts/screen/terminal.png"}},
+		Citations:         []map[string]any{{"citation_id": "cit_terminal_screen", "task_id": taskID, "artifact_id": "art_terminal_screen", "artifact_type": "screen_capture", "screen_session_id": "screen_terminal"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_terminal_governance",
+		RunID:               "run_structured_screen_terminal_governance",
+		Title:               "structured screen terminal governance task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_screen_success_terminal",
+		TaskID:    taskID,
+		Type:      "screen_capture",
+		Action:    "screen.capture.screenshot_analyze",
+		Summary:   "screen analysis completed",
+		Target:    "artifacts/screen/terminal.png",
+		Result:    "success",
+		CreatedAt: "2026-04-16T12:05:00Z",
+	}); err != nil {
+		t.Fatalf("write screen success audit record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_restore_terminal",
+		TaskID:    taskID,
+		Type:      "recovery",
+		Action:    "restore_apply",
+		Summary:   "restore apply failed after screen analysis",
+		Target:    "artifacts/screen/terminal.png",
+		Result:    "failed",
+		CreatedAt: "2026-04-16T12:06:00Z",
+	}); err != nil {
+		t.Fatalf("write recovery audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_restore_terminal" || auditRecord["action"] != "restore_apply" || auditRecord["result"] != "failed" {
+		t.Fatalf("expected newer terminal governance audit to override stale screen success audit, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredScreenApprovalPrefersFormalApprovalRequest(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen detail approval precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_waiting_auth_precedence"
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_screen_waiting_auth_precedence",
+		RunID:             "run_structured_screen_waiting_auth_precedence",
+		Title:             "structured screen waiting auth precedence task",
+		SourceType:        "screen_capture",
+		Status:            "waiting_auth",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "waiting_authorization",
+		RiskLevel:         "yellow",
+		StartedAt:         time.Date(2026, 4, 16, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 16, 11, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id":    "appr_snapshot_screen_waiting_auth_precedence",
+			"task_id":        taskID,
+			"operation_name": "write_file",
+			"risk_level":     "yellow",
+			"target_object":  "workspace/stale.txt",
+			"reason":         "stale snapshot approval",
+			"status":         "pending",
+			"created_at":     "2026-04-16T11:04:00Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot approval json failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen_waiting_auth_precedence",
+		RunID:               "run_structured_screen_waiting_auth_precedence",
+		Title:               "structured screen waiting auth precedence task",
+		SourceType:          "screen_capture",
+		Status:              "waiting_auth",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "waiting_authorization",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 16, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 16, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured screen waiting auth task failed: %v", err)
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_formal_screen_waiting_auth_precedence",
+		TaskID:          taskID,
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "current_screen",
+		Reason:          "formal screen approval should win",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":[]}`,
+		CreatedAt:       "2026-04-16T11:05:00Z",
+		UpdatedAt:       "2026-04-16T11:05:00Z",
+	}); err != nil {
+		t.Fatalf("write formal screen approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest := detailResult["approval_request"].(map[string]any)
+	if approvalRequest["approval_id"] != "appr_formal_screen_waiting_auth_precedence" || approvalRequest["operation_name"] != "screen_capture" || approvalRequest["target_object"] != "current_screen" {
+		t.Fatalf("expected formal screen approval request to override snapshot approval, got %+v", approvalRequest)
+	}
+}
+
+func TestNormalizeTaskDetailAuthorizationRecordCoercesLegacyDecisions(t *testing.T) {
+	allowRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
+		"authorization_record_id": "auth_allow",
+		"task_id":                 "task_auth_detail",
+		"approval_id":             "appr_allow",
+		"decision":                "allow_always",
+		"remember_rule":           true,
+		"operator":                "user",
+		"created_at":              "2026-04-20T16:00:00Z",
+	})
+	if allowRecord == nil || allowRecord["decision"] != "allow_once" {
+		t.Fatalf("expected legacy allow decision to coerce to protocol enum, got %+v", allowRecord)
+	}
+
+	denyRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
+		"authorization_record_id": "auth_deny",
+		"task_id":                 "task_auth_detail",
+		"approval_id":             "appr_deny",
+		"decision":                "deny_always",
+		"remember_rule":           false,
+		"operator":                "user",
+		"created_at":              "2026-04-20T16:01:00Z",
+	})
+	if denyRecord == nil || denyRecord["decision"] != "deny_once" {
+		t.Fatalf("expected legacy deny decision to coerce to protocol enum, got %+v", denyRecord)
+	}
+
+	invalidRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
+		"authorization_record_id": "auth_invalid",
+		"task_id":                 "task_auth_detail",
+		"approval_id":             "appr_invalid",
+		"decision":                "manual_override",
+		"remember_rule":           false,
+		"operator":                "user",
+		"created_at":              "2026-04-20T16:02:00Z",
+	})
+	if invalidRecord != nil {
+		t.Fatalf("expected unsupported decision to be dropped from task detail, got %+v", invalidRecord)
 	}
 }
 
@@ -7789,11 +10946,12 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings get failed: %v", err)
 	}
-	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
-	if dataLog["provider_api_key_configured"] != false {
-		t.Fatalf("expected unset provider key flag, got %+v", dataLog)
+	models := result["settings"].(map[string]any)["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if credentials["provider_api_key_configured"] != false {
+		t.Fatalf("expected unset provider key flag, got %+v", credentials)
 	}
-	stronghold := dataLog["stronghold"].(map[string]any)
+	stronghold := credentials["stronghold"].(map[string]any)
 	if stronghold["backend"] == "" || stronghold["available"] != true {
 		t.Fatalf("expected stronghold status metadata, got %+v", stronghold)
 	}
@@ -7809,9 +10967,10 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings get with secret failed: %v", err)
 	}
-	dataLog = result["settings"].(map[string]any)["data_log"].(map[string]any)
-	if dataLog["provider_api_key_configured"] != true {
-		t.Fatalf("expected configured provider key flag, got %+v", dataLog)
+	models = result["settings"].(map[string]any)["models"].(map[string]any)
+	credentials = models["credentials"].(map[string]any)
+	if credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected configured provider key flag, got %+v", credentials)
 	}
 }
 
@@ -7822,8 +10981,8 @@ func TestSettingsGetWithoutStorageStillReturnsStrongholdStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings get failed: %v", err)
 	}
-	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
-	stronghold := dataLog["stronghold"].(map[string]any)
+	models := result["settings"].(map[string]any)["models"].(map[string]any)
+	stronghold := models["credentials"].(map[string]any)["stronghold"].(map[string]any)
 	if stronghold["backend"] != "none" || stronghold["available"] != false || stronghold["formal_store"] != false {
 		t.Fatalf("expected degraded settings get to still expose stronghold defaults, got %+v", stronghold)
 	}
@@ -7867,7 +11026,7 @@ func TestSettingsUpdatePersistsSecretOutsideRegularSettings(t *testing.T) {
 		t.Fatal("expected storage service to be wired")
 	}
 	result, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+		"models": map[string]any{
 			"provider":              "openai",
 			"budget_auto_downgrade": false,
 			"api_key":               "persisted-secret-key",
@@ -7884,15 +11043,53 @@ func TestSettingsUpdatePersistsSecretOutsideRegularSettings(t *testing.T) {
 		t.Fatalf("unexpected stored secret: %+v", stored)
 	}
 	effectiveSettings := result["effective_settings"].(map[string]any)
-	dataLog := effectiveSettings["data_log"].(map[string]any)
-	if _, exists := dataLog["api_key"]; exists {
-		t.Fatalf("expected api_key to stay out of regular settings path, got %+v", dataLog)
+	models := effectiveSettings["models"].(map[string]any)
+	if _, exists := models["api_key"]; exists {
+		t.Fatalf("expected api_key to stay out of regular settings path, got %+v", models)
 	}
-	if dataLog["provider_api_key_configured"] != true {
-		t.Fatalf("expected configured flag in settings response, got %+v", dataLog)
+	if models["provider_api_key_configured"] != true {
+		t.Fatalf("expected configured flag in settings response, got %+v", models)
 	}
-	if _, exists := dataLog["stronghold"]; !exists {
-		t.Fatalf("expected stronghold status in settings response, got %+v", dataLog)
+	if _, exists := models["stronghold"]; !exists {
+		t.Fatalf("expected stronghold status in settings response, got %+v", models)
+	}
+}
+
+func TestSettingsUpdateReturnsLeafModelKeys(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings leaf model keys")
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"base_url": "https://example.invalid/v1",
+			"model":    "claude-test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	updatedKeys := result["updated_keys"].([]string)
+	expectedKeys := []string{"models.base_url", "models.model", "models.provider"}
+	if !reflect.DeepEqual(updatedKeys, expectedKeys) {
+		t.Fatalf("expected leaf model updated keys, got %+v", updatedKeys)
+	}
+}
+
+func TestNormalizeSettingsSnapshotAccumulatesLegacyDataLogFields(t *testing.T) {
+	normalized := normalizeSettingsSnapshot(map[string]any{
+		"data_log": map[string]any{
+			"provider":              "openai",
+			"budget_auto_downgrade": true,
+			"base_url":              "https://example.invalid/v1",
+			"model":                 "gpt-test",
+		},
+	})
+	models := normalized["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "openai" {
+		t.Fatalf("expected legacy provider to map into models provider, got %+v", models)
+	}
+	if credentials["budget_auto_downgrade"] != true || credentials["base_url"] != "https://example.invalid/v1" || credentials["model"] != "gpt-test" {
+		t.Fatalf("expected legacy data_log fields to accumulate into models.credentials, got %+v", credentials)
 	}
 }
 
@@ -7901,8 +11098,9 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	_, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+	defaultProvider := service.defaultSettingsProvider()
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
 			"provider":              "anthropic",
 			"budget_auto_downgrade": true,
 			"api_key":               "anthropic-secret-key",
@@ -7911,24 +11109,34 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings update failed: %v", err)
 	}
-	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", "anthropic_api_key")
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", model.OpenAIResponsesProvider+"_api_key")
 	if err != nil {
-		t.Fatalf("expected anthropic secret to be stored, got %v", err)
+		t.Fatalf("expected canonical provider secret to be stored, got %v", err)
 	}
 	if stored.Value != "anthropic-secret-key" {
-		t.Fatalf("unexpected stored anthropic secret: %+v", stored)
+		t.Fatalf("unexpected stored canonical secret: %+v", stored)
 	}
-	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", service.model.Provider()+"_api_key")
-	if !errors.Is(err, storage.ErrSecretNotFound) {
-		t.Fatalf("expected default provider secret to remain unset, got %v", err)
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected provider secret update to be next_task_effective, got %+v", result)
 	}
-	result, err := service.SettingsGet(map[string]any{"scope": "data_log"})
+	if service.currentModel() == nil || service.currentModel().Provider() != model.OpenAIResponsesProvider {
+		t.Fatalf("expected runtime model provider to switch for future tasks, got %+v", service.currentModel())
+	}
+	if defaultProvider != model.OpenAIResponsesProvider {
+		t.Fatalf("expected default provider to stay canonical, got %q", defaultProvider)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", defaultProvider+"_api_key")
+	if err != nil {
+		t.Fatalf("expected alias save to reuse canonical provider secret, got %v", err)
+	}
+	result, err = service.SettingsGet(map[string]any{"scope": "models"})
 	if err != nil {
 		t.Fatalf("settings get failed: %v", err)
 	}
-	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
-	if dataLog["provider"] != "anthropic" || dataLog["provider_api_key_configured"] != true {
-		t.Fatalf("expected settings get to reflect anthropic provider secret, got %+v", dataLog)
+	models := result["settings"].(map[string]any)["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "anthropic" || credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected settings get to reflect anthropic provider secret, got models=%+v credentials=%+v", models, credentials)
 	}
 }
 
@@ -7946,7 +11154,7 @@ func TestSettingsUpdateDeletesProviderSecretWithoutLeakingValue(t *testing.T) {
 		t.Fatalf("seed secret store failed: %v", err)
 	}
 	result, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+		"models": map[string]any{
 			"provider":       "openai",
 			"delete_api_key": true,
 		},
@@ -7958,12 +11166,12 @@ func TestSettingsUpdateDeletesProviderSecretWithoutLeakingValue(t *testing.T) {
 	if !errors.Is(err, storage.ErrSecretNotFound) {
 		t.Fatalf("expected secret to be deleted, got %v", err)
 	}
-	dataLog := result["effective_settings"].(map[string]any)["data_log"].(map[string]any)
-	if _, exists := dataLog["api_key"]; exists {
-		t.Fatalf("expected settings delete response to stay redacted, got %+v", dataLog)
+	models := result["effective_settings"].(map[string]any)["models"].(map[string]any)
+	if _, exists := models["api_key"]; exists {
+		t.Fatalf("expected settings delete response to stay redacted, got %+v", models)
 	}
-	if dataLog["provider_api_key_configured"] != false {
-		t.Fatalf("expected delete to clear configured flag, got %+v", dataLog)
+	if models["provider_api_key_configured"] != false {
+		t.Fatalf("expected delete to clear configured flag, got %+v", models)
 	}
 }
 
@@ -7984,7 +11192,7 @@ func TestSettingsUpdateReturnsStrongholdErrorWhenStoreUnavailable(t *testing.T) 
 	service.storage = storage.NewService(nil)
 	replaceSecretStore(t, service.storage, storage.UnavailableSecretStore{})
 	_, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+		"models": map[string]any{
 			"provider": "openai",
 			"api_key":  "secret-key",
 		},
@@ -7994,10 +11202,49 @@ func TestSettingsUpdateReturnsStrongholdErrorWhenStoreUnavailable(t *testing.T) 
 	}
 }
 
+func TestSettingsUpdateStoresZAIAliasSecretsUnderCanonicalProvider(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings z-ai secret alias")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "z-ai",
+			"api_key":  "z-ai-secret-key",
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", model.OpenAIResponsesProvider+"_api_key")
+	if err != nil {
+		t.Fatalf("expected canonical provider secret to be stored, got %v", err)
+	}
+	if stored.Value != "z-ai-secret-key" {
+		t.Fatalf("unexpected canonical provider secret value: %+v", stored)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", "z-ai_api_key")
+	if !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("expected z-ai alias secret key to stay unused, got %v", err)
+	}
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected z-ai secret update to be next_task_effective, got %+v", result)
+	}
+	result, err = service.SettingsGet(map[string]any{"scope": "models"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	models := result["settings"].(map[string]any)["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "z-ai" || credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected alias provider to report configured state, got models=%+v credentials=%+v", models, credentials)
+	}
+}
+
 func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
 	service := newTestService()
 	_, err := service.SettingsUpdate(map[string]any{
-		"data_log": map[string]any{
+		"models": map[string]any{
 			"provider": "openai",
 			"api_key":  "sk-test",
 		},
@@ -8027,8 +11274,100 @@ func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
 	if _, ok := effectiveSettings["general"].(map[string]any); !ok {
 		t.Fatalf("expected general effective settings payload, got %+v", effectiveSettings)
 	}
+	if _, exists := effectiveSettings["models"]; exists {
+		t.Fatalf("expected unrelated settings update to avoid attaching model metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestSettingsGetUsesStrongholdDescriptorAndOmitsLegacyDataLog(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings stronghold descriptor")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	replaceStrongholdProvider(t, service.storage, &stubStrongholdProvider{descriptor: storage.StrongholdDescriptor{
+		Backend:     "stronghold_sqlite_fallback",
+		Available:   true,
+		Fallback:    true,
+		Initialized: true,
+	}})
+	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       service.defaultSettingsProvider() + "_api_key",
+		Value:     "secret-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store failed: %v", err)
+	}
+
+	result, err := service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	settings := result["settings"].(map[string]any)
+	if _, exists := settings["data_log"]; exists {
+		t.Fatalf("expected settings.get to omit legacy data_log output, got %+v", settings)
+	}
+	models := settings["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected provider_api_key_configured to come from secret availability, got %+v", credentials)
+	}
+	stronghold := credentials["stronghold"].(map[string]any)
+	if stronghold["backend"] != "stronghold_sqlite_fallback" || stronghold["fallback"] != true || stronghold["formal_store"] != false {
+		t.Fatalf("expected fallback stronghold descriptor in settings.get, got %+v", stronghold)
+	}
+}
+
+func TestSettingsUpdateIgnoresReadonlyCredentialMetadataAndOmitsLegacyDataLog(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings readonly credential metadata")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	replaceStrongholdProvider(t, service.storage, &stubStrongholdProvider{descriptor: storage.StrongholdDescriptor{
+		Backend:     "stronghold",
+		Available:   true,
+		Fallback:    false,
+		Initialized: true,
+	}})
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"credentials": map[string]any{
+				"budget_auto_downgrade":       false,
+				"base_url":                    "https://example.invalid/v1",
+				"model":                       "claude-test",
+				"provider_api_key_configured": true,
+				"stronghold":                  map[string]any{"backend": "forged"},
+			},
+		},
+		"data_log": map[string]any{
+			"provider_api_key_configured": true,
+			"stronghold":                  map[string]any{"backend": "legacy-forged"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
 	if _, exists := effectiveSettings["data_log"]; exists {
-		t.Fatalf("expected unrelated settings update to avoid attaching data_log metadata, got %+v", effectiveSettings)
+		t.Fatalf("expected settings.update to omit legacy data_log output, got %+v", effectiveSettings)
+	}
+	models := effectiveSettings["models"].(map[string]any)
+	if models["provider"] != "anthropic" || models["base_url"] != "https://example.invalid/v1" || models["model"] != "claude-test" || models["budget_auto_downgrade"] != false {
+		t.Fatalf("expected effective_settings to flatten models credentials, got %+v", models)
+	}
+	if models["provider_api_key_configured"] != false {
+		t.Fatalf("expected readonly provider_api_key_configured to ignore request input, got %+v", models)
+	}
+	stronghold := models["stronghold"].(map[string]any)
+	if stronghold["backend"] != "stronghold" || stronghold["formal_store"] != true {
+		t.Fatalf("expected stronghold metadata to come from backend descriptor, got %+v", stronghold)
+	}
+	updatedKeys := result["updated_keys"].([]string)
+	for _, key := range updatedKeys {
+		if key == "models.provider_api_key_configured" || key == "models.stronghold" {
+			t.Fatalf("expected readonly stronghold metadata to stay out of updated keys, got %+v", updatedKeys)
+		}
 	}
 }
 
@@ -8056,6 +11395,165 @@ func TestServicePluginRuntimeListReturnsStructuredState(t *testing.T) {
 	}
 	if !foundFailedSidecar {
 		t.Fatalf("expected runtime query to expose failed sidecar state, got %+v", items)
+	}
+}
+
+func TestServicePluginListReturnsStructuredCatalog(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("sidecar failed"))
+
+	result, err := service.PluginList(map[string]any{
+		"query":  "ocr",
+		"kinds":  []any{"worker"},
+		"health": []any{"healthy"},
+		"page": map[string]any{
+			"limit":  10,
+			"offset": 0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("plugin list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "ocr" {
+		t.Fatalf("expected plugin list to return filtered ocr plugin, got %+v", items)
+	}
+	runtime, ok := service.plugin.RuntimeState(plugin.RuntimeKindWorker, "ocr_worker")
+	if !ok {
+		t.Fatalf("expected ocr worker runtime to exist")
+	}
+	capabilities := items[0]["capabilities"].([]map[string]any)
+	if len(capabilities) != len(runtime.Capabilities) {
+		t.Fatalf("expected plugin list item to expose all registered capabilities, got %+v", capabilities)
+	}
+	for _, capability := range capabilities {
+		toolName := capability["tool_name"].(string)
+		tool, err := service.tools.Get(toolName)
+		if err != nil {
+			t.Fatalf("expected capability %q to resolve from registry: %v", toolName, err)
+		}
+		metadata := tool.Metadata()
+		if capability["display_name"] != metadata.DisplayName || capability["description"] != metadata.Description || capability["source"] != string(metadata.Source) || capability["risk_hint"] != metadata.RiskHint {
+			t.Fatalf("expected plugin list capability to mirror registry metadata for %q, got %+v", toolName, capability)
+		}
+	}
+	if len(items[0]["runtimes"].([]map[string]any)) == 0 {
+		t.Fatalf("expected plugin list item to expose runtimes, got %+v", items[0])
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 || page["has_more"] != false {
+		t.Fatalf("expected plugin list page metadata, got %+v", page)
+	}
+}
+
+func TestServicePluginDetailGetReturnsStructuredContracts(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "ocr",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail get failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "ocr" || pluginValue["display_name"] != "OCR Worker" {
+		t.Fatalf("expected structured plugin detail header, got %+v", pluginValue)
+	}
+	runtimes := result["runtimes"].([]map[string]any)
+	if len(runtimes) != 1 || runtimes[0]["name"] != "ocr_worker" {
+		t.Fatalf("expected plugin detail runtimes for ocr worker, got %+v", runtimes)
+	}
+	metrics := result["metrics"].([]map[string]any)
+	if len(metrics) != 1 || metrics[0]["name"] != "ocr_worker" {
+		t.Fatalf("expected plugin detail metrics for ocr worker, got %+v", metrics)
+	}
+	events := result["recent_events"].([]map[string]any)
+	if len(events) == 0 {
+		t.Fatalf("expected plugin detail events, got %+v", events)
+	}
+	runtime, ok := service.plugin.RuntimeState(plugin.RuntimeKindWorker, "ocr_worker")
+	if !ok {
+		t.Fatalf("expected ocr worker runtime to exist")
+	}
+	tools := result["tools"].([]map[string]any)
+	if len(tools) != len(runtime.Capabilities) {
+		t.Fatalf("expected plugin detail tools to match declared runtime capabilities, got %+v", tools)
+	}
+	for _, item := range tools {
+		toolName := item["tool_name"].(string)
+		tool, err := service.tools.Get(toolName)
+		if err != nil {
+			t.Fatalf("expected plugin detail tool %q to resolve from registry: %v", toolName, err)
+		}
+		metadata := tool.Metadata()
+		if item["display_name"] != metadata.DisplayName || item["description"] != metadata.Description || item["source"] != string(metadata.Source) || item["risk_hint"] != metadata.RiskHint || item["timeout_sec"] != metadata.TimeoutSec || item["supports_dry_run"] != metadata.SupportsDryRun {
+			t.Fatalf("expected plugin detail tool to mirror registry metadata for %q, got %+v", toolName, item)
+		}
+		inputContract := item["input_contract"].(map[string]any)
+		if inputContract["schema_ref"] != metadata.InputSchemaRef {
+			t.Fatalf("expected input contract schema ref to mirror registry metadata for %q, got %+v", toolName, inputContract)
+		}
+		outputContract := item["output_contract"].(map[string]any)
+		if outputContract["schema_ref"] != metadata.OutputSchemaRef {
+			t.Fatalf("expected output contract schema ref to mirror registry metadata for %q, got %+v", toolName, outputContract)
+		}
+		deliveryMapping := item["delivery_mapping"].(map[string]any)
+		if deliveryMapping["emits_tool_call"] != true {
+			t.Fatalf("expected delivery mapping to preserve tool call emission for %q, got %+v", toolName, deliveryMapping)
+		}
+	}
+}
+
+func TestServicePluginListFallsBackToStaticCatalogWhenPluginRuntimeServiceMissing(t *testing.T) {
+	service := newTestService()
+	service.plugin = nil
+
+	result, err := service.PluginList(map[string]any{
+		"query": "media",
+		"page":  map[string]any{"limit": 10, "offset": 0},
+	})
+	if err != nil {
+		t.Fatalf("plugin list fallback failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "media" {
+		t.Fatalf("expected static plugin catalog fallback to return media plugin, got %+v", items)
+	}
+	if len(items[0]["capabilities"].([]map[string]any)) == 0 {
+		t.Fatalf("expected static plugin list fallback to preserve capability metadata, got %+v", items[0])
+	}
+	if len(items[0]["runtimes"].([]map[string]any)) != 0 {
+		t.Fatalf("expected static plugin list fallback to omit runtime rows, got %+v", items[0])
+	}
+}
+
+func TestServicePluginDetailGetFallsBackToStaticCatalogWhenPluginRuntimeServiceMissing(t *testing.T) {
+	service := newTestService()
+	service.plugin = nil
+
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "ocr",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail fallback failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "ocr" || pluginValue["display_name"] != "OCR Worker" {
+		t.Fatalf("expected static plugin detail fallback header, got %+v", pluginValue)
+	}
+	if len(result["runtimes"].([]map[string]any)) != 0 || len(result["metrics"].([]map[string]any)) != 0 || len(result["recent_events"].([]map[string]any)) != 0 {
+		t.Fatalf("expected static plugin detail fallback to avoid runtime payloads, got %+v", result)
+	}
+	if len(result["tools"].([]map[string]any)) == 0 {
+		t.Fatalf("expected static plugin detail fallback to retain declared tool contracts, got %+v", result)
 	}
 }
 
@@ -8355,6 +11853,200 @@ func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
 	}
 }
 
+func TestServiceTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_list_001",
+		RunID:      "run_tool_call_list_001",
+		TaskID:     "task_tool_call_list_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "notes/source.txt"},
+		Output:     map[string]any{"path": "notes/source.txt", "summary_output": map[string]any{"path": "notes/source.txt"}},
+		DurationMS: 12,
+	})
+	if err != nil {
+		t.Fatalf("save tool call failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_list_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected persisted read_file tool call, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
+func TestServiceTaskToolCallsListSupportsRunFilter(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list filters")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	for _, record := range []tools.ToolCallRecord{
+		{ToolCallID: "tool_call_filter_001", RunID: "run_filter_a", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, DurationMS: 5},
+		{ToolCallID: "tool_call_filter_002", RunID: "run_filter_b", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusFailed, DurationMS: 7},
+	} {
+		if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), record); err != nil {
+			t.Fatalf("save filtered tool call failed: %v", err)
+		}
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_filter_001", "run_id": "run_filter_b", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list with run filter failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_filter_b" || items[0]["status"] != string(tools.ToolCallStatusFailed) {
+		t.Fatalf("expected filtered tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListNormalizesProtocolStatuses(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list statuses")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_status_001",
+		RunID:      "run_tool_call_status_001",
+		TaskID:     "task_tool_call_status_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusStarted,
+		DurationMS: 3,
+	}); err != nil {
+		t.Fatalf("save tool call status failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_status_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["status"] != "running" {
+		t.Fatalf("expected outward running status, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestServiceTaskToolCallsListFallsBackToCompatibilityLatestToolCall(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat",
+		Title:             "compat tool call",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	if _, ok := service.runEngine.RecordToolCallLifecycle(task.TaskID, "read_file", "succeeded", map[string]any{"path": "notes/source.txt"}, map[string]any{"path": "notes/source.txt", "content_preview": "compat preview"}, 14, nil); !ok {
+		t.Fatal("expected compatibility tool call to be recorded")
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" || mapValue(items[0], "output")["content_preview"] != "compat preview" {
+		t.Fatalf("expected compatibility fallback tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListCompatibilityFallbackReturnsNonNilPayloadMaps(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat_nil",
+		Title:             "compat tool call nil payload",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	mutateRuntimeTask(t, service.runEngine, task.TaskID, func(record *runengine.TaskRecord) {
+		record.LatestToolCall = map[string]any{
+			"tool_call_id": "tool_call_compat_nil",
+			"task_id":      task.TaskID,
+			"run_id":       task.RunID,
+			"tool_name":    "read_file",
+			"status":       "started",
+			"duration_ms":  0,
+		}
+	})
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one compatibility tool call item, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected compatibility tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestPersistExecutionToolCallEventsFallsBackWhenToolCallIDMissing(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "missing tool call id")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_event_fallback",
+		Title:             "tool call event fallback",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	toolCall := tools.ToolCallRecord{
+		TaskID:     task.TaskID,
+		RunID:      task.RunID,
+		ToolName:   "screen_analyze",
+		Status:     tools.ToolCallStatusSucceeded,
+		DurationMS: 8,
+	}
+
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": task.TaskID, "type": "tool_call.completed", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two persisted tool_call.completed events, got %+v", items)
+	}
+	if items[0]["event_id"] == items[1]["event_id"] {
+		t.Fatalf("expected fallback event ids to remain unique, got %+v", items)
+	}
+}
+
 func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task steer")
 	startResult, err := service.StartTask(map[string]any{
@@ -8393,6 +12085,353 @@ func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	}
 	if record.LatestEvent["type"] != "task.steered" {
 		t.Fatalf("expected latest event task.steered, got %+v", record.LatestEvent)
+	}
+}
+
+func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
+	var activeTaskID string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_continue_same_task",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"follow-up text narrows the same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 8, OutputTokens: 12, TotalTokens: 20},
+				LatencyMS:  21,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_follow_up_processing",
+		Title:       "Analyze the current failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	activeTaskID = activeTask.TaskID
+	activeSessionID := activeTask.SessionID
+
+	followUpResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "重点看网络层，不要讲太泛",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit follow-up failed: %v", err)
+	}
+	task := followUpResult["task"].(map[string]any)
+	if task["task_id"] != activeTaskID {
+		t.Fatalf("expected follow-up to stay on task %s, got %+v", activeTaskID, task)
+	}
+	if task["session_id"] != activeSessionID {
+		t.Fatalf("expected follow-up to keep session %s, got %+v", activeSessionID, task)
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected continued task to remain in runtime")
+	}
+	if len(record.SteeringMessages) != 1 || !strings.Contains(record.SteeringMessages[0], "重点看网络层") {
+		t.Fatalf("expected follow-up steering message to persist, got %+v", record.SteeringMessages)
+	}
+}
+
+func TestServiceStartTaskNotificationIncludesSessionID(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_notification_contract",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Summarize this update",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected notifications to be available for task")
+	}
+	if len(notifications) == 0 {
+		t.Fatal("expected at least one task.updated notification")
+	}
+	if notifications[0].Method != "task.updated" {
+		t.Fatalf("expected first notification to be task.updated, got %+v", notifications[0])
+	}
+	if notifications[0].Params["session_id"] != "sess_notification_contract" {
+		t.Fatalf("expected task.updated notification to carry session_id, got %+v", notifications[0].Params)
+	}
+}
+
+func TestServiceStartTaskRoutesFileAttachmentIntoExistingTask(t *testing.T) {
+	var activeTaskID string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_continue_file",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"the file is supplementary evidence for the same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_follow_up_processing",
+		Title:       "Analyze the current service failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	activeTaskID = activeTask.TaskID
+
+	followUpResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start file follow-up failed: %v", err)
+	}
+	task := followUpResult["task"].(map[string]any)
+	if task["task_id"] != activeTaskID {
+		t.Fatalf("expected file follow-up to stay on task %s, got %+v", activeTaskID, task)
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected continued file task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected file follow-up to merge snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceSubmitInputDoesNotContinueWaitingAuthorizationTask(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "把这段报错分析一下",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start waiting_auth task failed: %v", err)
+	}
+	firstTask := startResult["task"].(map[string]any)
+
+	followUpResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "重点看网络层，不要讲太泛",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit follow-up after waiting_auth failed: %v", err)
+	}
+	secondTask := followUpResult["task"].(map[string]any)
+	if secondTask["task_id"] == firstTask["task_id"] {
+		t.Fatalf("expected waiting_auth task to reject implicit continuation, got %+v", secondTask)
+	}
+}
+
+func TestServiceSubmitInputDoesNotContinuePausedTask(t *testing.T) {
+	service := newTestService()
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_paused_follow_up",
+		Title:       "Analyze the current failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	if _, err := service.TaskControl(map[string]any{
+		"task_id": activeTask.TaskID,
+		"action":  "pause",
+	}); err != nil {
+		t.Fatalf("pause task failed: %v", err)
+	}
+
+	followUpResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "重点看网络层，不要讲太泛",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit follow-up after pause failed: %v", err)
+	}
+	secondTask := followUpResult["task"].(map[string]any)
+	if secondTask["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected paused task to reject implicit continuation, got %+v", secondTask)
+	}
+}
+
+func TestServiceStartTaskWithExplicitIntentDoesNotReuseWaitingTaskWithoutAnchors(t *testing.T) {
+	service := newTestService()
+
+	waitingTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_waiting_explicit_intent",
+		Title:       "确认处理方式：当前内容",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "顺便帮我写一份周报",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/reports/weekly.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start explicit new task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == waitingTask.TaskID {
+		t.Fatalf("expected explicit start intent without anchors to open a new task, got %+v", task)
+	}
+	if task["session_id"] == waitingTask.SessionID {
+		t.Fatalf("expected explicit start intent without anchors to use a fresh hidden session, got waiting=%+v new=%+v", waitingTask, task)
+	}
+}
+
+func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_new_task",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"the new input starts a different top-level request"}`,
+				Usage:      model.TokenUsage{InputTokens: 7, OutputTokens: 10, TotalTokens: 17},
+				LatencyMS:  19,
+			}, nil
+		},
+	})
+
+	firstResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我整理这份会议纪要并输出成文档",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first task failed: %v", err)
+	}
+	firstTask := firstResult["task"].(map[string]any)
+
+	secondResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "顺便再帮我写一份周报",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("second task failed: %v", err)
+	}
+	secondTask := secondResult["task"].(map[string]any)
+	if secondTask["task_id"] == firstTask["task_id"] {
+		t.Fatalf("expected unrelated request to open a new task, got %+v", secondTask)
+	}
+	if secondTask["session_id"] == firstTask["session_id"] {
+		t.Fatalf("expected unrelated request to use a new hidden session, got first=%+v second=%+v", firstTask, secondTask)
+	}
+}
+
+func TestServiceReusesRecentIdleSessionForNewTopLevelTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	finishedTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		Title:       "Finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我重新整理另外一份纪要",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task after idle session failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["session_id"] != finishedTask.SessionID {
+		t.Fatalf("expected new top-level task to reuse recent idle session %s, got %+v", finishedTask.SessionID, task)
 	}
 }
 

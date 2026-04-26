@@ -10,6 +10,7 @@ import {
   buildDashboardSafetyCardNavigationState,
   buildDashboardSafetyRestorePointNavigationState,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";
+import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import type { DashboardSettingsPatch } from "@/features/dashboard/shared/dashboardSettingsMutation";
 import {
@@ -859,12 +860,7 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
   const navigate = useNavigate();
   const openTaskDetail = useMemo(
     () => (taskId: string) => {
-      navigate(resolveDashboardModuleRoutePath("tasks"), {
-        state: {
-          focusTaskId: taskId,
-          openDetail: true,
-        },
-      });
+      navigateToDashboardTaskDetail(navigate, taskId);
     },
     [navigate],
   );

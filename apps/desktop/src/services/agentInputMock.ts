@@ -26,6 +26,7 @@ function buildTask(input: {
 
   return {
     task_id: input.taskId,
+    session_id: null,
     title: input.title,
     source_type: input.sourceType,
     status: input.status,

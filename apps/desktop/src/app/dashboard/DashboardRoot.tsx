@@ -1,23 +1,31 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
-import { getDashboardHomeFallbackData, loadDashboardHomeData, submitDashboardHomeRecommendationFeedback } from "@/features/dashboard/home/dashboardHome.service";
+import {
+  getDashboardHomeFallbackData,
+  loadDashboardHomeData,
+  submitDashboardHomeRecommendationFeedback,
+} from "@/features/dashboard/home/dashboardHome.service";
+import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
+import { NotesPage } from "@/features/dashboard/notes/NotesPage";
+import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
+import {
+  dashboardTaskDetailNavigationEvent,
+  navigateToDashboardTaskDetail,
+  type DashboardTaskDetailOpenRequest,
+} from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
+import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
+import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
-import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import "./dashboard.css";
 
-const TasksPage = lazy(() => import("@/features/dashboard/tasks/TasksPage").then((module) => ({ default: module.TasksPage })));
-const NotesPage = lazy(() => import("@/features/dashboard/notes/NotesPage").then((module) => ({ default: module.NotesPage })));
-const MemoryPage = lazy(() => import("@/features/dashboard/memory/MemoryPage").then((module) => ({ default: module.MemoryPage })));
-const SafetyPage = lazy(() => import("@/features/dashboard/safety/SafetyPage").then((module) => ({ default: module.SafetyPage })));
-
-function DashboardRouteFallback() {
-  return <div className="dashboard-route-layer" aria-live="polite">Loading module…</div>;
-}
+const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
 
 function useDashboardDomainExpansion() {
   const [isOpening, setIsOpening] = useState(true);
@@ -73,6 +81,7 @@ function DashboardRoutes() {
   const queryClient = useQueryClient();
   const isOpening = useDashboardDomainExpansion();
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
   const dashboardHomeQuery = useQuery({
     queryKey: ["dashboard", "home"],
     queryFn: loadDashboardHomeData,
@@ -95,8 +104,64 @@ function DashboardRoutes() {
     },
   });
 
+  /**
+   * Retries for task-detail open requests intentionally reuse the same
+   * `request_id`, so the dashboard must remember more than the latest value.
+   * Otherwise an older delayed retry can arrive after a newer request and
+   * incorrectly navigate the window back to the stale task detail.
+   */
+  function rememberHandledTaskDetailRequest(requestId: string) {
+    const now = Date.now();
+    const handledRequestIds = handledTaskDetailRequestIdsRef.current;
+
+    for (const [handledRequestId, handledAt] of handledRequestIds) {
+      if (now - handledAt > DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS) {
+        handledRequestIds.delete(handledRequestId);
+      }
+    }
+
+    if (handledRequestIds.has(requestId)) {
+      return false;
+    }
+
+    handledRequestIds.set(requestId, now);
+    return true;
+  }
+
   useEffect(() => {
-    const clearTaskSubscription = subscribeTaskUpdated(() => {
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+
+    void getCurrentWindow()
+      .listen<DashboardTaskDetailOpenRequest>(dashboardTaskDetailNavigationEvent, ({ payload }) => {
+        if (!rememberHandledTaskDetailRequest(payload.request_id)) {
+          return;
+        }
+
+        setVoiceOpen(false);
+        navigateToDashboardTaskDetail(navigate, payload.task_id);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        cleanup = unlisten;
+      })
+      .catch((error) => {
+        console.warn("dashboard task-detail navigation listener failed", error);
+      });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [navigate]);
+
+  useEffect(() => {
+    const clearTaskSubscription = subscribeTaskUpdated((payload) => {
+      rememberConversationSessionFromTaskUpdated(payload);
       void queryClient.invalidateQueries({ queryKey: ["dashboard", "home"] });
     });
 
@@ -172,6 +237,7 @@ function DashboardRoutes() {
   const handleRecommendationFeedback = (recommendationId: string, feedback: "positive" | "negative") => {
     recommendationFeedbackMutation.mutate({ feedback, recommendationId });
   };
+
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
       <AnimatePresence mode="wait">
@@ -196,10 +262,10 @@ function DashboardRoutes() {
               }
               path={resolveDashboardRoutePath("home")}
             />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><TasksPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><NotesPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><MemoryPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><SafetyPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("safety")}/*`} />
+            <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
+            <Route element={<NotesPage />} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
+            <Route element={<MemoryPage />} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
+            <Route element={<SafetyPage />} path={`${resolveDashboardModuleRoutePath("safety")}/*`} />
             <Route element={<Navigate replace to={resolveDashboardRoutePath("home")} />} path="*" />
           </Routes>
         </motion.div>

@@ -6,6 +6,7 @@ import type {
   Artifact,
   AuditRecord,
   BubbleMessage,
+  Citation,
   DeliveryPayload,
   DeliveryResult,
   DeliveryType,
@@ -15,6 +16,8 @@ import type {
   IntentPayload,
   MirrorReference,
   NotepadAction,
+  PluginListItem,
+  PluginManifest,
   RecommendationFeedback,
   RecommendationScene,
   RecoveryPoint,
@@ -25,9 +28,12 @@ import type {
   Session,
   SettingsSnapshot,
   PluginMetricSnapshot,
+  PluginRuntimeEvent,
   PluginRuntimeState,
+  PluginToolContract,
   Task,
   TaskControlAction,
+  ToolCall,
   TaskListGroup,
   TaskStep,
   TimeInterval,
@@ -48,6 +54,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_TASK_LIST: "agent.task.list",
   AGENT_TASK_DETAIL_GET: "agent.task.detail.get",
   AGENT_TASK_EVENTS_LIST: "agent.task.events.list",
+  AGENT_TASK_TOOL_CALLS_LIST: "agent.task.tool_calls.list",
   AGENT_TASK_STEER: "agent.task.steer",
   AGENT_TASK_ARTIFACT_LIST: "agent.task.artifact.list",
   AGENT_TASK_ARTIFACT_OPEN: "agent.task.artifact.open",
@@ -70,13 +77,18 @@ export const RPC_METHODS_STABLE = {
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
+  AGENT_SETTINGS_MODEL_VALIDATE: "agent.settings.model.validate",
   AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
+  AGENT_PLUGIN_LIST: "agent.plugin.list",
+  AGENT_PLUGIN_DETAIL_GET: "agent.plugin.detail.get",
 } as const;
 
 // RPC_METHODS_PLANNED reserves method names that are still documented as
 // planned and do not have a frozen implementation contract yet.
 export const RPC_METHODS_PLANNED = {
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
+  AGENT_PLUGIN_ENABLE: "agent.plugin.enable",
+  AGENT_PLUGIN_DISABLE: "agent.plugin.disable",
 } as const;
 
 // RPC_METHODS combines stable and planned method names for typed reuse.
@@ -123,20 +135,68 @@ export interface JsonRpcPage {
   has_more: boolean;
 }
 
-// PageContext 定义当前模块的接口约束。
+// PageContext defines the stable page-level metadata that task entrypoints can
+// carry into backend context capture.
 export interface PageContext {
-  title: string;
-  app_name: string;
-  url: string;
+  title?: string;
+  app_name?: string;
+  url?: string;
+  window_title?: string;
+  visible_text?: string;
+  hover_target?: string;
 }
 
-// InputContext 定义当前模块的接口约束。
+// ScreenContext defines the stable screen-derived signals that can help infer
+// controlled visual tasks without introducing a parallel RPC entrypoint.
+export interface ScreenContext {
+  summary?: string;
+  screen_summary?: string;
+  visible_text?: string;
+  window_title?: string;
+  hover_target?: string;
+}
+
+// BehaviorContext defines lightweight interaction signals that stay attached to
+// formal task entry requests.
+export interface BehaviorContext {
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
+}
+
+export interface ErrorContext {
+  message?: string;
+}
+
+export interface ClipboardContext {
+  text?: string;
+}
+
+// InputContext defines the stable request-context envelope shared by
+// `agent.input.submit` and `agent.task.start`.
 export interface InputContext {
   page?: PageContext;
+  screen?: ScreenContext;
+  behavior?: BehaviorContext;
   selection?: {
     text: string;
   };
+  error?: ErrorContext;
+  clipboard?: ClipboardContext;
+  text?: string;
+  selection_text?: string;
   files?: string[];
+  file_paths?: string[];
+  screen_summary?: string;
+  clipboard_text?: string;
+  hover_target?: string;
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
 }
 
 // VoiceMeta 定义当前模块的接口约束。
@@ -291,14 +351,23 @@ export interface TaskRuntimeSummary {
   events_count: number;
   latest_event_type?: string | null;
   active_steering_count: number;
+  latest_failure_code?: string | null;
+  latest_failure_category?: string | null;
+  latest_failure_summary?: string | null;
+  observation_signals: string[];
 }
 
 export interface AgentTaskDetailGetResult {
   task: Task;
   timeline: TaskStep[];
+  // delivery_result carries the latest formal conclusion for task detail.
+  delivery_result: DeliveryResult | null;
   artifacts: Artifact[];
+  citations: Citation[];
   mirror_references: MirrorReference[];
   approval_request: ApprovalRequest | null;
+  authorization_record: AuthorizationRecord | null;
+  audit_record: AuditRecord | null;
   security_summary: SecuritySummary;
   runtime_summary: TaskRuntimeSummary;
 }
@@ -330,6 +399,23 @@ export interface AgentTaskEventsListParams {
 // AgentTaskEventsListResult defines the result for agent.task.events.list.
 export interface AgentTaskEventsListResult {
   items: TaskEvent[];
+  page: JsonRpcPage;
+}
+
+// AgentTaskToolCallsListParams defines the parameters for
+// agent.task.tool_calls.list.
+export interface AgentTaskToolCallsListParams {
+  request_meta: RequestMeta;
+  task_id: string;
+  run_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// AgentTaskToolCallsListResult defines the result for
+// agent.task.tool_calls.list.
+export interface AgentTaskToolCallsListResult {
+  items: ToolCall[];
   page: JsonRpcPage;
 }
 
@@ -671,50 +757,102 @@ export type AgentSecurityRespondResult =
   | AgentSecurityApprovalRespondResult
   | AgentSecurityRestoreRespondResult;
 
-// AgentSettingsGetParams 定义当前模块的接口约束。
+// AgentSettingsGetParams defines the frozen settings snapshot query params.
 export interface AgentSettingsGetParams {
   request_meta: RequestMeta;
-  scope: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "data_log";
+  scope: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "models";
 }
 
-// AgentSettingsGetResult 定义当前模块的接口约束。
+// AgentSettingsGetResult defines the settings snapshot query result.
 export interface AgentSettingsGetResult {
   settings: SettingsSnapshot["settings"];
 }
 
-// AgentSettingsUpdateParams 定义当前模块的接口约束。
+// AgentSettingsUpdateParams defines the writable settings update payload.
 export interface AgentSettingsUpdateParams {
   request_meta: RequestMeta;
   general?: Partial<SettingsSnapshot["settings"]["general"]>;
   floating_ball?: Partial<SettingsSnapshot["settings"]["floating_ball"]>;
   memory?: Partial<SettingsSnapshot["settings"]["memory"]>;
   task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
-  data_log?: Partial<SettingsSnapshot["settings"]["data_log"]> & {
+  models?: Partial<SettingsSnapshot["settings"]["models"]> & {
+    budget_auto_downgrade?: boolean;
+    base_url?: string;
+    model?: string;
     api_key?: string;
     delete_api_key?: boolean;
   };
 }
 
-// AgentSettingsUpdateResult 定义当前模块的接口约束。
+export interface AgentSettingsEffectiveSettings {
+  general?: Partial<SettingsSnapshot["settings"]["general"]>;
+  floating_ball?: Partial<SettingsSnapshot["settings"]["floating_ball"]>;
+  memory?: Partial<SettingsSnapshot["settings"]["memory"]>;
+  task_automation?: Partial<SettingsSnapshot["settings"]["task_automation"]>;
+  models?: {
+    provider?: string;
+    budget_auto_downgrade?: boolean;
+    provider_api_key_configured?: boolean;
+    base_url?: string;
+    model?: string;
+    stronghold?: SettingsSnapshot["settings"]["models"]["credentials"]["stronghold"];
+  };
+}
+
+// AgentSettingsUpdateResult defines the persisted settings update result.
 export interface AgentSettingsUpdateResult {
   updated_keys: string[];
-  effective_settings: Partial<SettingsSnapshot["settings"]>;
+  effective_settings: AgentSettingsEffectiveSettings;
   apply_mode: ApplyMode;
   need_restart: boolean;
+}
+
+export type AgentSettingsModelValidateStatus =
+  | "valid"
+  | "missing_provider"
+  | "missing_base_url"
+  | "missing_model"
+  | "missing_api_key"
+  | "secret_store_unavailable"
+  | "auth_failed"
+  | "endpoint_not_found"
+  | "request_rejected"
+  | "request_timeout"
+  | "request_failed"
+  | "invalid_response"
+  | "tool_calling_unavailable"
+  | "unknown_error";
+
+// AgentSettingsModelValidateParams defines the post-save validation payload for
+// the effective model route that should power future tasks.
+export interface AgentSettingsModelValidateParams {
+  request_meta: RequestMeta;
+  models?: Partial<SettingsSnapshot["settings"]["models"]> & {
+    budget_auto_downgrade?: boolean;
+    base_url?: string;
+    model?: string;
+    api_key?: string;
+    delete_api_key?: boolean;
+  };
+}
+
+// AgentSettingsModelValidateResult defines the structured model validation
+// result returned after save-time compatibility probes.
+export interface AgentSettingsModelValidateResult {
+  ok: boolean;
+  status: AgentSettingsModelValidateStatus;
+  message: string;
+  provider: string;
+  canonical_provider: string;
+  base_url: string;
+  model: string;
+  text_generation_ready: boolean;
+  tool_calling_ready: boolean;
 }
 
 // AgentPluginRuntimeListParams defines the stable plugin runtime query params.
 export interface AgentPluginRuntimeListParams {
   request_meta?: RequestMeta;
-}
-
-// PluginRuntimeEvent mirrors the backend runtime event query payload.
-export interface PluginRuntimeEvent {
-  name: string;
-  kind: PluginRuntimeState["kind"];
-  event_type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
 }
 
 // AgentPluginRuntimeListResult defines the plugin runtime query result.
@@ -724,9 +862,42 @@ export interface AgentPluginRuntimeListResult {
   events: PluginRuntimeEvent[];
 }
 
-// TaskUpdatedNotification 定义当前模块的接口约束。
+export interface AgentPluginListParams {
+  request_meta?: RequestMeta;
+  page?: {
+    limit: number;
+    offset: number;
+  };
+  query?: string;
+  kinds?: PluginRuntimeState["kind"][];
+  health?: PluginRuntimeState["health"][];
+}
+
+export interface AgentPluginListResult {
+  items: PluginListItem[];
+  page: JsonRpcPage;
+}
+
+export interface AgentPluginDetailGetParams {
+  request_meta?: RequestMeta;
+  plugin_id: string;
+  include_runtime?: boolean;
+  include_metrics?: boolean;
+  include_events?: boolean;
+}
+
+export interface AgentPluginDetailGetResult {
+  plugin: PluginManifest;
+  runtimes: PluginRuntimeState[];
+  metrics: PluginMetricSnapshot[];
+  recent_events: PluginRuntimeEvent[];
+  tools: PluginToolContract[];
+}
+
+// TaskUpdatedNotification carries the minimal task status delta emitted by the backend.
 export interface TaskUpdatedNotification {
   task_id: string;
+  session_id: Task["session_id"];
   status: Task["status"];
 }
 

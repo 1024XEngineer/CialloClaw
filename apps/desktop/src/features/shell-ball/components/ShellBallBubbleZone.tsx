@@ -8,6 +8,8 @@ type ShellBallBubbleZoneProps = {
   bubbleItems?: ShellBallBubbleItem[];
   onDeleteBubble?: (bubbleId: string) => void;
   onPinBubble?: (bubbleId: string) => void;
+  onAllowApprovalBubble?: (bubbleId: string) => void;
+  onDenyApprovalBubble?: (bubbleId: string) => void;
 };
 
 export function ShellBallBubbleZone({
@@ -15,6 +17,8 @@ export function ShellBallBubbleZone({
   bubbleItems = [],
   onDeleteBubble,
   onPinBubble,
+  onAllowApprovalBubble,
+  onDenyApprovalBubble,
 }: ShellBallBubbleZoneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -71,6 +75,7 @@ export function ShellBallBubbleZone({
       <div
         ref={scrollRef}
         className="shell-ball-bubble-zone__scroll"
+        data-shell-ball-interactive="true"
         onScroll={syncAutoScrollState}
       >
         <div className="shell-ball-bubble-zone__spacer" aria-hidden="true" />
@@ -85,6 +90,8 @@ export function ShellBallBubbleZone({
               item={item}
               onDelete={onDeleteBubble}
               onPin={onPinBubble}
+              onAllowApproval={onAllowApprovalBubble}
+              onDenyApproval={onDenyApprovalBubble}
             />
           </div>
         ))}

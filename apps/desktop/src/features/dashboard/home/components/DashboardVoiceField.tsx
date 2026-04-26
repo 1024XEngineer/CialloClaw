@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { submitTextInput } from "@/services/agentInputService";
 import type { DashboardVoiceSequence } from "@/features/dashboard/home/dashboardHome.types";
+import { buildDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getShellBallMotionConfig } from "@/features/shell-ball/shellBall.motion";
 import { ShellBallMascot } from "@/features/shell-ball/components/ShellBallMascot";
@@ -192,7 +193,7 @@ export function DashboardVoiceField({ isOpen, onClose, onRecommendationConfirm, 
         navigate(getDashboardVoiceTaskRoute(result.task.status), {
           state: result.task.status === "waiting_auth"
             ? undefined
-            : { focusTaskId: result.task.task_id, openDetail: true },
+            : buildDashboardTaskDetailRouteState(result.task.task_id),
         });
         onClose();
       }, 720);

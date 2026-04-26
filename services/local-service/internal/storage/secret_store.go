@@ -173,6 +173,22 @@ func (s *SQLiteSecretStore) initialize(ctx context.Context) error {
 	return nil
 }
 
+// EnsureStrongholdMetadata stores the active Stronghold backend descriptor in a
+// dedicated metadata table so diagnostics can distinguish formal and fallback
+// lifecycle modes without exposing any secret values.
+func (s *SQLiteSecretStore) EnsureStrongholdMetadata(ctx context.Context, backend string) error {
+	if s == nil || s.db == nil {
+		return ErrSecretStoreAccessFailed
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS stronghold_metadata (metadata_key TEXT PRIMARY KEY, backend TEXT NOT NULL, updated_at TEXT NOT NULL)`); err != nil {
+		return fmt.Errorf("%w: %v", ErrSecretStoreAccessFailed, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO stronghold_metadata (metadata_key, backend, updated_at) VALUES (?, ?, ?)`, "active_backend", backend, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("%w: %v", ErrSecretStoreAccessFailed, err)
+	}
+	return nil
+}
+
 func validateSecretRecord(record SecretRecord) error {
 	if record.Namespace == "" {
 		return fmt.Errorf("secret namespace is required")

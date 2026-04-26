@@ -32,11 +32,12 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
-const SHELL_BALL_WINDOW_LABELS: [&str; 4] = [
+const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
     "shell-ball",
     "shell-ball-bubble",
     "shell-ball-input",
     "shell-ball-voice",
+    "onboarding",
 ];
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 
@@ -46,6 +47,8 @@ static LAST_EXTERNAL_WINDOW_CONTEXT: Lazy<Mutex<Option<CachedWindowContext>>> =
     Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_URL_REFRESH_STATE: Lazy<Mutex<UrlRefreshState>> =
     Lazy::new(|| Mutex::new(UrlRefreshState::default()));
+static WINDOW_CONTEXT_ACTIVITY_STATE: Lazy<Mutex<WindowContextActivityState>> =
+    Lazy::new(|| Mutex::new(WindowContextActivityState::default()));
 
 #[derive(Clone)]
 struct CachedWindowContext {
@@ -58,6 +61,14 @@ struct UrlRefreshState {
     in_flight_fingerprint: Option<String>,
     last_completed_fingerprint: Option<String>,
     last_completed_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct WindowContextActivityState {
+    window_switch_count: u32,
+    page_switch_count: u32,
+    last_window_fingerprint: Option<String>,
+    last_page_fingerprint: Option<String>,
 }
 
 struct ComGuard {
@@ -95,7 +106,7 @@ impl Drop for ComGuard {
 pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>, String> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
-        return Ok(read_cached_window_context());
+        return Ok(read_cached_window_context().map(with_window_context_activity_counts));
     }
 
     if is_shell_ball_cluster_window(hwnd) {
@@ -103,9 +114,11 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
     }
 
     let context = read_window_context_for_hwnd(hwnd);
+    record_window_switch(&context);
+    record_page_switch(&context);
     cache_window_context(hwnd, &context);
     schedule_window_context_url_refresh(hwnd, &context);
-    Ok(Some(context))
+    Ok(Some(with_window_context_activity_counts(context)))
 }
 
 /// Installs the Windows foreground-window listener used to keep a cached copy
@@ -142,6 +155,7 @@ pub fn install_window_context_listener(app: &AppHandle) -> Result<(), String> {
     }
 
     if let Some((hwnd, current_context)) = read_current_external_window_context() {
+        record_window_switch(&current_context);
         cache_window_context(hwnd, &current_context);
         schedule_window_context_url_refresh(hwnd, &current_context);
     }
@@ -155,10 +169,14 @@ fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPa
         return None;
     }
 
-    read_lightweight_window_context_for_hwnd(hwnd).ok().map(|context| (hwnd, context))
+    read_lightweight_window_context_for_hwnd(hwnd)
+        .ok()
+        .map(|context| (hwnd, context))
 }
 
-fn read_lightweight_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowContextPayload, String> {
+fn read_lightweight_window_context_for_hwnd(
+    hwnd: HWND,
+) -> Result<ActiveWindowContextPayload, String> {
     let process_path = get_process_path(hwnd);
     let app_name = process_path
         .as_deref()
@@ -173,20 +191,109 @@ fn read_lightweight_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowCo
         title,
         url: None,
         browser_kind: browser_kind.to_string(),
+        window_switch_count: None,
+        page_switch_count: None,
     })
 }
 
 fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
-    let mut context = read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
-        app_name: "unknown".to_string(),
-        process_path: None,
-        title: None,
-        url: None,
-        browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
-    });
+    let mut context =
+        read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
+            app_name: "unknown".to_string(),
+            process_path: None,
+            title: None,
+            url: None,
+            browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
+            window_switch_count: None,
+            page_switch_count: None,
+        });
 
     context.url = read_url_for_window_context(hwnd, &context);
     context
+}
+
+fn with_window_context_activity_counts(
+    mut context: ActiveWindowContextPayload,
+) -> ActiveWindowContextPayload {
+    if let Ok(activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
+        context.window_switch_count = Some(activity_state.window_switch_count);
+        context.page_switch_count = Some(activity_state.page_switch_count);
+    }
+
+    context
+}
+
+fn record_window_switch(context: &ActiveWindowContextPayload) {
+    let fingerprint = format!(
+        "{}|{}|{}",
+        context.app_name,
+        context.title.clone().unwrap_or_default(),
+        context.process_path.clone().unwrap_or_default()
+    );
+
+    if let Ok(mut activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
+        if activity_state
+            .last_window_fingerprint
+            .as_deref()
+            .is_some_and(|current| current != fingerprint.as_str())
+        {
+            activity_state.window_switch_count =
+                activity_state.window_switch_count.saturating_add(1);
+        }
+
+        activity_state.last_window_fingerprint = Some(fingerprint);
+    }
+}
+
+fn record_page_switch(context: &ActiveWindowContextPayload) {
+    record_page_switch_internal(context, false);
+}
+
+fn record_page_switch_after_url_refresh(context: &ActiveWindowContextPayload) {
+    record_page_switch_internal(context, true);
+}
+
+fn record_page_switch_internal(
+    context: &ActiveWindowContextPayload,
+    prefer_lightweight_match: bool,
+) {
+    let fingerprint = create_page_switch_fingerprint(context);
+    let lightweight_fingerprint =
+        prefer_lightweight_match.then(|| create_page_switch_lightweight_fingerprint(context));
+
+    if let Ok(mut activity_state) = WINDOW_CONTEXT_ACTIVITY_STATE.lock() {
+        if activity_state
+            .last_page_fingerprint
+            .as_deref()
+            .is_some_and(|current| {
+                current != fingerprint.as_str()
+                    && lightweight_fingerprint
+                        .as_deref()
+                        .map_or(true, |lightweight| current != lightweight)
+            })
+        {
+            activity_state.page_switch_count = activity_state.page_switch_count.saturating_add(1);
+        }
+
+        activity_state.last_page_fingerprint = Some(fingerprint);
+    }
+}
+
+fn create_page_switch_fingerprint(context: &ActiveWindowContextPayload) -> String {
+    format!(
+        "{}|{}|{}",
+        context.app_name,
+        context.title.clone().unwrap_or_default(),
+        context.url.clone().unwrap_or_default()
+    )
+}
+
+fn create_page_switch_lightweight_fingerprint(context: &ActiveWindowContextPayload) -> String {
+    format!(
+        "{}|{}|",
+        context.app_name,
+        context.title.clone().unwrap_or_default()
+    )
 }
 
 fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
@@ -199,10 +306,11 @@ fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
 }
 
 fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
-    LAST_EXTERNAL_WINDOW_CONTEXT
-        .lock()
-        .ok()
-        .and_then(|cached| cached.as_ref().map(|value| value.context.clone()))
+    LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok().and_then(|cached| {
+        cached
+            .as_ref()
+            .map(|value| with_window_context_activity_counts(value.context.clone()))
+    })
 }
 
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
@@ -213,12 +321,13 @@ fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
 
     let hwnd = HWND(cached.hwnd as *mut core::ffi::c_void);
     if hwnd.0.is_null() {
-        return Some(cached.context);
+        return Some(with_window_context_activity_counts(cached.context));
     }
 
     let context = read_window_context_for_hwnd(hwnd);
+    record_page_switch_after_url_refresh(&context);
     cache_window_context(hwnd, &context);
-    Some(context)
+    Some(with_window_context_activity_counts(context))
 }
 
 fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
@@ -288,6 +397,7 @@ unsafe extern "system" fn window_context_foreground_hook(
     }
 
     if let Ok(context) = read_lightweight_window_context_for_hwnd(hwnd) {
+        record_window_switch(&context);
         cache_window_context(hwnd, &context);
         schedule_window_context_url_refresh(hwnd, &context);
     }
@@ -310,9 +420,9 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
         if state.in_flight_fingerprint.as_deref() == Some(fingerprint.as_str()) {
             false
         } else if state.last_completed_fingerprint.as_deref() == Some(fingerprint.as_str())
-            && state
-                .last_completed_at
-                .is_some_and(|instant| instant.elapsed() < Duration::from_millis(WINDOW_CONTEXT_URL_DEBOUNCE_MS))
+            && state.last_completed_at.is_some_and(|instant| {
+                instant.elapsed() < Duration::from_millis(WINDOW_CONTEXT_URL_DEBOUNCE_MS)
+            })
         {
             false
         } else {
@@ -332,6 +442,7 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
         let url = read_url_for_window_context(hwnd, &context);
         let mut next_context = context.clone();
         next_context.url = url;
+        record_page_switch_after_url_refresh(&next_context);
         cache_window_context(hwnd, &next_context);
 
         if let Ok(mut state) = WINDOW_CONTEXT_URL_REFRESH_STATE.lock() {
@@ -359,10 +470,7 @@ fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> St
     )
 }
 
-fn read_url_for_window_context(
-    hwnd: HWND,
-    context: &ActiveWindowContextPayload,
-) -> Option<String> {
+fn read_url_for_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) -> Option<String> {
     match context.browser_kind.as_str() {
         BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => {
             read_browser_url_via_uia(hwnd)
@@ -382,7 +490,8 @@ fn classify_browser_kind(app_name: &str) -> &'static str {
 
 fn get_process_path(hwnd: HWND) -> Option<String> {
     let process_handle = open_process(hwnd)?;
-    let path = get_module_file_name(process_handle).or_else(|| get_query_process_image_name(process_handle));
+    let path = get_module_file_name(process_handle)
+        .or_else(|| get_query_process_image_name(process_handle));
 
     unsafe {
         let _ = CloseHandle(process_handle);
@@ -427,7 +536,12 @@ fn get_query_process_image_name(process: HANDLE) -> Option<String> {
     let mut size = buffer.len() as u32;
 
     if unsafe {
-        QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut size)
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
     }
     .is_err()
         || size == 0
@@ -462,7 +576,8 @@ fn get_window_title(hwnd: HWND) -> Option<String> {
 
 fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
     let _com_guard = ComGuard::initialize().ok()?;
-    let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
     let root_element = unsafe { automation.ElementFromHandle(hwnd).ok()? };
     let edit_control_type = VARIANT::from(UIA_EditControlTypeId.0);
     let condition: IUIAutomationCondition = unsafe {
@@ -470,7 +585,8 @@ fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
             .CreatePropertyCondition(UIA_ControlTypePropertyId, &edit_control_type)
             .ok()?
     };
-    let matches: IUIAutomationElementArray = unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok()? };
+    let matches: IUIAutomationElementArray =
+        unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok()? };
     let length = unsafe { matches.Length().ok()? };
 
     for index in 0..length {
@@ -487,7 +603,8 @@ fn read_element_url_candidate(element: &IUIAutomationElement) -> Option<String> 
     let name: BSTR = unsafe { element.CurrentName().ok()? };
     let normalized_name = name.to_string().trim().to_string();
 
-    let value_pattern: IUIAutomationValuePattern = unsafe { element.GetCurrentPatternAs(UIA_ValuePatternId).ok()? };
+    let value_pattern: IUIAutomationValuePattern =
+        unsafe { element.GetCurrentPatternAs(UIA_ValuePatternId).ok()? };
     let value = unsafe { value_pattern.CurrentValue().ok()? }.to_string();
     let trimmed_value = value.trim();
     if looks_like_url(trimmed_value) {

@@ -50,7 +50,10 @@
           "properties": {
             "title": { "type": "string" },
             "url": { "type": "string" },
-            "app_name": { "type": "string" }
+            "app_name": { "type": "string" },
+            "window_title": { "type": "string" },
+            "visible_text": { "type": "string" },
+            "hover_target": { "type": "string" }
           }
         }
       }
@@ -63,7 +66,30 @@
           "properties": {
             "title": { "type": "string" },
             "url": { "type": "string" },
-            "app_name": { "type": "string" }
+            "app_name": { "type": "string" },
+            "window_title": { "type": "string" },
+            "visible_text": { "type": "string" },
+            "hover_target": { "type": "string" }
+          }
+        },
+        "screen": {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string" },
+            "screen_summary": { "type": "string" },
+            "visible_text": { "type": "string" },
+            "window_title": { "type": "string" },
+            "hover_target": { "type": "string" }
+          }
+        },
+        "behavior": {
+          "type": "object",
+          "properties": {
+            "last_action": { "type": "string" },
+            "dwell_millis": { "type": "integer" },
+            "copy_count": { "type": "integer" },
+            "window_switch_count": { "type": "integer" },
+            "page_switch_count": { "type": "integer" }
           }
         },
         "selection": {
@@ -72,9 +98,55 @@
             "text": { "type": "string" }
           }
         },
+        "error": {
+          "type": "object",
+          "properties": {
+            "message": { "type": "string" }
+          }
+        },
+        "clipboard": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" }
+          }
+        },
+        "text": {
+          "type": "string"
+        },
+        "selection_text": {
+          "type": "string"
+        },
         "files": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "file_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "screen_summary": {
+          "type": "string"
+        },
+        "clipboard_text": {
+          "type": "string"
+        },
+        "hover_target": {
+          "type": "string"
+        },
+        "last_action": {
+          "type": "string"
+        },
+        "dwell_millis": {
+          "type": "integer"
+        },
+        "copy_count": {
+          "type": "integer"
+        },
+        "window_switch_count": {
+          "type": "integer"
+        },
+        "page_switch_count": {
+          "type": "integer"
         }
       }
     },

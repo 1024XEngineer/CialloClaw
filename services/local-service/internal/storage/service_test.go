@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -20,6 +21,15 @@ type stubAdapter struct {
 	databasePath string
 }
 
+type stubStrongholdProvider struct {
+	backend     string
+	fallback    bool
+	store       SecretStore
+	openErr     error
+	initialized bool
+	openCalls   int
+}
+
 // DatabasePath 处理当前模块的相关逻辑。
 func (s stubAdapter) DatabasePath() string {
 	return s.databasePath
@@ -31,6 +41,117 @@ func (s stubAdapter) SecretStorePath() string {
 		return ""
 	}
 	return s.databasePath + ".stronghold"
+}
+
+func (s *stubStrongholdProvider) Open(context.Context) (SecretStore, error) {
+	s.openCalls++
+	if s.openErr != nil {
+		s.initialized = false
+		return nil, s.openErr
+	}
+	s.initialized = true
+	if s.store == nil {
+		s.store = newInMemorySecretStore()
+	}
+	return s.store, nil
+}
+
+func (s *stubStrongholdProvider) Descriptor() StrongholdDescriptor {
+	return StrongholdDescriptor{
+		Backend:     s.backend,
+		Available:   s.initialized && s.openErr == nil,
+		Fallback:    s.fallback,
+		Initialized: s.initialized,
+	}
+}
+
+func TestDefaultStrongholdBootstrapConfigReturnsProviderFactories(t *testing.T) {
+	config := defaultStrongholdBootstrapConfig()
+	if config.formalProvider == nil || config.fallbackProvider == nil {
+		t.Fatalf("expected default Stronghold bootstrap config to provide both factories, got %+v", config)
+	}
+	formal := config.formalProvider(filepath.Join(t.TempDir(), "formal.stronghold"))
+	if formal == nil || formal.Descriptor().Backend != "stronghold" || formal.Descriptor().Fallback {
+		t.Fatalf("expected default formal provider descriptor, got %+v", formal)
+	}
+	fallback := config.fallbackProvider(filepath.Join(t.TempDir(), "fallback.stronghold"))
+	if fallback == nil || fallback.Descriptor().Backend != "stronghold_sqlite_fallback" || !fallback.Descriptor().Fallback {
+		t.Fatalf("expected default fallback provider descriptor, got %+v", fallback)
+	}
+}
+
+func TestNewServiceWithStrongholdBootstrapFillsMissingFactories(t *testing.T) {
+	t.Run("fills missing formal provider", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bootstrap-missing-formal.db")
+		fallbackCalls := 0
+		fallbackProvider := &stubStrongholdProvider{backend: "fallback_only", fallback: true, store: newInMemorySecretStore()}
+		service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+			fallbackProvider: func(string) StrongholdProvider {
+				fallbackCalls++
+				return fallbackProvider
+			},
+		})
+		defer func() { _ = service.Close() }()
+		if service == nil {
+			t.Fatal("expected missing formal provider bootstrap to create a storage service")
+		}
+		if runtime.GOOS == "windows" {
+			if service.Stronghold() == nil || service.Stronghold().Descriptor().Backend != "stronghold" {
+				t.Fatalf("expected default formal provider to back Stronghold on supported platforms, got %+v", service.Stronghold())
+			}
+			if fallbackCalls != 0 {
+				t.Fatalf("expected fallback provider to remain unused when default formal Stronghold succeeds, got %d calls", fallbackCalls)
+			}
+			return
+		}
+		if service.Stronghold() == nil || service.Stronghold().Descriptor().Backend != "fallback_only" || fallbackCalls != 1 {
+			t.Fatalf("expected default formal provider failure to activate injected fallback on unsupported platforms, provider=%+v fallbackCalls=%d", service.Stronghold(), fallbackCalls)
+		}
+	})
+
+	t.Run("fills missing fallback provider", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bootstrap-missing-fallback.db")
+		formalCalls := 0
+		formalProvider := &stubStrongholdProvider{backend: "formal_only", openErr: ErrStrongholdUnavailable}
+		service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+			formalProvider: func(string) StrongholdProvider {
+				formalCalls++
+				return formalProvider
+			},
+		})
+		defer func() { _ = service.Close() }()
+		if service == nil {
+			t.Fatal("expected missing fallback provider bootstrap to create a storage service")
+		}
+		if formalCalls != 1 {
+			t.Fatalf("expected injected formal provider to be attempted once, got %d calls", formalCalls)
+		}
+		if service.Stronghold() == nil || service.Stronghold().Descriptor().Backend != "stronghold_sqlite_fallback" || !service.Stronghold().Descriptor().Fallback {
+			t.Fatalf("expected missing fallback provider to use default fallback Stronghold, got %+v", service.Stronghold())
+		}
+	})
+
+	t.Run("fills both providers from defaults", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bootstrap-defaults.db")
+		service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{})
+		defer func() { _ = service.Close() }()
+		if service == nil {
+			t.Fatal("expected default bootstrap to create a storage service")
+		}
+		if service.Stronghold() == nil {
+			t.Fatal("expected default bootstrap to wire a Stronghold provider")
+		}
+		descriptor := service.Stronghold().Descriptor()
+		if runtime.GOOS == "windows" {
+			if descriptor.Backend != "stronghold" || descriptor.Fallback {
+				t.Fatalf("expected supported platforms to use formal Stronghold defaults, got %+v", descriptor)
+			}
+			return
+		}
+		if descriptor.Backend != "stronghold_sqlite_fallback" || !descriptor.Fallback {
+			t.Fatalf("expected unsupported platforms to fall back with default providers, got %+v", descriptor)
+		}
+	})
 }
 
 // TestBackendReturnsSQLiteWAL 验证BackendReturnsSQLiteWAL。
@@ -160,20 +281,37 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if service.TraceStore() == nil || service.EvalStore() == nil {
 		t.Fatalf("expected trace and eval stores to be wired: %+v", capabilities)
 	}
+	if service.ToolCallStore() == nil {
+		t.Fatalf("expected typed tool call store accessor to be wired: %+v", capabilities)
+	}
 	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
 		t.Fatalf("expected retrieval and search skeleton capabilities to be enabled: %+v", capabilities)
 	}
 	if capabilities.MemoryStoreBackend != memoryStoreBackendSQLite || capabilities.FallbackActive {
-		t.Fatalf("unexpected backend state: %+v", capabilities)
+		if runtime.GOOS == "windows" {
+			t.Fatalf("unexpected backend state: %+v", capabilities)
+		}
+		if !capabilities.FallbackActive {
+			t.Fatalf("expected unsupported platforms to report fallback activity, got %+v", capabilities)
+		}
 	}
 	if capabilities.MemoryRetrievalBackend != memoryRetrievalBackendSQLite {
 		t.Fatalf("unexpected retrieval backend: %+v", capabilities)
 	}
-	if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
-		t.Fatalf("unexpected secret backend: %+v", capabilities)
+	if runtime.GOOS == "windows" {
+		if capabilities.SecretStoreBackend != "stronghold" {
+			t.Fatalf("unexpected secret backend: %+v", capabilities)
+		}
+	} else {
+		if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
+			t.Fatalf("expected fallback secret backend on unsupported platforms, got %+v", capabilities)
+		}
 	}
-	if service.SkillManifestStore() == nil || service.BlueprintDefinitionStore() == nil || service.PromptTemplateVersionStore() == nil {
+	if service.SkillManifestStore() == nil || service.BlueprintDefinitionStore() == nil || service.PromptTemplateVersionStore() == nil || service.PluginManifestStore() == nil {
 		t.Fatalf("expected config asset stores to be wired: %+v", capabilities)
+	}
+	if service.SessionStore() == nil || service.SettingsStore() == nil {
+		t.Fatalf("expected session/settings stores to be wired: %+v", capabilities)
 	}
 }
 
@@ -190,6 +328,9 @@ func TestServiceConfigAssetStoresPersistRecords(t *testing.T) {
 	if err := service.PromptTemplateVersionStore().WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_001", TemplateName: "default", Version: "v1", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
 		t.Fatalf("write prompt template version failed: %v", err)
 	}
+	if err := service.PluginManifestStore().WritePluginManifest(context.Background(), PluginManifestRecord{PluginID: "plugin_001", Name: "ocr", Version: "v1", Entry: "builtin://plugin/ocr", Source: "builtin", Summary: "summary", CapabilitiesJSON: `["ocr_image"]`, PermissionsJSON: `["artifact_read"]`, RuntimeNamesJSON: `["ocr_worker"]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write plugin manifest failed: %v", err)
+	}
 	if _, err := service.SkillManifestStore().GetSkillManifest(context.Background(), "skill_001"); err != nil {
 		t.Fatalf("get skill manifest failed: %v", err)
 	}
@@ -198,6 +339,43 @@ func TestServiceConfigAssetStoresPersistRecords(t *testing.T) {
 	}
 	if _, err := service.PromptTemplateVersionStore().GetPromptTemplateVersion(context.Background(), "prompt_001"); err != nil {
 		t.Fatalf("get prompt template version failed: %v", err)
+	}
+	if _, err := service.PluginManifestStore().GetPluginManifest(context.Background(), "plugin_001"); err != nil {
+		t.Fatalf("get plugin manifest failed: %v", err)
+	}
+}
+
+func TestServiceSessionAndSettingsStoresPersistRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-settings-service.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	if err := service.SessionStore().WriteSession(context.Background(), SessionRecord{SessionID: "sess_001", Title: "Session 001", Status: "active", CreatedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:00Z"}); err != nil {
+		t.Fatalf("write session failed: %v", err)
+	}
+	if err := service.SettingsStore().SaveSettingsSnapshot(context.Background(), map[string]any{
+		"general": map[string]any{"language": "zh-CN"},
+		"models":  map[string]any{"provider": "openai", "credentials": map[string]any{"budget_auto_downgrade": true}},
+	}); err != nil {
+		t.Fatalf("save settings snapshot failed: %v", err)
+	}
+	session, err := service.SessionStore().GetSession(context.Background(), "sess_001")
+	if err != nil || session.Title != "Session 001" {
+		t.Fatalf("get session failed: session=%+v err=%v", session, err)
+	}
+	snapshot, err := service.SettingsStore().LoadSettingsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("load settings snapshot failed: %v", err)
+	}
+	if snapshot["general"].(map[string]any)["language"] != "zh-CN" {
+		t.Fatalf("unexpected settings snapshot: %+v", snapshot)
+	}
+}
+
+func TestResolveModelAPIKeyFailsWhenSecretStoreMissing(t *testing.T) {
+	service := NewService(nil)
+	service.secretStore = nil
+	if _, err := service.ResolveModelAPIKey("openai_responses"); !errors.Is(err, ErrSecretStoreAccessFailed) {
+		t.Fatalf("expected ErrSecretStoreAccessFailed when secret store is missing, got %v", err)
 	}
 }
 
@@ -520,6 +698,7 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 		RunID:      "run_loop_001",
 		TaskID:     "task_loop_001",
 		SessionID:  "sess_loop_001",
+		SourceType: "hover_input",
 		Status:     "completed",
 		IntentName: "agent_loop",
 		StartedAt:  "2026-04-17T10:00:00Z",
@@ -575,6 +754,22 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
+	if err := store.ReplaceTaskCitations(context.Background(), "task_loop_001", []CitationRecord{{
+		CitationID:      "cit_loop_001",
+		TaskID:          "task_loop_001",
+		RunID:           "run_loop_001",
+		SourceType:      "file",
+		SourceRef:       "art_loop_001",
+		Label:           "error_evidence | screen_capture | missing release asset",
+		ArtifactID:      "art_loop_001",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "missing release asset",
+		ScreenSessionID: "screen_sess_001",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
+	}
 
 	sqliteStore, ok := service.loopRuntimeStore.(*SQLiteLoopRuntimeStore)
 	if !ok {
@@ -582,6 +777,13 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	assertTableCount(t, sqliteStore.db, "runs", 1)
 	assertTableCount(t, sqliteStore.db, "steps", 1)
+	var runSourceType string
+	if err := sqliteStore.db.QueryRow(`SELECT source_type FROM runs WHERE run_id = ?`, "run_loop_001").Scan(&runSourceType); err != nil {
+		t.Fatalf("query run source_type failed: %v", err)
+	}
+	if runSourceType != "hover_input" {
+		t.Fatalf("expected run source_type to persist, got %s", runSourceType)
+	}
 	var attemptIndex int
 	var segmentKind string
 	if err := sqliteStore.db.QueryRow(`SELECT attempt_index, segment_kind FROM steps WHERE step_id = ?`, "step_loop_001").Scan(&attemptIndex, &segmentKind); err != nil {
@@ -611,6 +813,7 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	assertTableCount(t, sqliteStore.db, "steps", 2)
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
+	assertTableCount(t, sqliteStore.db, "task_citations", 1)
 
 	events, total, err := store.ListEvents(context.Background(), "task_loop_001", "", "", "", "", 20, 0)
 	if err != nil {
@@ -618,6 +821,20 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
+	}
+	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001")
+	if err != nil {
+		t.Fatalf("GetLatestDeliveryResult returned error: %v", err)
+	}
+	if !ok || deliveryResult.DeliveryResultID != "delivery_result_001" || deliveryResult.PreviewText != "loop preview" {
+		t.Fatalf("unexpected latest delivery_result: ok=%v record=%+v", ok, deliveryResult)
+	}
+	citations, err := store.ListTaskCitations(context.Background(), "task_loop_001")
+	if err != nil {
+		t.Fatalf("ListTaskCitations returned error: %v", err)
+	}
+	if len(citations) != 1 || citations[0].CitationID != "cit_loop_001" || citations[0].ExcerptText != "missing release asset" {
+		t.Fatalf("unexpected stored citations: %+v", citations)
 	}
 }
 
@@ -946,6 +1163,120 @@ func TestServiceUsesUnavailableSecretStoreWhenStrongholdCannotOpen(t *testing.T)
 	store := SecretStore(UnavailableSecretStore{})
 	if err := store.PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); !errors.Is(err, ErrStrongholdUnavailable) {
 		t.Fatalf("expected unavailable formal store to reject writes, got %v", err)
+	}
+}
+
+func TestServiceUsesFormalStrongholdProviderWhenAvailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stronghold-formal-service.db")
+
+	formalProvider := &stubStrongholdProvider{
+		backend:  "stronghold",
+		fallback: false,
+		store:    newInMemorySecretStore(),
+	}
+	service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+		formalProvider: func(string) StrongholdProvider { return formalProvider },
+		fallbackProvider: func(string) StrongholdProvider {
+			t.Fatal("fallback provider should not open when formal Stronghold succeeds")
+			return nil
+		},
+	})
+	defer func() { _ = service.Close() }()
+
+	if service.Stronghold() == nil {
+		t.Fatal("expected stronghold provider to be wired")
+	}
+	descriptor := service.Stronghold().Descriptor()
+	if descriptor.Backend != "stronghold" || !descriptor.Available || descriptor.Fallback || !descriptor.Initialized {
+		t.Fatalf("expected formal stronghold descriptor after successful bootstrap, got %+v", descriptor)
+	}
+	if formalProvider.openCalls != 1 {
+		t.Fatalf("expected formal stronghold provider to open exactly once, got %d", formalProvider.openCalls)
+	}
+	if service.Capabilities().SecretStoreBackend != "stronghold" || service.Capabilities().FallbackActive {
+		t.Fatalf("expected formal secret backend capability, got %+v", service.Capabilities())
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); err != nil {
+		t.Fatalf("expected formal secret store write to succeed, got %v", err)
+	}
+}
+
+func TestServiceFallsBackToDevelopmentStrongholdProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stronghold-fallback-service.db")
+
+	formalProvider := &stubStrongholdProvider{
+		backend:  "stronghold",
+		fallback: false,
+		openErr:  ErrStrongholdUnavailable,
+	}
+	fallbackProvider := &stubStrongholdProvider{
+		backend:  "stronghold_sqlite_fallback",
+		fallback: true,
+		store:    newInMemorySecretStore(),
+	}
+	service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+		formalProvider:   func(string) StrongholdProvider { return formalProvider },
+		fallbackProvider: func(string) StrongholdProvider { return fallbackProvider },
+	})
+	defer func() { _ = service.Close() }()
+
+	descriptor := service.Stronghold().Descriptor()
+	if descriptor.Backend != "stronghold_sqlite_fallback" || !descriptor.Available || !descriptor.Fallback || !descriptor.Initialized {
+		t.Fatalf("expected fallback descriptor after formal bootstrap failure, got %+v", descriptor)
+	}
+	if !service.Capabilities().FallbackActive || service.Capabilities().SecretStoreBackend != "stronghold_sqlite_fallback" {
+		t.Fatalf("expected fallback secret backend capability, got %+v", service.Capabilities())
+	}
+	if err := service.Validate(); err != nil {
+		t.Fatalf("expected fallback-backed storage to remain valid, got %v", err)
+	}
+	if formalProvider.openCalls != 1 || fallbackProvider.openCalls != 1 {
+		t.Fatalf("expected exactly one formal and fallback open attempt, got formal=%d fallback=%d", formalProvider.openCalls, fallbackProvider.openCalls)
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "anthropic_api_key", Value: "fallback-secret", UpdatedAt: "2026-04-15T10:00:00Z"}); err != nil {
+		t.Fatalf("expected fallback secret store write to succeed, got %v", err)
+	}
+}
+
+func TestServiceReportsStrongholdBootstrapFailureWhenFallbackUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stronghold-unavailable-service.db")
+	service := newServiceWithStrongholdBootstrap(stubAdapter{databasePath: path}, strongholdBootstrapConfig{
+		formalProvider: func(string) StrongholdProvider {
+			return &stubStrongholdProvider{backend: "stronghold", openErr: ErrStrongholdUnavailable}
+		},
+		fallbackProvider: func(string) StrongholdProvider {
+			return &stubStrongholdProvider{backend: "stronghold_sqlite_fallback", fallback: true, openErr: ErrStrongholdUnavailable}
+		},
+	})
+	defer func() { _ = service.Close() }()
+
+	if err := service.Validate(); err == nil || !strings.Contains(err.Error(), "initialize formal stronghold secret store") || !strings.Contains(err.Error(), "initialize fallback stronghold secret store") {
+		t.Fatalf("expected validation to surface both stronghold bootstrap errors, got %v", err)
+	}
+	if _, err := service.ResolveModelAPIKey("openai"); !errors.Is(err, ErrSecretStoreAccessFailed) {
+		t.Fatalf("expected unavailable stronghold bootstrap to surface secret store access failure, got %v", err)
+	}
+}
+
+func TestResolveModelAPIKeyNormalizesOpenAICompatibleAliases(t *testing.T) {
+	service := NewService(stubAdapter{databasePath: filepath.Join(t.TempDir(), "alias-secret-store.db")})
+	defer func() { _ = service.Close() }()
+
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "shared-secret",
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed canonical provider secret failed: %v", err)
+	}
+
+	value, err := service.ResolveModelAPIKey("z-ai")
+	if err != nil {
+		t.Fatalf("expected z-ai alias to reuse canonical provider secret, got %v", err)
+	}
+	if value != "shared-secret" {
+		t.Fatalf("unexpected alias secret value: %q", value)
 	}
 }
 

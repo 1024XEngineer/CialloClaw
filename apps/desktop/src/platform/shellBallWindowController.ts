@@ -25,7 +25,6 @@ export const shellBallWindowPermissions = Object.freeze([
   "core:window:allow-set-size-constraints",
   "core:window:allow-set-focus",
   "core:window:allow-set-focusable",
-  "core:window:allow-set-ignore-cursor-events",
   "core:window:allow-set-always-on-top",
   "core:window:allow-start-dragging",
 ] as const);
@@ -228,4 +227,20 @@ export function createShellBallLogicalSize(width: number, height: number) {
 
 export function createShellBallLogicalPosition(x: number, y: number) {
   return new LogicalPosition(x, y);
+}
+
+export async function applyShellBallCurrentWindowFrame(input: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) {
+  const { invoke } = await import("@tauri-apps/api/core");
+
+  await invoke("shell_ball_apply_window_frame", {
+    x: input.x,
+    y: input.y,
+    width: input.width,
+    height: input.height,
+  });
 }

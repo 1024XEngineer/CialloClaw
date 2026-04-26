@@ -1,3 +1,6 @@
+/* global process, require */
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 const { existsSync } = require("node:fs");
 const { dirname, resolve } = require("node:path");
 const Module = require("node:module");

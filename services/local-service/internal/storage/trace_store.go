@@ -109,9 +109,9 @@ func (s *SQLiteTraceStore) WriteTraceRecord(ctx context.Context, record TraceRec
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR REPLACE INTO trace_records (
 			trace_id, task_id, run_id, loop_round, llm_input_summary, llm_output_summary,
-			latency_ms, cost, rule_hits_json, review_result, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.TraceID, record.TaskID, nullableString(record.RunID), record.LoopRound, record.LLMInputSummary, record.LLMOutputSummary, record.LatencyMS, record.Cost, nullableString(record.RuleHitsJSON), nullableString(record.ReviewResult), record.CreatedAt)
+			latency_ms, cost, asset_refs_json, rule_hits_json, review_result, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.TraceID, record.TaskID, nullableString(record.RunID), record.LoopRound, record.LLMInputSummary, record.LLMOutputSummary, record.LatencyMS, record.Cost, nullableString(record.AssetRefsJSON), nullableString(record.RuleHitsJSON), nullableString(record.ReviewResult), record.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("write trace record: %w", err)
 	}
@@ -138,7 +138,7 @@ func (s *SQLiteTraceStore) DeleteTraceRecord(ctx context.Context, traceID string
 
 func (s *SQLiteTraceStore) ListTraceRecords(ctx context.Context, taskID string, limit, offset int) ([]TraceRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM trace_records`
-	query := `SELECT trace_id, task_id, run_id, loop_round, llm_input_summary, llm_output_summary, latency_ms, cost, rule_hits_json, review_result, created_at FROM trace_records`
+	query := `SELECT trace_id, task_id, run_id, loop_round, llm_input_summary, llm_output_summary, latency_ms, cost, asset_refs_json, rule_hits_json, review_result, created_at FROM trace_records`
 	args := []any{}
 	if taskID != "" {
 		countQuery += ` WHERE task_id = ?`
@@ -165,12 +165,14 @@ func (s *SQLiteTraceStore) ListTraceRecords(ctx context.Context, taskID string, 
 	for rows.Next() {
 		var record TraceRecord
 		var runID sql.NullString
+		var assetRefs sql.NullString
 		var ruleHits sql.NullString
 		var reviewResult sql.NullString
-		if err := rows.Scan(&record.TraceID, &record.TaskID, &runID, &record.LoopRound, &record.LLMInputSummary, &record.LLMOutputSummary, &record.LatencyMS, &record.Cost, &ruleHits, &reviewResult, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.TraceID, &record.TaskID, &runID, &record.LoopRound, &record.LLMInputSummary, &record.LLMOutputSummary, &record.LatencyMS, &record.Cost, &assetRefs, &ruleHits, &reviewResult, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan trace record: %w", err)
 		}
 		record.RunID = runID.String
+		record.AssetRefsJSON = assetRefs.String
 		record.RuleHitsJSON = ruleHits.String
 		record.ReviewResult = reviewResult.String
 		items = append(items, record)
@@ -208,12 +210,16 @@ func (s *SQLiteTraceStore) initialize(ctx context.Context) error {
 			llm_output_summary TEXT NOT NULL,
 			latency_ms INTEGER NOT NULL DEFAULT 0,
 			cost REAL NOT NULL DEFAULT 0,
+			asset_refs_json TEXT,
 			rule_hits_json TEXT,
 			review_result TEXT,
 			created_at TEXT NOT NULL
 		);
 	`); err != nil {
 		return fmt.Errorf("create trace_records table: %w", err)
+	}
+	if err := ensureTraceEvalColumns(ctx, s.db, "trace_records", map[string]string{"asset_refs_json": "TEXT"}); err != nil {
+		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_records_task_time ON trace_records(task_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create trace_records index: %w", err)
@@ -243,9 +249,9 @@ func NewSQLiteEvalStore(databasePath string) (*SQLiteEvalStore, error) {
 func (s *SQLiteEvalStore) WriteEvalSnapshot(ctx context.Context, record EvalSnapshotRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR REPLACE INTO eval_snapshots (
-			eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at
-		) VALUES (?, ?, ?, ?, ?, ?)
-	`, record.EvalSnapshotID, record.TraceID, record.TaskID, record.Status, record.MetricsJSON, record.CreatedAt)
+			eval_snapshot_id, trace_id, task_id, status, asset_refs_json, metrics_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, record.EvalSnapshotID, record.TraceID, record.TaskID, record.Status, nullableString(record.AssetRefsJSON), record.MetricsJSON, record.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("write eval snapshot: %w", err)
 	}
@@ -254,7 +260,7 @@ func (s *SQLiteEvalStore) WriteEvalSnapshot(ctx context.Context, record EvalSnap
 
 func (s *SQLiteEvalStore) ListEvalSnapshots(ctx context.Context, taskID string, limit, offset int) ([]EvalSnapshotRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM eval_snapshots`
-	query := `SELECT eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at FROM eval_snapshots`
+	query := `SELECT eval_snapshot_id, trace_id, task_id, status, asset_refs_json, metrics_json, created_at FROM eval_snapshots`
 	args := []any{}
 	if taskID != "" {
 		countQuery += ` WHERE task_id = ?`
@@ -280,9 +286,11 @@ func (s *SQLiteEvalStore) ListEvalSnapshots(ctx context.Context, taskID string, 
 	items := make([]EvalSnapshotRecord, 0)
 	for rows.Next() {
 		var record EvalSnapshotRecord
-		if err := rows.Scan(&record.EvalSnapshotID, &record.TraceID, &record.TaskID, &record.Status, &record.MetricsJSON, &record.CreatedAt); err != nil {
+		var assetRefs sql.NullString
+		if err := rows.Scan(&record.EvalSnapshotID, &record.TraceID, &record.TaskID, &record.Status, &assetRefs, &record.MetricsJSON, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan eval snapshot: %w", err)
 		}
+		record.AssetRefsJSON = assetRefs.String
 		items = append(items, record)
 	}
 	if err := rows.Err(); err != nil {
@@ -314,12 +322,16 @@ func (s *SQLiteEvalStore) initialize(ctx context.Context) error {
 			trace_id TEXT NOT NULL,
 			task_id TEXT NOT NULL,
 			status TEXT NOT NULL,
+			asset_refs_json TEXT,
 			metrics_json TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(trace_id) REFERENCES trace_records(trace_id)
 		);
 	`); err != nil {
 		return fmt.Errorf("create eval_snapshots table: %w", err)
+	}
+	if err := ensureTraceEvalColumns(ctx, s.db, "eval_snapshots", map[string]string{"asset_refs_json": "TEXT"}); err != nil {
+		return err
 	}
 	if err := ensureEvalSnapshotForeignKey(ctx, s.db); err != nil {
 		return err
@@ -378,6 +390,7 @@ func ensureEvalSnapshotForeignKey(ctx context.Context, db *sql.DB) error {
 			trace_id TEXT NOT NULL,
 			task_id TEXT NOT NULL,
 			status TEXT NOT NULL,
+			asset_refs_json TEXT,
 			metrics_json TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(trace_id) REFERENCES trace_records(trace_id)
@@ -391,6 +404,7 @@ func ensureEvalSnapshotForeignKey(ctx context.Context, db *sql.DB) error {
 			trace_id TEXT NOT NULL,
 			task_id TEXT NOT NULL,
 			status TEXT NOT NULL,
+			asset_refs_json TEXT,
 			metrics_json TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			quarantined_at TEXT NOT NULL,
@@ -400,15 +414,15 @@ func ensureEvalSnapshotForeignKey(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("create orphaned eval_snapshots quarantine table: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO eval_snapshots (eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at)
-		SELECT eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at
+		INSERT INTO eval_snapshots (eval_snapshot_id, trace_id, task_id, status, asset_refs_json, metrics_json, created_at)
+		SELECT eval_snapshot_id, trace_id, task_id, status, NULL, metrics_json, created_at
 		FROM eval_snapshots_legacy;
 	`); err != nil {
 		if _, quarantineErr := tx.ExecContext(ctx, fmt.Sprintf(`
 			INSERT OR REPLACE INTO %s (
-				eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at, quarantined_at, reason
+				eval_snapshot_id, trace_id, task_id, status, asset_refs_json, metrics_json, created_at, quarantined_at, reason
 			)
-			SELECT legacy.eval_snapshot_id, legacy.trace_id, legacy.task_id, legacy.status, legacy.metrics_json, legacy.created_at, CURRENT_TIMESTAMP, ?
+			SELECT legacy.eval_snapshot_id, legacy.trace_id, legacy.task_id, legacy.status, NULL, legacy.metrics_json, legacy.created_at, CURRENT_TIMESTAMP, ?
 			FROM eval_snapshots_legacy legacy
 			LEFT JOIN trace_records traces ON traces.trace_id = legacy.trace_id
 			WHERE traces.trace_id IS NULL;
@@ -416,8 +430,8 @@ func ensureEvalSnapshotForeignKey(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("quarantine orphaned eval_snapshots rows: %w", quarantineErr)
 		}
 		if _, copyErr := tx.ExecContext(ctx, `
-			INSERT INTO eval_snapshots (eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at)
-			SELECT legacy.eval_snapshot_id, legacy.trace_id, legacy.task_id, legacy.status, legacy.metrics_json, legacy.created_at
+			INSERT INTO eval_snapshots (eval_snapshot_id, trace_id, task_id, status, asset_refs_json, metrics_json, created_at)
+			SELECT legacy.eval_snapshot_id, legacy.trace_id, legacy.task_id, legacy.status, NULL, legacy.metrics_json, legacy.created_at
 			FROM eval_snapshots_legacy legacy
 			INNER JOIN trace_records traces ON traces.trace_id = legacy.trace_id;
 		`); copyErr != nil {
@@ -431,6 +445,47 @@ func ensureEvalSnapshotForeignKey(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("commit eval_snapshots foreign key migration: %w", err)
 	}
 	return nil
+}
+
+func ensureTraceEvalColumns(ctx context.Context, db *sql.DB, tableName string, requiredColumns map[string]string) error {
+	existingColumns, err := traceEvalTableColumns(ctx, db, tableName)
+	if err != nil {
+		return err
+	}
+	for name, definition := range requiredColumns {
+		if _, ok := existingColumns[name]; ok {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, tableName, name, definition)); err != nil {
+			return fmt.Errorf("migrate %s add column %s: %w", tableName, name, err)
+		}
+	}
+	return nil
+}
+
+func traceEvalTableColumns(ctx context.Context, db *sql.DB, tableName string) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s);`, tableName))
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s schema: %w", tableName, err)
+	}
+	defer rows.Close()
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return nil, fmt.Errorf("scan %s schema: %w", tableName, err)
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s schema: %w", tableName, err)
+	}
+	return columns, nil
 }
 
 func pageTraceRecords(items []TraceRecord, limit, offset int) []TraceRecord {
