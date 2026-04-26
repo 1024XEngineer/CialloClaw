@@ -46,6 +46,7 @@ func (s *Server) registerHandlers() {
 		"agent.security.respond":               s.handleAgentSecurityRespond,
 		"agent.settings.get":                   s.handleAgentSettingsGet,
 		"agent.settings.update":                s.handleAgentSettingsUpdate,
+		"agent.settings.model.validate":        s.handleAgentSettingsModelValidate,
 		"agent.plugin.runtime.list":            s.handleAgentPluginRuntimeList,
 		"agent.plugin.list":                    s.handleAgentPluginList,
 		"agent.plugin.detail.get":              s.handleAgentPluginDetailGet,
@@ -243,6 +244,12 @@ func (s *Server) handleAgentSettingsUpdate(params map[string]any) (any, *rpcErro
 	return wrapOrchestratorResult(data, err)
 }
 
+// handleAgentSettingsModelValidate handles agent.settings.model.validate.
+func (s *Server) handleAgentSettingsModelValidate(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SettingsModelValidate(params)
+	return wrapOrchestratorResult(data, err)
+}
+
 // handleAgentPluginRuntimeList handles agent.plugin.runtime.list.
 func (s *Server) handleAgentPluginRuntimeList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.PluginRuntimeList(params)
@@ -343,7 +350,7 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_stronghold_access_failed",
 		}
 	}
-	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) || errors.Is(err, storage.ErrSecretNotFound) || errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrSecretSourceFailed) || errors.Is(err, model.ErrSecretNotFound) {
+	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) {
 		return nil, &rpcError{
 			Code:    1005004,
 			Message: "STRONGHOLD_ACCESS_FAILED",
@@ -367,28 +374,28 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_model_provider_not_found",
 		}
 	}
-	if model.IsProviderRuntimeUnavailable(err) {
-		return nil, &rpcError{
-			Code:    1008007,
-			Message: "MODEL_RUNTIME_UNAVAILABLE",
-			Detail:  err.Error(),
-			TraceID: "trace_model_runtime_unavailable",
-		}
-	}
-	if errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) {
-		return nil, &rpcError{
-			Code:    1008002,
-			Message: "MODEL_NOT_ALLOWED",
-			Detail:  err.Error(),
-			TraceID: "trace_model_not_allowed",
-		}
-	}
 	if errors.Is(err, tools.ErrToolOutputInvalid) {
 		return nil, &rpcError{
 			Code:    1003004,
 			Message: "TOOL_OUTPUT_INVALID",
 			Detail:  err.Error(),
 			TraceID: "trace_tool_output_invalid",
+		}
+	}
+	if model.IsProviderRuntimeUnavailable(err) {
+		return nil, &rpcError{
+			Code:    1008003,
+			Message: "MODEL_RUNTIME_UNAVAILABLE",
+			Detail:  err.Error(),
+			TraceID: "trace_model_runtime_unavailable",
+		}
+	}
+	if errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrSecretSourceFailed) {
+		return nil, &rpcError{
+			Code:    1008002,
+			Message: "MODEL_NOT_ALLOWED",
+			Detail:  err.Error(),
+			TraceID: "trace_model_not_allowed",
 		}
 	}
 

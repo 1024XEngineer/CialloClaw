@@ -69,6 +69,15 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	// Bootstrap builds a working client from the canonical runtime route, but an
+	// unsupported persisted provider still needs a clientless placeholder that
+	// preserves the user-facing provider identity for diagnostics and follow-up
+	// settings edits.
+	resolvedModelConfig, placeholderModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
+	}
 	auditService := audit.NewService(storageService.AuditWriter())
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -122,12 +131,12 @@ func New(cfg config.Config) (*App, error) {
 	)
 
 	modelService, err := newModelServiceFromConfigForBootstrap(model.ServiceConfig{
-		ModelConfig:  cfg.Model,
+		ModelConfig:  resolvedModelConfig,
 		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
-		if shouldFallbackBootstrapModelService(err) {
-			modelService = model.NewService(cfg.Model)
+		if shouldFallbackBootstrapModelService(err, persistedModelRouteChanged) {
+			modelService = model.NewService(placeholderModelConfig)
 		} else {
 			_ = storageService.Close()
 			return nil, err
@@ -182,7 +191,45 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
-func shouldFallbackBootstrapModelService(err error) bool {
+func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, config.ModelConfig, bool, error) {
+	if settingsStore == nil {
+		return base, base, false, nil
+	}
+	snapshot, err := settingsStore.LoadSettingsSnapshot(context.Background())
+	if err != nil {
+		return config.ModelConfig{}, config.ModelConfig{}, false, err
+	}
+	resolved := model.RuntimeConfigFromSettings(base, snapshot)
+	placeholder := resolved
+	if provider := bootstrapPersistedModelProvider(snapshot); provider != "" {
+		placeholder.Provider = provider
+	}
+	persistedRouteChanged := placeholder.Provider != base.Provider || placeholder.Endpoint != base.Endpoint || placeholder.ModelID != base.ModelID
+	return resolved, placeholder, persistedRouteChanged, nil
+}
+
+func bootstrapPersistedModelProvider(snapshot map[string]any) string {
+	models, ok := snapshot["models"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if provider, ok := models["provider"].(string); ok {
+		if trimmed := strings.TrimSpace(provider); trimmed != "" {
+			return trimmed
+		}
+	}
+	credentials, ok := models["credentials"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	provider, _ := credentials["provider"].(string)
+	return strings.TrimSpace(provider)
+}
+
+func shouldFallbackBootstrapModelService(err error, allowPersistedRoutePlaceholder bool) bool {
+	if allowPersistedRoutePlaceholder && errors.Is(err, model.ErrModelProviderUnsupported) {
+		return true
+	}
 	if !errors.Is(err, model.ErrSecretSourceFailed) {
 		return false
 	}

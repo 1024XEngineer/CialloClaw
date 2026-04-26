@@ -455,14 +455,6 @@ export interface SettingsSnapshot {
         stronghold: StrongholdStatus;
       };
     };
-    data_log?: {
-      provider: string;
-      budget_auto_downgrade: boolean;
-      provider_api_key_configured: boolean;
-      stronghold: StrongholdStatus;
-      base_url?: string;
-      model?: string;
-    };
   };
 }
 

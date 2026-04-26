@@ -31,6 +31,18 @@ impl LocalPathRoots {
             workspace_root: canonicalize_root(workspace_root),
         }
     }
+
+    /// Returns the trusted workspace root used for workspace-relative desktop
+    /// path resolution.
+    pub(crate) fn workspace_root(&self) -> Option<&PathBuf> {
+        self.workspace_root.as_ref()
+    }
+
+    /// Returns the trusted repository root used for repo-relative desktop path
+    /// resolution.
+    pub(crate) fn repo_root(&self) -> Option<&PathBuf> {
+        self.repo_root.as_ref()
+    }
 }
 
 /// Opens a local file or directory through the operating system shell.
@@ -57,12 +69,18 @@ fn resolve_existing_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result
     let candidate = resolve_path_candidate(raw_path, roots)?;
 
     if !candidate.exists() {
-        return Err(format!("local target does not exist: {}", candidate.display()));
+        return Err(format!(
+            "local target does not exist: {}",
+            candidate.display()
+        ));
     }
 
-    let canonical_target = candidate
-        .canonicalize()
-        .map_err(|error| format!("failed to canonicalize local target {}: {error}", candidate.display()))?;
+    let canonical_target = candidate.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize local target {}: {error}",
+            candidate.display()
+        )
+    })?;
 
     ensure_path_within_allowed_roots(&canonical_target, roots)?;
 
@@ -85,7 +103,9 @@ fn resolve_path_candidate(raw_path: &str, roots: &LocalPathRoots) -> Result<Path
             return Ok(workspace_root.join(workspace_relative_path));
         }
 
-        return Err("workspace root is not available for workspace-relative delivery paths".to_string());
+        return Err(
+            "workspace root is not available for workspace-relative delivery paths".to_string(),
+        );
     }
 
     if let Some(repo_root) = roots.repo_root.as_ref() {
@@ -106,7 +126,7 @@ fn strip_workspace_prefix(raw_path: &str) -> Option<&str> {
 }
 
 fn canonicalize_root(root: Option<PathBuf>) -> Option<PathBuf> {
-    root.and_then(|path| path.canonicalize().ok())
+    root.map(|path| path.canonicalize().unwrap_or(path))
 }
 
 fn ensure_path_within_allowed_roots(target: &Path, roots: &LocalPathRoots) -> Result<(), String> {
@@ -174,7 +194,11 @@ fn encode_wide(value: &OsStr) -> Vec<u16> {
 
 #[cfg(target_os = "macos")]
 fn open_with_system_handler(target: &Path) -> Result<(), String> {
-    run_platform_command("open", &[target], &format!("open local target {}", target.display()))
+    run_platform_command(
+        "open",
+        &[target],
+        &format!("open local target {}", target.display()),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -249,7 +273,10 @@ mod tests {
     #[test]
     fn resolve_path_candidate_joins_workspace_relative_paths_against_workspace_root() {
         let fixture = create_root_fixture("workspace-root");
-        let roots = LocalPathRoots::new(Some(fixture.workspace_root.clone()), Some(fixture.repo_root));
+        let roots = LocalPathRoots::new(
+            Some(fixture.workspace_root.clone()),
+            Some(fixture.repo_root),
+        );
         let resolved = resolve_path_candidate("workspace/artifacts/result.docx", &roots)
             .expect("resolve workspace-relative path");
 
@@ -262,13 +289,21 @@ mod tests {
     #[test]
     fn resolve_path_candidate_joins_repo_relative_paths_against_repo_root() {
         let fixture = create_root_fixture("repo-root");
-        let roots = LocalPathRoots::new(Some(fixture.workspace_root), Some(fixture.repo_root.clone()));
+        let roots = LocalPathRoots::new(
+            Some(fixture.workspace_root),
+            Some(fixture.repo_root.clone()),
+        );
         let resolved = resolve_path_candidate("apps/desktop/src/main.ts", &roots)
             .expect("resolve repo-relative path");
 
         assert_eq!(
             resolved,
-            fixture.repo_root.join("apps").join("desktop").join("src").join("main.ts")
+            fixture
+                .repo_root
+                .join("apps")
+                .join("desktop")
+                .join("src")
+                .join("main.ts")
         );
     }
 
@@ -279,7 +314,10 @@ mod tests {
         fs::create_dir_all(target.parent().expect("workspace target parent"))
             .expect("create workspace target parent");
         fs::write(&target, "artifact").expect("write temp target");
-        let roots = LocalPathRoots::new(Some(fixture.workspace_root.clone()), Some(fixture.repo_root));
+        let roots = LocalPathRoots::new(
+            Some(fixture.workspace_root.clone()),
+            Some(fixture.repo_root),
+        );
 
         let resolved = resolve_existing_local_path("workspace/reports/summary.txt", &roots)
             .expect("resolve existing target");
@@ -310,6 +348,18 @@ mod tests {
         assert!(error.contains("outside the allowed workspace and repository roots"));
 
         let _ = fs::remove_file(outside_target);
+    }
+
+    #[test]
+    fn local_path_roots_keep_missing_workspace_root_for_later_resolution() {
+        let fixture = create_root_fixture("missing-root-retained");
+        let missing_workspace_root = fixture.workspace_root.join("missing");
+        let roots = LocalPathRoots::new(
+            Some(missing_workspace_root.clone()),
+            Some(fixture.repo_root),
+        );
+
+        assert_eq!(roots.workspace_root(), Some(&missing_workspace_root));
     }
 
     struct RootFixture {

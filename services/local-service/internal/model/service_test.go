@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -16,6 +17,13 @@ type mockClient struct {
 	response GenerateTextResponse
 	err      error
 	request  GenerateTextRequest
+	called   bool
+}
+
+type mockToolCallingClient struct {
+	response ToolCallResult
+	err      error
+	request  ToolCallRequest
 	called   bool
 }
 
@@ -57,6 +65,19 @@ func (m *mockClient) GenerateText(_ context.Context, request GenerateTextRequest
 		return GenerateTextResponse{}, m.err
 	}
 
+	return m.response, nil
+}
+
+func (m *mockToolCallingClient) GenerateText(_ context.Context, _ GenerateTextRequest) (GenerateTextResponse, error) {
+	return GenerateTextResponse{}, nil
+}
+
+func (m *mockToolCallingClient) GenerateToolCalls(_ context.Context, request ToolCallRequest) (ToolCallResult, error) {
+	m.called = true
+	m.request = request
+	if m.err != nil {
+		return ToolCallResult{}, m.err
+	}
 	return m.response, nil
 }
 
@@ -111,6 +132,22 @@ func TestNewServiceAppliesLoopConfigDefaults(t *testing.T) {
 	if service.ContextKeepRecent() != defaultContextKeepRecent {
 		t.Fatalf("expected default keep recent, got %d", service.ContextKeepRecent())
 	}
+	if service.PlannerRetryBudget() != 1 {
+		t.Fatalf("expected default planner retry budget, got %d", service.PlannerRetryBudget())
+	}
+	if service.ToolRetryBudget() != 1 {
+		t.Fatalf("expected default tool retry budget, got %d", service.ToolRetryBudget())
+	}
+}
+
+func TestNewServicePreservesConfiguredRetryBudgets(t *testing.T) {
+	service := NewService(config.ModelConfig{PlannerRetryBudget: 3, ToolRetryBudget: 2}, nil)
+	if service.PlannerRetryBudget() != 3 {
+		t.Fatalf("expected configured planner retry budget, got %d", service.PlannerRetryBudget())
+	}
+	if service.ToolRetryBudget() != 2 {
+		t.Fatalf("expected configured tool retry budget, got %d", service.ToolRetryBudget())
+	}
 }
 
 // TestGenerateTextReturnsErrorWhenClientMissing 验证GenerateTextReturnsErrorWhenClientMissing。
@@ -149,12 +186,54 @@ func TestGenerateTextDelegatesToClient(t *testing.T) {
 		t.Fatal("expected client to be called")
 	}
 
-	if client.request != request {
+	if !reflect.DeepEqual(client.request, request) {
 		t.Fatalf("request mismatch: got %+v want %+v", client.request, request)
 	}
 
 	if response.OutputText != "done" {
 		t.Fatalf("output mismatch: got %q", response.OutputText)
+	}
+}
+
+func TestGenerateToolCallsReturnsErrorWhenClientMissing(t *testing.T) {
+	service := NewService(config.ModelConfig{}, nil)
+	_, err := service.GenerateToolCalls(context.Background(), ToolCallRequest{Input: "hello"})
+	if !errors.Is(err, ErrClientNotConfigured) {
+		t.Fatalf("expected ErrClientNotConfigured, got %v", err)
+	}
+}
+
+func TestGenerateToolCallsReturnsErrorWhenToolCallingUnsupported(t *testing.T) {
+	service := NewService(config.ModelConfig{}, &mockClient{})
+	_, err := service.GenerateToolCalls(context.Background(), ToolCallRequest{Input: "hello"})
+	if !errors.Is(err, ErrToolCallingNotSupported) {
+		t.Fatalf("expected ErrToolCallingNotSupported, got %v", err)
+	}
+	if service.SupportsToolCalling() {
+		t.Fatal("expected plain text client not to report tool-calling support")
+	}
+}
+
+func TestGenerateToolCallsDelegatesToToolCallingClient(t *testing.T) {
+	client := &mockToolCallingClient{response: ToolCallResult{RequestID: "req_tool_123", ToolCalls: []ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/todo.md"}}}}}
+	service := NewService(config.ModelConfig{}, client)
+	request := ToolCallRequest{TaskID: "task_001", RunID: "run_001", Input: "inspect", Tools: []ToolDefinition{{Name: "read_file"}}}
+
+	result, err := service.GenerateToolCalls(context.Background(), request)
+	if err != nil {
+		t.Fatalf("GenerateToolCalls returned error: %v", err)
+	}
+	if !client.called {
+		t.Fatal("expected tool-calling client to be called")
+	}
+	if !reflect.DeepEqual(client.request, request) {
+		t.Fatalf("request mismatch: got %+v want %+v", client.request, request)
+	}
+	if !service.SupportsToolCalling() {
+		t.Fatal("expected tool-calling client support to be reported")
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "read_file" {
+		t.Fatalf("unexpected tool call result: %+v", result)
 	}
 }
 
@@ -321,6 +400,11 @@ func TestGenerateTextResponseInvocationRecord(t *testing.T) {
 
 	if record.Usage.TotalTokens != 15 || record.LatencyMS != 123 {
 		t.Fatalf("record metrics mismatch: got %+v", record)
+	}
+	mapped := record.Map()
+	usage, _ := mapped["usage"].(map[string]any)
+	if mapped["provider"] != OpenAIResponsesProvider || mapped["model_id"] != "gpt-5.4" || usage["total_tokens"] != 15 {
+		t.Fatalf("expected invocation record map to preserve fields, got %+v", mapped)
 	}
 }
 

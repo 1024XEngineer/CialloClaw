@@ -12,7 +12,7 @@ import type {
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
 import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, runMockUpdateNote } from "./notePage.mock";
-import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome } from "./notePage.types";
+import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 
@@ -47,6 +47,39 @@ function formatAbsoluteTime(value: string) {
     minute: "2-digit",
     month: "numeric",
   });
+}
+
+function formatAbsoluteTimestamp(value: number) {
+  return new Date(value).toLocaleString("zh-CN", {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "numeric",
+  });
+}
+
+function createSourceNoteFallbackId(path: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < path.length; index += 1) {
+    hash ^= path.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `source_note_${(hash >>> 0).toString(16)}`;
+}
+
+function extractSourceNotePreview(content: string) {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const previewLine = lines.find((line) => !/^#+\s*/.test(line)) ?? lines[0] ?? "";
+
+  return previewLine
+    .replace(/^[-*+]\s+\[[ xX]\]\s*/, "")
+    .replace(/^[-*+]\s*/, "")
+    .trim();
 }
 
 function formatRelativeTime(value: string) {
@@ -324,6 +357,326 @@ function mapItems(items: TodoItem[]): NoteListItem[] {
     experience: getMockNoteExperience(item.item_id) ?? createFallbackExperience(item),
     item,
   }));
+}
+
+function parseSourceChecklistLine(line: string) {
+  const trimmed = line.trim();
+  const match = /^[-*]\s+\[( |x|X)\]\s+(.+)$/.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    checked: match[1].toLowerCase() === "x",
+    title: match[2].trim(),
+  };
+}
+
+function splitSourceMetadataLine(line: string) {
+  const separatorIndex = line.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex >= line.length - 1) {
+    return null;
+  }
+
+  const key = line.slice(0, separatorIndex).trim().toLowerCase();
+  const value = line.slice(separatorIndex + 1).trim();
+  if (key === "" || value === "") {
+    return null;
+  }
+
+  return { key, value };
+}
+
+function normalizeFallbackBucket(value: string | null, checked: boolean) {
+  if (value === "upcoming" || value === "later" || value === "recurring_rule" || value === "closed") {
+    return value;
+  }
+
+  return checked ? "closed" : "later";
+}
+
+function inferFallbackStatus(dueAt: string | null, checked: boolean): TodoItem["status"] {
+  if (checked) {
+    return "completed";
+  }
+
+  if (!dueAt) {
+    return "normal";
+  }
+
+  const parsedDueAt = new Date(dueAt);
+  if (Number.isNaN(parsedDueAt.getTime())) {
+    return "normal";
+  }
+
+  const now = new Date();
+  if (parsedDueAt.getTime() < now.getTime()) {
+    return "overdue";
+  }
+
+  if (
+    parsedDueAt.getFullYear() === now.getFullYear()
+    && parsedDueAt.getMonth() === now.getMonth()
+    && parsedDueAt.getDate() === now.getDate()
+  ) {
+    return "due_today";
+  }
+
+  return "normal";
+}
+
+function buildSourceNoteResource(itemId: string, path: string) {
+  return {
+    label: "源 markdown",
+    open_action: "open_file" as const,
+    open_payload: {
+      path,
+      task_id: null,
+      url: null,
+    },
+    path,
+    resource_id: `${itemId}_source`,
+    resource_type: "Markdown 文件",
+  };
+}
+
+/**
+ * Builds one renderer-local note card from a markdown source file when the
+ * source note exists on disk but has not been surfaced as a formal notepad
+ * item yet.
+ *
+ * @param note Markdown source note from the desktop bridge.
+ * @returns A later-bucket note card that keeps the source file visible.
+ */
+export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListItem {
+  const itemId = createSourceNoteFallbackId(note.path);
+  const previewText = extractSourceNotePreview(note.content);
+
+  return {
+    experience: {
+      agentSuggestion: {
+        detail: "这张便签已经保存在任务来源目录里。你可以继续编辑它，巡检识别后会切换成正式便签项。",
+        label: "下一步建议",
+      },
+      canConvertToTask: false,
+      detailStatus: "等待巡检同步",
+      detailStatusTone: "normal",
+      effectiveScope: note.sourceRoot,
+      endedAt: null,
+      isRecurringEnabled: false,
+      nextOccurrenceAt: null,
+      noteText: previewText || "这张源便签还没有提炼出正式事项，当前先作为本地便签卡片显示。",
+      noteType: "reminder",
+      plannedAt: null,
+      prerequisite: "当前还没有正式巡检结果，这张卡片直接来自任务来源目录中的 markdown 文件。",
+      previewStatus: "待巡检",
+      recentInstanceStatus: null,
+      relatedResources: [
+        {
+          id: `${itemId}_source`,
+          label: "源 markdown",
+          openAction: "open_file",
+          path: note.path,
+          taskId: null,
+          type: "Markdown 文件",
+          url: null,
+        },
+      ],
+      repeatRule: null,
+      summaryLabel: "源便签",
+      timeHint: note.modifiedAtMs ? `最后修改 ${formatAbsoluteTimestamp(note.modifiedAtMs)}` : "刚创建",
+      title: note.title,
+      typeLabel: "源便签",
+    },
+    item: {
+      agent_suggestion: "等待巡检同步后再进入正式事项流。",
+      bucket: "later",
+      due_at: null,
+      item_id: itemId,
+      linked_task_id: null,
+      note_text: previewText || note.content.trim() || "新建源便签",
+      related_resources: [
+        {
+          label: "源 markdown",
+          open_action: "open_file",
+          open_payload: {
+            path: note.path,
+            task_id: null,
+            url: null,
+          },
+          path: note.path,
+          resource_id: `${itemId}_source`,
+          resource_type: "Markdown 文件",
+        },
+      ],
+      status: "normal",
+      title: note.title,
+      type: "note",
+      ended_at: null,
+      effective_scope: note.sourceRoot,
+      next_occurrence_at: null,
+      prerequisite: "等待巡检把源文件识别成正式事项。",
+      recent_instance_status: null,
+      recurring_enabled: false,
+      repeat_rule: null,
+    },
+    sourceNote: {
+      localOnly: true,
+      path: note.path,
+      sourceLine: null,
+      title: note.title,
+    },
+  };
+}
+
+/**
+ * Builds one local fallback card for every checklist block found in the source
+ * markdown file. The page uses these cards before the backend inspector has
+ * finished translating the file into formal notepad items.
+ *
+ * @param note Markdown source note from the desktop bridge.
+ * @returns Renderer-local cards derived from checklist blocks in the file.
+ */
+export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteListItem[] {
+  const lines = note.content.replace(/\r\n/g, "\n").split("\n");
+  const items: NoteListItem[] = [];
+  let current:
+    | {
+        agentSuggestion: string | null;
+        bodyLines: string[];
+        bucket: string | null;
+        checked: boolean;
+        dueAt: string | null;
+        effectiveScope: string | null;
+        nextOccurrenceAt: string | null;
+        noteText: string | null;
+        prerequisite: string | null;
+        recentInstanceStatus: string | null;
+        repeatRule: string | null;
+        sourceLine: number;
+        title: string;
+      }
+    | null = null;
+
+  const flushCurrent = () => {
+    if (!current) {
+      return;
+    }
+
+    const itemId = createSourceNoteFallbackId(`${note.path}:${current.sourceLine}:${current.title}`);
+    const noteText = current.noteText ?? (current.bodyLines.join("\n").trim() || current.title);
+    const bucket = normalizeFallbackBucket(current.bucket, current.checked);
+    const dueAt = current.nextOccurrenceAt ?? current.dueAt;
+    const item = {
+      agent_suggestion: current.agentSuggestion ?? "等待巡检把这个 markdown 便签块同步成正式事项。",
+      bucket,
+      due_at: dueAt,
+      effective_scope: current.effectiveScope ?? note.sourceRoot,
+      ended_at: current.checked ? dueAt : null,
+      item_id: itemId,
+      linked_task_id: null,
+      next_occurrence_at: current.nextOccurrenceAt,
+      note_text: noteText,
+      prerequisite: current.prerequisite,
+      recent_instance_status: current.recentInstanceStatus,
+      recurring_enabled: bucket === "recurring_rule",
+      related_resources: [buildSourceNoteResource(itemId, note.path)],
+      repeat_rule: current.repeatRule,
+      source_line: current.sourceLine,
+      source_path: note.path,
+      status: inferFallbackStatus(dueAt, current.checked),
+      title: current.title,
+      type: bucket === "recurring_rule" ? "recurring" : "note",
+    } as TodoItem;
+
+    items.push({
+      experience: createFallbackExperience(item),
+      item,
+      sourceNote: {
+        localOnly: true,
+        path: note.path,
+        sourceLine: current.sourceLine,
+        title: current.title,
+      },
+    });
+
+    current = null;
+  };
+
+  lines.forEach((line, index) => {
+    const checklist = parseSourceChecklistLine(line);
+    if (checklist) {
+      flushCurrent();
+      current = {
+        agentSuggestion: null,
+        bodyLines: [],
+        bucket: null,
+        checked: checklist.checked,
+        dueAt: null,
+        effectiveScope: null,
+        nextOccurrenceAt: null,
+        noteText: null,
+        prerequisite: null,
+        recentInstanceStatus: null,
+        repeatRule: null,
+        sourceLine: index + 1,
+        title: checklist.title,
+      };
+      return;
+    }
+
+    if (!current) {
+      return;
+    }
+
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      return;
+    }
+
+    const metadata = splitSourceMetadataLine(trimmed);
+    if (!metadata) {
+      current.bodyLines.push(trimmed);
+      return;
+    }
+
+    switch (metadata.key) {
+      case "agent":
+      case "suggest":
+        current.agentSuggestion = metadata.value;
+        return;
+      case "bucket":
+        current.bucket = metadata.value;
+        return;
+      case "due":
+        current.dueAt = metadata.value;
+        return;
+      case "next":
+        current.nextOccurrenceAt = metadata.value;
+        return;
+      case "note":
+        current.noteText = metadata.value;
+        return;
+      case "prerequisite":
+        current.prerequisite = metadata.value;
+        return;
+      case "repeat":
+        current.repeatRule = metadata.value;
+        current.bucket = "recurring_rule";
+        return;
+      case "scope":
+        current.effectiveScope = metadata.value;
+        return;
+      case "status":
+        current.recentInstanceStatus = metadata.value;
+        return;
+      default:
+        current.bodyLines.push(trimmed);
+    }
+  });
+
+  flushCurrent();
+  return items.length > 0 ? items : [buildSourceNoteFallbackItem(note)];
 }
 
 async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {

@@ -392,7 +392,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：数据库、Artifact、恢复点、Stronghold、RAG 等落盘能力异常。
 - `1006xxx`：worker / sidecar / plugin 进程不可用或输出非法。
 - `1007xxx`：平台和执行环境问题。
-- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常；其中 `1008001`、`1008002`、`1008007` 已登记，其余仍为预留段。
+- `1008xxx`：模型与前馈配置异常；其中 `1008001`、`1008002`、`1008003` 已登记到错误码真源，其余编号继续预留。
 - `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常，当前为预留段。
 
 ### 6.3 推荐错误码表
@@ -445,12 +445,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1006003` `OCR_WORKER_FAILED`
 - `1006004` `MEDIA_WORKER_FAILED`
 
-#### 模型与前馈配置
-
-- `1008001` `MODEL_PROVIDER_NOT_FOUND`
-- `1008002` `MODEL_NOT_ALLOWED`
-- `1008007` `MODEL_RUNTIME_UNAVAILABLE`
-
 #### 预留错误码（尚未登记到错误码真源）
 
 以下错误码常量保留给后续功能使用。在它们正式写入 `packages/protocol/errors/codes.ts` 前，只能作为规划预留，不得被文档误解为当前仓库已经实现：
@@ -469,12 +463,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1007004` `SANDBOX_PROFILE_INVALID`
 - `1007005` `PATH_POLICY_VIOLATION`
 
+##### 模型与前馈配置
+
+- `1008001` `MODEL_PROVIDER_NOT_FOUND`
+- `1008002` `MODEL_NOT_ALLOWED`
+- `1008003` `MODEL_RUNTIME_UNAVAILABLE`
+
 ##### 模型与前馈配置预留
 
-- `1008003` `SKILL_NOT_FOUND`
-- `1008004` `BLUEPRINT_NOT_FOUND`
-- `1008005` `PROMPT_TEMPLATE_NOT_FOUND`
-- `1008006` `LSP_DIAGNOSTIC_UNAVAILABLE`
+- `1008004` `SKILL_NOT_FOUND`
+- `1008005` `BLUEPRINT_NOT_FOUND`
+- `1008006` `PROMPT_TEMPLATE_NOT_FOUND`
+- `1008007` `LSP_DIAGNOSTIC_UNAVAILABLE`
 
 ##### 评估与升级预留
 
@@ -3633,7 +3633,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改设置并点击保存时
-- **系统处理**：写入设置并返回当前生效快照与生效方式；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文。当前 `models.provider / models.api_key / models.base_url / models.model` 仍需重启后才会重建 active model service。
+- **系统处理**：写入设置并返回当前生效快照与生效方式；`models.api_key` 只用于当前请求写入 Stronghold，不会进入正式设置快照或回传明文。模型路由与凭证更新会在不打断当前任务的前提下重建 future-task 运行时模型配置。
 - **入参**：要更新的设置项
 - **出参**：已更新字段、生效设置、生效方式、是否需重启
 
@@ -3642,6 +3642,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.settings.update` 的 `models` 采用写入导向结构，使用扁平字段提交提供方、凭证和模型选择。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
+- `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
 
 ### agent.settings.update 入参说明
 
@@ -3710,8 +3711,36 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.effective_settings.models.base_url`              | 生效后的模型服务基地址 |
 | `data.effective_settings.models.model`                 | 生效后的模型名 |
 | `data.apply_mode`                                      | 配置生效方式，取值来自 `apply_mode` |
-| `data.need_restart`                                    | 当前更新是否需要重启客户端 |
-| `meta.server_time`                                     | 服务端响应时间 |
+
+---
+
+### 8.4.3 `agent.settings.model.validate`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：控制面板点击“测试连接”时，以及模型设置保存前的只读预校验阶段
+- **系统处理**：使用当前草稿中的 `models` 路由字段与已保存密钥（或本次请求临时提供的 `models.api_key`）构建一次只读探测，检查文本生成与工具调用是否可用
+- **入参**：可选模型草稿字段；未提供的字段沿用当前运行时有效配置
+- **出参**：结构化校验结果、失败原因、规范化后的 provider 与文本/工具调用就绪状态
+
+补充约束：
+
+- 本接口是只读探测，不会修改正式设置快照、Stronghold 密钥或当前任务状态。
+- `models.api_key` 若在本次请求中提供，仅用于本次校验，不会回显明文。
+- 返回 `ok = true` 时表示当前模型配置已通过文本生成与工具调用校验；返回 `ok = false` 时，控制面板应阻止本次保存并直接展示校验失败原因。
+
+### agent.settings.model.validate 出参关键字段
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `data.ok` | 当前模型配置是否通过校验 |
+| `data.status` | 结构化校验状态，例如缺少 API Key、鉴权失败、接口不存在、工具调用不可用 |
+| `data.message` | 面向用户的校验说明文案 |
+| `data.provider` | 前端提交或当前设置中展示的 provider 文本 |
+| `data.canonical_provider` | 后端规范化后实际走的 provider 路由 |
+| `data.base_url` | 本次校验使用的模型基地址 |
+| `data.model` | 本次校验使用的模型名 |
+| `data.text_generation_ready` | 文本生成探测是否成功 |
+| `data.tool_calling_ready` | 工具调用探测是否成功 |
 
 ### agent.settings.update 出参示例
 
@@ -3747,8 +3776,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "model": "gpt-3.5-turbo"
         }
       },
-      "apply_mode": "restart_required",
-      "need_restart": true
+      "apply_mode": "next_task_effective",
+      "need_restart": false
     },
     "meta": {
       "server_time": "2026-04-07T11:06:01+08:00"

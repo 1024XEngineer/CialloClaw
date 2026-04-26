@@ -24,6 +24,13 @@ const actionIcons: Record<NoteDetailAction, ComponentType<{ className?: string }
 };
 
 function getActions(item: NoteListItem) {
+  if (item.sourceNote?.localOnly) {
+    return [
+      { action: "edit" as const, label: "编辑源便签", tooltip: "继续编辑任务来源目录里的 markdown 便签。" },
+      { action: "open-resource" as const, label: "打开源文件", tooltip: "直接打开这张源便签对应的 markdown 文件。" },
+    ];
+  }
+
   if (item.item.bucket === "upcoming") {
     return [
       { action: "complete" as const, label: "标记完成", tooltip: "把这条事项标记为已完成。" },

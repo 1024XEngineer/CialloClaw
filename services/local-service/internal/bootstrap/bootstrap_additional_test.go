@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -40,6 +42,27 @@ func replacePluginManifestStore(t *testing.T, service *storage.Service, store st
 	serviceValue := reflect.ValueOf(service).Elem()
 	field := serviceValue.FieldByName("pluginManifestStore")
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func appRuntimeModelService(t *testing.T, app *App) *model.Service {
+	t.Helper()
+	if app == nil || app.server == nil {
+		t.Fatal("expected app server to be wired")
+	}
+	serverValue := reflect.ValueOf(app.server).Elem()
+	orchestratorField := serverValue.FieldByName("orchestrator")
+	orchestratorValue := reflect.NewAt(orchestratorField.Type(), unsafe.Pointer(orchestratorField.UnsafeAddr())).Elem()
+	if orchestratorValue.IsNil() {
+		t.Fatal("expected bootstrap orchestrator to be wired")
+	}
+	serviceValue := orchestratorValue.Elem()
+	modelField := serviceValue.FieldByName("model")
+	modelValue := reflect.NewAt(modelField.Type(), unsafe.Pointer(modelField.UnsafeAddr())).Elem()
+	if modelValue.IsNil() {
+		return nil
+	}
+	service, _ := modelValue.Interface().(*model.Service)
+	return service
 }
 
 func TestPersistPluginManifestsHandlesNilAndSuccessPaths(t *testing.T) {
@@ -206,5 +229,234 @@ func TestNewModelServiceFallbackAndFailureBranches(t *testing.T) {
 	}
 	if _, err := New(baseConfig(filepath.Join(t.TempDir(), "secret-source-error"))); !errors.Is(err, secretSourceErr) {
 		t.Fatalf("expected non-missing secret source failure to propagate, got %v", err)
+	}
+}
+
+func TestNewUsesPersistedModelSettingsForRuntimeModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_bootstrap","output_text":"persisted model ok","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	baseDir := t.TempDir()
+	cfg := config.Config{
+		RPC: config.RPCConfig{
+			Transport:        "named_pipe",
+			NamedPipeName:    `\\.\pipe\cialloclaw-bootstrap-persisted-model`,
+			DebugHTTPAddress: ":0",
+		},
+		WorkspaceRoot: filepath.Join(baseDir, "workspace"),
+		DatabasePath:  filepath.Join(baseDir, "data", "local.db"),
+		Model: config.ModelConfig{
+			Provider:             model.OpenAIResponsesProvider,
+			ModelID:              "gpt-bootstrap-default",
+			Endpoint:             "https://invalid.example/v1/responses",
+			SingleTaskLimit:      10.0,
+			DailyLimit:           50.0,
+			BudgetAutoDowngrade:  true,
+			MaxToolIterations:    4,
+			PlannerRetryBudget:   1,
+			ToolRetryBudget:      1,
+			ContextCompressChars: 2400,
+			ContextKeepRecent:    4,
+		},
+	}
+	seed := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	if err := seed.SettingsStore().SaveSettingsSnapshot(context.Background(), map[string]any{
+		"models": map[string]any{
+			"provider": "openai",
+			"credentials": map[string]any{
+				"base_url": server.URL,
+				"model":    "gpt-persisted",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed settings snapshot failed: %v", err)
+	}
+	if err := seed.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "persisted-secret-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store failed: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed storage failed: %v", err)
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("bootstrap returned error: %v", err)
+	}
+	defer func() { _ = app.Close() }()
+
+	runtimeModel := appRuntimeModelService(t, app)
+	if runtimeModel == nil {
+		t.Fatal("expected bootstrap runtime model to be wired")
+	}
+	configSnapshot := runtimeModel.RuntimeConfig()
+	if configSnapshot.Provider != model.OpenAIResponsesProvider || configSnapshot.Endpoint != server.URL || configSnapshot.ModelID != "gpt-persisted" {
+		t.Fatalf("expected bootstrap runtime model to honor persisted settings, got %+v", configSnapshot)
+	}
+	response, err := runtimeModel.GenerateText(context.Background(), model.GenerateTextRequest{Input: "hello"})
+	if err != nil {
+		t.Fatalf("expected persisted runtime model to build a working client, got %v", err)
+	}
+	if response.OutputText != "persisted model ok" {
+		t.Fatalf("expected persisted runtime model to use stored endpoint, got %+v", response)
+	}
+}
+
+func TestNewFallsBackToPlaceholderWhenPersistedProviderIsUnsupported(t *testing.T) {
+	baseDir := t.TempDir()
+	cfg := config.Config{
+		RPC: config.RPCConfig{
+			Transport:        "named_pipe",
+			NamedPipeName:    `\\.\pipe\cialloclaw-bootstrap-unsupported-model`,
+			DebugHTTPAddress: ":0",
+		},
+		WorkspaceRoot: filepath.Join(baseDir, "workspace"),
+		DatabasePath:  filepath.Join(baseDir, "data", "local.db"),
+		Model: config.ModelConfig{
+			Provider:             model.OpenAIResponsesProvider,
+			ModelID:              "gpt-bootstrap-default",
+			Endpoint:             "https://api.openai.com/v1/responses",
+			SingleTaskLimit:      10.0,
+			DailyLimit:           50.0,
+			BudgetAutoDowngrade:  true,
+			MaxToolIterations:    4,
+			PlannerRetryBudget:   1,
+			ToolRetryBudget:      1,
+			ContextCompressChars: 2400,
+			ContextKeepRecent:    4,
+		},
+	}
+	seed := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	if err := seed.SettingsStore().SaveSettingsSnapshot(context.Background(), map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"credentials": map[string]any{
+				"base_url": "https://example.invalid/v1/messages",
+				"model":    "claude-3-7-sonnet",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed settings snapshot failed: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed storage failed: %v", err)
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("expected bootstrap to fall back for persisted unsupported provider, got %v", err)
+	}
+	defer func() { _ = app.Close() }()
+
+	runtimeModel := appRuntimeModelService(t, app)
+	if runtimeModel == nil {
+		t.Fatal("expected placeholder runtime model to be wired")
+	}
+	configSnapshot := runtimeModel.RuntimeConfig()
+	if configSnapshot.Provider != "anthropic" || configSnapshot.Endpoint != "https://example.invalid/v1/messages" || configSnapshot.ModelID != "claude-3-7-sonnet" {
+		t.Fatalf("expected placeholder runtime model to preserve persisted unsupported provider config, got %+v", configSnapshot)
+	}
+	if _, err := runtimeModel.GenerateText(context.Background(), model.GenerateTextRequest{Input: "hello"}); !errors.Is(err, model.ErrClientNotConfigured) {
+		t.Fatalf("expected placeholder runtime model to remain clientless, got %v", err)
+	}
+}
+
+func TestLoadBootstrapModelConfigPreservesPersistedProviderForPlaceholderFallback(t *testing.T) {
+	base := config.ModelConfig{
+		Provider: model.OpenAIResponsesProvider,
+		ModelID:  "gpt-bootstrap-default",
+		Endpoint: "https://api.openai.com/v1/responses",
+	}
+	service := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "bootstrap-load-config.db")))
+	defer func() { _ = service.Close() }()
+
+	if err := service.SettingsStore().SaveSettingsSnapshot(context.Background(), map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"credentials": map[string]any{
+				"base_url": "https://example.invalid/v1/messages",
+				"model":    "claude-3-7-sonnet",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed settings snapshot failed: %v", err)
+	}
+
+	resolved, placeholder, persistedChanged, err := loadBootstrapModelConfig(base, service.SettingsStore())
+	if err != nil {
+		t.Fatalf("loadBootstrapModelConfig returned error: %v", err)
+	}
+	if !persistedChanged {
+		t.Fatal("expected persisted route change to be detected")
+	}
+	if resolved.Provider != model.OpenAIResponsesProvider || resolved.Endpoint != "https://example.invalid/v1/messages" || resolved.ModelID != "claude-3-7-sonnet" {
+		t.Fatalf("expected resolved runtime route to stay canonical, got %+v", resolved)
+	}
+	if placeholder.Provider != "anthropic" || placeholder.Endpoint != "https://example.invalid/v1/messages" || placeholder.ModelID != "claude-3-7-sonnet" {
+		t.Fatalf("expected placeholder route to preserve persisted provider identity, got %+v", placeholder)
+	}
+}
+
+func TestLoadBootstrapModelConfigWithoutSettingsStoreKeepsBaseConfig(t *testing.T) {
+	base := config.ModelConfig{
+		Provider: model.OpenAIResponsesProvider,
+		ModelID:  "gpt-bootstrap-default",
+		Endpoint: "https://api.openai.com/v1/responses",
+	}
+
+	resolved, placeholder, persistedChanged, err := loadBootstrapModelConfig(base, nil)
+	if err != nil {
+		t.Fatalf("loadBootstrapModelConfig returned error: %v", err)
+	}
+	if persistedChanged {
+		t.Fatal("expected nil settings store not to report persisted route changes")
+	}
+	if !reflect.DeepEqual(resolved, base) {
+		t.Fatalf("expected resolved config to keep base config, got %+v want %+v", resolved, base)
+	}
+	if !reflect.DeepEqual(placeholder, base) {
+		t.Fatalf("expected placeholder config to keep base config, got %+v want %+v", placeholder, base)
+	}
+}
+
+func TestBootstrapPersistedModelProviderReadsCredentialsFallback(t *testing.T) {
+	provider := bootstrapPersistedModelProvider(map[string]any{
+		"models": map[string]any{
+			"credentials": map[string]any{
+				"provider": "  custom_gateway  ",
+			},
+		},
+	})
+	if provider != "custom_gateway" {
+		t.Fatalf("expected provider fallback from credentials, got %q", provider)
+	}
+}
+
+func TestBootstrapPersistedModelProviderRejectsMissingModelsScope(t *testing.T) {
+	if provider := bootstrapPersistedModelProvider(map[string]any{"general": map[string]any{"language": "zh-CN"}}); provider != "" {
+		t.Fatalf("expected missing models scope to return empty provider, got %q", provider)
+	}
+	if provider := bootstrapPersistedModelProvider(map[string]any{"models": map[string]any{"provider": 123}}); provider != "" {
+		t.Fatalf("expected non-string provider to be ignored, got %q", provider)
+	}
+}
+
+func TestShouldFallbackBootstrapModelServiceHonorsPersistedProviderGate(t *testing.T) {
+	unsupportedErr := model.ErrModelProviderUnsupported
+	if shouldFallbackBootstrapModelService(unsupportedErr, false) {
+		t.Fatal("expected unsupported provider without persisted route change not to fallback")
+	}
+	if !shouldFallbackBootstrapModelService(unsupportedErr, true) {
+		t.Fatal("expected persisted unsupported provider to fallback into placeholder")
+	}
+	if shouldFallbackBootstrapModelService(errors.New("boom"), true) {
+		t.Fatal("expected unrelated bootstrap error not to fallback")
 	}
 }

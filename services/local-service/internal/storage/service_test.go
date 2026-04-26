@@ -1258,6 +1258,28 @@ func TestServiceReportsStrongholdBootstrapFailureWhenFallbackUnavailable(t *test
 	}
 }
 
+func TestResolveModelAPIKeyNormalizesOpenAICompatibleAliases(t *testing.T) {
+	service := NewService(stubAdapter{databasePath: filepath.Join(t.TempDir(), "alias-secret-store.db")})
+	defer func() { _ = service.Close() }()
+
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "shared-secret",
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed canonical provider secret failed: %v", err)
+	}
+
+	value, err := service.ResolveModelAPIKey("z-ai")
+	if err != nil {
+		t.Fatalf("expected z-ai alias to reuse canonical provider secret, got %v", err)
+	}
+	if value != "shared-secret" {
+		t.Fatalf("unexpected alias secret value: %q", value)
+	}
+}
+
 func TestNewServiceFallsBackTraceAndEvalTogetherWhenEvalInitFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trace-eval-fallback.db")
 	originalTraceFactory := newSQLiteTraceStoreForService
