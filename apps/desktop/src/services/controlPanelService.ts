@@ -414,15 +414,15 @@ export async function saveControlPanelData(
       applyMode = settingsResult.apply_mode;
       needRestart = settingsResult.need_restart;
       savedSettings = true;
-	      updatedKeys.push(...settingsResult.updated_keys);
-	      warnings.push(...buildControlPanelSaveWarnings(data.settings.models.provider, settingsResult.updated_keys, data.providerApiKeyInput));
-	      if (!modelValidation && shouldValidateSavedModelRoute(settingsResult.updated_keys, data.providerApiKeyInput)) {
-	        modelValidation = await validateControlPanelModel(data, { timeoutMs });
-	      }
-	      if (!saveInspectorRequested) {
-	        saveSettings({ settings: effectiveSettings });
-	      }
-	    }
+      updatedKeys.push(...settingsResult.updated_keys);
+      warnings.push(...buildControlPanelSaveWarnings(data.settings.models.provider, settingsResult.updated_keys, data.providerApiKeyInput));
+      if (!modelValidation && shouldValidateSavedModelRoute(settingsResult.updated_keys, data.providerApiKeyInput)) {
+        modelValidation = await validateControlPanelModel(data, { timeoutMs });
+      }
+      if (!saveInspectorRequested) {
+        saveSettings({ settings: effectiveSettings });
+      }
+    }
 
     if (saveInspectorRequested) {
       try {

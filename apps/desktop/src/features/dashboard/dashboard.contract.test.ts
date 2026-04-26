@@ -2562,6 +2562,204 @@ test("control-panel save blocks invalid model routes before persisting settings"
   }
 });
 
+test("shell-ball protocol stub stays aligned with formal settings snapshot shape", () => {
+  const protocolStubSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/test-stubs/protocol.ts"), "utf8");
+
+  assert.match(protocolStubSource, /models:\s*\{[\s\S]*credentials:\s*\{/);
+  assert.doesNotMatch(protocolStubSource, /data_log\?:/);
+});
+
+test("control-panel save persists local settings after model-only saves and keeps validation metadata", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: { unit: "day", value: 7 },
+      profile_refresh_interval: { unit: "week", value: 2 },
+    },
+    task_automation: {
+      inspect_on_startup: true,
+      inspect_on_file_change: true,
+      inspection_interval: { unit: "minute", value: 15 },
+      task_sources: ["D:/workspace/todos"],
+      remind_before_deadline: true,
+      remind_when_stale: false,
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: { unit: "minute", value: 15 },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  let validationCount = 0;
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({ settings: remoteSettings }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        models: {
+          provider: string;
+          budget_auto_downgrade: boolean;
+          base_url: string;
+          model: string;
+          api_key?: string;
+        };
+      };
+      remoteSettings = {
+        ...remoteSettings,
+        models: {
+          provider: request.models.provider,
+          credentials: {
+            ...remoteSettings.models.credentials,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.base_url", "models.model", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    validateSettingsModel: async () => {
+      validationCount += 1;
+      return {
+        ok: true,
+        status: "ok",
+        message: "validated",
+        provider: "anthropic",
+        canonical_provider: "openai_responses",
+        base_url: "https://api.qnaigc.com/v1",
+        model: "claude-3-7-sonnet",
+        text_generation_ready: true,
+        tool_calling_ready: true,
+      };
+    },
+    updateTaskInspectorConfig: async () => ({ effective_config: inspectorConfig }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        providerApiKeyInput: "saved-secret-key",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "anthropic",
+            base_url: "https://api.qnaigc.com/v1",
+            model: "claude-3-7-sonnet",
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.equal(validationCount, 1);
+    assert.equal(result.savedSettings, true);
+    assert.equal(result.savedInspector, false);
+    assert.equal(result.modelValidation?.ok, true);
+    const persisted = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}");
+    assert.equal(persisted.settings.models.provider, "anthropic");
+    assert.equal(persisted.settings.models.base_url, "https://api.qnaigc.com/v1");
+    assert.equal(persisted.settings.models.model, "claude-3-7-sonnet");
+    assert.equal(persisted.settings.models.provider_api_key_configured, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("mirror overview can reuse a refreshed settings snapshot without reloading the page data", async () => {
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
     updateSettings: async () => ({
