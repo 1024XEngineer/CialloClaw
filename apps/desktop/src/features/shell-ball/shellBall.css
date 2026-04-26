@@ -974,6 +974,7 @@ body[data-app-window="shell-ball"],
   display: flex;
   height: clamp(16.2rem, 30.6vw, 21.6rem);
   justify-content: center;
+  pointer-events: auto;
   position: relative;
   transform: scale(var(--shell-ball-mascot-scale));
   transform-origin: center center;
@@ -985,18 +986,22 @@ body[data-app-window="shell-ball"],
   padding-top: 2.9rem;
 }
 
-.shell-ball-mascot__visual-shell,
+.shell-ball-mascot__visual-shell {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  pointer-events: none;
+  position: relative;
+  transform-origin: center center;
+  width: 100%;
+  z-index: 1;
+}
+
 .shell-ball-mascot__magnetic-aura-shell {
   inset: 0;
   pointer-events: none;
   position: absolute;
-}
-
-.shell-ball-mascot__visual-shell {
-  align-items: center;
-  display: flex;
-  justify-content: center;
-  transform-origin: center center;
 }
 
 .shell-ball-mascot__magnetic-aura-shell {
@@ -1024,6 +1029,7 @@ body[data-app-window="shell-ball"],
   border-radius: 999px;
   cursor: grab;
   inset: 0;
+  pointer-events: auto;
   position: absolute;
   z-index: 8;
 }
