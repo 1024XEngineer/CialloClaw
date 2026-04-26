@@ -985,38 +985,6 @@ body[data-app-window="shell-ball"],
   padding-top: 2.9rem;
 }
 
-.shell-ball-mascot__visual-shell,
-.shell-ball-mascot__magnetic-aura-shell {
-  inset: 0;
-  pointer-events: none;
-  position: absolute;
-}
-
-.shell-ball-mascot__visual-shell {
-  align-items: center;
-  display: flex;
-  justify-content: center;
-  transform-origin: center center;
-}
-
-.shell-ball-mascot__magnetic-aura-shell {
-  align-items: center;
-  display: flex;
-  justify-content: center;
-  z-index: 0;
-}
-
-.shell-ball-mascot__magnetic-aura {
-  background:
-    radial-gradient(circle, color-mix(in srgb, var(--shell-ball-accent, #6a91c8) 26%, white) 0%, transparent 58%),
-    radial-gradient(circle, rgba(255, 255, 255, 0.34) 0%, transparent 74%);
-  border-radius: 999px;
-  filter: blur(8px);
-  height: 12.4rem;
-  opacity: 0.22;
-  width: 12.4rem;
-}
-
 .shell-ball-mascot__hotspot {
   appearance: none;
   background: transparent;
@@ -1530,15 +1498,7 @@ body[data-app-window="shell-ball"],
   --shell-ball-accent: var(--shell-ball-sky);
 }
 
-.shell-ball-mascot[data-tone="sky"] {
-  --shell-ball-accent: var(--shell-ball-sky);
-}
-
 .shell-ball-mascot[data-tone="teal"] .shell-ball-mascot__orbital--back {
-  --shell-ball-accent: var(--shell-ball-teal);
-}
-
-.shell-ball-mascot[data-tone="teal"] {
   --shell-ball-accent: var(--shell-ball-teal);
 }
 
@@ -1546,15 +1506,7 @@ body[data-app-window="shell-ball"],
   --shell-ball-accent: var(--shell-ball-warm);
 }
 
-.shell-ball-mascot[data-tone="amber"] {
-  --shell-ball-accent: var(--shell-ball-warm);
-}
-
 .shell-ball-mascot[data-tone="slate"] .shell-ball-mascot__orbital--back {
-  --shell-ball-accent: var(--shell-ball-slate);
-}
-
-.shell-ball-mascot[data-tone="slate"] {
   --shell-ball-accent: var(--shell-ball-slate);
 }
 

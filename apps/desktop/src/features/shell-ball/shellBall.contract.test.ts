@@ -39,7 +39,7 @@ import {
   shouldShowShellBallSelectionIndicator,
 } from "./ShellBallApp";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
-import { getShellBallDockVisualMotion, ShellBallMascot } from "./components/ShellBallMascot";
+import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
 import { getShellBallMascotPointerPhaseAction } from "./components/ShellBallMascot";
@@ -87,7 +87,6 @@ import {
   createShellBallWindowGeometry,
   createShellBallWindowFrame,
   getShellBallDockAnimationConfig,
-  getShellBallDockAnimationKeyframes,
   getShellBallHelperWindowInteractionMode,
   getShellBallParkedDockInsetPx,
   getShellBallBubbleAnchor,
@@ -2066,78 +2065,6 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
       overshootPx: 0,
     },
   );
-  assert.deepEqual(
-    getShellBallDockAnimationKeyframes({
-      currentFrame: { x: 12, y: 48 },
-      nextFrame: { x: -6, y: 48 },
-      animationConfig: getShellBallDockAnimationConfig({
-        side: "left",
-        mode: "dock",
-      }),
-    }),
-    {
-      x: [12, -12, -6],
-      y: 48,
-      times: [0, 0.82, 1],
-    },
-  );
-  assert.deepEqual(
-    getShellBallDockAnimationKeyframes({
-      currentFrame: { x: 48, y: 28 },
-      nextFrame: { x: 48, y: -10 },
-      animationConfig: getShellBallDockAnimationConfig({
-        side: "top",
-        mode: "dock",
-      }),
-    }),
-    {
-      x: 48,
-      y: [28, -18, -10],
-      times: [0, 0.82, 1],
-    },
-  );
-  assert.deepEqual(
-    getShellBallDockAnimationKeyframes({
-      currentFrame: { x: 48, y: 28 },
-      nextFrame: { x: 48, y: 6 },
-      animationConfig: getShellBallDockAnimationConfig({
-        side: "bottom",
-        mode: "reveal",
-      }),
-    }),
-    {
-      x: 48,
-      y: 6,
-    },
-  );
-  assert.deepEqual(
-    getShellBallDockVisualMotion({
-      edgeDockSide: "top",
-      edgeDockRevealed: false,
-    }).shellY,
-    [0, -15, 5, 0],
-  );
-  assert.deepEqual(
-    getShellBallDockVisualMotion({
-      edgeDockSide: "bottom",
-      edgeDockRevealed: false,
-    }).shellY,
-    [0, 11, -4, 0],
-  );
-  assert.deepEqual(
-    getShellBallDockVisualMotion({
-      edgeDockSide: "left",
-      edgeDockRevealed: false,
-    }).shellX,
-    [0, -13, -4, 0],
-  );
-  assert.deepEqual(
-    getShellBallDockVisualMotion({
-      edgeDockSide: "right",
-      edgeDockRevealed: true,
-    }).shellX,
-    [0, 7, 0],
-  );
 
   const metricsSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
@@ -2159,14 +2086,9 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /if \(input\.current\.side === "bottom"\) \{/);
   assert.match(metricsSource, /getShellBallParkedDockInsetPx\(/);
   assert.match(metricsSource, /getShellBallDockAnimationConfig\(/);
-  assert.match(metricsSource, /getShellBallDockAnimationKeyframes\(/);
   assert.match(metricsSource, /mode: "dock"/);
   assert.match(metricsSource, /mode: "reveal"/);
-  assert.match(metricsSource, /import \{ animate, type AnimationPlaybackControls \} from "motion";/);
-  assert.match(metricsSource, /const ballDockAnimationRef = useRef<ShellBallDockAnimationHandle \| null>\(null\);/);
-  assert.match(metricsSource, /const controls = animate\(currentFrame, keyframes, \{/);
-  assert.match(metricsSource, /activeAnimation\?\.controls\.stop\(\);/);
-  assert.match(metricsSource, /void controls\.then\(finish, finish\);/);
+  assert.match(metricsSource, /const overshootFrame = animationConfig === null/);
   assert.match(metricsSource, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(metricsSource, /await queueBallWindowDragPosition\(finalFrame\);/);
   assert.match(metricsSource, /while \(pendingBallDragFrameRef\.current !== null\) \{/);
@@ -2185,10 +2107,6 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(interactionSource, /const driftDistance = Math\.hypot\(event\.screenX - pressStartXRef\.current, event\.screenY - pressStartYRef\.current\);/);
   assert.match(interactionSource, /driftDistance > SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX/);
   assert.match(mascotSource, /shouldSuppressShellBallMascotHotspotGestures/);
-  assert.match(mascotSource, /import \{ motion \} from "motion\/react";/);
-  assert.match(mascotSource, /export function getShellBallDockVisualMotion\(/);
-  assert.match(mascotSource, /className="shell-ball-mascot__magnetic-aura-shell"/);
-  assert.match(mascotSource, /className="shell-ball-mascot__visual-shell"/);
   assert.match(surfaceSource, /onDragMove: \(event: PointerEvent<HTMLButtonElement>\) => void;/);
   assert.match(surfaceSource, /onHotspotDragMove=\{onDragMove\}/);
   assert.match(surfaceSource, /onHotspotDragEnd=\{onDragEnd\}/);
