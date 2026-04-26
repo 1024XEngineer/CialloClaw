@@ -4,6 +4,11 @@ import { desktopOnboardingEvents } from "@/features/onboarding/onboarding.events
 import { resetOnboardingInteractiveState, setOnboardingIgnoreCursorEvents } from "./onboardingWindow";
 
 export const ONBOARDING_WINDOW_LABEL = "onboarding";
+const ONBOARDING_CARD_WINDOW_WIDTH = 460;
+const ONBOARDING_CARD_WINDOW_HEIGHT = 340;
+const ONBOARDING_CARD_WINDOW_MARGIN = 24;
+
+type OnboardingWindowPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 export type OnboardingWindowFrame = {
   height: number;
@@ -14,6 +19,7 @@ export type OnboardingWindowFrame = {
 
 type SyncOnboardingWindowFrameOptions = {
   alwaysOnTop?: boolean;
+  placement?: OnboardingWindowPlacement;
 };
 
 let onboardingWindowHandle: Window | null = null;
@@ -94,7 +100,7 @@ async function getOrCreateOnboardingWindow() {
     await invoke("desktop_open_or_focus_onboarding");
     const createdWindow = await waitForOnboardingWindowHandle(10_000);
     await resetOnboardingInteractiveState();
-    await setOnboardingIgnoreCursorEvents(true);
+    await setOnboardingIgnoreCursorEvents(false);
     return createdWindow;
   })().finally(() => {
     onboardingWindowPromise = null;
@@ -103,11 +109,94 @@ async function getOrCreateOnboardingWindow() {
   return onboardingWindowPromise;
 }
 
+function resolveOnboardingCardWindowFrame(frame: OnboardingWindowFrame, placement: OnboardingWindowPlacement) {
+  const margin = Math.min(ONBOARDING_CARD_WINDOW_MARGIN, Math.max(0, Math.floor(Math.min(frame.width, frame.height) / 8)));
+  const width = Math.max(320, Math.min(ONBOARDING_CARD_WINDOW_WIDTH, frame.width - margin * 2));
+  const height = Math.max(260, Math.min(ONBOARDING_CARD_WINDOW_HEIGHT, frame.height - margin * 2));
+
+  const left = frame.x + margin;
+  const right = frame.x + frame.width - width - margin;
+  const top = frame.y + margin;
+  const bottom = frame.y + frame.height - height - margin;
+
+  switch (placement) {
+    case "top-left":
+      return { x: left, y: top, width, height } satisfies OnboardingWindowFrame;
+    case "top-right":
+      return { x: right, y: top, width, height } satisfies OnboardingWindowFrame;
+    case "bottom-left":
+      return { x: left, y: bottom, width, height } satisfies OnboardingWindowFrame;
+    case "bottom-right":
+      return { x: right, y: bottom, width, height } satisfies OnboardingWindowFrame;
+    case "center":
+    default:
+      return {
+        x: frame.x + (frame.width - width) / 2,
+        y: frame.y + (frame.height - height) / 2,
+        width,
+        height,
+      } satisfies OnboardingWindowFrame;
+  }
+}
+
+function buildOnboardingWindowUrl(input: {
+  monitorFrame: OnboardingWindowFrame;
+  placement: OnboardingWindowPlacement;
+  source: string;
+  startedAt: string;
+  step: string;
+  windowLabel: string;
+}) {
+  const params = new URLSearchParams({
+    monitor_height: String(input.monitorFrame.height),
+    monitor_width: String(input.monitorFrame.width),
+    monitor_x: String(input.monitorFrame.x),
+    monitor_y: String(input.monitorFrame.y),
+    placement: input.placement,
+    source: input.source,
+    started_at: input.startedAt,
+    step: input.step,
+    window_label: input.windowLabel,
+  });
+
+  return `onboarding.html?${params.toString()}`;
+}
+
 /**
- * Ensures the onboarding overlay window matches the current monitor frame and
- * stays visible above the active workflow window.
+ * Recreates the onboarding card window with enough URL state to render the
+ * first guide card without waiting for cross-window event hydration.
  *
- * @param frame The target logical monitor frame.
+ * @param input Initial session and placement state for the new card window.
+ */
+export async function recreateOnboardingWindow(input: {
+  monitorFrame: OnboardingWindowFrame;
+  placement: OnboardingWindowPlacement;
+  source: string;
+  startedAt: string;
+  step: string;
+  windowLabel: string;
+}) {
+  const cardFrame = resolveOnboardingCardWindowFrame(input.monitorFrame, input.placement);
+  const url = buildOnboardingWindowUrl(input);
+
+  await invoke("desktop_recreate_onboarding", {
+    height: cardFrame.height,
+    url,
+    width: cardFrame.width,
+    x: cardFrame.x,
+    y: cardFrame.y,
+  });
+
+  onboardingWindowHandle = await waitForOnboardingWindowHandle(10_000);
+  await resetOnboardingInteractiveState();
+  await setOnboardingIgnoreCursorEvents(false);
+}
+
+/**
+ * Moves the dedicated onboarding card window near the current guide target and
+ * keeps it above the active workflow window.
+ *
+ * @param frame The target logical monitor frame used to place the card window.
  * @param options Window ordering overrides for the current onboarding step.
  */
 export async function syncOnboardingWindowFrame(
@@ -115,11 +204,14 @@ export async function syncOnboardingWindowFrame(
   options: SyncOnboardingWindowFrameOptions = {},
 ) {
   const onboardingWindow = await getOrCreateOnboardingWindow();
+  const cardFrame = resolveOnboardingCardWindowFrame(frame, options.placement ?? "center");
   await resetOnboardingInteractiveState();
-  await setOnboardingIgnoreCursorEvents(true);
-  await onboardingWindow.setPosition(new LogicalPosition(frame.x, frame.y));
-  await onboardingWindow.setSize(new LogicalSize(frame.width, frame.height));
-  await onboardingWindow.setFocusable(false);
+  // The onboarding surface is now a normal card-sized window, so it must keep
+  // receiving pointer events instead of using fullscreen click-through regions.
+  await setOnboardingIgnoreCursorEvents(false);
+  await onboardingWindow.setPosition(new LogicalPosition(cardFrame.x, cardFrame.y));
+  await onboardingWindow.setSize(new LogicalSize(cardFrame.width, cardFrame.height));
+  await onboardingWindow.setFocusable(true);
   await onboardingWindow.setAlwaysOnTop(options.alwaysOnTop ?? true);
 }
 
@@ -132,8 +224,7 @@ export function waitForOnboardingWindowReady(timeoutMs: number) {
 }
 
 /**
- * Waits until the onboarding React app has laid out its first card and
- * registered native hit-test regions.
+ * Waits until the onboarding React app has laid out its first card.
  */
 export function waitForOnboardingCardReady(timeoutMs: number) {
   return waitForOnboardingWindowEvent(desktopOnboardingEvents.cardReady, timeoutMs);
@@ -145,11 +236,12 @@ export function waitForOnboardingCardReady(timeoutMs: number) {
  */
 export async function showOnboardingWindow() {
   const onboardingWindow = await getOrCreateOnboardingWindow();
+  // Keep the card-sized onboarding window as a normal interactive surface;
+  // native promotion only handles z-order and first-frame visibility.
   await setOnboardingIgnoreCursorEvents(false);
-  // Keep the overlay clickable without stealing focus so the underlying window
-  // remains immediately interactive after the user leaves the guide card.
-  await onboardingWindow.setFocusable(false);
-  await onboardingWindow.show();
+  await onboardingWindow.setFocusable(true);
+  await onboardingWindow.setAlwaysOnTop(true);
+  await invoke("desktop_promote_onboarding");
 }
 
 /**
@@ -166,7 +258,7 @@ export async function destroyOnboardingWindow() {
 
   try {
     await resetOnboardingInteractiveState();
-    await setOnboardingIgnoreCursorEvents(true);
+    await setOnboardingIgnoreCursorEvents(false);
     await onboardingWindow.destroy();
   } finally {
     await resetOnboardingInteractiveState();

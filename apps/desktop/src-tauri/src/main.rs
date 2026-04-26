@@ -509,14 +509,16 @@ fn ensure_onboarding_window(app: &tauri::AppHandle) {
             WebviewUrl::App("onboarding.html".into()),
         )
         .title("CialloClaw Onboarding")
-        .inner_size(1280.0, 860.0)
+        .inner_size(460.0, 340.0)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
         .resizable(false)
         .skip_taskbar(true)
         .shadow(false)
-        .visible(true)
+        // Keep the card window hidden until the frontend finishes its first
+        // layout, then promote it as a normal interactive topmost surface.
+        .visible(false)
         .focused(false)
         .build();
 
@@ -527,12 +529,12 @@ fn ensure_onboarding_window(app: &tauri::AppHandle) {
                 if let Ok(hwnd) = window.hwnd() {
                     unsafe {
                         set_forward_mouse_messages(hwnd, false);
-                        set_window_ignore_cursor_events(hwnd, true);
+                        set_window_ignore_cursor_events(hwnd, false);
                     }
                 }
             }
             Err(error) => {
-            eprintln!("failed to create onboarding window: {error}");
+                eprintln!("failed to create onboarding window: {error}");
             }
         }
     });
@@ -541,6 +543,103 @@ fn ensure_onboarding_window(app: &tauri::AppHandle) {
 #[tauri::command]
 fn desktop_open_or_focus_onboarding(app: tauri::AppHandle) -> Result<(), String> {
     ensure_onboarding_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn desktop_recreate_onboarding(
+    app: tauri::AppHandle,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        window
+            .destroy()
+            .map_err(|error| format!("failed to destroy existing onboarding window: {error}"))?;
+    }
+
+    let window = WebviewWindowBuilder::new(
+        &app,
+        ONBOARDING_WINDOW_LABEL,
+        WebviewUrl::App(url.into()),
+    )
+    .title("CialloClaw Onboarding")
+    .inner_size(width, height)
+    .position(x, y)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(false)
+    .skip_taskbar(true)
+    .shadow(false)
+    .visible(true)
+    .focused(true)
+    .build()
+    .map_err(|error| format!("failed to recreate onboarding window: {error}"))?;
+
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            // The recreated guide is a normal card-sized window, not a
+            // fullscreen pass-through overlay.
+            set_forward_mouse_messages(hwnd, false);
+            set_window_ignore_cursor_events(hwnd, false);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn desktop_promote_onboarding(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(ONBOARDING_WINDOW_LABEL)
+        .ok_or_else(|| format!("webview window not found: {ONBOARDING_WINDOW_LABEL}"))?;
+
+    if let Err(error) = window.unminimize() {
+        eprintln!("failed to unminimize onboarding window: {error}");
+    }
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get onboarding hwnd: {error}"))?;
+
+    unsafe {
+        // Promote the card-sized onboarding window in one native operation.
+        // SWP_NOACTIVATE avoids stealing focus from the workflow surface while
+        // still making the first visible frame reliable on cold launches.
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+        .map_err(|error| format!("failed to promote onboarding window: {error}"))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn desktop_promote_onboarding(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(ONBOARDING_WINDOW_LABEL)
+        .ok_or_else(|| format!("webview window not found: {ONBOARDING_WINDOW_LABEL}"))?;
+
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to unminimize onboarding window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show onboarding window: {error}"))?;
+
     Ok(())
 }
 
@@ -1519,6 +1618,8 @@ fn main() {
             desktop_get_active_window_context,
             desktop_open_or_focus_control_panel,
             desktop_open_or_focus_onboarding,
+            desktop_recreate_onboarding,
+            desktop_promote_onboarding,
             desktop_open_local_path,
             desktop_reveal_local_path,
             pick_shell_ball_files,

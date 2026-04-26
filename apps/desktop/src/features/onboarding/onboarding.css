@@ -8,6 +8,7 @@
 .desktop-onboarding-window {
   background: transparent !important;
   background-color: transparent !important;
+  box-sizing: border-box;
   height: 100vh;
   overflow: hidden;
   position: relative;
@@ -29,7 +30,9 @@ html[data-app-window="onboarding"] .radix-themes {
   color: #352b22;
   display: grid;
   gap: 0.8rem;
-  max-width: min(25rem, calc(100vw - 2rem));
+  inset: 12px;
+  max-width: none;
+  overflow: auto;
   padding: 1.3rem 1.35rem;
   position: absolute;
   pointer-events: auto;
@@ -49,13 +52,11 @@ html[data-app-window="onboarding"] .radix-themes {
 }
 
 .desktop-onboarding-window__card--center {
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  transform: none;
 }
 
 .desktop-onboarding-window__card--center {
-  animation-name: desktop-onboarding-card-enter-center;
+  animation-name: desktop-onboarding-card-enter;
 }
 
 @keyframes desktop-onboarding-card-enter-center {
@@ -71,23 +72,19 @@ html[data-app-window="onboarding"] .radix-themes {
 }
 
 .desktop-onboarding-window__card--top-left {
-  left: 1.2rem;
-  top: 1.2rem;
+  transform: none;
 }
 
 .desktop-onboarding-window__card--top-right {
-  right: 1.2rem;
-  top: 1.2rem;
+  transform: none;
 }
 
 .desktop-onboarding-window__card--bottom-left {
-  bottom: 1.2rem;
-  left: 1.2rem;
+  transform: none;
 }
 
 .desktop-onboarding-window__card--bottom-right {
-  bottom: 1.2rem;
-  right: 1.2rem;
+  transform: none;
 }
 
 .desktop-onboarding-window__step-label,
@@ -238,15 +235,17 @@ html[data-app-window="onboarding"] .radix-themes {
 }
 
 @media (max-width: 720px) {
+  .desktop-onboarding-window__card--center,
   .desktop-onboarding-window__card--top-left,
   .desktop-onboarding-window__card--top-right,
   .desktop-onboarding-window__card--bottom-left,
   .desktop-onboarding-window__card--bottom-right {
-    bottom: 1rem;
-    left: 1rem;
+    bottom: 12px;
+    left: 12px;
     max-width: none;
-    right: 1rem;
-    top: auto;
+    right: 12px;
+    top: 12px;
+    transform: none;
   }
 
   .desktop-onboarding-window__actions {

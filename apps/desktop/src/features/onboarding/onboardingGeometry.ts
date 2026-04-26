@@ -39,8 +39,8 @@ export async function resolveDesktopOnboardingMonitorFrame() {
 }
 
 /**
- * Projects a DOM rect from the current business window into the monitor-relative
- * coordinate space consumed by the onboarding overlay window.
+ * Projects a DOM rect from the current business window into monitor-relative
+ * coordinates used to place the onboarding card window near the target.
  *
  * @param rect Client rect measured inside the current business window.
  * @param monitorFrame The logical monitor frame used by the onboarding window.

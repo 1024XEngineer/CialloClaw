@@ -1405,6 +1405,42 @@ test("dashboard and control-panel entrypoints install hide-on-close handling", (
   assert.match(controlPanelMainSource, /void installHideOnCloseRequest\(\)/);
 });
 
+test("onboarding window is card-sized, interactive, and promoted natively", () => {
+  const mainSource = readFileSync(resolve(desktopRoot, "src-tauri/src/main.rs"), "utf8");
+  const onboardingControllerSource = readFileSync(resolve(desktopRoot, "src/platform/onboardingWindowController.ts"), "utf8");
+  const onboardingWindowSource = readFileSync(resolve(desktopRoot, "src/features/onboarding/OnboardingWindow.tsx"), "utf8");
+  const onboardingServiceSource = readFileSync(resolve(desktopRoot, "src/features/onboarding/onboardingService.ts"), "utf8");
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(
+    mainSource,
+    /WebviewWindowBuilder::new\(\s*&handle,\s*ONBOARDING_WINDOW_LABEL,\s*WebviewUrl::App\("onboarding\.html"\.into\(\)\),[\s\S]*?\.inner_size\(460\.0, 340\.0\)[\s\S]*?\.visible\(false\)\s*[\s\S]*?\.focused\(false\)/,
+  );
+  assert.match(mainSource, /set_window_ignore_cursor_events\(hwnd, false\)/);
+  assert.match(mainSource, /fn desktop_recreate_onboarding\([\s\S]*?url: String,[\s\S]*?WebviewUrl::App\(url\.into\(\)\)/);
+  assert.match(mainSource, /desktop_recreate_onboarding,/);
+  assert.match(mainSource, /fn desktop_promote_onboarding\(app: tauri::AppHandle\) -> Result<\(\), String> \{[\s\S]*?SetWindowPos\(/);
+  assert.match(mainSource, /desktop_promote_onboarding,/);
+  assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_WIDTH = 460/);
+  assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_HEIGHT = 340/);
+  assert.match(onboardingControllerSource, /function resolveOnboardingCardWindowFrame/);
+  assert.match(onboardingControllerSource, /export async function recreateOnboardingWindow/);
+  assert.match(onboardingControllerSource, /await invoke\("desktop_recreate_onboarding"/);
+  assert.match(onboardingControllerSource, /await setOnboardingIgnoreCursorEvents\(false\)/);
+  assert.match(
+    onboardingControllerSource,
+    /export async function showOnboardingWindow\(\) \{[\s\S]*?await setOnboardingIgnoreCursorEvents\(false\);[\s\S]*?await onboardingWindow\.setFocusable\(true\);[\s\S]*?await onboardingWindow\.setAlwaysOnTop\(true\);[\s\S]*?await invoke\("desktop_promote_onboarding"\);[\s\S]*?\}/,
+  );
+  assert.match(onboardingWindowSource, /function loadInitialOnboardingStateFromUrl\(\)/);
+  assert.doesNotMatch(onboardingWindowSource, /setOnboardingInteractiveRegions/);
+  assert.match(onboardingServiceSource, /let desktopOnboardingLaunchPromise: Promise<DesktopOnboardingSession \| null> \| null = null/);
+  assert.match(onboardingServiceSource, /currentWindow\.emitTo\(label, desktopOnboardingEvents\.sessionChanged, session\)/);
+  assert.match(onboardingServiceSource, /await recreateOnboardingWindow\(\{/);
+  assert.match(onboardingServiceSource, /placement: presentation\.placement/);
+  assert.match(controlPanelAppSource, /const \[isReplayingOnboarding, setIsReplayingOnboarding\] = useState\(false\)/);
+  assert.match(controlPanelAppSource, /disabled=\{onboardingReplayDisabled\}/);
+});
+
 test("control-panel entrypoint and view keep frameless window close and drag controls wired", () => {
   const controlPanelMainSource = readFileSync(resolve(desktopRoot, "src/app/control-panel/main.tsx"), "utf8");
   const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");

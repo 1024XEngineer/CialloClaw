@@ -559,6 +559,7 @@ export function ControlPanelApp() {
   const [inspectionSummary, setInspectionSummary] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
+  const [isReplayingOnboarding, setIsReplayingOnboarding] = useState(false);
   const [systemAppearance, setSystemAppearance] = useState<ControlPanelAppearance>(() => {
     if (typeof window === "undefined") {
       return "light";
@@ -722,6 +723,8 @@ export function ControlPanelApp() {
   const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
+  const onboardingReplayDisabled =
+    isSaving || isRunningInspection || isReplayingOnboarding || onboardingLoading !== null || onboardingSession?.isOpen === true;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -760,14 +763,26 @@ export function ControlPanelApp() {
   };
 
   const handleReplayOnboarding = () => {
+    if (onboardingReplayDisabled) {
+      return;
+    }
+
+    setIsReplayingOnboarding(true);
     void (async () => {
-      await showShellBallWindow("ball");
-      await setDesktopOnboardingLoadingState({
-        message: "正在打开引导...",
-        windowLabel: "control-panel",
-      });
-      await startDesktopOnboarding("manual", "control-panel");
-      await requestCurrentDesktopWindowClose();
+      try {
+        await showShellBallWindow("ball");
+        await setDesktopOnboardingLoadingState({
+          message: "正在打开引导...",
+          windowLabel: "control-panel",
+        });
+
+        const session = await startDesktopOnboarding("manual", "control-panel");
+        if (session !== null) {
+          await requestCurrentDesktopWindowClose();
+        }
+      } finally {
+        setIsReplayingOnboarding(false);
+      }
     })();
   };
 
@@ -1523,9 +1538,9 @@ export function ControlPanelApp() {
                 variant="soft"
                 color="gray"
                 onClick={handleReplayOnboarding}
-                disabled={isSaving || isRunningInspection}
+                disabled={onboardingReplayDisabled}
               >
-                重新查看新手引导
+                {isReplayingOnboarding ? "正在打开引导…" : "重新查看新手引导"}
               </Button>
               <Button
                 className="control-panel-shell__button control-panel-shell__button--secondary"

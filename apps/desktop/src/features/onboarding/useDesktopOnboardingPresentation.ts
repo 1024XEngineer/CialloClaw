@@ -5,7 +5,7 @@ import { loadDesktopOnboardingPresentation, type DesktopOnboardingPresentation }
 
 /**
  * Subscribes the current desktop window to onboarding presentation updates so
- * the dedicated overlay window can track the latest highlighted target.
+ * the dedicated card window can track the latest highlighted target.
  *
  * @returns The active onboarding presentation or `null` when no step is mapped.
  */
