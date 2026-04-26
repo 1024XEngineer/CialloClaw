@@ -1652,6 +1652,7 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 	effectiveSettings := map[string]any{}
 	applyMode := "immediate"
 	needRestart := false
+	modelSettingsChanged := false
 
 	for _, section := range []string{"general", "floating_ball", "memory", "task_automation", "models"} {
 		sectionPatch, ok := values[section].(map[string]any)
@@ -1669,7 +1670,8 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 		nextSettings[section] = currentSection
 		effectiveSettings[section] = cloneMap(sectionPatch)
 
-		updatedKeys = append(updatedKeys, settingsPatchPaths(section, sectionPatch)...)
+		sectionUpdatedKeys := settingsPatchPaths(section, sectionPatch)
+		updatedKeys = append(updatedKeys, sectionUpdatedKeys...)
 
 		if section == "general" {
 			if nextLanguage, ok := sectionPatch["language"]; ok {
@@ -1680,6 +1682,12 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 				}
 			}
 		}
+		if section == "models" && modelRouteSettingsChanged(sectionUpdatedKeys) {
+			modelSettingsChanged = true
+		}
+	}
+	if modelSettingsChanged && !needRestart {
+		applyMode = "next_task_effective"
 	}
 	if e.settingsStore != nil {
 		if err := e.settingsStore.SaveSettingsSnapshot(context.Background(), normalizeSettingsPatch(cloneMap(nextSettings))); err != nil {
@@ -2957,6 +2965,23 @@ func buildDefaultSettings() map[string]any {
 			},
 		},
 	}
+}
+
+func modelRouteSettingsChanged(updatedKeys []string) bool {
+	for _, key := range updatedKeys {
+		switch strings.TrimSpace(key) {
+		case "models.provider",
+			"models.base_url",
+			"models.model",
+			"models.api_key",
+			"models.delete_api_key",
+			"models.credentials.provider",
+			"models.credentials.base_url",
+			"models.credentials.model":
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSettingsPatch(values map[string]any) map[string]any {

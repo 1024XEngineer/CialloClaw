@@ -543,11 +543,11 @@ function createDetail(
 ) {
   return {
     approval_request: approvalRequest,
-    audit_record: null,
+    audit_record: null as AgentTaskDetailGetResult["audit_record"],
     artifacts,
-    authorization_record: null,
-    citations: [],
-    delivery_result: null,
+    authorization_record: null as AgentTaskDetailGetResult["authorization_record"],
+    citations: [] as AgentTaskDetailGetResult["citations"],
+    delivery_result: null as AgentTaskDetailGetResult["delivery_result"],
     mirror_references: mirrorReferences,
     runtime_summary: runtimeSummary,
     security_summary: securitySummary,

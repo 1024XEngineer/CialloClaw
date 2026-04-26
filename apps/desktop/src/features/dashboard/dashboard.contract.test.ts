@@ -297,6 +297,13 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
               value: number;
             };
           };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+          };
         };
         inspector: {
           task_sources: string[];
@@ -310,19 +317,29 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
           remind_when_stale: boolean;
         };
         providerApiKeyInput: string;
+        warnings?: string[];
       }>;
       saveControlPanelData: (
         data: unknown,
         options?: {
           saveInspector?: boolean;
           saveSettings?: boolean;
+          validateModel?: boolean;
           timeoutMs?: number;
         },
       ) => Promise<{
         source: "rpc";
         applyMode: string;
         needRestart: boolean;
+        savedInspector?: boolean;
+        savedSettings?: boolean;
         updatedKeys: string[];
+        warnings: string[];
+        modelValidation?: {
+          ok: boolean;
+          status: string;
+          message: string;
+        } | null;
         effectiveSettings: {
           general: {
             voice_type: string;
@@ -347,10 +364,68 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
               value: number;
             };
           };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+          };
         };
+      }>;
+      validateControlPanelModel: (
+        data: unknown,
+        options?: {
+          timeoutMs?: number;
+        },
+      ) => Promise<{
+        ok: boolean;
+        status: string;
+        message: string;
+        provider: string;
+        canonical_provider: string;
+        base_url: string;
+        model: string;
+        text_generation_ready: boolean;
+        tool_calling_ready: boolean;
       }>;
     };
   }, rpcMethods);
+}
+
+function loadControlPanelAboutServiceModule() {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, "src/services/controlPanelAboutService.ts");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      getControlPanelAboutFeedbackChannels: () => Array<
+        | {
+            actionLabel: string;
+            description: string;
+            href: string;
+            hrefLabel: string;
+            id: string;
+            kind: "link";
+            title: string;
+          }
+        | {
+            description: string;
+            id: string;
+            kind: "placeholder";
+            note: string;
+            placeholderLabel: string;
+            title: string;
+          }
+      >;
+      getControlPanelAboutFallbackSnapshot: () => {
+        appName: string;
+        appVersion: string;
+      };
+      copyControlPanelAboutValue: (value: string, successMessage: string) => Promise<string>;
+      runControlPanelAboutAction: (action: "share") => Promise<string>;
+    };
+  });
 }
 
 function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
@@ -522,6 +597,7 @@ type DashboardContractRpcMethodOverrides = {
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
+  validateSettingsModel?: (params: unknown) => Promise<unknown>;
   updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
 };
@@ -652,6 +728,19 @@ function withDesktopAliasRuntime<T>(
           (() => Promise.reject(new Error("updateTaskInspectorConfig should not run in dashboard contract tests"))),
         getSettingsDetailed: rpcMethods?.getSettingsDetailed ?? (() => Promise.reject(new Error("getSettingsDetailed should not run in dashboard contract tests"))),
         updateSettings: rpcMethods?.updateSettings ?? (() => Promise.reject(new Error("updateSettings should not run in dashboard contract tests"))),
+        validateSettingsModel:
+          rpcMethods?.validateSettingsModel ??
+          (() => Promise.resolve({
+            ok: true,
+            status: "valid",
+            message: "当前模型配置校验通过，可执行文本生成与工具调用。",
+            provider: "openai",
+            canonical_provider: "openai_responses",
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4.1-mini",
+            text_generation_ready: true,
+            tool_calling_ready: true,
+          })),
       };
     }
 
@@ -1258,12 +1347,13 @@ test("task context links back into mirror detail state instead of plain text dea
   assert.match(mirrorAppSource, /setHistoryDetailView\(options\.historyDetailView\)/);
 });
 
-test("task page keeps waiting-auth anchors and waiting-input escape hatches", () => {
+test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
   const { getTaskPrimaryActions } = loadTaskPageMapperModule();
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
@@ -1271,7 +1361,8 @@ test("task page keeps waiting-auth anchors and waiting-input escape hatches", ()
     ["cancel", "open-safety"],
   );
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
-  assert.match(taskPageSource, /如需修改或补充当前任务，请到悬浮球继续处理。/);
+  assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
+  assert.match(taskDetailPanelSource, /placeholder=\{canSteerTask \? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"\}/);
 });
 
 test("settings service normalizes legacy stored snapshots before returning and saving", () => {
@@ -1434,6 +1525,121 @@ test("settings service ignores stale legacy settings aliases when models are alr
       Object.assign(globalThis, { window: originalWindow });
     }
   }
+});
+
+test("control panel about service exposes fallback metadata and feedback channel config", () => {
+  const { getControlPanelAboutFallbackSnapshot, getControlPanelAboutFeedbackChannels } = loadControlPanelAboutServiceModule();
+  const fallback = getControlPanelAboutFallbackSnapshot();
+  const feedbackChannels = getControlPanelAboutFeedbackChannels();
+
+  assert.deepEqual(fallback, {
+    appName: "CialloClaw",
+    appVersion: "0.1.0",
+  });
+  assert.deepEqual(feedbackChannels, [
+    {
+      actionLabel: "复制链接",
+      description: "公开问题反馈、功能建议与版本回归记录。",
+      href: "https://github.com/1024XEngineer/CialloClaw/issues",
+      hrefLabel: "github.com/1024XEngineer/CialloClaw/issues",
+      id: "github_issues",
+      kind: "link",
+      title: "GitHub Issues",
+    },
+    {
+      description: "预留微信群、QQ群或 Discord 等社群二维码图片。",
+      id: "community_qr",
+      kind: "placeholder",
+      note: "后续放入二维码图片后，会在这里直接显示预览。",
+      placeholderLabel: "待放置二维码图片",
+      title: "社群二维码",
+    },
+    {
+      description: "预留邮箱、工单表单或其它定向联系入口。",
+      id: "contact_form",
+      kind: "placeholder",
+      note: "支持后续替换成链接、表单地址或其它说明文本。",
+      placeholderLabel: "待放置链接或表单",
+      title: "邮箱 / 表单",
+    },
+  ]);
+});
+
+test("control panel about helpers copy feedback and share links", async () => {
+  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
+  const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const copiedValues: string[] = [];
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (value: string) => {
+          copiedValues.push(value);
+        },
+      },
+    },
+  });
+
+  try {
+    const feedbackCopy = await copyControlPanelAboutValue("https://github.com/1024XEngineer/CialloClaw/issues", "已复制反馈渠道链接。");
+    const shareFeedback = await runControlPanelAboutAction("share");
+
+    assert.equal(feedbackCopy, "已复制反馈渠道链接。");
+    assert.equal(shareFeedback, "已复制分享链接。");
+    assert.deepEqual(copiedValues, [
+      "https://github.com/1024XEngineer/CialloClaw/issues",
+      "https://github.com/1024XEngineer/CialloClaw",
+    ]);
+  } finally {
+    if (originalNavigatorDescriptor) {
+      Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "navigator");
+    }
+
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+  }
+});
+
+test("control panel app wires the about navigation without update-only fields", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+  const removedRuntimeCopyPattern = /Tauri\s+Runtime/;
+
+  assert.match(controlPanelAppSource, /type ControlPanelSectionId = .*"about"/);
+  assert.match(controlPanelAppSource, /navLabel: "关于"/);
+  assert.match(controlPanelAppSource, /case "about":/);
+  assert.match(controlPanelAppSource, /title="帮助与反馈"/);
+  assert.match(controlPanelAppSource, /title="版本信息"/);
+  assert.match(controlPanelAppSource, /应用内新手引导/);
+  assert.match(controlPanelAppSource, /反馈渠道/);
+  assert.match(controlPanelAppSource, /CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS/);
+  assert.match(controlPanelAppSource, /复制链接/);
+  assert.doesNotMatch(controlPanelAppSource, /快捷操作/);
+  assert.doesNotMatch(controlPanelAppSource, /打开帮助/);
+  assert.doesNotMatch(controlPanelAppSource, /提交反馈/);
+  assert.doesNotMatch(controlPanelAppSource, /打开链接/);
+  assert.doesNotMatch(controlPanelAppSource, /GitHub 项目主页/);
+  assert.doesNotMatch(controlPanelAppSource, /当前反馈/);
+  assert.doesNotMatch(controlPanelAppSource, /更多渠道/);
+  assert.doesNotMatch(controlPanelAppSource, /应用标识/);
+  assert.doesNotMatch(controlPanelAppSource, /元信息来源/);
+  assert.doesNotMatch(controlPanelAppSource, /检查更新/);
+  assert.doesNotMatch(controlPanelAppSource, removedRuntimeCopyPattern);
+});
+
+test("control panel app surfaces about action feedback in local UI state", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /const \[aboutActionFeedback, setAboutActionFeedback\] = useState<string \| null>\(null\);/);
+  assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
 });
 
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
@@ -1989,6 +2195,562 @@ test("control panel saves full floating-ball ownership through the real rpc sett
     assert.equal(reloaded.settings.memory.work_summary_interval.unit, "hour");
     assert.equal(reloaded.settings.memory.profile_refresh_interval.value, 5);
     assert.equal(reloaded.settings.memory.profile_refresh_interval.unit, "day");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel save keeps arbitrary provider aliases on the supported OpenAI-compatible route", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: {
+        unit: "day",
+        value: 7,
+      },
+      profile_refresh_interval: {
+        unit: "week",
+        value: 2,
+      },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: {
+      unit: "minute",
+      value: 15,
+    },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({
+      settings: remoteSettings,
+    }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        models: {
+          provider: string;
+          budget_auto_downgrade: boolean;
+          base_url: string;
+          model: string;
+          api_key?: string;
+        };
+      };
+
+      assert.equal(request.models.provider, "anthropic");
+      assert.equal(request.models.api_key, "saved-secret-key");
+
+      remoteSettings = {
+        ...remoteSettings,
+        models: {
+          provider: request.models.provider,
+          credentials: {
+            ...remoteSettings.models.credentials,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    updateTaskInspectorConfig: async () => ({
+      effective_config: inspectorConfig,
+    }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        providerApiKeyInput: "saved-secret-key",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "anthropic",
+            base_url: "https://api.qnaigc.com/v1",
+            model: "claude-3-7-sonnet",
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.deepEqual(result.warnings, []);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel save blocks invalid model routes before persisting settings", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  const remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: { unit: "day", value: 7 },
+      profile_refresh_interval: { unit: "week", value: 2 },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: { unit: "minute", value: 15 },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  let updateSettingsCalled = false;
+  const { loadControlPanelData, saveControlPanelData, validateControlPanelModel } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({ settings: remoteSettings }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      updateSettingsCalled = true;
+      const request = params as { models: { provider: string; base_url: string; model: string; api_key?: string } };
+      assert.equal(request.models.provider, "broken-provider");
+      assert.equal(request.models.base_url, "https://broken.example/v1");
+      assert.equal(request.models.model, "bad-model");
+      assert.equal(request.models.api_key, "bad-secret");
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.base_url", "models.model", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: true,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    validateSettingsModel: async () => ({
+      ok: false,
+      status: "auth_failed",
+      message: "模型配置校验失败：鉴权失败，请检查 API Key 或访问权限。",
+      provider: "broken-provider",
+      canonical_provider: "openai_responses",
+      base_url: "https://broken.example/v1",
+      model: "bad-model",
+      text_generation_ready: false,
+      tool_calling_ready: false,
+    }),
+    updateTaskInspectorConfig: async () => ({ effective_config: inspectorConfig }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const initialData = await loadControlPanelData();
+    await assert.rejects(
+      saveControlPanelData(
+        {
+          ...initialData,
+          providerApiKeyInput: "bad-secret",
+          settings: {
+            ...initialData.settings,
+            models: {
+              ...initialData.settings.models,
+              provider: "broken-provider",
+              base_url: "https://broken.example/v1",
+              model: "bad-model",
+            },
+          },
+        },
+        { saveInspector: false, saveSettings: true, validateModel: true },
+      ),
+      /当前设置未保存。/,
+    );
+    assert.equal(updateSettingsCalled, false);
+
+    const validation = await validateControlPanelModel(
+      {
+        ...initialData,
+        providerApiKeyInput: "bad-secret",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "broken-provider",
+            base_url: "https://broken.example/v1",
+            model: "bad-model",
+          },
+        },
+      },
+    );
+    assert.equal(validation.ok, false);
+    assert.equal(validation.status, "auth_failed");
+
+    const controlPanelSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+    assert.match(controlPanelSource, /测试连接/);
+    assert.match(controlPanelSource, /handleValidateModel/);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("shell-ball protocol stub stays aligned with formal settings snapshot shape", () => {
+  const protocolStubSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/test-stubs/protocol.ts"), "utf8");
+
+  assert.match(protocolStubSource, /models:\s*\{[\s\S]*credentials:\s*\{/);
+  assert.doesNotMatch(protocolStubSource, /data_log\?:/);
+});
+
+test("control-panel save persists local settings after model-only saves and keeps validation metadata", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: { unit: "day", value: 7 },
+      profile_refresh_interval: { unit: "week", value: 2 },
+    },
+    task_automation: {
+      inspect_on_startup: true,
+      inspect_on_file_change: true,
+      inspection_interval: { unit: "minute", value: 15 },
+      task_sources: ["D:/workspace/todos"],
+      remind_before_deadline: true,
+      remind_when_stale: false,
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: { unit: "minute", value: 15 },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  let validationCount = 0;
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({ settings: remoteSettings }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        models: {
+          provider: string;
+          budget_auto_downgrade: boolean;
+          base_url: string;
+          model: string;
+          api_key?: string;
+        };
+      };
+      remoteSettings = {
+        ...remoteSettings,
+        models: {
+          provider: request.models.provider,
+          credentials: {
+            ...remoteSettings.models.credentials,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.base_url", "models.model", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    validateSettingsModel: async () => {
+      validationCount += 1;
+      return {
+        ok: true,
+        status: "ok",
+        message: "validated",
+        provider: "anthropic",
+        canonical_provider: "openai_responses",
+        base_url: "https://api.qnaigc.com/v1",
+        model: "claude-3-7-sonnet",
+        text_generation_ready: true,
+        tool_calling_ready: true,
+      };
+    },
+    updateTaskInspectorConfig: async () => ({ effective_config: inspectorConfig }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        providerApiKeyInput: "saved-secret-key",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "anthropic",
+            base_url: "https://api.qnaigc.com/v1",
+            model: "claude-3-7-sonnet",
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.equal(validationCount, 1);
+    assert.equal(result.savedSettings, true);
+    assert.equal(result.savedInspector, false);
+    assert.equal(result.modelValidation?.ok, true);
+    const persisted = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}");
+    assert.equal(persisted.settings.models.provider, "anthropic");
+    assert.equal(persisted.settings.models.base_url, "https://api.qnaigc.com/v1");
+    assert.equal(persisted.settings.models.model, "claude-3-7-sonnet");
+    assert.equal(persisted.settings.models.provider_api_key_configured, true);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");

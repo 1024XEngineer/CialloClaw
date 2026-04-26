@@ -39,7 +39,7 @@ export const ERROR_CODES = {
   PATH_POLICY_VIOLATION: 1007005,
   MODEL_PROVIDER_NOT_FOUND: 1008001,
   MODEL_NOT_ALLOWED: 1008002,
-  MODEL_RUNTIME_UNAVAILABLE: 1008007,
+  MODEL_RUNTIME_UNAVAILABLE: 1008003,
 } as const;
 
 // ErrorCodeName is the stable union of exported error-code names.

@@ -1,5 +1,6 @@
 import type {
   AgentSecuritySummaryGetResult,
+  AgentSettingsModelValidateResult,
   AgentTaskInspectorConfigGetResult,
   AgentTaskInspectorRunResult,
   ApplyMode,
@@ -11,6 +12,7 @@ import {
   getSettings,
   getTaskInspectorConfig,
   runTaskInspector,
+  validateSettingsModel,
   updateSettings,
   updateTaskInspectorConfig,
 } from "@/rpc/methods";
@@ -37,6 +39,8 @@ export type ControlPanelSaveResult = {
   applyMode: ApplyMode;
   needRestart: boolean;
   updatedKeys: string[];
+  warnings: string[];
+  modelValidation: AgentSettingsModelValidateResult | null;
   effectiveSettings: Partial<DesktopSettingsData>;
   effectiveInspector: AgentTaskInspectorConfigGetResult;
   savedInspector: boolean;
@@ -48,8 +52,15 @@ export type ControlPanelSaveOptions = {
   confirmedInspector?: AgentTaskInspectorConfigGetResult;
   saveInspector?: boolean;
   saveSettings?: boolean;
+  validateModel?: boolean;
   timeoutMs?: number;
 };
+
+export type ControlPanelModelValidationOptions = {
+  timeoutMs?: number;
+};
+
+type ControlPanelSaveErrorKind = "general" | "model_validation_failed";
 
 const CONTROL_PANEL_RPC_TIMEOUT_MS = 10_000;
 
@@ -68,11 +79,13 @@ const CONTROL_PANEL_INSPECTOR_UPDATED_KEYS = [
  */
 export class ControlPanelSaveError extends Error {
   readonly partialResult: ControlPanelSaveResult | null;
+  readonly kind: ControlPanelSaveErrorKind;
 
-  constructor(message: string, partialResult: ControlPanelSaveResult | null = null) {
+  constructor(message: string, partialResult: ControlPanelSaveResult | null = null, kind: ControlPanelSaveErrorKind = "general") {
     super(message);
     this.name = "ControlPanelSaveError";
     this.partialResult = partialResult;
+    this.kind = kind;
   }
 }
 
@@ -180,6 +193,51 @@ function buildSettingsUpdatePayload(input: ControlPanelData) {
   };
 }
 
+function normalizeControlPanelModelProvider(provider: string): string {
+  return provider.trim().toLowerCase();
+}
+
+function buildControlPanelSaveWarnings(
+  provider: string,
+  updatedKeys: string[],
+  providerApiKeyInput: string,
+): string[] {
+  const normalizedProvider = normalizeControlPanelModelProvider(provider);
+  if (normalizedProvider === "") {
+    return [];
+  }
+
+  const providerChanged = updatedKeys.includes("models.provider");
+  const apiKeySaved = providerApiKeyInput.trim() !== "";
+  if (!providerChanged && !apiKeySaved) {
+    return [];
+  }
+
+  return [];
+}
+
+function shouldValidateSavedModelRoute(updatedKeys: string[], providerApiKeyInput: string) {
+  return updatedKeys.some((key) => key.startsWith("models.")) || providerApiKeyInput.trim() !== "";
+}
+
+function buildModelValidatePayload(input: ControlPanelData) {
+  return {
+    request_meta: createRequestMeta(),
+    models: buildModelsUpdatePayload(input),
+  };
+}
+
+async function runControlPanelModelValidation(
+  data: ControlPanelData,
+  timeoutMs: number,
+): Promise<AgentSettingsModelValidateResult> {
+  return withRpcTimeout(
+    validateSettingsModel(buildModelValidatePayload(data)),
+    timeoutMs,
+    "模型配置校验",
+  );
+}
+
 function buildInspectorUpdatePayload(input: ControlPanelData) {
   return {
     request_meta: createRequestMeta(),
@@ -223,12 +281,16 @@ function buildControlPanelSaveResult(
     savedInspector: boolean;
     savedSettings: boolean;
     updatedKeys: string[];
+    warnings?: string[];
+    modelValidation?: AgentSettingsModelValidateResult | null;
   },
 ): ControlPanelSaveResult {
   return {
     applyMode: options.applyMode,
     needRestart: options.needRestart,
     updatedKeys: options.updatedKeys,
+    warnings: options.warnings ?? [],
+    modelValidation: options.modelValidation ?? null,
     effectiveSettings: settings,
     effectiveInspector: inspector,
     savedInspector: options.savedInspector,
@@ -302,8 +364,9 @@ export async function loadControlPanelData(): Promise<ControlPanelData> {
 /**
  * saveControlPanelData persists only the dirty settings groups requested by
  * the caller so unrelated RPC writes do not block the entire settings surface.
- * The save path applies effective update payloads directly; formal readback
- * stays on the open/load path instead of adding extra save-time RPC reads.
+ * Model-route changes run through a read-only validation probe before the
+ * formal settings write so invalid provider/base-url/model/key drafts never
+ * reach the persisted snapshot.
  */
 export async function saveControlPanelData(
   data: ControlPanelData,
@@ -312,6 +375,7 @@ export async function saveControlPanelData(
   const confirmedInspector = options.confirmedInspector ?? data.inspector;
   const saveSettingsRequested = options.saveSettings ?? true;
   const saveInspectorRequested = options.saveInspector ?? true;
+  const validateModelRequested = options.validateModel ?? saveSettingsRequested;
   const timeoutMs = options.timeoutMs ?? CONTROL_PANEL_RPC_TIMEOUT_MS;
 
   if (!saveSettingsRequested && !saveInspectorRequested) {
@@ -321,6 +385,7 @@ export async function saveControlPanelData(
       savedInspector: false,
       savedSettings: false,
       updatedKeys: [],
+      modelValidation: null,
     });
   }
 
@@ -331,8 +396,17 @@ export async function saveControlPanelData(
   let savedInspector = false;
   let savedSettings = false;
   const updatedKeys: string[] = [];
+  const warnings: string[] = [];
+  let modelValidation: AgentSettingsModelValidateResult | null = null;
 
   try {
+    if (saveSettingsRequested && validateModelRequested) {
+      modelValidation = await validateControlPanelModel(data, { timeoutMs });
+      if (!modelValidation.ok) {
+        throw new ControlPanelSaveError(`${modelValidation.message} 当前设置未保存。`, null, "model_validation_failed");
+      }
+    }
+
     if (saveSettingsRequested) {
       const settingsResult = await withRpcTimeout(updateSettings(buildSettingsUpdatePayload(data)), timeoutMs, "设置保存");
       effectiveSettings = mergeProtocolSettings(data.settings, settingsResult.effective_settings as Partial<SettingsSnapshot["settings"]>);
@@ -341,6 +415,10 @@ export async function saveControlPanelData(
       needRestart = settingsResult.need_restart;
       savedSettings = true;
       updatedKeys.push(...settingsResult.updated_keys);
+      warnings.push(...buildControlPanelSaveWarnings(data.settings.models.provider, settingsResult.updated_keys, data.providerApiKeyInput));
+      if (!modelValidation && shouldValidateSavedModelRoute(settingsResult.updated_keys, data.providerApiKeyInput)) {
+        modelValidation = await validateControlPanelModel(data, { timeoutMs });
+      }
       if (!saveInspectorRequested) {
         saveSettings({ settings: effectiveSettings });
       }
@@ -369,6 +447,8 @@ export async function saveControlPanelData(
               savedInspector: false,
               savedSettings: true,
               updatedKeys,
+              warnings,
+              modelValidation,
             }),
           );
         }
@@ -383,6 +463,8 @@ export async function saveControlPanelData(
       savedInspector,
       savedSettings,
       updatedKeys,
+      warnings,
+      modelValidation,
     });
   } catch (error) {
     if (error instanceof ControlPanelSaveError) {
@@ -391,6 +473,27 @@ export async function saveControlPanelData(
 
     if (isRpcChannelUnavailable(error)) {
       throw new ControlPanelSaveError("设置服务暂时不可用，请稍后重试。");
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * validateControlPanelModel runs the formal model-route probe without mutating
+ * the saved settings snapshot, so the UI can distinguish saved-vs-usable state.
+ */
+export async function validateControlPanelModel(
+  data: ControlPanelData,
+  options: ControlPanelModelValidationOptions = {},
+): Promise<AgentSettingsModelValidateResult> {
+  const timeoutMs = options.timeoutMs ?? CONTROL_PANEL_RPC_TIMEOUT_MS;
+
+  try {
+    return await runControlPanelModelValidation(data, timeoutMs);
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      throw new Error("模型配置校验服务暂时不可用，请稍后重试。");
     }
 
     throw error;

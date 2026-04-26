@@ -9,6 +9,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -588,7 +589,8 @@ func (s *Service) ResolveModelAPIKey(provider string) (string, error) {
 	if s.secretStore == nil {
 		return "", ErrSecretStoreAccessFailed
 	}
-	record, err := s.secretStore.GetSecret(context.Background(), "model", strings.TrimSpace(provider)+"_api_key")
+	canonicalProvider := model.CanonicalProviderName(provider)
+	record, err := s.secretStore.GetSecret(context.Background(), "model", strings.TrimSpace(canonicalProvider)+"_api_key")
 	if err != nil {
 		if errors.Is(err, ErrSecretNotFound) {
 			return "", err

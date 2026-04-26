@@ -150,10 +150,11 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 }
 
 func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
-	if s == nil || s.model == nil {
+	modelService := s.currentModel()
+	if s == nil || modelService == nil {
 		return taskContinuationDecision{}, false
 	}
-	response, err := s.model.GenerateText(context.Background(), model.GenerateTextRequest{
+	response, err := modelService.GenerateText(context.Background(), model.GenerateTextRequest{
 		TaskID: "task_continuation_classifier",
 		RunID:  "run_continuation_classifier",
 		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, continuationContext),

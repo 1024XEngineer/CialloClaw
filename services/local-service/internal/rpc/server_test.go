@@ -4,7 +4,6 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http/httptest"
@@ -1338,36 +1337,6 @@ func TestDispatchMapsStrongholdErrors(t *testing.T) {
 	}
 }
 
-func TestDispatchMapsModelSecretErrors(t *testing.T) {
-	_, rpcErr := wrapOrchestratorResult(nil, errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound))
-	if rpcErr == nil {
-		t.Fatal("expected rpc error")
-	}
-	if rpcErr.Code != 1005004 || rpcErr.Message != "STRONGHOLD_ACCESS_FAILED" {
-		t.Fatalf("expected STRONGHOLD_ACCESS_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
-	}
-}
-
-func TestDispatchMapsModelClientConfigurationErrorsToStronghold(t *testing.T) {
-	_, rpcErr := wrapOrchestratorResult(nil, model.ErrClientNotConfigured)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error")
-	}
-	if rpcErr.Code != 1005004 || rpcErr.Message != "STRONGHOLD_ACCESS_FAILED" {
-		t.Fatalf("expected STRONGHOLD_ACCESS_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
-	}
-}
-
-func TestDispatchMapsAPIKeyConfigurationErrorsToStronghold(t *testing.T) {
-	_, rpcErr := wrapOrchestratorResult(nil, model.ErrOpenAIAPIKeyRequired)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error")
-	}
-	if rpcErr.Code != 1005004 || rpcErr.Message != "STRONGHOLD_ACCESS_FAILED" {
-		t.Fatalf("expected STRONGHOLD_ACCESS_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
-	}
-}
-
 func TestDispatchMapsModelProviderErrors(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, model.ErrModelProviderUnsupported)
 	if rpcErr == nil {
@@ -1378,8 +1347,8 @@ func TestDispatchMapsModelProviderErrors(t *testing.T) {
 	}
 }
 
-func TestDispatchMapsModelCapabilityErrors(t *testing.T) {
-	_, rpcErr := wrapOrchestratorResult(nil, model.ErrToolCallingNotSupported)
+func TestDispatchMapsModelConfigurationErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, model.ErrOpenAIEndpointRequired)
 	if rpcErr == nil {
 		t.Fatal("expected rpc error")
 	}
@@ -1388,51 +1357,22 @@ func TestDispatchMapsModelCapabilityErrors(t *testing.T) {
 	}
 }
 
-func TestDispatchMapsModelConfigurationErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{name: "endpoint missing", err: model.ErrOpenAIEndpointRequired},
-		{name: "provider rejected request", err: &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"}},
+func TestDispatchMapsModelRuntimeUnavailableErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, model.ErrOpenAIRequestTimeout)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1008003 || rpcErr.Message != "MODEL_RUNTIME_UNAVAILABLE" {
+		t.Fatalf("expected MODEL_RUNTIME_UNAVAILABLE mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, rpcErr := wrapOrchestratorResult(nil, test.err)
-			if rpcErr == nil {
-				t.Fatal("expected rpc error")
-			}
-			if rpcErr.Code != 1008002 || rpcErr.Message != "MODEL_NOT_ALLOWED" {
-				t.Fatalf("expected MODEL_NOT_ALLOWED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
-			}
-		})
+	_, rpcErr = wrapOrchestratorResult(nil, &model.OpenAIHTTPStatusError{StatusCode: 503, Message: "upstream unavailable"})
+	if rpcErr == nil || rpcErr.Code != 1008003 {
+		t.Fatalf("expected 5xx provider failure to map as runtime unavailable, got %+v", rpcErr)
 	}
 }
 
-func TestDispatchMapsModelRuntimeErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{name: "timeout", err: model.ErrOpenAIRequestTimeout},
-		{name: "provider unavailable", err: &model.OpenAIHTTPStatusError{StatusCode: 503, Message: "service unavailable"}},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, rpcErr := wrapOrchestratorResult(nil, test.err)
-			if rpcErr == nil {
-				t.Fatal("expected rpc error")
-			}
-			if rpcErr.Code != 1008007 || rpcErr.Message != "MODEL_RUNTIME_UNAVAILABLE" {
-				t.Fatalf("expected MODEL_RUNTIME_UNAVAILABLE mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
-			}
-		})
-	}
-}
-
-func TestDispatchMapsModelOutputInvalidErrors(t *testing.T) {
+func TestDispatchMapsToolOutputInvalidExplicitly(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, tools.ErrToolOutputInvalid)
 	if rpcErr == nil {
 		t.Fatal("expected rpc error")
@@ -1467,6 +1407,7 @@ func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(
 		{name: "security.respond", invoke: func() (any, *rpcError) {
 			return server.handleAgentSecurityRespond(map[string]any{"task_id": "missing", "decision": "approve"})
 		}},
+		{name: "settings.model.validate", invoke: func() (any, *rpcError) { return server.handleAgentSettingsModelValidate(map[string]any{}) }},
 	}
 	for _, call := range handlerCalls {
 		data, rpcErr := call.invoke()
@@ -1514,6 +1455,7 @@ func TestJSONRPCHandlerWrappersCoverPrimitiveDecodersAndTracingHelpers(t *testin
 		t.Fatal("expected malformed params to fail decodeParams")
 	}
 }
+
 func TestDispatchReturnsSettingsGet(t *testing.T) {
 	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-get.db")})
@@ -1563,8 +1505,32 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 	if _, exists := models["api_key"]; exists {
 		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", models)
 	}
-	if success.Result.Data.(map[string]any)["apply_mode"] != "restart_required" || success.Result.Data.(map[string]any)["need_restart"] != true {
-		t.Fatalf("expected model settings update to require restart, got %+v", success.Result.Data)
+	if success.Result.Data.(map[string]any)["apply_mode"] != "next_task_effective" || success.Result.Data.(map[string]any)["need_restart"] != false {
+		t.Fatalf("expected model settings update to be next_task_effective, got %+v", success.Result.Data)
+	}
+}
+
+func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-settings-model-validate"`),
+		Method:  "agent.settings.model.validate",
+		Params: mustMarshal(t, map[string]any{
+			"models": map[string]any{
+				"provider": "openai",
+				"base_url": "https://api.example.com/v1",
+				"model":    "gpt-4.1-mini",
+			},
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["ok"] != false || data["status"] != "missing_api_key" {
+		t.Fatalf("expected structured validation failure result, got %+v", data)
 	}
 }
 

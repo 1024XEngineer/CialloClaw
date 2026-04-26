@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -71,6 +72,7 @@ type Service struct {
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
+	modelMu        sync.RWMutex
 	runtimeMu      sync.RWMutex
 	runtimeNextID  uint64
 	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
@@ -88,6 +90,12 @@ type budgetDowngradeDecision struct {
 	DegradeActions []string
 	Summary        string
 	Trace          map[string]any
+}
+
+type modelSecretRollback struct {
+	provider string
+	record   storage.SecretRecord
+	existed  bool
 }
 
 // NewService wires the main orchestration dependencies.
@@ -274,7 +282,7 @@ func (s *Service) Snapshot() map[string]any {
 		"delivery_type":           s.delivery.DefaultResultType(),
 		"memory_backend":          s.memory.RetrievalBackend(),
 		"risk_level":              s.risk.DefaultLevel(),
-		"model":                   s.model.Descriptor(),
+		"model":                   s.currentModelDescriptor(),
 		"tool_count":              len(s.tools.Names()),
 		"primary_worker":          primaryWorker,
 		"pending_approvals":       pendingTotal,
@@ -2812,14 +2820,25 @@ func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 // settings patch plus apply-mode metadata.
 func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) {
 	normalizedParams := normalizeSettingsUpdateParams(params)
+	previewSettings, updatedKeys, applyMode, needRestart, err := s.previewSettingsUpdate(normalizedParams)
+	if err != nil {
+		return nil, err
+	}
 	modelSecretTouched := false
 	secretUpdatedKeys := make([]string, 0, 2)
+	rollbacks := make([]modelSecretRollback, 0, 2)
+	previousModel := s.currentModel()
 	if models := cloneMap(mapValue(normalizedParams, "models")); len(models) > 0 {
 		if deleteAPIKey := boolValue(models, "delete_api_key", false); deleteAPIKey {
 			provider := s.providerForSettingsUpdate(models)
+			rollback, rollbackErr := s.captureModelSecretRollback(provider)
+			if rollbackErr != nil {
+				return nil, rollbackErr
+			}
 			if err := s.deleteModelSecret(provider); err != nil {
 				return nil, err
 			}
+			rollbacks = append(rollbacks, rollback)
 			delete(models, "delete_api_key")
 			normalizedParams["models"] = models
 			modelSecretTouched = true
@@ -2827,25 +2846,33 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 		}
 		if apiKey := stringValue(models, "api_key", ""); apiKey != "" {
 			provider := s.providerForSettingsUpdate(models)
+			rollback, rollbackErr := s.captureModelSecretRollback(provider)
+			if rollbackErr != nil {
+				return nil, rollbackErr
+			}
 			if err := s.persistModelSecret(provider, apiKey); err != nil {
 				return nil, err
 			}
+			rollbacks = append(rollbacks, rollback)
 			delete(models, "api_key")
 			normalizedParams["models"] = models
 			modelSecretTouched = true
 			secretUpdatedKeys = append(secretUpdatedKeys, "models.api_key")
 		}
 	}
+	if modelSettingsTouched(updatedKeys) {
+		applyMode = "next_task_effective"
+		needRestart = false
+		if err := s.reloadRuntimeModelForSettings(previewSettings); err != nil {
+			s.rollbackModelSecretMutations(rollbacks)
+			return nil, err
+		}
+	}
 	effectiveSettings, updatedKeys, applyMode, needRestart, err := s.runEngine.UpdateSettings(normalizedParams)
 	if err != nil {
+		s.ReplaceModel(previousModel)
+		s.rollbackModelSecretMutations(rollbacks)
 		return nil, err
-	}
-	if modelSettingsRequireRestart(normalizedParams, secretUpdatedKeys) {
-		// The active model service is still constructed at bootstrap time, so
-		// provider/credential/base-url/model changes must surface as restart
-		// required until hot-reload semantics are implemented across the runtime.
-		applyMode = "restart_required"
-		needRestart = true
 	}
 	if modelSecretTouched {
 		if _, ok := effectiveSettings["models"]; !ok {
@@ -2853,11 +2880,7 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 		}
 	}
 	if _, ok := effectiveSettings["models"]; ok {
-		effectiveSettingsWithSecrets, err := s.attachSensitiveSettingAvailability(effectiveSettings)
-		if err != nil {
-			return nil, err
-		}
-		effectiveSettings = effectiveSettingsWithSecrets
+		effectiveSettings = s.attachSensitiveSettingAvailabilityForCommittedUpdate(effectiveSettings, secretUpdatedKeys)
 	}
 	effectiveSettings = outwardSettingsUpdatePatch(effectiveSettings)
 	updatedKeys = outwardSettingsUpdateKeys(updatedKeys, secretUpdatedKeys)
@@ -2869,22 +2892,39 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 	}, nil
 }
 
-func modelSettingsRequireRestart(normalizedParams map[string]any, secretUpdatedKeys []string) bool {
-	for _, key := range secretUpdatedKeys {
-		if key == "models.api_key" || key == "models.delete_api_key" {
-			return true
-		}
+// attachSensitiveSettingAvailabilityForCommittedUpdate decorates the response
+// payload after a settings update has already committed. At this point the
+// runtime model, secrets, and settings snapshot may already be live, so a
+// follow-up Stronghold read must not turn the committed save back into an RPC
+// error. When the readonly secret probe fails, the response degrades to stable
+// metadata derived from the just-applied mutation hints and current Stronghold
+// descriptor instead of reopening a partial-apply path.
+func (s *Service) attachSensitiveSettingAvailabilityForCommittedUpdate(settings map[string]any, secretUpdatedKeys []string) map[string]any {
+	decorated, err := s.attachSensitiveSettingAvailability(settings)
+	if err == nil {
+		return decorated
 	}
-	models := cloneMap(mapValue(normalizedParams, "models"))
-	if len(models) == 0 {
-		return false
+	return attachSensitiveSettingAvailabilityFallback(settings, strongholdStatusFromStorage(s.storage), settingsUpdateSecretAvailabilityHint(secretUpdatedKeys))
+}
+
+// previewSettingsUpdate computes the future settings snapshot without mutating
+// runengine state so SettingsUpdate can validate runtime model reloads before
+// persisting a next-task-effective model route.
+func (s *Service) previewSettingsUpdate(values map[string]any) (map[string]any, []string, string, bool, error) {
+	if s == nil || s.runEngine == nil {
+		return nil, nil, "", false, nil
 	}
-	for _, key := range []string{"provider", "base_url", "model"} {
-		if _, ok := models[key]; ok {
-			return true
-		}
+	currentSettings := s.runEngine.Settings()
+	nextSettings := cloneMap(currentSettings)
+	if nextSettings == nil {
+		nextSettings = map[string]any{}
 	}
-	return false
+	previewPatch := cloneMap(values)
+	mergeSettingsPreview(nextSettings, previewPatch)
+	updatedKeys := settingsPatchPathsFromPreview(previewPatch)
+	applyMode := previewApplyMode(currentSettings, previewPatch, updatedKeys)
+	needRestart := previewNeedsRestart(currentSettings, previewPatch)
+	return normalizeSettingsSnapshot(nextSettings), updatedKeys, applyMode, needRestart, nil
 }
 
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
@@ -3666,7 +3706,7 @@ func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (m
 }
 
 func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return resolvedProvider, false, nil
 	}
@@ -3686,8 +3726,48 @@ func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
 	return resolvedProvider, false, err
 }
 
+func attachSensitiveSettingAvailabilityFallback(settings map[string]any, stronghold map[string]any, providerConfigured *bool) map[string]any {
+	cloned := normalizeSettingsSnapshot(cloneMap(settings))
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	models := cloneMap(mapValue(cloned, "models"))
+	if models == nil {
+		models = map[string]any{}
+	}
+	credentials := cloneMap(mapValue(models, "credentials"))
+	if credentials == nil {
+		credentials = map[string]any{}
+	}
+	if providerConfigured != nil {
+		credentials["provider_api_key_configured"] = *providerConfigured
+	} else if _, ok := credentials["provider_api_key_configured"]; !ok {
+		credentials["provider_api_key_configured"] = false
+	}
+	if len(stronghold) > 0 {
+		credentials["stronghold"] = cloneMap(stronghold)
+	}
+	models["credentials"] = credentials
+	cloned["models"] = models
+	return cloned
+}
+
+func settingsUpdateSecretAvailabilityHint(secretUpdatedKeys []string) *bool {
+	for _, key := range secretUpdatedKeys {
+		switch key {
+		case "models.api_key":
+			configured := true
+			return &configured
+		case "models.delete_api_key":
+			configured := false
+			return &configured
+		}
+	}
+	return nil
+}
+
 func (s *Service) persistModelSecret(provider, apiKey string) error {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return ErrStrongholdAccessFailed
 	}
@@ -3707,7 +3787,7 @@ func (s *Service) persistModelSecret(provider, apiKey string) error {
 }
 
 func (s *Service) deleteModelSecret(provider string) error {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return ErrStrongholdAccessFailed
 	}
@@ -3719,6 +3799,125 @@ func (s *Service) deleteModelSecret(provider string) error {
 		return normalizedErr
 	}
 	return nil
+}
+
+func (s *Service) captureModelSecretRollback(provider string) (modelSecretRollback, error) {
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
+	rollback := modelSecretRollback{provider: resolvedProvider}
+	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
+		return rollback, nil
+	}
+	record, err := s.storage.SecretStore().GetSecret(context.Background(), "model", resolvedProvider+"_api_key")
+	if err == nil {
+		rollback.record = record
+		rollback.existed = true
+		return rollback, nil
+	}
+	normalizedErr := storage.NormalizeSecretStoreError(err)
+	if errors.Is(normalizedErr, storage.ErrSecretNotFound) {
+		return rollback, nil
+	}
+	if errors.Is(normalizedErr, storage.ErrStrongholdAccessFailed) {
+		return rollback, ErrStrongholdAccessFailed
+	}
+	return rollback, normalizedErr
+}
+
+func (s *Service) rollbackModelSecretMutations(rollbacks []modelSecretRollback) {
+	for index := len(rollbacks) - 1; index >= 0; index-- {
+		rollback := rollbacks[index]
+		if rollback.provider == "" || s == nil || s.storage == nil || s.storage.SecretStore() == nil {
+			continue
+		}
+		if rollback.existed {
+			_ = s.storage.SecretStore().PutSecret(context.Background(), rollback.record)
+			continue
+		}
+		_ = s.storage.SecretStore().DeleteSecret(context.Background(), "model", rollback.provider+"_api_key")
+	}
+}
+
+func (s *Service) reloadRuntimeModelForSettings(settings map[string]any) error {
+	if s == nil || s.runEngine == nil {
+		return nil
+	}
+	resolvedConfig := model.RuntimeConfigFromSettings(s.currentModelConfig(), settings)
+	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+		ModelConfig:  resolvedConfig,
+		SecretSource: model.NewStaticSecretSource(s.storage),
+	})
+	if err != nil {
+		if shouldFallbackRuntimeModelReload(err) {
+			modelService = model.NewService(resolvedConfig)
+		} else {
+			return err
+		}
+	}
+	s.ReplaceModel(modelService)
+	return nil
+}
+
+func settingsPatchPathsFromPreview(patch map[string]any) []string {
+	if len(patch) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(patch))
+	for key := range patch {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	paths := make([]string, 0, len(keys))
+	for _, key := range keys {
+		nextPrefix := key
+		if nested, ok := patch[key].(map[string]any); ok && len(nested) > 0 {
+			for _, child := range settingsPatchPathsFromPreview(nested) {
+				paths = append(paths, nextPrefix+"."+child)
+			}
+			continue
+		}
+		paths = append(paths, nextPrefix)
+	}
+	return paths
+}
+
+func mergeSettingsPreview(target map[string]any, patch map[string]any) {
+	for key, value := range patch {
+		patchMap, ok := value.(map[string]any)
+		if ok {
+			currentMap, currentOK := target[key].(map[string]any)
+			if !currentOK {
+				currentMap = map[string]any{}
+			}
+			mergeSettingsPreview(currentMap, patchMap)
+			target[key] = currentMap
+			continue
+		}
+		target[key] = value
+	}
+}
+
+func previewNeedsRestart(currentSettings, patch map[string]any) bool {
+	generalPatch := cloneMap(mapValue(patch, "general"))
+	if len(generalPatch) == 0 {
+		return false
+	}
+	nextLanguage, ok := generalPatch["language"]
+	if !ok {
+		return false
+	}
+	currentGeneral := cloneMap(mapValue(currentSettings, "general"))
+	currentLanguage, hasCurrentLanguage := currentGeneral["language"]
+	return !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage)
+}
+
+func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []string) string {
+	if previewNeedsRestart(currentSettings, patch) {
+		return "restart_required"
+	}
+	if modelSettingsTouched(updatedKeys) {
+		return "next_task_effective"
+	}
+	return "immediate"
 }
 
 func strongholdStatusFromStorage(store *storage.Service) map[string]any {
@@ -3899,18 +4098,15 @@ func (s *Service) providerForSettingsUpdate(models map[string]any) string {
 }
 
 func (s *Service) defaultSettingsProvider() string {
-	if s.model == nil {
+	if s.currentModel() == nil {
 		return ""
 	}
-	return strings.TrimSpace(s.model.Provider())
+	return strings.TrimSpace(s.currentModel().Provider())
 }
 
 func providerFromSettings(models map[string]any, fallback string) string {
 	provider := firstNonEmptyString(stringValue(models, "provider", ""), fallback)
-	if provider == "openai" {
-		return model.OpenAIResponsesProvider
-	}
-	return provider
+	return model.CanonicalProviderName(provider)
 }
 
 func matchesTaskGroup(task runengine.TaskRecord, group string) bool {
@@ -6499,7 +6695,7 @@ func containsString(values []string, expected string) bool {
 }
 
 func supportsBudgetProvider(provider string) bool {
-	switch strings.TrimSpace(provider) {
+	switch model.CanonicalProviderName(provider) {
 	case "", model.OpenAIResponsesProvider:
 		return true
 	default:
@@ -7484,7 +7680,7 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	auditAction := "execute_task"
 	auditTarget := impactScopeTarget(impactScope, targetPathFromIntent(taskIntent))
 	auditResult := "failed"
-	failureCode, failureCategory := classifyExecutionFailure(task, err)
+	failureCode, failureCategory := classifyScreenFailure(task, err)
 	if errors.Is(err, execution.ErrRecoveryPointPrepareFailed) {
 		securityStatus = "execution_error"
 		stepName = "recovery_prepare_failed"
@@ -7519,16 +7715,6 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	return updatedTask, bubble
 }
 
-// classifyExecutionFailure keeps task-facing runtime summaries and governance
-// metadata aligned with the formal protocol error names without exposing raw
-// provider or worker errors as long-term UI contracts.
-func classifyExecutionFailure(task runengine.TaskRecord, err error) (string, string) {
-	if failureCode, failureCategory := classifyScreenFailure(task, err); failureCode != "" || failureCategory != "" {
-		return failureCode, failureCategory
-	}
-	return classifyModelFailure(err)
-}
-
 // classifyScreenFailure keeps screen-task runtime summaries and governance
 // metadata aligned with the formal protocol error names while still exposing a
 // task-facing failure category for UI grouping.
@@ -7561,46 +7747,10 @@ func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string
 	}
 }
 
-// classifyModelFailure normalizes formal model-provider failures into stable
-// protocol codes so task detail and runtime summaries can expose one canonical
-// failure contract instead of transport-specific error strings.
-func classifyModelFailure(err error) (string, string) {
-	switch {
-	case errors.Is(err, model.ErrModelProviderUnsupported):
-		return "MODEL_PROVIDER_NOT_FOUND", "model_provider"
-	case errors.Is(err, model.ErrModelProviderRequired):
-		return "MODEL_PROVIDER_NOT_FOUND", "model_provider"
-	case model.IsProviderRuntimeUnavailable(err):
-		return "MODEL_RUNTIME_UNAVAILABLE", "model_runtime"
-	case errors.Is(err, model.ErrToolCallingNotSupported):
-		return "MODEL_NOT_ALLOWED", "model_capability"
-	case errors.Is(err, model.ErrOpenAIEndpointRequired), errors.Is(err, model.ErrOpenAIModelIDRequired), errors.Is(err, model.ErrOpenAIHTTPStatus):
-		return "MODEL_NOT_ALLOWED", "model_configuration"
-	case errors.Is(err, tools.ErrToolOutputInvalid):
-		return "TOOL_OUTPUT_INVALID", "model_output"
-	case errors.Is(err, model.ErrClientNotConfigured), errors.Is(err, model.ErrOpenAIAPIKeyRequired), errors.Is(err, model.ErrSecretSourceFailed), errors.Is(err, model.ErrSecretNotFound), errors.Is(err, storage.ErrSecretNotFound), errors.Is(err, storage.ErrStrongholdUnavailable), errors.Is(err, storage.ErrSecretStoreAccessFailed):
-		return "STRONGHOLD_ACCESS_FAILED", "model_credentials"
-	default:
-		return "", ""
-	}
-}
-
 func executionFailureBubble(err error) string {
 	switch {
 	case errors.Is(err, execution.ErrRecoveryPointPrepareFailed):
 		return "执行失败：执行前恢复点创建失败，请稍后重试。"
-	case errors.Is(err, model.ErrClientNotConfigured), errors.Is(err, model.ErrOpenAIAPIKeyRequired), errors.Is(err, model.ErrSecretSourceFailed), errors.Is(err, model.ErrSecretNotFound), errors.Is(err, storage.ErrSecretNotFound), errors.Is(err, storage.ErrStrongholdUnavailable), errors.Is(err, storage.ErrSecretStoreAccessFailed):
-		return "执行失败：当前模型凭证未配置或不可访问，请先完成模型设置后重试。"
-	case errors.Is(err, model.ErrModelProviderRequired), errors.Is(err, model.ErrModelProviderUnsupported):
-		return "执行失败：当前模型提供方未登记，请检查模型设置后重试。"
-	case model.IsProviderRuntimeUnavailable(err):
-		return "执行失败：当前模型服务暂时不可用，请稍后重试。"
-	case errors.Is(err, model.ErrToolCallingNotSupported):
-		return "执行失败：当前模型不支持所需的工具调用能力，请调整模型设置后重试。"
-	case errors.Is(err, model.ErrOpenAIEndpointRequired), errors.Is(err, model.ErrOpenAIModelIDRequired), errors.Is(err, model.ErrOpenAIHTTPStatus):
-		return "执行失败：当前模型配置不完整或请求被提供方拒绝，请检查模型设置后重试。"
-	case errors.Is(err, tools.ErrToolOutputInvalid):
-		return "执行失败：当前模型返回结果不完整，请稍后重试。"
 	case errors.Is(err, tools.ErrWorkspaceBoundaryDenied):
 		return "执行失败：目标超出工作区边界，已阻止本次操作。"
 	case errors.Is(err, tools.ErrCommandNotAllowed):
@@ -7610,8 +7760,97 @@ func executionFailureBubble(err error) string {
 	case errors.Is(err, tools.ErrToolExecutionFailed):
 		return "执行失败：工具运行失败，请检查环境后重试。"
 	default:
+		if detail := modelExecutionFailureBubble(err); detail != "" {
+			return detail
+		}
 		return "执行失败：请稍后重试。"
 	}
+}
+
+// modelExecutionFailureBubble keeps upstream model failures actionable without
+// exposing raw transport details or secrets in the task-facing bubble copy.
+func modelExecutionFailureBubble(err error) string {
+	if err == nil {
+		return ""
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	switch {
+	case errors.Is(err, model.ErrClientNotConfigured):
+		return "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。"
+	case errors.Is(err, model.ErrToolCallingNotSupported):
+		return "执行失败：当前模型接口不支持工具调用，请切换到兼容工具调用的模型或关闭相关工具路径。"
+	case errors.Is(err, model.ErrOpenAIResponseInvalid):
+		return "执行失败：模型返回内容无法解析，请检查上游接口兼容性。"
+	case errors.Is(err, model.ErrOpenAIRequestTimeout):
+		return "执行失败：模型请求超时，请稍后重试。"
+	case errors.Is(err, model.ErrOpenAIRequestFailed):
+		return "执行失败：模型请求发送失败，请检查网络连接或上游地址。"
+	case errors.As(err, &statusErr):
+		return modelHTTPStatusFailureBubble(statusErr)
+	default:
+		return ""
+	}
+}
+
+func modelHTTPStatusFailureBubble(statusErr *model.OpenAIHTTPStatusError) string {
+	if statusErr == nil {
+		return ""
+	}
+	safeMessage := sanitizeModelProviderMessage(statusErr.Message)
+	switch statusErr.StatusCode {
+	case 400:
+		if safeMessage != "" {
+			return "执行失败：模型请求被上游拒绝（" + safeMessage + "）。"
+		}
+		return "执行失败：模型请求被上游拒绝，请检查输入内容、模型能力和接口兼容性。"
+	case 401, 403:
+		if safeMessage != "" {
+			return "执行失败：模型鉴权失败（" + safeMessage + "），请检查 API Key 或访问权限。"
+		}
+		return "执行失败：模型鉴权失败，请检查 API Key 或访问权限。"
+	case 404:
+		if safeMessage != "" {
+			return "执行失败：模型接口不存在（" + safeMessage + "），请检查 Base URL 或接口兼容性。"
+		}
+		return "执行失败：模型接口不存在，请检查 Base URL 或接口兼容性。"
+	case 408, 504:
+		return "执行失败：模型请求超时，请稍后重试。"
+	case 429:
+		if safeMessage != "" {
+			return "执行失败：模型请求过于频繁（" + safeMessage + "），请稍后重试。"
+		}
+		return "执行失败：模型请求过于频繁，请稍后重试。"
+	case 500, 502, 503:
+		if safeMessage != "" {
+			return "执行失败：模型服务暂时不可用（" + safeMessage + "），请稍后重试。"
+		}
+		return "执行失败：模型服务暂时不可用，请稍后重试。"
+	default:
+		if safeMessage != "" {
+			return "执行失败：模型调用失败（" + safeMessage + "）。"
+		}
+		return "执行失败：模型调用失败，请稍后重试。"
+	}
+}
+
+func sanitizeModelProviderMessage(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	trimmed = strings.ReplaceAll(trimmed, "\r", " ")
+	trimmed = strings.ReplaceAll(trimmed, "\n", " ")
+	lowerTrimmed := strings.ToLower(trimmed)
+	for _, secretMarker := range []string{"api key", "authorization", "bearer ", "sk-"} {
+		if strings.Contains(lowerTrimmed, secretMarker) {
+			return ""
+		}
+	}
+	if len(trimmed) > 120 {
+		trimmed = strings.TrimSpace(trimmed[:120]) + "..."
+	}
+	return trimmed
 }
 
 func (s *Service) buildExecutionAudit(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, deliveryResult map[string]any) ([]map[string]any, map[string]any) {
@@ -7674,7 +7913,7 @@ func (s *Service) buildBudgetFailureAudit(task runengine.TaskRecord, executionEr
 	if executionErr == nil {
 		return nil
 	}
-	if failureCode, _ := classifyModelFailure(executionErr); failureCode == "" {
+	if !errors.Is(executionErr, model.ErrClientNotConfigured) && !errors.Is(executionErr, model.ErrToolCallingNotSupported) && !errors.Is(executionErr, model.ErrModelProviderUnsupported) && !errors.Is(executionErr, model.ErrSecretNotFound) && !errors.Is(executionErr, model.ErrSecretSourceFailed) {
 		return nil
 	}
 	return map[string]any{

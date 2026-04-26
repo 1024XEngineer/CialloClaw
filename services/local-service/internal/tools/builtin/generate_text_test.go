@@ -105,29 +105,32 @@ func TestGenerateTextToolFallsBackOnModelError(t *testing.T) {
 	}
 }
 
-func TestGenerateTextToolMarksEmptyModelOutputAsInvalidFallback(t *testing.T) {
+func TestGenerateTextToolKeepsFallbackFlagWhenModelReturnsEmptyOutput(t *testing.T) {
 	tool := NewGenerateTextTool()
 
 	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{
 		TaskID: "task_003",
 		RunID:  "run_003",
 		Model: stubModelCapability{response: model.GenerateTextResponse{
-			TaskID:    "task_003",
-			RunID:     "run_003",
-			RequestID: "req_003",
-			Provider:  "openai_responses",
-			ModelID:   "gpt-5.4",
+			TaskID:     "task_003",
+			RunID:      "run_003",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "   ",
 		}},
 	}, map[string]any{
 		"prompt":        "say something",
 		"fallback_text": "fallback content",
-		"intent_name":   "rewrite",
+		"intent_name":   "summarize",
 	})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
+	if result.RawOutput["fallback"] != true {
+		t.Fatalf("expected empty model output to keep fallback flag, got %+v", result.RawOutput)
+	}
 	if result.RawOutput["fallback_reason"] != tools.ErrToolOutputInvalid.Error() {
-		t.Fatalf("expected empty model output to map to tool output invalid, got %+v", result.RawOutput)
+		t.Fatalf("expected invalid output fallback reason, got %+v", result.RawOutput)
 	}
 }
 

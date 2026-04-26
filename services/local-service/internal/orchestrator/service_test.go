@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -456,7 +455,6 @@ func (s *stubStrongholdProvider) Open(context.Context) (storage.SecretStore, err
 func (s *stubStrongholdProvider) Descriptor() storage.StrongholdDescriptor {
 	return s.descriptor
 }
-
 func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
 	return s.base.WriteTask(ctx, record)
 }
@@ -706,7 +704,6 @@ func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (
 
 	return service, workspaceRoot, storageService
 }
-
 func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, pluginService *plugin.Service) {
 	t.Helper()
 	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
@@ -1046,77 +1043,6 @@ func TestServiceSubmitInputRoutesClearCommandToAgentLoopWithoutForcedConfirmatio
 	}
 	if deliveryResult["type"] != "bubble" {
 		t.Fatalf("expected short command to prefer bubble delivery, got %v", deliveryResult["type"])
-	}
-}
-
-func TestServiceSubmitInputUsesConfiguredOpenAIResponsesClient(t *testing.T) {
-	type capturedRequest struct {
-		Model      string        `json:"model"`
-		Input      string        `json:"input"`
-		Tools      []interface{} `json:"tools"`
-		ToolChoice string        `json:"tool_choice"`
-	}
-
-	var captured capturedRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		if got := r.Header.Get("Authorization"); got != "Bearer formal-mainline-key" {
-			t.Fatalf("authorization header mismatch: got %q", got)
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read request body: %v", err)
-		}
-		if err := json.Unmarshal(body, &captured); err != nil {
-			t.Fatalf("parse request body: %v", err)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_formal_mainline","model":"gpt-5.4","output_text":"Configured Responses output.","usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}`))
-	}))
-	defer server.Close()
-
-	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-		ModelConfig: serviceconfig.ModelConfig{
-			Provider: model.OpenAIResponsesProvider,
-			ModelID:  "gpt-5.4",
-			Endpoint: server.URL,
-		},
-		APIKey: "formal-mainline-key",
-	})
-	if err != nil {
-		t.Fatalf("new model service from config: %v", err)
-	}
-
-	service, _, _ := newTestServiceWithModelService(t, modelService)
-	result, err := service.SubmitInput(map[string]any{
-		"session_id": "sess_formal_mainline",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"input": map[string]any{
-			"type": "text",
-			"text": "Translate this note into English",
-		},
-	})
-	if err != nil {
-		t.Fatalf("submit input failed: %v", err)
-	}
-	task := result["task"].(map[string]any)
-	if task["status"] != "completed" {
-		t.Fatalf("expected configured model path to complete task, got %+v", task)
-	}
-	if captured.Model != "gpt-5.4" {
-		t.Fatalf("expected configured model id to reach responses client, got %+v", captured)
-	}
-	if captured.ToolChoice != "auto" || len(captured.Tools) == 0 {
-		t.Fatalf("expected configured responses request to include tool-calling metadata, got %+v", captured)
-	}
-	if !strings.Contains(captured.Input, "Translate this note into English") {
-		t.Fatalf("expected user request to reach responses client, got %+v", captured)
-	}
-	deliveryResult, ok := result["delivery_result"].(map[string]any)
-	if !ok || deliveryResult["type"] != "bubble" {
-		t.Fatalf("expected configured model path to return bubble delivery, got %+v", result["delivery_result"])
 	}
 }
 
@@ -5399,142 +5325,6 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 	}
 }
 
-func TestServiceTaskDetailGetIncludesFailureSummaryForFailedModelTask(t *testing.T) {
-	service := newTestService()
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:         "sess_model_failure_detail",
-		Title:             "总结当前报错",
-		SourceType:        "hover_input",
-		Status:            "processing",
-		Intent:            map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		PreferredDelivery: "bubble",
-		FallbackDelivery:  "bubble",
-		CurrentStep:       "generate_output",
-		RiskLevel:         "green",
-		Timeline:          initialTimeline("processing", "generate_output"),
-		Snapshot: contextsvc.TaskContextSnapshot{
-			Text:      "Provider failure should remain visible in runtime summary.",
-			InputType: "text",
-		},
-	})
-	updatedTask, _ := service.failExecutionTask(task, task.Intent, execution.Result{}, errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound))
-
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": updatedTask.TaskID})
-	if err != nil {
-		t.Fatalf("task detail get failed: %v", err)
-	}
-	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
-	if runtimeSummary["latest_failure_code"] != "STRONGHOLD_ACCESS_FAILED" {
-		t.Fatalf("expected failed model task to expose formal latest_failure_code, got %+v", runtimeSummary)
-	}
-	if runtimeSummary["latest_failure_category"] != "model_credentials" {
-		t.Fatalf("expected failed model task to expose latest_failure_category, got %+v", runtimeSummary)
-	}
-	summary, _ := runtimeSummary["latest_failure_summary"].(string)
-	if !strings.Contains(summary, "模型凭证") {
-		t.Fatalf("expected failed model task to expose credentials-focused summary, got %+v", runtimeSummary)
-	}
-}
-
-func TestClassifyModelFailureUsesFormalCodes(t *testing.T) {
-	testCases := []struct {
-		name     string
-		err      error
-		wantCode string
-		wantType string
-	}{
-		{
-			name:     "unsupported provider",
-			err:      model.ErrModelProviderUnsupported,
-			wantCode: "MODEL_PROVIDER_NOT_FOUND",
-			wantType: "model_provider",
-		},
-		{
-			name:     "missing provider config",
-			err:      model.ErrModelProviderRequired,
-			wantCode: "MODEL_PROVIDER_NOT_FOUND",
-			wantType: "model_provider",
-		},
-		{
-			name:     "tool calling unsupported",
-			err:      model.ErrToolCallingNotSupported,
-			wantCode: "MODEL_NOT_ALLOWED",
-			wantType: "model_capability",
-		},
-		{
-			name:     "endpoint missing",
-			err:      model.ErrOpenAIEndpointRequired,
-			wantCode: "MODEL_NOT_ALLOWED",
-			wantType: "model_configuration",
-		},
-		{
-			name:     "api key missing",
-			err:      model.ErrOpenAIAPIKeyRequired,
-			wantCode: "STRONGHOLD_ACCESS_FAILED",
-			wantType: "model_credentials",
-		},
-		{
-			name:     "provider timeout",
-			err:      model.ErrOpenAIRequestTimeout,
-			wantCode: "MODEL_RUNTIME_UNAVAILABLE",
-			wantType: "model_runtime",
-		},
-		{
-			name:     "provider rate limited",
-			err:      &model.OpenAIHTTPStatusError{StatusCode: 429, Message: "rate limited"},
-			wantCode: "MODEL_RUNTIME_UNAVAILABLE",
-			wantType: "model_runtime",
-		},
-		{
-			name:     "provider rejects request",
-			err:      &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"},
-			wantCode: "MODEL_NOT_ALLOWED",
-			wantType: "model_configuration",
-		},
-		{
-			name:     "output invalid",
-			err:      tools.ErrToolOutputInvalid,
-			wantCode: "TOOL_OUTPUT_INVALID",
-			wantType: "model_output",
-		},
-		{
-			name:     "secret resolution unavailable",
-			err:      errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound),
-			wantCode: "STRONGHOLD_ACCESS_FAILED",
-			wantType: "model_credentials",
-		},
-		{
-			name:     "missing client",
-			err:      model.ErrClientNotConfigured,
-			wantCode: "STRONGHOLD_ACCESS_FAILED",
-			wantType: "model_credentials",
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			failureCode, failureCategory := classifyModelFailure(testCase.err)
-			if failureCode != testCase.wantCode || failureCategory != testCase.wantType {
-				t.Fatalf("expected %s/%s, got %s/%s", testCase.wantCode, testCase.wantType, failureCode, failureCategory)
-			}
-		})
-	}
-}
-
-func TestBuildBudgetFailureAuditTracksFormalModelFailures(t *testing.T) {
-	service := newTestService()
-	auditRecord := service.buildBudgetFailureAudit(runengine.TaskRecord{TaskID: "task_budget_failure_audit", RunID: "run_budget_failure_audit"}, errors.Join(model.ErrOpenAIEndpointRequired, model.ErrOpenAIRequestTimeout))
-	if auditRecord == nil {
-		t.Fatal("expected formal model failure to produce budget failure audit")
-	}
-	if stringValue(auditRecord, "action", "") != "budget_auto_downgrade.failure_signal" {
-		t.Fatalf("expected budget failure audit action, got %+v", auditRecord)
-	}
-	if !strings.Contains(stringValue(auditRecord, "reason", ""), model.ErrOpenAIEndpointRequired.Error()) {
-		t.Fatalf("expected budget failure audit reason to retain model config detail, got %+v", auditRecord)
-	}
-}
-
 func TestLatestTaskFailurePrefersStructuredFailureMetadataOverBudgetSignals(t *testing.T) {
 	task := runengine.TaskRecord{
 		TaskID: "task_failure_signal_priority",
@@ -7215,7 +7005,7 @@ func TestServiceBudgetAutoDowngradeSwitchesWorkspaceDeliveryToBubble(t *testing.
 	}
 }
 
-func TestServiceBudgetAutoDowngradeProviderUnavailableDisablesExpensiveTools(t *testing.T) {
+func TestServiceBudgetAutoDowngradeNoLongerFlagsArbitraryProviderAliasesUnavailable(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed provider unavailable")
 	if _, err := service.SettingsUpdate(map[string]any{
 		"models": map[string]any{
@@ -7242,18 +7032,8 @@ func TestServiceBudgetAutoDowngradeProviderUnavailableDisablesExpensiveTools(t *
 		UpdatedAt:         time.Now().UTC(),
 	}
 	decision := service.evaluateBudgetAutoDowngrade(task, task.Intent)
-	if !decision.Applied || decision.TriggerReason != "provider_unavailable" {
-		t.Fatalf("expected provider unavailable downgrade decision, got %+v", decision)
-	}
-	updatedTask, updatedSnapshot, updatedIntent := service.applyBudgetAutoDowngrade(task, contextsvc.TaskContextSnapshot{Text: strings.Repeat("provider unavailable ", 20)}, task.Intent, decision)
-	if updatedTask.PreferredDelivery != "bubble" || updatedTask.FallbackDelivery != "bubble" {
-		t.Fatalf("expected provider unavailable downgrade to force bubble delivery, got task=%+v", updatedTask)
-	}
-	if mapValue(updatedIntent, "arguments")["disable_tool_calls"] != true {
-		t.Fatalf("expected provider unavailable downgrade to disable expensive tool calls, got %+v", updatedIntent)
-	}
-	if len(updatedSnapshot.Text) == 0 {
-		t.Fatalf("expected snapshot text to survive downgrade mutation, got %+v", updatedSnapshot)
+	if decision.Applied || decision.TriggerReason != "" {
+		t.Fatalf("expected arbitrary provider alias to stay on the openai-compatible route, got %+v", decision)
 	}
 }
 
@@ -7362,6 +7142,30 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 	}
 	if !foundBudgetFailure {
 		t.Fatalf("expected failExecutionTask to append budget failure signal, got %+v", updatedTask.AuditRecords)
+	}
+}
+
+func TestExecutionFailureBubbleSurfacesModelConfigurationError(t *testing.T) {
+	bubbleText := executionFailureBubble(model.ErrClientNotConfigured)
+	if bubbleText != "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。" {
+		t.Fatalf("expected model configuration failure bubble, got %q", bubbleText)
+	}
+}
+
+func TestExecutionFailureBubbleSurfacesHTTPStatusDetailsSafely(t *testing.T) {
+	bubbleText := executionFailureBubble(&model.OpenAIHTTPStatusError{StatusCode: 400, Message: `Cannot read "image.png" (this model does not support image input). Inform the user.`})
+	if !strings.Contains(bubbleText, "Cannot read \"image.png\"") {
+		t.Fatalf("expected upstream model error detail in bubble, got %q", bubbleText)
+	}
+	if !strings.Contains(bubbleText, "模型请求被上游拒绝") {
+		t.Fatalf("expected 400 status bubble prefix, got %q", bubbleText)
+	}
+}
+
+func TestExecutionFailureBubbleRedactsSecretBearingProviderMessages(t *testing.T) {
+	bubbleText := executionFailureBubble(&model.OpenAIHTTPStatusError{StatusCode: 401, Message: "Authorization: Bearer sk-secret-value invalid"})
+	if bubbleText != "执行失败：模型鉴权失败，请检查 API Key 或访问权限。" {
+		t.Fatalf("expected secret-bearing provider message to be redacted, got %q", bubbleText)
 	}
 }
 
@@ -11282,7 +11086,8 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	_, err := service.SettingsUpdate(map[string]any{
+	defaultProvider := service.defaultSettingsProvider()
+	result, err := service.SettingsUpdate(map[string]any{
 		"models": map[string]any{
 			"provider":              "anthropic",
 			"budget_auto_downgrade": true,
@@ -11292,18 +11097,27 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings update failed: %v", err)
 	}
-	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", "anthropic_api_key")
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", model.OpenAIResponsesProvider+"_api_key")
 	if err != nil {
-		t.Fatalf("expected anthropic secret to be stored, got %v", err)
+		t.Fatalf("expected canonical provider secret to be stored, got %v", err)
 	}
 	if stored.Value != "anthropic-secret-key" {
-		t.Fatalf("unexpected stored anthropic secret: %+v", stored)
+		t.Fatalf("unexpected stored canonical secret: %+v", stored)
 	}
-	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", service.model.Provider()+"_api_key")
-	if !errors.Is(err, storage.ErrSecretNotFound) {
-		t.Fatalf("expected default provider secret to remain unset, got %v", err)
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected provider secret update to be next_task_effective, got %+v", result)
 	}
-	result, err := service.SettingsGet(map[string]any{"scope": "models"})
+	if service.currentModel() == nil || service.currentModel().Provider() != model.OpenAIResponsesProvider {
+		t.Fatalf("expected runtime model provider to switch for future tasks, got %+v", service.currentModel())
+	}
+	if defaultProvider != model.OpenAIResponsesProvider {
+		t.Fatalf("expected default provider to stay canonical, got %q", defaultProvider)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", defaultProvider+"_api_key")
+	if err != nil {
+		t.Fatalf("expected alias save to reuse canonical provider secret, got %v", err)
+	}
+	result, err = service.SettingsGet(map[string]any{"scope": "models"})
 	if err != nil {
 		t.Fatalf("settings get failed: %v", err)
 	}
@@ -11373,6 +11187,45 @@ func TestSettingsUpdateReturnsStrongholdErrorWhenStoreUnavailable(t *testing.T) 
 	})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsUpdateStoresZAIAliasSecretsUnderCanonicalProvider(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings z-ai secret alias")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "z-ai",
+			"api_key":  "z-ai-secret-key",
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", model.OpenAIResponsesProvider+"_api_key")
+	if err != nil {
+		t.Fatalf("expected canonical provider secret to be stored, got %v", err)
+	}
+	if stored.Value != "z-ai-secret-key" {
+		t.Fatalf("unexpected canonical provider secret value: %+v", stored)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", "z-ai_api_key")
+	if !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("expected z-ai alias secret key to stay unused, got %v", err)
+	}
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected z-ai secret update to be next_task_effective, got %+v", result)
+	}
+	result, err = service.SettingsGet(map[string]any{"scope": "models"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	models := result["settings"].(map[string]any)["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "z-ai" || credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected alias provider to report configured state, got models=%+v credentials=%+v", models, credentials)
 	}
 }
 

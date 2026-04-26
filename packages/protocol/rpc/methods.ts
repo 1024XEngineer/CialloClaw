@@ -77,6 +77,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
+  AGENT_SETTINGS_MODEL_VALIDATE: "agent.settings.model.validate",
   AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
   AGENT_PLUGIN_LIST: "agent.plugin.list",
   AGENT_PLUGIN_DETAIL_GET: "agent.plugin.detail.get",
@@ -756,18 +757,18 @@ export type AgentSecurityRespondResult =
   | AgentSecurityApprovalRespondResult
   | AgentSecurityRestoreRespondResult;
 
-// AgentSettingsGetParams 定义当前模块的接口约束。
+// AgentSettingsGetParams defines the frozen settings snapshot query params.
 export interface AgentSettingsGetParams {
   request_meta: RequestMeta;
   scope: "all" | "general" | "floating_ball" | "memory" | "task_automation" | "models";
 }
 
-// AgentSettingsGetResult 定义当前模块的接口约束。
+// AgentSettingsGetResult defines the settings snapshot query result.
 export interface AgentSettingsGetResult {
   settings: SettingsSnapshot["settings"];
 }
 
-// AgentSettingsUpdateParams 定义当前模块的接口约束。
+// AgentSettingsUpdateParams defines the writable settings update payload.
 export interface AgentSettingsUpdateParams {
   request_meta: RequestMeta;
   general?: Partial<SettingsSnapshot["settings"]["general"]>;
@@ -798,12 +799,55 @@ export interface AgentSettingsEffectiveSettings {
   };
 }
 
-// AgentSettingsUpdateResult 定义当前模块的接口约束。
+// AgentSettingsUpdateResult defines the persisted settings update result.
 export interface AgentSettingsUpdateResult {
   updated_keys: string[];
   effective_settings: AgentSettingsEffectiveSettings;
   apply_mode: ApplyMode;
   need_restart: boolean;
+}
+
+export type AgentSettingsModelValidateStatus =
+  | "valid"
+  | "missing_provider"
+  | "missing_base_url"
+  | "missing_model"
+  | "missing_api_key"
+  | "secret_store_unavailable"
+  | "auth_failed"
+  | "endpoint_not_found"
+  | "request_rejected"
+  | "request_timeout"
+  | "request_failed"
+  | "invalid_response"
+  | "tool_calling_unavailable"
+  | "unknown_error";
+
+// AgentSettingsModelValidateParams defines the post-save validation payload for
+// the effective model route that should power future tasks.
+export interface AgentSettingsModelValidateParams {
+  request_meta: RequestMeta;
+  models?: Partial<SettingsSnapshot["settings"]["models"]> & {
+    budget_auto_downgrade?: boolean;
+    base_url?: string;
+    model?: string;
+    api_key?: string;
+    delete_api_key?: boolean;
+  };
+}
+
+// AgentSettingsModelValidateResult defines the structured model validation
+// result returned after save-time compatibility probes.
+export interface AgentSettingsModelValidateResult {
+  ok: boolean;
+  status: AgentSettingsModelValidateStatus;
+  message: string;
+  provider: string;
+  canonical_provider: string;
+  base_url: string;
+  model: string;
+  text_generation_ready: boolean;
+  tool_calling_ready: boolean;
 }
 
 // AgentPluginRuntimeListParams defines the stable plugin runtime query params.

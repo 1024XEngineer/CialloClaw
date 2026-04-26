@@ -254,18 +254,32 @@ export interface SettingsSnapshot {
       task_sources: string[];
       remind_before_deadline: boolean;
       remind_when_stale: boolean;
-    };
-    models: {
-      provider: string;
-      credentials: {
-        budget_auto_downgrade: boolean;
-        provider_api_key_configured: boolean;
-        base_url: string;
-        model: string;
-        stronghold: StrongholdStatus;
-      };
-    };
-  };
+	    };
+	    models: {
+	      provider: string;
+	      credentials: {
+	        budget_auto_downgrade: boolean;
+	        provider_api_key_configured: boolean;
+	        base_url: string;
+	        model: string;
+	        stronghold: StrongholdStatus;
+	      };
+	    };
+	  };
+}
+
+export interface Citation {
+  citation_id: string;
+  task_id: string;
+  run_id: string;
+  source_type: "file" | "web" | "context";
+  source_ref: string;
+  label: string;
+  artifact_id?: string | null;
+  artifact_type?: string | null;
+  evidence_role?: string | null;
+  excerpt_text?: string | null;
+  screen_session_id?: string | null;
 }
 
 export const RPC_METHODS_STABLE = {
@@ -529,10 +543,26 @@ export interface AgentTaskDetailGetParams {
 export interface AgentTaskDetailGetResult {
   task: Task;
   timeline: TaskStep[];
+  delivery_result: DeliveryResult | null;
   artifacts: Artifact[];
+  citations: Citation[];
   mirror_references: MirrorReference[];
   approval_request: ApprovalRequest | null;
+  authorization_record: AuthorizationRecord | null;
+  audit_record: AuditRecord | null;
   security_summary: SecuritySummary;
+  runtime_summary: TaskRuntimeSummary;
+}
+
+export interface TaskRuntimeSummary {
+  loop_stop_reason?: string | null;
+  events_count: number;
+  latest_event_type?: string | null;
+  active_steering_count: number;
+  latest_failure_code?: string | null;
+  latest_failure_category?: string | null;
+  latest_failure_summary?: string | null;
+  observation_signals: string[];
 }
 
 export interface TaskEvent {

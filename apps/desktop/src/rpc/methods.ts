@@ -25,6 +25,8 @@ import type {
   AgentRecommendationGetResult,
   AgentSettingsGetParams,
   AgentSettingsGetResult,
+  AgentSettingsModelValidateParams,
+  AgentSettingsModelValidateResult,
   AgentSettingsUpdateParams,
   AgentSettingsUpdateResult,
   AgentTaskInspectorConfigGetParams,
@@ -220,6 +222,10 @@ export function getSettingsDetailed(params: AgentSettingsGetParams): Promise<Jso
 
 export function updateSettings(params: AgentSettingsUpdateParams) {
   return rpcClient.request<AgentSettingsUpdateResult>(RPC_METHODS.AGENT_SETTINGS_UPDATE, params);
+}
+
+export function validateSettingsModel(params: AgentSettingsModelValidateParams) {
+  return rpcClient.request<AgentSettingsModelValidateResult>(RPC_METHODS.AGENT_SETTINGS_MODEL_VALIDATE, params);
 }
 
 export function listPluginRuntimes(params: AgentPluginRuntimeListParams) {
