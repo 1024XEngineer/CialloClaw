@@ -1,3 +1,4 @@
+import { animate, type AnimationPlaybackControls } from "motion";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow, monitorFromPoint, type Monitor } from "@tauri-apps/api/window";
 import {
@@ -105,6 +106,17 @@ type ShellBallDockAnimationConfig = {
   direction: -1 | 1;
   durationMs: number;
   overshootPx: number;
+};
+
+type ShellBallDockAnimationHandle = {
+  controls: AnimationPlaybackControls;
+  resolve: () => void;
+};
+
+type ShellBallDockAnimationKeyframes = {
+  x: number | number[];
+  y: number | number[];
+  times?: number[];
 };
 
 type UseShellBallWindowMetricsInput = {
@@ -292,24 +304,12 @@ function clampShellBallAxisPosition(value: number, min: number, max: number) {
   return Math.min(Math.max(Math.round(value), min), max);
 }
 
-function easeOutCubic(progress: number) {
-  return 1 - (1 - progress) ** 3;
-}
-
-function easeInOutCubic(progress: number) {
-  if (progress < 0.5) {
-    return 4 * progress ** 3;
+function resolveShellBallAnimatedAxisValue(value: number | number[]) {
+  if (Array.isArray(value)) {
+    return value[value.length - 1] ?? 0;
   }
 
-  return 1 - ((-2 * progress + 2) ** 3) / 2;
-}
-
-function interpolateShellBallFrame(startFrame: ShellBallWindowFrame, endFrame: ShellBallWindowFrame, progress: number): ShellBallWindowFrame {
-  return {
-    ...endFrame,
-    x: Math.round(startFrame.x + (endFrame.x - startFrame.x) * progress),
-    y: Math.round(startFrame.y + (endFrame.y - startFrame.y) * progress),
-  };
+  return value;
 }
 
 /**
@@ -376,23 +376,36 @@ export function getShellBallDockAnimationConfig(input: {
   };
 }
 
-function resolveShellBallDockAnimationOvershootFrame(input: {
-  nextFrame: ShellBallWindowFrame;
-  config: ShellBallDockAnimationConfig;
-}) {
-  if (input.config.overshootPx <= 0) {
-    return input.nextFrame;
+/**
+ * Builds edge-aware keyframes for shell-ball docking. Dock mode keeps a short
+ * overshoot segment so the orb feels magnetically captured by the edge.
+ */
+export function getShellBallDockAnimationKeyframes(input: {
+  currentFrame: Pick<ShellBallWindowFrame, "x" | "y">;
+  nextFrame: Pick<ShellBallWindowFrame, "x" | "y">;
+  animationConfig: ShellBallDockAnimationConfig | null;
+}): ShellBallDockAnimationKeyframes {
+  const animationConfig = input.animationConfig;
+
+  if (animationConfig === null || animationConfig.overshootPx <= 0) {
+    return {
+      x: input.nextFrame.x,
+      y: input.nextFrame.y,
+    };
   }
 
-  return input.config.axis === "x"
-    ? {
-        ...input.nextFrame,
-        x: input.nextFrame.x + input.config.direction * input.config.overshootPx,
-      }
-    : {
-        ...input.nextFrame,
-        y: input.nextFrame.y + input.config.direction * input.config.overshootPx,
-      };
+  const overshootX = animationConfig.axis === "x"
+    ? input.nextFrame.x + animationConfig.direction * animationConfig.overshootPx
+    : input.nextFrame.x;
+  const overshootY = animationConfig.axis === "y"
+    ? input.nextFrame.y + animationConfig.direction * animationConfig.overshootPx
+    : input.nextFrame.y;
+
+  return {
+    x: animationConfig.axis === "x" ? [input.currentFrame.x, overshootX, input.nextFrame.x] : input.nextFrame.x,
+    y: animationConfig.axis === "y" ? [input.currentFrame.y, overshootY, input.nextFrame.y] : input.nextFrame.y,
+    times: [0, SHELL_BALL_EDGE_DOCK_OVERSHOOT_PROGRESS, 1],
+  };
 }
 
 function resolveShellBallEdgeDockSide(input: {
@@ -736,7 +749,7 @@ export function useShellBallWindowMetrics({
   const globalAnchorRef = useRef<ShellBallGlobalAnchor | null>(null);
   const edgeDockStateRef = useRef<ShellBallEdgeDockState>({ side: null, revealed: false });
   const previousEdgeDockStateRef = useRef<ShellBallEdgeDockState>({ side: null, revealed: false });
-  const ballDockAnimationFrameRef = useRef<number | null>(null);
+  const ballDockAnimationRef = useRef<ShellBallDockAnimationHandle | null>(null);
   const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
   const helperWindowMoveAnimationTokenRef = useRef(0);
@@ -762,10 +775,10 @@ export function useShellBallWindowMetrics({
   }, []);
 
   const cancelBallDockAnimation = useCallback(() => {
-    if (ballDockAnimationFrameRef.current !== null) {
-      window.cancelAnimationFrame(ballDockAnimationFrameRef.current);
-      ballDockAnimationFrameRef.current = null;
-    }
+    const activeAnimation = ballDockAnimationRef.current;
+    ballDockAnimationRef.current = null;
+    activeAnimation?.controls.stop();
+    activeAnimation?.resolve();
   }, []);
 
   const cancelBallGeometryEmitAnimation = useCallback(() => {
@@ -812,51 +825,54 @@ export function useShellBallWindowMetrics({
           mode: input.mode,
         });
     const durationMs = animationConfig?.durationMs ?? SHELL_BALL_EDGE_DOCK_HORIZONTAL_ANIMATION_DURATION_MS;
-    const overshootFrame = animationConfig === null
-      ? nextFrame
-      : resolveShellBallDockAnimationOvershootFrame({
-          nextFrame,
-          config: animationConfig,
-        });
-    const hasOvershoot = animationConfig !== null && animationConfig.overshootPx > 0;
-    const startTime = performance.now();
+    const dockKeyframes = getShellBallDockAnimationKeyframes({
+      currentFrame,
+      nextFrame,
+      animationConfig,
+    });
+    const { times, ...keyframes } = dockKeyframes;
 
     await new Promise<void>((resolve) => {
-      const step = (timestamp: number) => {
-        const progress = Math.min(1, (timestamp - startTime) / durationMs);
-        const frame = !hasOvershoot
-          ? interpolateShellBallFrame(currentFrame, nextFrame, easeOutCubic(progress))
-          : progress < SHELL_BALL_EDGE_DOCK_OVERSHOOT_PROGRESS
-            ? interpolateShellBallFrame(
-                currentFrame,
-                overshootFrame,
-                easeOutCubic(progress / SHELL_BALL_EDGE_DOCK_OVERSHOOT_PROGRESS),
-              )
-            : interpolateShellBallFrame(
-                overshootFrame,
-                nextFrame,
-                easeInOutCubic((progress - SHELL_BALL_EDGE_DOCK_OVERSHOOT_PROGRESS) / (1 - SHELL_BALL_EDGE_DOCK_OVERSHOOT_PROGRESS)),
-              );
-
-        void currentWindow.setPosition(createShellBallLogicalPosition(frame.x, frame.y));
-
-        if (geometryRef.current !== null) {
-          geometryRef.current = {
-            ...geometryRef.current,
-            ballFrame: frame,
-          };
-        }
-
-        if (progress >= 1) {
-          ballDockAnimationFrameRef.current = null;
-          resolve();
+      let settled = false;
+      const finish = () => {
+        if (settled) {
           return;
         }
 
-        ballDockAnimationFrameRef.current = window.requestAnimationFrame(step);
+        settled = true;
+        if (ballDockAnimationRef.current?.controls === controls) {
+          ballDockAnimationRef.current = null;
+        }
+        resolve();
+      };
+      const controls = animate(currentFrame, keyframes, {
+        duration: durationMs / 1000,
+        ease: input?.mode === "dock" ? [0.16, 1, 0.3, 1] : [0.22, 1, 0.36, 1],
+        ...(times === undefined ? {} : { times }),
+        onUpdate: (latest) => {
+          const frame = {
+            ...currentFrame,
+            x: Math.round(resolveShellBallAnimatedAxisValue(latest.x)),
+            y: Math.round(resolveShellBallAnimatedAxisValue(latest.y)),
+          };
+
+          void currentWindow.setPosition(createShellBallLogicalPosition(frame.x, frame.y));
+
+          if (geometryRef.current !== null) {
+            geometryRef.current = {
+              ...geometryRef.current,
+              ballFrame: frame,
+            };
+          }
+        },
+      });
+
+      ballDockAnimationRef.current = {
+        controls,
+        resolve: finish,
       };
 
-      ballDockAnimationFrameRef.current = window.requestAnimationFrame(step);
+      void controls.then(finish, finish);
     });
   }, [cancelBallDockAnimation]);
 
