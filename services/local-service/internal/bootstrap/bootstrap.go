@@ -69,7 +69,11 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
-	resolvedModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
+	// Bootstrap builds a working client from the canonical runtime route, but an
+	// unsupported persisted provider still needs a clientless placeholder that
+	// preserves the user-facing provider identity for diagnostics and follow-up
+	// settings edits.
+	resolvedModelConfig, placeholderModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
 	if err != nil {
 		_ = storageService.Close()
 		return nil, err
@@ -132,7 +136,7 @@ func New(cfg config.Config) (*App, error) {
 	})
 	if err != nil {
 		if shouldFallbackBootstrapModelService(err, persistedModelRouteChanged) {
-			modelService = model.NewService(resolvedModelConfig)
+			modelService = model.NewService(placeholderModelConfig)
 		} else {
 			_ = storageService.Close()
 			return nil, err
@@ -187,17 +191,39 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
-func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, bool, error) {
+func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, config.ModelConfig, bool, error) {
 	if settingsStore == nil {
-		return base, false, nil
+		return base, base, false, nil
 	}
 	snapshot, err := settingsStore.LoadSettingsSnapshot(context.Background())
 	if err != nil {
-		return config.ModelConfig{}, false, err
+		return config.ModelConfig{}, config.ModelConfig{}, false, err
 	}
 	resolved := model.RuntimeConfigFromSettings(base, snapshot)
-	persistedRouteChanged := resolved.Provider != base.Provider || resolved.Endpoint != base.Endpoint || resolved.ModelID != base.ModelID
-	return resolved, persistedRouteChanged, nil
+	placeholder := resolved
+	if provider := bootstrapPersistedModelProvider(snapshot); provider != "" {
+		placeholder.Provider = provider
+	}
+	persistedRouteChanged := placeholder.Provider != base.Provider || placeholder.Endpoint != base.Endpoint || placeholder.ModelID != base.ModelID
+	return resolved, placeholder, persistedRouteChanged, nil
+}
+
+func bootstrapPersistedModelProvider(snapshot map[string]any) string {
+	models, ok := snapshot["models"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if provider, ok := models["provider"].(string); ok {
+		if trimmed := strings.TrimSpace(provider); trimmed != "" {
+			return trimmed
+		}
+	}
+	credentials, ok := models["credentials"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	provider, _ := credentials["provider"].(string)
+	return strings.TrimSpace(provider)
 }
 
 func shouldFallbackBootstrapModelService(err error, allowPersistedRoutePlaceholder bool) bool {

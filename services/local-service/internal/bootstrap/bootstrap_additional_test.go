@@ -367,3 +367,96 @@ func TestNewFallsBackToPlaceholderWhenPersistedProviderIsUnsupported(t *testing.
 		t.Fatalf("expected placeholder runtime model to remain clientless, got %v", err)
 	}
 }
+
+func TestLoadBootstrapModelConfigPreservesPersistedProviderForPlaceholderFallback(t *testing.T) {
+	base := config.ModelConfig{
+		Provider: model.OpenAIResponsesProvider,
+		ModelID:  "gpt-bootstrap-default",
+		Endpoint: "https://api.openai.com/v1/responses",
+	}
+	service := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "bootstrap-load-config.db")))
+	defer func() { _ = service.Close() }()
+
+	if err := service.SettingsStore().SaveSettingsSnapshot(context.Background(), map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"credentials": map[string]any{
+				"base_url": "https://example.invalid/v1/messages",
+				"model":    "claude-3-7-sonnet",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed settings snapshot failed: %v", err)
+	}
+
+	resolved, placeholder, persistedChanged, err := loadBootstrapModelConfig(base, service.SettingsStore())
+	if err != nil {
+		t.Fatalf("loadBootstrapModelConfig returned error: %v", err)
+	}
+	if !persistedChanged {
+		t.Fatal("expected persisted route change to be detected")
+	}
+	if resolved.Provider != model.OpenAIResponsesProvider || resolved.Endpoint != "https://example.invalid/v1/messages" || resolved.ModelID != "claude-3-7-sonnet" {
+		t.Fatalf("expected resolved runtime route to stay canonical, got %+v", resolved)
+	}
+	if placeholder.Provider != "anthropic" || placeholder.Endpoint != "https://example.invalid/v1/messages" || placeholder.ModelID != "claude-3-7-sonnet" {
+		t.Fatalf("expected placeholder route to preserve persisted provider identity, got %+v", placeholder)
+	}
+}
+
+func TestLoadBootstrapModelConfigWithoutSettingsStoreKeepsBaseConfig(t *testing.T) {
+	base := config.ModelConfig{
+		Provider: model.OpenAIResponsesProvider,
+		ModelID:  "gpt-bootstrap-default",
+		Endpoint: "https://api.openai.com/v1/responses",
+	}
+
+	resolved, placeholder, persistedChanged, err := loadBootstrapModelConfig(base, nil)
+	if err != nil {
+		t.Fatalf("loadBootstrapModelConfig returned error: %v", err)
+	}
+	if persistedChanged {
+		t.Fatal("expected nil settings store not to report persisted route changes")
+	}
+	if !reflect.DeepEqual(resolved, base) {
+		t.Fatalf("expected resolved config to keep base config, got %+v want %+v", resolved, base)
+	}
+	if !reflect.DeepEqual(placeholder, base) {
+		t.Fatalf("expected placeholder config to keep base config, got %+v want %+v", placeholder, base)
+	}
+}
+
+func TestBootstrapPersistedModelProviderReadsCredentialsFallback(t *testing.T) {
+	provider := bootstrapPersistedModelProvider(map[string]any{
+		"models": map[string]any{
+			"credentials": map[string]any{
+				"provider": "  custom_gateway  ",
+			},
+		},
+	})
+	if provider != "custom_gateway" {
+		t.Fatalf("expected provider fallback from credentials, got %q", provider)
+	}
+}
+
+func TestBootstrapPersistedModelProviderRejectsMissingModelsScope(t *testing.T) {
+	if provider := bootstrapPersistedModelProvider(map[string]any{"general": map[string]any{"language": "zh-CN"}}); provider != "" {
+		t.Fatalf("expected missing models scope to return empty provider, got %q", provider)
+	}
+	if provider := bootstrapPersistedModelProvider(map[string]any{"models": map[string]any{"provider": 123}}); provider != "" {
+		t.Fatalf("expected non-string provider to be ignored, got %q", provider)
+	}
+}
+
+func TestShouldFallbackBootstrapModelServiceHonorsPersistedProviderGate(t *testing.T) {
+	unsupportedErr := model.ErrModelProviderUnsupported
+	if shouldFallbackBootstrapModelService(unsupportedErr, false) {
+		t.Fatal("expected unsupported provider without persisted route change not to fallback")
+	}
+	if !shouldFallbackBootstrapModelService(unsupportedErr, true) {
+		t.Fatal("expected persisted unsupported provider to fallback into placeholder")
+	}
+	if shouldFallbackBootstrapModelService(errors.New("boom"), true) {
+		t.Fatal("expected unrelated bootstrap error not to fallback")
+	}
+}

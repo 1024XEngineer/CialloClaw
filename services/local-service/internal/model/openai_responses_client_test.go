@@ -575,6 +575,13 @@ func TestGenerateTextReturnsRequestError(t *testing.T) {
 	}
 }
 
+func TestOpenAIHTTPStatusErrorUsesFallbackMessageWhenMessageMissing(t *testing.T) {
+	err := (&OpenAIHTTPStatusError{StatusCode: http.StatusBadGateway}).Error()
+	if err != "openai responses returned http status 502" {
+		t.Fatalf("unexpected fallback status error text: %q", err)
+	}
+}
+
 // TestGenerateTextRejectsEmptyInput 验证GenerateTextRejectsEmptyInput。
 func TestGenerateTextRejectsEmptyInput(t *testing.T) {
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{

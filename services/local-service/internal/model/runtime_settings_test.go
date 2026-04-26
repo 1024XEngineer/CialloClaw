@@ -26,6 +26,18 @@ func TestCanonicalProviderNameNormalizesKnownAliases(t *testing.T) {
 	}
 }
 
+func TestIsOpenAICompatibleProviderAliasMatchesNonEmptyProviders(t *testing.T) {
+	if IsOpenAICompatibleProviderAlias("") {
+		t.Fatal("expected empty provider not to be treated as openai-compatible alias")
+	}
+	if IsOpenAICompatibleProviderAlias("   ") {
+		t.Fatal("expected blank provider not to be treated as openai-compatible alias")
+	}
+	if !IsOpenAICompatibleProviderAlias("anthropic") {
+		t.Fatal("expected non-empty provider alias to be treated as openai-compatible")
+	}
+}
+
 func TestRuntimeConfigFromSettingsOverlaysModelsScope(t *testing.T) {
 	base := config.ModelConfig{
 		Provider:             OpenAIResponsesProvider,
@@ -115,5 +127,35 @@ func TestServiceRuntimeConfigReflectsCurrentLoopBudgets(t *testing.T) {
 	}
 	if configSnapshot.MaxToolIterations != 6 || configSnapshot.PlannerRetryBudget != 2 || configSnapshot.ToolRetryBudget != 3 || configSnapshot.ContextCompressChars != 3600 || configSnapshot.ContextKeepRecent != 5 {
 		t.Fatalf("expected runtime config loop budgets to round-trip, got %+v", configSnapshot)
+	}
+}
+
+func TestRuntimeConfigFromSettingsParsesNumericBudgetValuesAcrossTypes(t *testing.T) {
+	base := config.ModelConfig{}
+	resolved := RuntimeConfigFromSettings(base, map[string]any{
+		"models": map[string]any{
+			"credentials": map[string]any{
+				"budget_policy": map[string]any{
+					"planner_retry_budget":   int32(2),
+					"tool_retry_budget":      int64(3),
+					"max_tool_iterations":    float64(4),
+					"context_compress_chars": "skip",
+					"context_keep_recent":    float64(5),
+				},
+			},
+		},
+	})
+	if resolved.PlannerRetryBudget != 2 || resolved.ToolRetryBudget != 3 || resolved.MaxToolIterations != 4 || resolved.ContextKeepRecent != 5 {
+		t.Fatalf("expected numeric coercion across runtime settings types, got %+v", resolved)
+	}
+	if resolved.ContextCompressChars != 0 {
+		t.Fatalf("expected unsupported numeric type to be ignored, got %+v", resolved)
+	}
+}
+
+func TestServiceRuntimeConfigHandlesNilService(t *testing.T) {
+	var service *Service
+	if snapshot := service.RuntimeConfig(); !reflect.DeepEqual(snapshot, config.ModelConfig{}) {
+		t.Fatalf("expected nil service runtime config to be empty, got %+v", snapshot)
 	}
 }
