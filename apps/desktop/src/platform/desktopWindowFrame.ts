@@ -40,6 +40,18 @@ type DesktopCloseHandle = {
   close: () => Promise<void>;
 };
 
+// minimizeCurrentDesktopWindow keeps helper flows in the same window session
+// while getting the control panel out of the way after launching onboarding.
+export async function minimizeCurrentDesktopWindow() {
+  const currentWindow = getDesktopFrameWindow();
+
+  if (!currentWindow) {
+    return;
+  }
+
+  await currentWindow.minimize();
+}
+
 // installDesktopEscapeClose keeps frameless desktop windows dismissible
 // without stealing Escape from active text inputs or editable regions.
 export function installDesktopEscapeClose(windowHandle?: DesktopCloseHandle | null) {
