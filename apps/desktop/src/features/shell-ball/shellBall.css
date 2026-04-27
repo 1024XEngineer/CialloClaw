@@ -970,19 +970,45 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-mascot {
+  --shell-ball-mascot-visual-scale: 1;
+  --shell-ball-orbital-scale: 1;
+  --shell-ball-shadow-offset-y: 0px;
+  --shell-ball-shadow-scale-x: 1;
+  --shell-ball-shadow-scale-y: 1;
   align-items: center;
   display: flex;
   height: clamp(16.2rem, 30.6vw, 21.6rem);
   justify-content: center;
   position: relative;
-  transform: scale(var(--shell-ball-mascot-scale));
+  transform: scale(var(--shell-ball-mascot-scale)) scale(var(--shell-ball-mascot-visual-scale));
   transform-origin: center center;
   width: clamp(14.86rem, 27.9vw, 17.1rem);
+  will-change: filter, transform;
 }
 
 .shell-ball-mascot[data-voice-hints="true"] {
   padding-bottom: 2.8rem;
   padding-top: 2.9rem;
+}
+
+.shell-ball-surface__mascot-shell[data-shell-ball-dragging="true"] {
+  filter: drop-shadow(0 22px 34px rgba(84, 117, 163, 0.22));
+}
+
+.shell-ball-surface__mascot-shell[data-shell-ball-settling="true"] {
+  filter: drop-shadow(0 16px 28px rgba(95, 136, 192, 0.2));
+}
+
+.shell-ball-mascot[data-shell-ball-dragging="true"] .shell-ball-mascot__float {
+  animation-play-state: paused;
+}
+
+.shell-ball-mascot[data-shell-ball-dragging="true"] .shell-ball-mascot__body,
+.shell-ball-mascot[data-shell-ball-settling="true"] .shell-ball-mascot__body {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.72),
+    0 26px 42px -22px rgba(88, 123, 175, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.76) inset;
 }
 
 .shell-ball-mascot__hotspot {
@@ -1028,7 +1054,8 @@ body[data-app-window="shell-ball"],
   filter: blur(1px);
   left: 50%;
   top: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--shell-ball-orbital-scale));
+  transform-origin: center center;
 }
 
 .shell-ball-mascot__orbital--back {
@@ -1051,7 +1078,12 @@ body[data-app-window="shell-ball"],
   filter: blur(12px);
   height: 2.62rem;
   left: 50%;
-  transform: translateX(-50%);
+  transform:
+    translateX(-50%)
+    translateY(var(--shell-ball-shadow-offset-y))
+    scaleX(var(--shell-ball-shadow-scale-x))
+    scaleY(var(--shell-ball-shadow-scale-y));
+  transform-origin: center center;
   width: 9rem;
 }
 
@@ -1062,7 +1094,7 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-mascot__attitude {
   position: relative;
-  transition: transform 260ms ease;
+  will-change: transform;
 }
 
 .shell-ball-mascot__body-shell {

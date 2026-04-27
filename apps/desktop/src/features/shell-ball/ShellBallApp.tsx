@@ -337,6 +337,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   });
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const {
+    ballDockSettling,
+    ballDragActive,
     beginBallWindowPointerDrag,
     edgeDockState,
     endBallWindowPointerDrag,
@@ -950,12 +952,15 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
+      dockTarget={edgeDockState.side}
       edgeDockRevealed={edgeDockState.revealed}
       edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
+      isDragging={ballDragActive}
+      isSettling={ballDockSettling}
       topContent={isEdgeDocked ? null : (
         <div className="shell-ball-surface__bubble-reserve" data-visible={snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? "true" : "false"}>
           <div className="shell-ball-surface__bubble-reserve-content">

@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent } from "react";
+import { motion } from "motion/react";
 import { AudioLines, Mic, ShieldAlert } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import { SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX, type ShellBallVoicePreview } from "../shellBall.interaction";
@@ -7,8 +8,11 @@ import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.t
 import type { ShellBallEdgeDockSide } from "../useShellBallWindowMetrics";
 
 type ShellBallMascotProps = {
+  dockTarget?: ShellBallEdgeDockSide | null;
   edgeDockRevealed?: boolean;
   edgeDockSide?: ShellBallEdgeDockSide | null;
+  isDragging?: boolean;
+  isSettling?: boolean;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -136,6 +140,38 @@ function getShellBallDockAttitude(input: {
     };
   }
 
+  if (input.edgeDockSide === "top_left") {
+    return {
+      shiftX: input.edgeDockRevealed ? 1 : 5,
+      shiftY: input.edgeDockRevealed ? 0 : -8,
+      tiltDeg: input.edgeDockRevealed ? 1 : 8,
+    };
+  }
+
+  if (input.edgeDockSide === "top_right") {
+    return {
+      shiftX: input.edgeDockRevealed ? -1 : -5,
+      shiftY: input.edgeDockRevealed ? 0 : -8,
+      tiltDeg: input.edgeDockRevealed ? -1 : -8,
+    };
+  }
+
+  if (input.edgeDockSide === "bottom_left") {
+    return {
+      shiftX: input.edgeDockRevealed ? 1 : 4,
+      shiftY: input.edgeDockRevealed ? 0 : 4,
+      tiltDeg: input.edgeDockRevealed ? 1 : 6,
+    };
+  }
+
+  if (input.edgeDockSide === "bottom_right") {
+    return {
+      shiftX: input.edgeDockRevealed ? -1 : -4,
+      shiftY: input.edgeDockRevealed ? 0 : 4,
+      tiltDeg: input.edgeDockRevealed ? -1 : -6,
+    };
+  }
+
   return {
     shiftX: 0,
     shiftY: input.edgeDockRevealed ? 0 : 4,
@@ -144,8 +180,11 @@ function getShellBallDockAttitude(input: {
 }
 
 export function ShellBallMascot({
+  dockTarget = null,
   edgeDockRevealed = false,
   edgeDockSide = null,
+  isDragging = false,
+  isSettling = false,
   visualState,
   voicePreview = null,
   showVoiceHints = true,
@@ -183,9 +222,6 @@ export function ShellBallMascot({
     edgeDockSide,
     edgeDockRevealed,
   });
-  const attitudeStyle: CSSProperties = {
-    transform: `translate(${dockAttitude.shiftX}px, ${dockAttitude.shiftY}px) rotate(${motionConfig.bodyTiltDeg + dockAttitude.tiltDeg}deg) scale(${motionConfig.bodyScale})`,
-  };
   const wingStyle: MotionStyle = {
     "--shell-ball-wing-lift": `${motionConfig.wingLiftDeg}deg`,
     "--shell-ball-wing-duration": `${motionConfig.wingDurationMs}ms`,
@@ -208,6 +244,10 @@ export function ShellBallMascot({
   const showVoiceMarker = visualState === "voice_listening" || visualState === "voice_locked";
   const showSelectionMarker = selectionIndicatorVisible && !showVoiceMarker;
   const shouldRouteHotspotDrag = visualState !== "voice_listening" && visualState !== "voice_locked";
+  const rootScale = isDragging ? 1.03 : isSettling ? 1.01 : 1;
+  const rootBrightness = isDragging ? 1.06 : isSettling ? 1.08 : 1;
+  const attitudeLift = isDragging ? -4 : isSettling ? -2 : 0;
+  const attitudeScale = motionConfig.bodyScale * (isDragging ? 1.06 : isSettling ? 1.02 : 1);
 
   function resetPointerSequence() {
     activeSequenceRef.current = false;
@@ -335,7 +375,7 @@ export function ShellBallMascot({
     }
   }
 
-  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+  function handleClick(_event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
       visualState,
       gesture: "single_click",
@@ -350,7 +390,7 @@ export function ShellBallMascot({
     onPrimaryClick();
   }
 
-  function handleDoubleClick(event: MouseEvent<HTMLButtonElement>) {
+  function handleDoubleClick(_event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
       visualState,
       gesture: "double_click",
@@ -365,17 +405,45 @@ export function ShellBallMascot({
   }
 
   return (
-    <div
+    <motion.div
       className={cn("shell-ball-mascot", voicePreview !== null && `shell-ball-mascot--preview-${voicePreview}`)}
+      animate={{
+        "--shell-ball-mascot-visual-scale": rootScale,
+        filter: `brightness(${rootBrightness}) saturate(${isDragging ? 1.1 : isSettling ? 1.06 : 1})`,
+      }}
       data-state={visualState}
+      data-dock-target={dockTarget ?? "none"}
       data-edge-dock-revealed={edgeDockRevealed ? "true" : "false"}
       data-edge-dock-side={edgeDockSide ?? "none"}
+      data-shell-ball-dragging={isDragging ? "true" : "false"}
+      data-shell-ball-settling={isSettling ? "true" : "false"}
       data-tone={motionConfig.accentTone}
       data-voice-hints={shouldRenderVoiceHints ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
+      transition={
+        isDragging
+          ? { damping: 22, mass: 0.52, stiffness: 340, type: "spring" }
+          : { damping: 24, mass: 0.64, stiffness: 280, type: "spring" }
+      }
     >
-      <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--back" />
-      <div className="shell-ball-mascot__shadow" />
+      <motion.div
+        animate={{
+          opacity: isDragging ? 0.94 : isSettling ? 0.9 : 0.74,
+          "--shell-ball-orbital-scale": isDragging ? 1.12 : isSettling ? 1.08 : 1,
+        }}
+        className="shell-ball-mascot__orbital shell-ball-mascot__orbital--back"
+        transition={{ damping: 24, mass: 0.62, stiffness: 260, type: "spring" }}
+      />
+      <motion.div
+        animate={{
+          opacity: isDragging ? 0.34 : isSettling ? 0.3 : 0.24,
+          "--shell-ball-shadow-offset-y": `${isDragging ? 2 : 0}px`,
+          "--shell-ball-shadow-scale-x": isDragging ? 1.18 : isSettling ? 1.08 : 1,
+          "--shell-ball-shadow-scale-y": isDragging ? 1.12 : isSettling ? 1.04 : 1,
+        }}
+        className="shell-ball-mascot__shadow"
+        transition={{ damping: 26, mass: 0.68, stiffness: 240, type: "spring" }}
+      />
 
       {showVoiceHoldRing ? (
         <svg aria-hidden="true" className="shell-ball-mascot__hold-ring" viewBox="0 0 190 190">
@@ -406,7 +474,20 @@ export function ShellBallMascot({
       )}
 
       <div className="shell-ball-mascot__float" style={floatStyle}>
-        <div className="shell-ball-mascot__attitude" style={attitudeStyle}>
+        <motion.div
+          animate={{
+            rotate: motionConfig.bodyTiltDeg + dockAttitude.tiltDeg,
+            scale: attitudeScale,
+            x: dockAttitude.shiftX,
+            y: dockAttitude.shiftY + attitudeLift,
+          }}
+          className="shell-ball-mascot__attitude"
+          transition={
+            isSettling
+              ? { damping: 18, mass: 0.48, stiffness: 360, type: "spring" }
+              : { damping: 24, mass: 0.64, stiffness: 260, type: "spring" }
+          }
+        >
           <div className="shell-ball-mascot__tail-shell" style={tailStyle}>
             <div className="shell-ball-mascot__tail" />
           </div>
@@ -457,10 +538,17 @@ export function ShellBallMascot({
               <ShieldAlert className="shell-ball-mascot__auth-icon" />
             </div>
           ) : null}
-        </div>
+        </motion.div>
       </div>
 
-      <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--front" />
+      <motion.div
+        animate={{
+          opacity: isDragging ? 0.84 : isSettling ? 0.8 : 0.72,
+          "--shell-ball-orbital-scale": isDragging ? 1.08 : isSettling ? 1.05 : 1,
+        }}
+        className="shell-ball-mascot__orbital shell-ball-mascot__orbital--front"
+        transition={{ damping: 24, mass: 0.62, stiffness: 250, type: "spring" }}
+      />
       <button
         type="button"
         className="shell-ball-mascot__hotspot"
@@ -476,6 +564,6 @@ export function ShellBallMascot({
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerCancel}
       />
-    </div>
+    </motion.div>
   );
 }

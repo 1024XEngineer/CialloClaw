@@ -9,9 +9,12 @@ type ShellBallSurfaceProps = {
   children?: ReactNode;
   containerRef?: RefObject<HTMLDivElement>;
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
+  dockTarget?: ShellBallEdgeDockSide | null;
   edgeDockRevealed?: boolean;
   edgeDockSide?: ShellBallEdgeDockSide | null;
   fileDropActive?: boolean;
+  isDragging?: boolean;
+  isSettling?: boolean;
   mascotRef?: RefObject<HTMLDivElement>;
   overlayContent?: ReactNode;
   textDropActive?: boolean;
@@ -85,9 +88,12 @@ export function ShellBallSurface({
   children,
   containerRef,
   dashboardTransitionPhase = "idle",
+  dockTarget = null,
   edgeDockRevealed = false,
   edgeDockSide = null,
   fileDropActive = false,
+  isDragging = false,
+  isSettling = false,
   mascotRef,
   overlayContent,
   textDropActive = false,
@@ -144,7 +150,10 @@ export function ShellBallSurface({
       ref={containerRef}
       className="shell-ball-surface"
       data-dashboard-transition-phase={dashboardTransitionPhase}
+      data-dock-target={dockTarget ?? "none"}
       data-file-drop-active={fileDropActive ? "true" : "false"}
+      data-shell-ball-dragging={isDragging ? "true" : "false"}
+      data-shell-ball-settling={isSettling ? "true" : "false"}
       onDragEnterCapture={handleDragOver}
       onDragOverCapture={handleDragOver}
       onDropCapture={handleDrop}
@@ -177,12 +186,18 @@ export function ShellBallSurface({
                 <div
                   ref={mascotRef}
                   className="shell-ball-surface__mascot-shell"
+                  data-dock-target={dockTarget ?? "none"}
+                  data-shell-ball-dragging={isDragging ? "true" : "false"}
+                  data-shell-ball-settling={isSettling ? "true" : "false"}
                 >
-                    <ShellBallMascot
-                      edgeDockRevealed={edgeDockRevealed}
-                      edgeDockSide={edgeDockSide}
-                      visualState={visualState}
-                      voicePreview={voicePreview}
+                  <ShellBallMascot
+                    dockTarget={dockTarget}
+                    edgeDockRevealed={edgeDockRevealed}
+                    edgeDockSide={edgeDockSide}
+                    isDragging={isDragging}
+                    isSettling={isSettling}
+                    visualState={visualState}
+                    voicePreview={voicePreview}
                     selectionIndicatorVisible={selectionIndicatorVisible}
                     voiceHoldProgress={voiceHoldProgress}
                     motionConfig={motionConfig}
