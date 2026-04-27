@@ -57,7 +57,7 @@ func Decode(data []byte) (Result, error) {
 	if hasBinaryControls(data) {
 		return Result{}, ErrUnsupportedEncoding
 	}
-	return decodeTransform(data, simplifiedchinese.GB18030.NewDecoder(), EncodingGB18030)
+	return decodeGB18030(data)
 }
 
 func decodeUTF8(data []byte) (Result, error) {
@@ -77,6 +77,17 @@ func decodeTransform(data []byte, decoder *encoding.Decoder, encodingName string
 		return Result{}, ErrUnsupportedEncoding
 	}
 	return Result{Text: text, Encoding: encodingName}, nil
+}
+
+func decodeGB18030(data []byte) (Result, error) {
+	result, err := decodeTransform(data, simplifiedchinese.GB18030.NewDecoder(), EncodingGB18030)
+	if err != nil {
+		return Result{}, err
+	}
+	if !isLikelyGB18030Text(data, result.Text) {
+		return Result{}, ErrUnsupportedEncoding
+	}
+	return result, nil
 }
 
 func hasBinaryControls(data []byte) bool {
@@ -114,4 +125,94 @@ func isSafeDecodedText(text string) bool {
 		}
 	}
 	return true
+}
+
+func isLikelyGB18030Text(data []byte, text string) bool {
+	// GB18030 overlaps with other legacy encodings at the byte level. Keep this
+	// fallback conservative so unsupported text is surfaced instead of silently
+	// becoming plausible but wrong workspace content.
+	if looksLikeShiftJISBytes(data) {
+		return false
+	}
+	return containsChineseTextSignal(text)
+}
+
+func containsChineseTextSignal(text string) bool {
+	for _, value := range text {
+		if unicode.In(value, unicode.Hiragana, unicode.Katakana, unicode.Hangul) {
+			return false
+		}
+		if unicode.In(value, unicode.Han) || isCJKPunctuation(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCJKPunctuation(value rune) bool {
+	return (value >= 0x3000 && value <= 0x303f) || (value >= 0xff00 && value <= 0xffef)
+}
+
+func looksLikeShiftJISBytes(data []byte) bool {
+	totalLegacySequences := 0
+	shiftJISPairs := 0
+	kanaPairs := 0
+
+	for index := 0; index < len(data); {
+		current := data[index]
+		if current < 0x80 {
+			index++
+			continue
+		}
+
+		totalLegacySequences++
+		if index+1 < len(data) {
+			next := data[index+1]
+			if isShiftJISPair(current, next) {
+				shiftJISPairs++
+				if isShiftJISKanaPair(current, next) {
+					kanaPairs++
+				}
+			}
+			if isGB18030FourByteSequence(data, index) {
+				index += 4
+				continue
+			}
+			if isGB18030TwoByteSequence(current, next) {
+				index += 2
+				continue
+			}
+		}
+		index++
+	}
+
+	if kanaPairs >= 2 {
+		return true
+	}
+	return totalLegacySequences >= 2 && shiftJISPairs == totalLegacySequences
+}
+
+func isShiftJISPair(first byte, second byte) bool {
+	return ((first >= 0x81 && first <= 0x9f) || (first >= 0xe0 && first <= 0xfc)) &&
+		((second >= 0x40 && second <= 0x7e) || (second >= 0x80 && second <= 0xfc))
+}
+
+func isShiftJISKanaPair(first byte, second byte) bool {
+	return (first == 0x82 && second >= 0x9f && second <= 0xf1) ||
+		(first == 0x83 && second >= 0x40 && second <= 0x96)
+}
+
+func isGB18030FourByteSequence(data []byte, index int) bool {
+	if index+3 >= len(data) {
+		return false
+	}
+	return data[index] >= 0x81 && data[index] <= 0xfe &&
+		data[index+1] >= 0x30 && data[index+1] <= 0x39 &&
+		data[index+2] >= 0x81 && data[index+2] <= 0xfe &&
+		data[index+3] >= 0x30 && data[index+3] <= 0x39
+}
+
+func isGB18030TwoByteSequence(first byte, second byte) bool {
+	return first >= 0x81 && first <= 0xfe &&
+		((second >= 0x40 && second <= 0x7e) || (second >= 0x80 && second <= 0xfe))
 }

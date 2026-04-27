@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -29,6 +30,17 @@ func TestDecodeSupportsUTF8AndGB18030(t *testing.T) {
 	}
 	if gb18030Result.Text != "修复乱码" || gb18030Result.Encoding != EncodingGB18030 {
 		t.Fatalf("unexpected GB18030 result: %+v", gb18030Result)
+	}
+}
+
+func TestDecodeRejectsAmbiguousShiftJIS(t *testing.T) {
+	shiftJISBytes, _, err := transform.Bytes(japanese.ShiftJIS.NewEncoder(), []byte("\u3053\u3093\u306b\u3061\u306f"))
+	if err != nil {
+		t.Fatalf("Shift-JIS encode failed: %v", err)
+	}
+	_, err = Decode(shiftJISBytes)
+	if !errors.Is(err, ErrUnsupportedEncoding) {
+		t.Fatalf("expected ErrUnsupportedEncoding for ambiguous Shift-JIS bytes, got %v", err)
 	}
 }
 
