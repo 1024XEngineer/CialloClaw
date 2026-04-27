@@ -7,6 +7,7 @@ import (
 	"unicode/utf16"
 
 	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -60,6 +61,12 @@ func TestDecodeSupportedTextEncodings(t *testing.T) {
 			name:         "gb18030_chinese_text",
 			data:         gb18030Encoded(t, fixText),
 			wantText:     fixText,
+			wantEncoding: EncodingGB18030,
+		},
+		{
+			name:         "gb18030_rare_han_text",
+			data:         gb18030Encoded(t, "龘麤"),
+			wantText:     "龘麤",
 			wantEncoding: EncodingGB18030,
 		},
 		{
@@ -127,6 +134,10 @@ func TestDecodeRejectsUnsafeText(t *testing.T) {
 			name: "shift_jis_mojibake_is_not_accepted_as_gb18030",
 			data: shiftJISEncoded(t, "こんにちは"),
 		},
+		{
+			name: "euc_kr_mojibake_is_not_accepted_as_gb18030",
+			data: eucKREncoded(t, "안녕하세요"),
+		},
 	}
 
 	for _, tc := range tests {
@@ -153,6 +164,15 @@ func shiftJISEncoded(t *testing.T, value string) []byte {
 	encoded, _, err := transform.Bytes(japanese.ShiftJIS.NewEncoder(), []byte(value))
 	if err != nil {
 		t.Fatalf("Shift-JIS encode failed: %v", err)
+	}
+	return encoded
+}
+
+func eucKREncoded(t *testing.T, value string) []byte {
+	t.Helper()
+	encoded, _, err := transform.Bytes(korean.EUCKR.NewEncoder(), []byte(value))
+	if err != nil {
+		t.Fatalf("EUC-KR encode failed: %v", err)
 	}
 	return encoded
 }

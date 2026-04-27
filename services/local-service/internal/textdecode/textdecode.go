@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	xunicode "golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
@@ -29,13 +31,30 @@ const UnsupportedEncodingUserMessage = "文件编码无法安全识别，请转�
 // replacement characters or binary data leaking into user-facing text.
 var ErrUnsupportedEncoding = errors.New("unsupported or unsafe text encoding")
 
-var commonHanRunes = buildRuneSet(`的一是在不了有人和这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经十三之进着等部度家电力里如水化高自二理起小现实加量都两体制机当使点从业本去把性好应开它合还因由其些然前外天政四日那社义事平形相全表间样与关各重新线内数正心反你明看原又么利比或但质气第向道命此变条只没结解问意建月公无系军很情者最立代想已通并提直题党程展五果料象员革位入常文总次品式活设及管特件长求老头基资边流路级少图山统接知较将组见计别她手角期根论运农指几九区强放决西被干做必战先回则任取据处理世车价远步改领
-修复乱码执行输入输出文件内容任务来源检查说明标题备注状态同步失败成功问题错误日志预览摘要工作空间中文文本文档目录计划配置设置更新读取写入打开关闭转换安全识别`)
-
 // Result carries decoded text plus the encoding that was accepted.
 type Result struct {
 	Text     string
 	Encoding string
+}
+
+type legacyCodec struct {
+	decoder *encoding.Decoder
+	encoder *encoding.Encoder
+}
+
+var competingLegacyCodecs = []legacyCodec{
+	{
+		decoder: japanese.ShiftJIS.NewDecoder(),
+		encoder: japanese.ShiftJIS.NewEncoder(),
+	},
+	{
+		decoder: japanese.EUCJP.NewDecoder(),
+		encoder: japanese.EUCJP.NewEncoder(),
+	},
+	{
+		decoder: korean.EUCKR.NewDecoder(),
+		encoder: korean.EUCKR.NewEncoder(),
+	},
 }
 
 // Decode normalizes workspace file bytes before they enter tool output,
@@ -143,38 +162,78 @@ func isSupportedGB18030Text(data []byte, text string) bool {
 	// generic fallback for every legacy byte stream. Keep the byte-level
 	// round-trip invariant and require decoded text to contain a readable script
 	// signal instead of blindly accepting any reversible mojibake.
-	if !roundTripsGB18030(data, text) {
+	if !roundTripsWithEncoding(data, text, simplifiedchinese.GB18030.NewEncoder()) {
 		return false
 	}
-	return hasReadableLegacyTextSignal(text)
+	score := legacyTextReadabilityScore(text)
+	if score == 0 {
+		return false
+	}
+	return !hasStrongerCompetingLegacyDecode(data, score)
 }
 
-func roundTripsGB18030(data []byte, text string) bool {
-	encoded, _, err := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte(text))
+func roundTripsWithEncoding(data []byte, text string, encoder *encoding.Encoder) bool {
+	encoded, _, err := transform.Bytes(encoder, []byte(text))
 	return err == nil && bytes.Equal(encoded, data)
 }
 
-func hasReadableLegacyTextSignal(text string) bool {
+func legacyTextReadabilityScore(text string) int {
+	score := 0
 	for _, value := range text {
 		switch {
 		case value <= unicode.MaxASCII:
-			if unicode.IsLetter(value) || unicode.IsDigit(value) || unicode.IsPunct(value) || unicode.IsSpace(value) || unicode.IsSymbol(value) {
-				return true
+			switch {
+			case unicode.IsLetter(value) || unicode.IsDigit(value):
+				score += 2
+			case unicode.IsPunct(value) || unicode.IsSpace(value) || unicode.IsSymbol(value):
+				score++
 			}
-		case isCommonHanRune(value):
-			return true
+		case unicode.In(value, unicode.Han):
+			score += 2
 		case unicode.In(value, unicode.Hiragana, unicode.Katakana, unicode.Hangul, unicode.Latin, unicode.Greek, unicode.Cyrillic):
-			return true
+			score += 3
 		case isCommonCJKPunctuation(value):
+			score++
+		}
+	}
+	return score
+}
+
+func hasStrongerCompetingLegacyDecode(data []byte, acceptedScore int) bool {
+	for _, codec := range competingLegacyCodecs {
+		decoded, _, err := transform.Bytes(codec.decoder, data)
+		if err != nil {
+			continue
+		}
+		text := string(decoded)
+		if !isSafeDecodedText(text) || !roundTripsWithEncoding(data, text, codec.encoder) {
+			continue
+		}
+		if score := legacyTextReadabilityScore(text); score > acceptedScore && hasPureDistinctiveLegacyScript(text) {
 			return true
 		}
 	}
 	return false
 }
 
-func isCommonHanRune(value rune) bool {
-	_, ok := commonHanRunes[value]
-	return ok
+func hasPureDistinctiveLegacyScript(text string) bool {
+	distinctiveCount := 0
+	for _, value := range text {
+		switch {
+		case unicode.In(value, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
+			distinctiveCount++
+		case value <= unicode.MaxASCII:
+			if unicode.IsPunct(value) || unicode.IsSpace(value) || unicode.IsSymbol(value) || unicode.IsDigit(value) {
+				continue
+			}
+			return false
+		case isCommonCJKPunctuation(value):
+			continue
+		default:
+			return false
+		}
+	}
+	return distinctiveCount >= 2
 }
 
 func isCommonCJKPunctuation(value rune) bool {
@@ -184,15 +243,4 @@ func isCommonCJKPunctuation(value rune) bool {
 	default:
 		return false
 	}
-}
-
-func buildRuneSet(values string) map[rune]struct{} {
-	result := make(map[rune]struct{}, len(values))
-	for _, value := range values {
-		if value == '\n' || value == '\r' || value == '\t' || value == ' ' {
-			continue
-		}
-		result[value] = struct{}{}
-	}
-	return result
 }
