@@ -34,10 +34,16 @@ function useDashboardDomainExpansion() {
   useEffect(() => {
     let frame = 0;
     let timeout = 0;
+    let disposed = false;
+    let clearWindowFocusListener: (() => void) | null = null;
 
-    const trigger = () => {
+    const clearPendingRelease = () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
+    };
+
+    const trigger = () => {
+      clearPendingRelease();
       setIsOpening(true);
       frame = window.requestAnimationFrame(() => {
         setIsOpening(false);
@@ -48,13 +54,13 @@ function useDashboardDomainExpansion() {
       }, 720);
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        hiddenRef.current = true;
-        return;
-      }
+    const markHidden = () => {
+      hiddenRef.current = true;
+      clearPendingRelease();
+    };
 
-      if (!hiddenRef.current) {
+    const restoreIfNeeded = () => {
+      if (!hiddenRef.current || document.visibilityState === "hidden") {
         return;
       }
 
@@ -62,12 +68,42 @@ function useDashboardDomainExpansion() {
       trigger();
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        markHidden();
+        return;
+      }
+
+      restoreIfNeeded();
+    };
+
     trigger();
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused) {
+          markHidden();
+          return;
+        }
+
+        restoreIfNeeded();
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        clearWindowFocusListener = unlisten;
+      })
+      .catch((error) => {
+        console.warn("dashboard focus listener failed", error);
+      });
 
     return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
+      disposed = true;
+      clearPendingRelease();
+      clearWindowFocusListener?.();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);

@@ -3505,6 +3505,31 @@ test("dashboard task-detail routing deduplicates retry request ids and accepts t
   assert.match(taskPageSource, /if \(selectedTaskId && detailOpen\) \{/);
 });
 
+test("dashboard opening mask replays after Tauri window focus returns from hidden desktop sessions", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+
+  assert.match(dashboardRootSource, /const markHidden = \(\) => \{/);
+  assert.match(dashboardRootSource, /const restoreIfNeeded = \(\) => \{/);
+  assert.match(dashboardRootSource, /document\.visibilityState === "hidden"/);
+  assert.match(dashboardRootSource, /\.onFocusChanged\(\(\{ payload: focused \}\) => \{/);
+  assert.match(dashboardRootSource, /if \(!focused\) \{\s*markHidden\(\);/);
+  assert.match(dashboardRootSource, /restoreIfNeeded\(\);/);
+});
+
+test("dashboard entry keeps a window-level error boundary so runtime faults do not collapse into a blank shell", () => {
+  const dashboardMainSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/main.tsx"), "utf8");
+  const dashboardErrorBoundarySource = readFileSync(
+    resolve(desktopRoot, "src/app/dashboard/DashboardWindowErrorBoundary.tsx"),
+    "utf8",
+  );
+
+  assert.match(dashboardMainSource, /DashboardWindowErrorBoundary/);
+  assert.match(dashboardMainSource, /<DashboardWindowErrorBoundary>[\s\S]*<DashboardRoot \/>[\s\S]*<\/DashboardWindowErrorBoundary>/);
+  assert.match(dashboardErrorBoundarySource, /static getDerivedStateFromError/);
+  assert.match(dashboardErrorBoundarySource, /window\.location\.reload\(\)/);
+  assert.match(dashboardErrorBoundarySource, /dashboard window render failed/);
+});
+
 test("conversation session reuse expires after the backend freshness window", () => {
   const originalDate = globalThis.Date;
 
