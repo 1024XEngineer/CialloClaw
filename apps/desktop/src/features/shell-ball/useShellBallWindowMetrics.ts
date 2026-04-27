@@ -805,7 +805,7 @@ export function useShellBallWindowMetrics({
       return;
     }
 
-    const animationConfig = input?.side === null || input?.side === undefined
+    const animationConfig = input?.side == null
       ? null
       : getShellBallDockAnimationConfig({
           side: input.side,
