@@ -5072,7 +5072,7 @@ test("shell-ball submit auto-opens formal delivery results through the shared de
           url: string | null;
         } {
           return {
-            feedback: "宸叉墦寮€鏈湴鏂囦欢銆?",
+            feedback: "已打开本地文件。",
             mode: "open_local_path" as const,
             path: "C:\\output\\summary.docx",
             taskId: "task-auto-open",
@@ -5156,7 +5156,7 @@ test("shell-ball submit auto-opens formal delivery results through the shared de
       useShellBallCoordinator({
         visualState: "hover_input",
         regionActive: false,
-        inputValue: "璇锋€荤粨杩欎釜鏂囨。",
+        inputValue: "请总结这个文档。",
         inputFocused: true,
         finalizedSpeechPayload: null,
         voicePreview: null,
@@ -5175,7 +5175,7 @@ test("shell-ball submit auto-opens formal delivery results through the shared de
           delivery_result: {
             type: "workspace_document",
             title: "summary.docx",
-            preview_text: "宸蹭负浣犵敓鎴愭€荤粨鏂囨。",
+            preview_text: "已为你生成总结文档。",
             payload: {
               path: null,
               task_id: "task-auto-open",
@@ -6434,7 +6434,7 @@ test("shell-ball delivery.ready auto-opens tracked formal delivery results", asy
           url: string | null;
         } {
           return {
-            feedback: "宸插湪鏂囦欢澶逛腑瀹氫綅缁撴灉銆?",
+            feedback: "已在文件夹中定位结果。",
             mode: "reveal_local_path" as const,
             path: "C:\\output\\summary.docx",
             taskId: "task-delivery-ready",
@@ -6539,7 +6539,7 @@ test("shell-ball delivery.ready auto-opens tracked formal delivery results", asy
         onPrimaryClick: () => {},
       });
 
-      await handleClipboardPrompt("璇锋€荤粨杩欎釜鏂囨。");
+      await handleClipboardPrompt("请总结这个文档。");
       await flushAsyncEffects();
 
       deliveryReadyListener?.({
@@ -6547,7 +6547,7 @@ test("shell-ball delivery.ready auto-opens tracked formal delivery results", asy
         delivery_result: {
           type: "reveal_in_folder",
           title: "summary.docx",
-          preview_text: "宸插畬鎴愭€荤粨锛屾鍦ㄥ畾浣嶆枃浠躲€?",
+          preview_text: "已完成总结，正在定位文件。",
           payload: {
             path: "C:\\output\\summary.docx",
             task_id: "task-delivery-ready",
@@ -6620,7 +6620,7 @@ test("shell-ball task-detail deliveries auto-open the dashboard detail view", as
           url: string | null;
         } {
           return {
-            feedback: "宸插畾浣嶅埌浠诲姟璇︽儏銆?",
+            feedback: "已定位到任务详情。",
             mode: "task_detail" as const,
             path: null,
             taskId: "task-task-detail",
@@ -6719,7 +6719,7 @@ test("shell-ball task-detail deliveries auto-open the dashboard detail view", as
           delivery_result: {
             type: "task_detail",
             title: "Task detail",
-            preview_text: "宸插畾浣嶅埌浠诲姟璇︽儏銆?",
+            preview_text: "已定位到任务详情。",
             payload: {
               path: null,
               task_id: "task-task-detail",
