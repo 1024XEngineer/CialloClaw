@@ -23,6 +23,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -1661,7 +1662,7 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 	return merged, artifact, nil
 }
 
-// ApplyRecoveryPoint 将某个恢复点对应的工作区快照重新写回目标对象。
+// ApplyRecoveryPoint restores workspace snapshots captured by one recovery point.
 func (s *Service) ApplyRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) (checkpoint.ApplyResult, error) {
 	if s.checkpoint == nil {
 		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point: checkpoint service unavailable")
@@ -1830,7 +1831,12 @@ func (s *Service) fileSection(filePath string) string {
 		return fmt.Sprintf("文件: %s\n读取失败: %v", trimmedPath, err)
 	}
 
-	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(string(content), 1600))
+	decoded, err := textdecode.Decode(content)
+	if err != nil {
+		return fmt.Sprintf("文件: %s\n%s", trimmedPath, textdecode.UnsupportedEncodingUserMessage)
+	}
+
+	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
 }
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {

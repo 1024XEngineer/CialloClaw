@@ -1,4 +1,4 @@
-// 该文件负责任务巡检模块的最小运行态聚合逻辑。
+// Package taskinspector aggregates the minimum runtime state for task inspection.
 package taskinspector
 
 import (
@@ -11,6 +11,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 )
 
 const defaultStaleInterval = 15 * time.Minute
@@ -22,13 +23,13 @@ const (
 	notepadBucketUpcoming      = "upcoming"
 )
 
-// Service 负责根据 workspace、notepad 和 runtime task 状态生成巡检结果。
+// Service builds inspection results from workspace, notepad, and runtime task state.
 type Service struct {
 	fileSystem platform.FileSystemAdapter
 	now        func() time.Time
 }
 
-// RunInput 描述一次巡检执行所需的运行态输入。
+// RunInput carries runtime state required by one inspection pass.
 type RunInput struct {
 	Reason          string
 	TargetSources   []string
@@ -38,7 +39,7 @@ type RunInput struct {
 	NotepadItems    []map[string]any
 }
 
-// RunResult 描述一次巡检执行输出的协议兼容结果。
+// RunResult carries the protocol-compatible result of one inspection pass.
 type RunResult struct {
 	InspectionID string
 	Summary      map[string]any
@@ -47,7 +48,7 @@ type RunResult struct {
 	SourceSynced bool
 }
 
-// NewService 创建并返回 task inspector 服务。
+// NewService creates a task inspector service.
 func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	return &Service{
 		fileSystem: fileSystem,
@@ -55,16 +56,16 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	}
 }
 
-// Run 执行一次最小真实巡检。
+// Run executes one minimum real inspection.
 func (s *Service) Run(input RunInput) RunResult {
 	sources := resolveSources(input.TargetSources, input.Config)
-	sourceSynced := len(sources) > 0 && s.fileSystem != nil
-	parsedFiles, parsedNotepadItems := s.inspectSources(sources)
+	parsedFiles, parsedNotepadItems, sourcesReady := s.inspectSources(sources)
+	// Source sync replaces downstream notepad state, so keep the previous
+	// snapshot unless every configured source was read and decoded safely.
+	sourceSynced := len(sources) > 0 && s.fileSystem != nil && sourcesReady
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
 	if sourceSynced {
 		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
-	} else if len(parsedNotepadItems) > 0 {
-		resolvedNotepadItems = parsedNotepadItems
 	}
 	fileItems := countOpenNotepadItems(parsedNotepadItems)
 	dueToday, overdue := countDueBuckets(resolvedNotepadItems, s.now())
@@ -86,41 +87,93 @@ func (s *Service) Run(input RunInput) RunResult {
 	}
 }
 
-func (s *Service) inspectSources(sources []string) (int, []map[string]any) {
+func (s *Service) inspectSources(sources []string) (int, []map[string]any, bool) {
 	if s.fileSystem == nil || len(sources) == 0 {
-		return 0, nil
+		return 0, nil, false
 	}
 
 	parsedFiles := 0
 	identifiedItems := make([]map[string]any, 0)
 	seenFiles := map[string]struct{}{}
+	visitedRoot := false
+	sourcesReady := true
 
 	for _, source := range sources {
 		root := sourceToFSPath(source)
 		if root == "" {
+			sourcesReady = false
 			continue
 		}
+		visitedRoot = true
 
-		_ = fs.WalkDir(s.fileSystem, root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil || entry == nil || entry.IsDir() {
+		walkErr := fs.WalkDir(s.fileSystem, root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				sourcesReady = false
+				return nil
+			}
+			if entry == nil || entry.IsDir() {
 				return nil
 			}
 			if _, seen := seenFiles[currentPath]; seen {
 				return nil
 			}
 			seenFiles[currentPath] = struct{}{}
-			parsedFiles++
-
-			content, err := fs.ReadFile(s.fileSystem, currentPath)
-			if err != nil {
+			if shouldSkipTaskSourceAttachment(currentPath) {
 				return nil
 			}
-			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), string(content), s.now())...)
+			if !isSupportedTextTaskSourceFile(currentPath) {
+				return nil
+			}
+			content, err := fs.ReadFile(s.fileSystem, currentPath)
+			if err != nil {
+				sourcesReady = false
+				return nil
+			}
+			decoded, err := textdecode.Decode(content)
+			if err != nil {
+				if shouldSkipUnreadableTaskSourceFile(currentPath) {
+					return nil
+				}
+				sourcesReady = false
+				return nil
+			}
+			parsedFiles++
+			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now())...)
 			return nil
 		})
+		if walkErr != nil {
+			sourcesReady = false
+		}
 	}
 
-	return parsedFiles, identifiedItems
+	return parsedFiles, identifiedItems, visitedRoot && sourcesReady
+}
+
+func shouldSkipTaskSourceAttachment(currentPath string) bool {
+	switch strings.ToLower(path.Ext(currentPath)) {
+	case ".7z", ".avi", ".bin", ".bmp", ".class", ".dll", ".doc", ".docx", ".dylib", ".exe", ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".pdf", ".png", ".ppt", ".pptx", ".rar", ".so", ".tar", ".wav", ".webp", ".xls", ".xlsx", ".zip":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldSkipUnreadableTaskSourceFile(currentPath string) bool {
+	switch strings.ToLower(path.Ext(currentPath)) {
+	case "", ".markdown", ".md", ".text", ".txt":
+		return false
+	default:
+		return true
+	}
+}
+
+func isSupportedTextTaskSourceFile(currentPath string) bool {
+	switch strings.ToLower(path.Ext(currentPath)) {
+	case "", ".markdown", ".md", ".text", ".txt":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveSources(targetSources []string, config map[string]any) []string {

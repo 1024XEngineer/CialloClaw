@@ -9,15 +9,6 @@
     "beforeDevCommand": "node ./src-tauri/scripts/runWithSidecar.mjs dev",
     "beforeBuildCommand": "node ./src-tauri/scripts/runWithSidecar.mjs build"
   },
-  "bundle": {
-    "icon": [
-      "icons/icon.png",
-      "icons/icon.ico"
-    ],
-    "externalBin": [
-      "binaries/local-service"
-    ]
-  },
   "app": {
     "windows": [
       {

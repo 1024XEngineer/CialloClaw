@@ -1,8 +1,8 @@
-// Package builtin 提供本地内置工具实现。
+// Package builtin implements the in-process local tools.
 //
-// 内置工具在进程内直接执行，不依赖外部 worker 或 sidecar。
-// 每个内置工具必须实现 tools.Tool 接口，
-// 工具名称使用 snake_case，输出必须能映射到 /packages/protocol。
+// Builtin tools run inside the local service and do not depend on external
+// workers or sidecars. Each tool must implement tools.Tool, use a snake_case
+// name, and return output that can be mapped to /packages/protocol.
 package builtin
 
 import (
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -20,23 +21,23 @@ const readFileMaxBytes int64 = 1 << 20
 const readFileDefaultTextType = "text/plain"
 
 // ---------------------------------------------------------------------------
-// ReadFileTool：读取工作区内文件的内置工具
+// ReadFileTool: workspace file reader
 // ---------------------------------------------------------------------------
 
-// ReadFileTool 是一个最小示例工具，用于读取工作区内的文件内容。
+// ReadFileTool reads file content from the current workspace.
 //
-// 它演示了如何实现 tools.Tool 接口：
-//   - Metadata 返回工具元信息
-//   - Validate 校验输入参数
-//   - Execute 通过 PlatformCapability 读取文件
+// It demonstrates the tools.Tool contract:
+//   - Metadata returns static tool metadata.
+//   - Validate checks the tool input before execution.
+//   - Execute reads through PlatformCapability.
 //
-// 本工具不直接操作文件系统，所有平台能力通过
-// ToolExecuteContext.Platform 注入。
+// This tool never touches the filesystem directly. All platform capability is
+// injected through ToolExecuteContext.Platform.
 type ReadFileTool struct {
 	meta tools.ToolMetadata
 }
 
-// NewReadFileTool 创建并返回 ReadFileTool。
+// NewReadFileTool creates the workspace file reader.
 func NewReadFileTool() *ReadFileTool {
 	return &ReadFileTool{
 		meta: tools.ToolMetadata{
@@ -53,24 +54,24 @@ func NewReadFileTool() *ReadFileTool {
 	}
 }
 
-// Metadata 返回 ReadFileTool 的静态元信息。
+// Metadata returns static tool metadata.
 func (t *ReadFileTool) Metadata() tools.ToolMetadata {
 	return t.meta
 }
 
-// Validate 校验 read_file 的输入参数。
+// Validate checks read_file input.
 //
-// 必须包含 "path" 字段且不为空。
+// The input must include a non-empty "path" field.
 func (t *ReadFileTool) Validate(input map[string]any) error {
 	_, err := requireStringField(input, "path")
 	return err
 }
 
-// Execute 执行文件读取。
+// Execute reads the target file through the injected platform adapter.
 //
-// 通过 ToolExecuteContext.Platform.ReadFile 读取文件内容，
-// 不直接调用 os.ReadFile 或任何平台 API。
-// 读取前通过 Platform.EnsureWithinWorkspace 校验路径合法性。
+// The workspace boundary is validated before reading. Text bytes are decoded at
+// this boundary so unsafe encodings cannot leak replacement characters into
+// tool_call, event, delivery_result, or bubble previews.
 func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
 	_ = ctx
 
@@ -105,9 +106,25 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	}
 
 	mimeType, textType := detectReadFileTypes(readPath, content)
+	decodedContent, err := decodeReadFileContent(content)
+	if err != nil {
+		rawOutput := map[string]any{
+			"path":      safePath,
+			"mime_type": mimeType,
+			"text_type": textType,
+		}
+		return &tools.ToolResult{
+			ToolName:      t.meta.Name,
+			RawOutput:     rawOutput,
+			SummaryOutput: buildReadFileSummary(rawOutput, textdecode.UnsupportedEncodingUserMessage),
+			Error: &tools.ToolResultError{
+				Message: textdecode.UnsupportedEncodingUserMessage,
+			},
+		}, fmt.Errorf("%w: %w", tools.ErrToolExecutionFailed, err)
+	}
 	rawOutput := map[string]any{
 		"path":      safePath,
-		"content":   string(content),
+		"content":   decodedContent,
 		"mime_type": mimeType,
 		"text_type": textType,
 	}
@@ -115,11 +132,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: buildReadFileSummary(rawOutput),
+		SummaryOutput: buildReadFileSummary(rawOutput, ""),
 	}, nil
 }
 
-// DryRun 执行预检查，验证路径合法性但不实际读取文件。
+// DryRun validates the target path without reading file content.
 func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
 	_ = ctx
 
@@ -165,13 +182,17 @@ func readFileToolPath(originalPath, normalizedPath, safePath string) string {
 	return normalizedPath
 }
 
-func buildReadFileSummary(raw map[string]any) map[string]any {
+func buildReadFileSummary(raw map[string]any, contentPreviewOverride string) map[string]any {
 	content, _ := raw["content"].(string)
+	contentPreview := previewReadFileText(content, readFilePreviewLimit)
+	if contentPreviewOverride != "" {
+		contentPreview = contentPreviewOverride
+	}
 	return map[string]any{
 		"path":            raw["path"],
 		"mime_type":       raw["mime_type"],
 		"text_type":       raw["text_type"],
-		"content_preview": previewReadFileText(content, readFilePreviewLimit),
+		"content_preview": contentPreview,
 	}
 }
 
@@ -182,6 +203,14 @@ func previewReadFileText(input string, limit int) string {
 func detectReadFileTypes(path string, content []byte) (string, string) {
 	mimeType := inferReadFileMimeType(path, content)
 	return mimeType, inferReadFileTextType(mimeType)
+}
+
+func decodeReadFileContent(content []byte) (string, error) {
+	decoded, err := textdecode.Decode(content)
+	if err != nil {
+		return "", err
+	}
+	return decoded.Text, nil
 }
 
 func inferReadFileMimeType(path string, content []byte) string {
