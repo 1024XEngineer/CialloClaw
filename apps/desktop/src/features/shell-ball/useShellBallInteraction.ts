@@ -31,7 +31,6 @@ import {
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
 import { startTaskFromFiles } from "@/services/taskService";
-import { getCurrentConversationSessionId } from "@/services/conversationSessionService";
 import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
@@ -76,6 +75,13 @@ export type ShellBallInputSubmitResult = (
       task_id?: string | null;
     } | null;
   } | null;
+};
+
+export type ShellBallPreparedTextSubmitDraft = {
+  currentDraft: string;
+  currentInputValue: string;
+  currentPendingFiles: string[];
+  submittedDraftRevision: number;
 };
 
 type ShellBallPostSubmitReset = {
@@ -790,7 +796,12 @@ export function useShellBallInteraction() {
     inputHoveredRef.current = active;
   }
 
-  async function handleSubmitText() {
+  /**
+   * Applies the shell-ball optimistic text-submit reset without consuming the
+   * user's draft revision. Callers can restore the captured draft later when
+   * the submit fails and no new draft has claimed the field yet.
+   */
+  function prepareTextSubmitDraft(): ShellBallPreparedTextSubmitDraft | null {
     const currentInputValue = inputValueRef.current ?? "";
     const currentPendingFiles = pendingFilesRef.current ?? [];
     const currentDraft = currentInputValue.trim();
@@ -809,19 +820,49 @@ export function useShellBallInteraction() {
     inputFocusedRef.current = reset.nextFocused;
     setInputFocused(reset.nextFocused);
 
+    return {
+      currentDraft,
+      currentInputValue,
+      currentPendingFiles,
+      submittedDraftRevision,
+    };
+  }
+
+  /**
+   * Restores an optimistically-cleared shell-ball draft only when the field is
+   * still untouched and no newer draft has started after the failed submit.
+   */
+  function restorePreparedTextSubmitDraft(preparedDraft: ShellBallPreparedTextSubmitDraft) {
+    if (shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: inputValueRef.current ?? "",
+      currentPendingFiles: pendingFilesRef.current ?? [],
+      currentDraftRevision: draftRevisionRef.current,
+      submittedDraftRevision: preparedDraft.submittedDraftRevision,
+    })) {
+      setInputValueState(preparedDraft.currentInputValue);
+      setPendingFilesState(preparedDraft.currentPendingFiles);
+    }
+    inputFocusedRef.current = true;
+    setInputFocused(true);
+  }
+
+  async function handleSubmitText() {
+    const preparedDraft = prepareTextSubmitDraft();
+    if (preparedDraft === null) {
+      return null;
+    }
+
     try {
       const result =
-        currentPendingFiles.length > 0
+        preparedDraft.currentPendingFiles.length > 0
           ? await startShellBallFileTask({
-              text: currentDraft,
-              files: currentPendingFiles,
-              sessionId: getCurrentConversationSessionId(),
+              text: preparedDraft.currentDraft,
+              files: preparedDraft.currentPendingFiles,
             })
           : await submitShellBallInput({
-              text: currentDraft,
+              text: preparedDraft.currentDraft,
               trigger: "hover_text_input",
               inputMode: "text",
-              sessionId: getCurrentConversationSessionId(),
             });
       if (result !== null) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
@@ -829,17 +870,7 @@ export function useShellBallInteraction() {
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
-      if (shouldRestoreShellBallSubmitFailureDraft({
-        currentInputValue: inputValueRef.current ?? "",
-        currentPendingFiles: pendingFilesRef.current ?? [],
-        currentDraftRevision: draftRevisionRef.current,
-        submittedDraftRevision,
-      })) {
-        setInputValueState(currentInputValue);
-        setPendingFilesState(currentPendingFiles);
-      }
-      inputFocusedRef.current = true;
-      setInputFocused(true);
+      restorePreparedTextSubmitDraft(preparedDraft);
       throw error;
     }
   }
@@ -862,7 +893,6 @@ export function useShellBallInteraction() {
         text: normalizedText,
         trigger: "voice_commit",
         inputMode: "voice",
-        sessionId: getCurrentConversationSessionId(),
       });
 
       if (result !== null) {
@@ -1199,6 +1229,8 @@ export function useShellBallInteraction() {
     inputValue,
     pendingFiles,
     setInputValue: setTrackedInputValue,
+    prepareTextSubmitDraft,
+    restorePreparedTextSubmitDraft,
     finalizedSpeechPayload,
     acknowledgeFinalizedSpeechPayload,
     regionActive,
@@ -1229,7 +1261,6 @@ export function useShellBallInteraction() {
     handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
-    getCurrentConversationSessionId,
     handleForceState,
   };
 }

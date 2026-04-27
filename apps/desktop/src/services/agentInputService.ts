@@ -11,7 +11,7 @@ import {
   recordMirrorConversationStart,
   recordMirrorConversationSuccess,
 } from "./mirrorMemoryService";
-import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import { rememberConversationSessionFromTask } from "./conversationSessionService";
 
 type DesktopWindowContextSnapshot = {
   app_name: string;
@@ -267,7 +267,9 @@ async function readDesktopMouseActivitySnapshot(): Promise<DesktopMouseActivityS
  */
 export function createTextInputSubmitParams(input: SubmitTextInputParams): AgentInputSubmitParams | null {
   const normalizedText = input.text.trim();
-  const normalizedSessionId = input.sessionId?.trim() || getCurrentConversationSessionId();
+  // Desktop free-form input only reuses a backend session when the caller
+  // explicitly passes one for a known continuation flow.
+  const normalizedSessionId = input.sessionId?.trim() || undefined;
 
   if (normalizedText === "") {
     return null;

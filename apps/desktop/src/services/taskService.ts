@@ -9,7 +9,7 @@ import type {
 import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
-import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import { rememberConversationSessionFromTask } from "./conversationSessionService";
 
 type StartTaskContext = {
   context?: InputContext;
@@ -54,7 +54,9 @@ function resolveTaskPageContext(pageContext: PageContext | undefined) {
 }
 
 function resolveTaskSessionId(sessionId: string | undefined) {
-  return sessionId?.trim() || getCurrentConversationSessionId();
+  // Task-entry helpers start fresh unless a caller deliberately pins a backend
+  // session for an explicit continuation flow.
+  return sessionId?.trim() || undefined;
 }
 
 export async function startTaskFromSelectedText(text: string, context: StartTaskContext = {}) {

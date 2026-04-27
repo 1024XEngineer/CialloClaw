@@ -271,7 +271,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
-    getCurrentConversationSessionId,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
@@ -328,7 +327,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
     onSubmitVoiceText: handleSubmitVoiceText,
-    getCurrentConversationSessionId,
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });

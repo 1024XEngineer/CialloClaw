@@ -1,4 +1,11 @@
-import type { ApprovalDecision, ApprovalRequest, BubbleMessage, DeliveryResult, InputContext, TaskUpdatedNotification } from "@cialloclaw/protocol";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  BubbleMessage,
+  DeliveryResult,
+  InputContext,
+  TaskUpdatedNotification,
+} from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { respondSecurityDetailed } from "@/rpc/methods";
@@ -63,7 +70,6 @@ type ShellBallCoordinatorInput = {
   onInputFocusChange: (focused: boolean) => void;
   onSubmitText: () => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null | void;
   onSubmitVoiceText?: (text: string) => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null;
-  getCurrentConversationSessionId?: () => string | undefined;
   onAttachFile: () => void;
   onPrimaryClick: () => void;
 };
@@ -79,6 +85,7 @@ type QueuedDeliveryReadyNotification = {
 };
 
 type QueuedTaskUpdatedNotification = TaskUpdatedNotification;
+
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -812,7 +819,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
-    getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   });
@@ -831,7 +837,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
-    getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   };
@@ -1181,7 +1186,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           fallback: "task_detail",
         },
         pageContext,
-        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
         source: "floating_ball",
       });
 
@@ -1265,7 +1269,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         source: "floating_ball",
         trigger: "hover_text_input",
         inputMode: "text",
-        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
         options: {
           confirm_required: false,
           preferred_delivery: "bubble",
@@ -1370,7 +1373,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         trigger: "hover_text_input",
         inputMode: "text",
         context: input.context,
-        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
         options: {
           confirm_required: false,
           preferred_delivery: "bubble",

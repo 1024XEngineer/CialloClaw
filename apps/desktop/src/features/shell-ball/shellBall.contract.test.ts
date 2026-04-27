@@ -2414,6 +2414,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
           return Promise.reject(transportError);
         },
       },
+      "./conversationSessionService": {
+        rememberConversationSessionFromTask() {},
+      },
       "./mirrorMemoryService": {
         recordMirrorConversationFailure() {
           mirrorCalls.push("failure");
@@ -2501,6 +2504,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
           },
         },
       },
+      "./conversationSessionService": {
+        rememberConversationSessionFromTask() {},
+      },
       "./agentInputService": {
         submitTextInput(params: Record<string, unknown>) {
           bootstrapSubmitCalls.push(params);
@@ -2560,11 +2566,27 @@ test("task-entry services keep rpc transport failures visible and forward file d
         },
       });
 
+      await service.startTaskFromErrorSignal("  stack trace  ", {
+        source: "floating_ball",
+      });
+
+      assert.equal(startTaskCalls[2]?.session_id, undefined);
+      assert.equal(startTaskCalls[2]?.trigger, "error_detected");
+      assert.deepEqual(startTaskCalls[2]?.input, {
+        type: "error",
+        error_message: "stack trace",
+        page_context: {
+          app_name: "desktop",
+          title: "Quick Intake",
+          url: "local://shell-ball",
+        },
+      });
+
       await service.bootstrapTask("  summarize this  ");
     },
   );
 
-  assert.equal(startTaskCalls.length, 2);
+  assert.equal(startTaskCalls.length, 3);
   assert.equal(bootstrapSubmitCalls.length, 1);
   assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
 
@@ -2582,6 +2604,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
             return { tasks: [] as Array<Record<string, unknown>> };
           },
         },
+      },
+      "./conversationSessionService": {
+        rememberConversationSessionFromTask() {},
       },
       "./agentInputService": {
         submitTextInput() {
@@ -2638,7 +2663,7 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
         },
         "./conversationSessionService": {
           getCurrentConversationSessionId(): string | undefined {
-            return undefined;
+            return "sess_ctx_hidden";
           },
           rememberConversationSessionFromTask() {},
         },
@@ -2803,6 +2828,7 @@ test("submitTextInput keeps ordinary text submissions free of ambient page and s
   }
 
   assert.equal(submitCalls.length, 1);
+  assert.equal(submitCalls[0]?.session_id, undefined);
   assert.deepEqual(submitCalls[0]?.context, {
     files: [],
     behavior: {
@@ -7247,9 +7273,11 @@ test("shell-ball region leave keeps hover input visible while the text field is 
   assert.match(interactionSource, /function handleRegionLeave\(\) \{[\s\S]*hoverRetained: getHoverRetained\(\),[\s\S]*\}/);
 });
 
-test("shell-ball direct input only reuses backend-owned conversation sessions", () => {
+test("shell-ball direct input starts fresh requests while explicit session reuse stays opt-in", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
   const sessionServiceSource = readFileSync(resolve(desktopRoot, "src/services/conversationSessionService.ts"), "utf8");
+  const agentInputServiceSource = readFileSync(resolve(desktopRoot, "src/services/agentInputService.ts"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/services/taskService.ts"), "utf8");
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
@@ -7257,18 +7285,20 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(sessionServiceSource, /export function rememberConversationSessionFromTask\(task: Task \| null \| undefined\) \{/);
   assert.doesNotMatch(interactionSource, /function ensureConversationSessionId\(\) \{/);
   assert.doesNotMatch(interactionSource, /createShellBallConversationSessionId/);
-  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
-  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
-  assert.match(appSource, /getCurrentConversationSessionId,/);
-  assert.match(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
-  assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
+  assert.doesNotMatch(interactionSource, /startShellBallFileTask\(\{[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.doesNotMatch(interactionSource, /trigger: "hover_text_input",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.doesNotMatch(interactionSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.doesNotMatch(agentInputServiceSource, /getCurrentConversationSessionId/);
+  assert.doesNotMatch(taskServiceSource, /getCurrentConversationSessionId/);
+  assert.doesNotMatch(appSource, /getCurrentConversationSessionId,/);
+  assert.doesNotMatch(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
+  assert.doesNotMatch(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
 });
 
 test("shell-ball direct input does not expose task follow-up steering controls", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
-
   assert.doesNotMatch(coordinatorSource, /shellBallFollowUpTarget/);
   assert.doesNotMatch(coordinatorSource, /steerTask\(\{/);
   assert.doesNotMatch(coordinatorSource, /onPrepareTextSubmitDraft/);
@@ -7280,8 +7310,8 @@ test("shell-ball direct input does not expose task follow-up steering controls",
   assert.doesNotMatch(inputBarSource, /followUpArmed\?: boolean;/);
   assert.doesNotMatch(inputBarSource, /followUpLabel\?: string \| null;/);
   assert.doesNotMatch(inputBarSource, /onToggleFollowUp\?: \(\) => void;/);
-  assert.doesNotMatch(inputBarSource, /\u53d1\u9001\u5230\u5f53\u524d\u4efb\u52a1/);
-  assert.doesNotMatch(inputBarSource, /\u8865\u5145\u5f53\u524d\u4efb\u52a1/);
+  assert.doesNotMatch(inputBarSource, /发送到当前任务/);
+  assert.doesNotMatch(inputBarSource, /补充当前任务/);
 });
 
 test("shell-ball direct submit shows a detected-page status bubble before the task reply", async () => {
@@ -7718,7 +7748,7 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   assert.match(coordinatorSource, /createShellBallSelectedTextPreview\(text\)/);
   assert.match(coordinatorSource, /startTaskFromSelectedText\(normalizedText, \{/);
   assert.match(coordinatorSource, /pageContext,/);
-  assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
+  assert.doesNotMatch(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
   assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
   assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.doesNotMatch(selectionProviderSource, /readShellBallSelectionSnapshot/);
@@ -7855,12 +7885,16 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
 test("shell-ball text submit clears drafts before RPC completion and gates failure restore", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 
+  assert.match(interactionSource, /function prepareTextSubmitDraft\(\): ShellBallPreparedTextSubmitDraft \| null \{/);
   assert.match(
     interactionSource,
     /const submittedDraftRevision = draftRevisionRef\.current;\s*dispatch\("submit_text"\);\s*setInputValueState\(reset\.nextInputValue\);\s*setPendingFilesState\(reset\.nextPendingFiles\);/,
   );
+  assert.match(interactionSource, /function restorePreparedTextSubmitDraft\(preparedDraft: ShellBallPreparedTextSubmitDraft\) \{/);
   assert.match(interactionSource, /if \(shouldRestoreShellBallSubmitFailureDraft\(\{/);
-  assert.match(interactionSource, /setInputValueState\(currentInputValue\);\s*setPendingFilesState\(currentPendingFiles\);/);
+  assert.match(interactionSource, /setInputValueState\(preparedDraft\.currentInputValue\);\s*setPendingFilesState\(preparedDraft\.currentPendingFiles\);/);
+  assert.match(interactionSource, /const preparedDraft = prepareTextSubmitDraft\(\);\s*if \(preparedDraft === null\) \{\s*return null;\s*\}/);
+  assert.match(interactionSource, /restorePreparedTextSubmitDraft\(preparedDraft\);/);
 });
 
 test("shell-ball interaction timing constants stay frozen", () => {
