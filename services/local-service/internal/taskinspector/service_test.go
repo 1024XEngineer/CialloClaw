@@ -30,7 +30,6 @@ func (a readFileErrorAdapter) ReadFile(name string) ([]byte, error) {
 type relErrorAdapter struct {
 	platform.FileSystemAdapter
 	failEnsureRoot bool
-	failRel        bool
 }
 
 func (a relErrorAdapter) EnsureWithinWorkspace(path string) (string, error) {
@@ -38,13 +37,6 @@ func (a relErrorAdapter) EnsureWithinWorkspace(path string) (string, error) {
 		return "", errors.New("workspace root unavailable")
 	}
 	return a.FileSystemAdapter.EnsureWithinWorkspace(path)
-}
-
-func (a relErrorAdapter) Rel(base, target string) (string, error) {
-	if a.failRel {
-		return "", errors.New("relative path failed")
-	}
-	return a.FileSystemAdapter.Rel(base, target)
 }
 
 func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
@@ -353,12 +345,12 @@ func TestTaskInspectorHelperFunctions(t *testing.T) {
 		t.Fatalf("expected root slash to normalize to dot, got path=%q err=%v", rootPath, err)
 	}
 	drivePath, err := sourceToFSPath(nil, `D:/workspace/notes`)
-	if err != nil || drivePath != `D:/workspace/notes` {
-		t.Fatalf("expected drive-letter source to stay absolute, got path=%q err=%v", drivePath, err)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected drive-letter source without file system to require workspace binding, got path=%q err=%v", drivePath, err)
 	}
 	driveBackslashPath, err := sourceToFSPath(nil, `D:\workspace\notes`)
-	if err != nil || driveBackslashPath != `D:/workspace/notes` {
-		t.Fatalf("expected backslash drive-letter source to normalize to slash form, got path=%q err=%v", driveBackslashPath, err)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected backslash drive-letter source without file system to require workspace binding, got path=%q err=%v", driveBackslashPath, err)
 	}
 	_, err = sourceToFSPath(nil, "../../etc")
 	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
@@ -495,8 +487,8 @@ func TestSourceToFSPathAcceptsWorkspaceAbsolutePaths(t *testing.T) {
 	}
 
 	absWithoutFileSystem, err := sourceToFSPath(nil, absoluteSource)
-	if err != nil || absWithoutFileSystem != filepath.ToSlash(filepath.Clean(absoluteSource)) {
-		t.Fatalf("expected absolute source without file system to stay absolute, path=%q err=%v", absWithoutFileSystem, err)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected absolute source without file system to require workspace binding, path=%q err=%v", absWithoutFileSystem, err)
 	}
 
 	_, err = sourceToFSPath(fileSystem, `D:/workspace/notes`)
@@ -509,6 +501,11 @@ func TestSourceToFSPathAcceptsWorkspaceAbsolutePaths(t *testing.T) {
 		t.Fatalf("expected workspace-relative escape path to be rejected, got %v", err)
 	}
 
+	_, err = sourceToFSPath(nil, "/tmp/workspace/notes")
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected legacy unix-style absolute path without filesystem binding to be rejected, got %v", err)
+	}
+
 	_, err = sourceToFSPath(relErrorAdapter{FileSystemAdapter: fileSystem, failEnsureRoot: true}, absoluteSource)
 	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
 		t.Fatalf("expected workspace-root resolution failure to map to boundary error, got %v", err)
@@ -517,5 +514,15 @@ func TestSourceToFSPathAcceptsWorkspaceAbsolutePaths(t *testing.T) {
 	_, err = sourceToFSPath(fileSystem, filepath.Join(t.TempDir(), "outside"))
 	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
 		t.Fatalf("expected outside absolute source to be rejected, got %v", err)
+	}
+
+	_, err = sourceToFSPath(fileSystem, `..\evil`)
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected backslash parent traversal to be rejected, got %v", err)
+	}
+
+	unsafePath, err := sourceToFSPath(fileSystem, `sub\a.md`)
+	if err != nil || unsafePath != "sub/a.md" {
+		t.Fatalf("expected relative windows path to normalize to slash form, path=%q err=%v", unsafePath, err)
 	}
 }

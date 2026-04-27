@@ -35,8 +35,8 @@ func TestSourceToFSPathAcceptsWindowsAbsoluteWorkspaceSources(t *testing.T) {
 	absoluteSource := filepath.Join(workspaceRoot, "todos")
 
 	fsPath, err := sourceToFSPath(nil, absoluteSource)
-	if err != nil || fsPath != filepath.ToSlash(filepath.Clean(absoluteSource)) {
-		t.Fatalf("expected windows absolute source without filesystem to stay absolute, path=%q err=%v", fsPath, err)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected windows absolute source without filesystem to require binding, path=%q err=%v", fsPath, err)
 	}
 	workspaceRelativeSlash, err := sourceToFSPath(fileSystem, filepath.ToSlash(filepath.Clean(absoluteSource)))
 	if err != nil || workspaceRelativeSlash != "todos" {
@@ -45,6 +45,18 @@ func TestSourceToFSPathAcceptsWindowsAbsoluteWorkspaceSources(t *testing.T) {
 	workspaceRelative, err := sourceToFSPath(fileSystem, absoluteSource)
 	if err != nil || workspaceRelative != "todos" {
 		t.Fatalf("expected windows absolute source inside workspace to resolve to todos, path=%q err=%v", workspaceRelative, err)
+	}
+	subPath, err := sourceToFSPath(fileSystem, `sub\a.md`)
+	if err != nil || subPath != "sub/a.md" {
+		t.Fatalf("expected windows relative source to normalize to slash form, path=%q err=%v", subPath, err)
+	}
+	_, err = sourceToFSPath(fileSystem, `workspace/..\evil`)
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected mixed-separator workspace escape to be rejected, got %v", err)
+	}
+	_, err = sourceToFSPath(fileSystem, `..\evil`)
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected windows parent traversal to be rejected, got %v", err)
 	}
 	_, err = sourceToFSPath(fileSystem, filepath.Join(t.TempDir(), "outside"))
 	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {

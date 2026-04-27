@@ -244,12 +244,11 @@ func dedupeNonEmptyStrings(values []string) []string {
 // sourceToFSPath accepts both workspace-virtual paths and legacy absolute paths
 // that still point inside the current workspace root.
 func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (string, error) {
-	source = strings.TrimSpace(source)
+	source = filepath.ToSlash(strings.TrimSpace(source))
 	if source == "" {
 		return "", nil
 	}
-	normalizedSource := strings.ReplaceAll(source, "\\", "/")
-	trimmedVirtual := strings.TrimPrefix(normalizedSource, "/")
+	trimmedVirtual := strings.TrimPrefix(source, "/")
 	switch trimmedVirtual {
 	case "", "workspace", ".":
 		return ".", nil
@@ -264,10 +263,13 @@ func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (strin
 		}
 		return normalized, nil
 	}
+	if strings.HasPrefix(source, "/") && !filepath.IsAbs(source) {
+		return "", ErrInspectionSourceOutsideWorkspace
+	}
 
-	if isAbsoluteTaskSourcePath(source, normalizedSource) {
+	if isAbsoluteTaskSourcePath(source) {
 		if fileSystem == nil {
-			return normalizeAbsoluteTaskSourcePath(source, normalizedSource), nil
+			return "", ErrInspectionFileSystemUnavailable
 		}
 		workspaceRoot, err := fileSystem.EnsureWithinWorkspace(".")
 		if err != nil {
@@ -283,7 +285,7 @@ func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (strin
 		return relPath, nil
 	}
 
-	normalized := path.Clean(strings.TrimPrefix(normalizedSource, "/"))
+	normalized := path.Clean(strings.TrimPrefix(source, "/"))
 	if normalized == "." {
 		return ".", nil
 	}
@@ -296,35 +298,35 @@ func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (strin
 // isAbsoluteTaskSourcePath recognizes both native absolute paths for the
 // current GOOS and Windows drive-letter paths so non-Windows tests can still
 // validate Windows-style inspection sources such as D:/todos.
-func isAbsoluteTaskSourcePath(source string, normalizedSource string) bool {
+func isAbsoluteTaskSourcePath(source string) bool {
 	if filepath.IsAbs(source) {
 		return true
 	}
-	if strings.HasPrefix(normalizedSource, "//") {
+	if strings.HasPrefix(source, "//") {
 		return true
 	}
-	if len(normalizedSource) < 3 || normalizedSource[1] != ':' || normalizedSource[2] != '/' {
+	if len(source) < 3 || source[1] != ':' || source[2] != '/' {
 		return false
 	}
-	driveLetter := normalizedSource[0]
+	driveLetter := source[0]
 	return (driveLetter >= 'a' && driveLetter <= 'z') || (driveLetter >= 'A' && driveLetter <= 'Z')
 }
 
-func normalizeAbsoluteTaskSourcePath(source string, normalizedSource string) string {
-	if strings.HasPrefix(normalizedSource, "//") {
-		trimmed := strings.TrimPrefix(normalizedSource, "//")
+func normalizeAbsoluteTaskSourcePath(source string) string {
+	if strings.HasPrefix(source, "//") {
+		trimmed := strings.TrimPrefix(source, "//")
 		cleaned := path.Clean("/" + trimmed)
 		return "//" + strings.TrimPrefix(cleaned, "/")
 	}
 	if filepath.IsAbs(source) {
 		return filepath.ToSlash(filepath.Clean(source))
 	}
-	return path.Clean(normalizedSource)
+	return path.Clean(source)
 }
 
 func relativeAbsoluteTaskSourcePath(workspaceRoot string, source string) (string, bool) {
-	normalizedWorkspaceRoot := normalizeAbsoluteTaskSourcePath(workspaceRoot, strings.ReplaceAll(strings.TrimSpace(workspaceRoot), "\\", "/"))
-	normalizedSource := normalizeAbsoluteTaskSourcePath(source, strings.ReplaceAll(strings.TrimSpace(source), "\\", "/"))
+	normalizedWorkspaceRoot := normalizeAbsoluteTaskSourcePath(filepath.ToSlash(strings.TrimSpace(workspaceRoot)))
+	normalizedSource := normalizeAbsoluteTaskSourcePath(filepath.ToSlash(strings.TrimSpace(source)))
 	if normalizedWorkspaceRoot == "" || normalizedSource == "" {
 		return "", false
 	}
