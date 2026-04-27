@@ -29,11 +29,11 @@ html[data-app-window="onboarding"] .radix-themes {
   box-shadow: 0 26px 60px -36px rgba(38, 27, 19, 0.4);
   color: #352b22;
   display: grid;
-  gap: 0.8rem;
-  inset: 12px;
+  gap: 0.65rem;
+  inset: 10px;
   max-width: none;
-  overflow: auto;
-  padding: 1.3rem 1.35rem;
+  overflow: hidden;
+  padding: 1rem 1.05rem;
   position: absolute;
   pointer-events: auto;
   z-index: 2;
@@ -100,24 +100,26 @@ html[data-app-window="onboarding"] .radix-themes {
 
 .desktop-onboarding-window__title {
   margin: 0;
+  line-height: 1.15;
 }
 
 .desktop-onboarding-window__body {
   color: rgba(60, 47, 36, 0.86);
-  line-height: 1.6;
+  line-height: 1.45;
 }
 
 .desktop-onboarding-window__actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.7rem;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
   justify-content: flex-end;
 }
 
 .desktop-onboarding-window__button {
   border-radius: 999px;
   cursor: pointer;
-  min-height: 2.7rem;
+  min-height: 2.45rem;
+  white-space: nowrap;
   transition:
     transform 160ms ease,
     box-shadow 160ms ease,
@@ -249,11 +251,8 @@ html[data-app-window="onboarding"] .radix-themes {
   }
 
   .desktop-onboarding-window__actions {
-    justify-content: stretch;
-  }
-
-  .desktop-onboarding-window__button {
-    flex: 1 1 100%;
+    gap: 0.45rem;
+    justify-content: flex-end;
   }
 
   .desktop-onboarding[data-placement="floating"] .desktop-onboarding__card {

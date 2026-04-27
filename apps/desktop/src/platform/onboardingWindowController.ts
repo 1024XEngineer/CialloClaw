@@ -4,8 +4,8 @@ import { desktopOnboardingEvents } from "@/features/onboarding/onboarding.events
 import { resetOnboardingInteractiveState, setOnboardingIgnoreCursorEvents } from "./onboardingWindow";
 
 export const ONBOARDING_WINDOW_LABEL = "onboarding";
-const ONBOARDING_CARD_WINDOW_WIDTH = 460;
-const ONBOARDING_CARD_WINDOW_HEIGHT = 340;
+const ONBOARDING_CARD_WINDOW_WIDTH = 420;
+const ONBOARDING_CARD_WINDOW_HEIGHT = 300;
 const ONBOARDING_CARD_WINDOW_MARGIN = 24;
 
 type OnboardingWindowPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -45,7 +45,7 @@ async function waitForOnboardingWindowHandle(timeoutMs: number) {
 }
 
 async function waitForOnboardingWindowEvent(eventName: string, timeoutMs: number) {
-  const onboardingWindow = await getOrCreateOnboardingWindow();
+  const onboardingWindow = await ensureOnboardingWindow();
   let timeoutHandle = 0;
   let disposed = false;
   let resolveEvent: (() => void) | null = null;
@@ -80,7 +80,7 @@ async function waitForOnboardingWindowEvent(eventName: string, timeoutMs: number
   return eventPromise;
 }
 
-async function getOrCreateOnboardingWindow() {
+export async function ensureOnboardingWindow() {
   if (onboardingWindowHandle !== null) {
     return onboardingWindowHandle;
   }
@@ -139,57 +139,17 @@ function resolveOnboardingCardWindowFrame(frame: OnboardingWindowFrame, placemen
   }
 }
 
-function buildOnboardingWindowUrl(input: {
-  monitorFrame: OnboardingWindowFrame;
-  placement: OnboardingWindowPlacement;
-  source: string;
-  startedAt: string;
-  step: string;
-  windowLabel: string;
-}) {
-  const params = new URLSearchParams({
-    monitor_height: String(input.monitorFrame.height),
-    monitor_width: String(input.monitorFrame.width),
-    monitor_x: String(input.monitorFrame.x),
-    monitor_y: String(input.monitorFrame.y),
-    placement: input.placement,
-    source: input.source,
-    started_at: input.startedAt,
-    step: input.step,
-    window_label: input.windowLabel,
-  });
+export async function getOnboardingWindow() {
+  if (onboardingWindowHandle !== null) {
+    return onboardingWindowHandle;
+  }
 
-  return `onboarding.html?${params.toString()}`;
-}
+  const windowHandle = await Window.getByLabel(ONBOARDING_WINDOW_LABEL);
+  if (windowHandle !== null) {
+    onboardingWindowHandle = windowHandle;
+  }
 
-/**
- * Recreates the onboarding card window with enough URL state to render the
- * first guide card without waiting for cross-window event hydration.
- *
- * @param input Initial session and placement state for the new card window.
- */
-export async function recreateOnboardingWindow(input: {
-  monitorFrame: OnboardingWindowFrame;
-  placement: OnboardingWindowPlacement;
-  source: string;
-  startedAt: string;
-  step: string;
-  windowLabel: string;
-}) {
-  const cardFrame = resolveOnboardingCardWindowFrame(input.monitorFrame, input.placement);
-  const url = buildOnboardingWindowUrl(input);
-
-  await invoke("desktop_recreate_onboarding", {
-    height: cardFrame.height,
-    url,
-    width: cardFrame.width,
-    x: cardFrame.x,
-    y: cardFrame.y,
-  });
-
-  onboardingWindowHandle = await waitForOnboardingWindowHandle(10_000);
-  await resetOnboardingInteractiveState();
-  await setOnboardingIgnoreCursorEvents(false);
+  return windowHandle;
 }
 
 /**
@@ -203,7 +163,7 @@ export async function syncOnboardingWindowFrame(
   frame: OnboardingWindowFrame,
   options: SyncOnboardingWindowFrameOptions = {},
 ) {
-  const onboardingWindow = await getOrCreateOnboardingWindow();
+  const onboardingWindow = await ensureOnboardingWindow();
   const cardFrame = resolveOnboardingCardWindowFrame(frame, options.placement ?? "center");
   await resetOnboardingInteractiveState();
   // The onboarding surface is now a normal card-sized window, so it must keep
@@ -235,13 +195,29 @@ export function waitForOnboardingCardReady(timeoutMs: number) {
  * laid out and the native hit-test state is ready.
  */
 export async function showOnboardingWindow() {
-  const onboardingWindow = await getOrCreateOnboardingWindow();
+  const onboardingWindow = await ensureOnboardingWindow();
   // Keep the card-sized onboarding window as a normal interactive surface;
   // native promotion only handles z-order and first-frame visibility.
   await setOnboardingIgnoreCursorEvents(false);
   await onboardingWindow.setFocusable(true);
   await onboardingWindow.setAlwaysOnTop(true);
   await invoke("desktop_promote_onboarding");
+}
+
+/**
+ * Hides the onboarding window while keeping the warmed webview process alive so
+ * replay can reopen the guide without paying the cold-start creation cost.
+ */
+export async function hideOnboardingWindow() {
+  const onboardingWindow = onboardingWindowHandle ?? await Window.getByLabel(ONBOARDING_WINDOW_LABEL);
+
+  if (onboardingWindow === null) {
+    onboardingWindowHandle = null;
+    return;
+  }
+
+  await setOnboardingIgnoreCursorEvents(false);
+  await onboardingWindow.hide();
 }
 
 /**

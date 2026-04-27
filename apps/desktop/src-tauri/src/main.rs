@@ -1153,52 +1153,6 @@ fn desktop_open_or_focus_onboarding(app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
-#[tauri::command]
-fn desktop_recreate_onboarding(
-    app: tauri::AppHandle,
-    url: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
-        window
-            .destroy()
-            .map_err(|error| format!("failed to destroy existing onboarding window: {error}"))?;
-    }
-
-    let window = WebviewWindowBuilder::new(
-        &app,
-        ONBOARDING_WINDOW_LABEL,
-        WebviewUrl::App(url.into()),
-    )
-    .title("CialloClaw Onboarding")
-    .inner_size(width, height)
-    .position(x, y)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .resizable(false)
-    .skip_taskbar(true)
-    .shadow(false)
-    .visible(true)
-    .focused(true)
-    .build()
-    .map_err(|error| format!("failed to recreate onboarding window: {error}"))?;
-
-    if let Ok(hwnd) = window.hwnd() {
-        unsafe {
-            // The recreated guide is a normal card-sized window, not a
-            // fullscreen pass-through overlay.
-            set_forward_mouse_messages(hwnd, false);
-            set_window_ignore_cursor_events(hwnd, false);
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(windows)]
 #[tauri::command]
 fn desktop_promote_onboarding(app: tauri::AppHandle) -> Result<(), String> {
@@ -2234,7 +2188,6 @@ fn main() {
             desktop_get_active_window_context,
             desktop_open_or_focus_control_panel,
             desktop_open_or_focus_onboarding,
-            desktop_recreate_onboarding,
             desktop_promote_onboarding,
             desktop_open_local_path,
             desktop_reveal_local_path,

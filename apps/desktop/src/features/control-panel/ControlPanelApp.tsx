@@ -42,15 +42,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
   advanceDesktopOnboarding,
-  setDesktopOnboardingLoadingState,
+  startManualDesktopOnboardingReplay,
   setDesktopOnboardingPresentation,
-  startDesktopOnboarding,
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
-import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
-import { showShellBallWindow } from "@/platform/shellBallWindowController";
+import { ensureOnboardingWindow } from "@/platform/onboardingWindowController";
 import "./controlPanel.css";
 
 type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "about";
@@ -624,7 +622,6 @@ function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPane
  */
 export function ControlPanelApp() {
   const onboardingSession = useDesktopOnboardingSession();
-  const onboardingLoading = useDesktopOnboardingLoading("control-panel");
   const autoAdvancedControlPanelStepRef = useRef(false);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
   const [aboutSnapshot, setAboutSnapshot] = useState<ControlPanelAboutSnapshot>(() => getControlPanelAboutFallbackSnapshot());
@@ -696,6 +693,20 @@ export function ControlPanelApp() {
         setDraft((current) => current ?? fallbackData);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void ensureOnboardingWindow().catch((error) => {
+      if (!cancelled) {
+        console.warn("control-panel onboarding prewarm failed", error);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -821,8 +832,7 @@ export function ControlPanelApp() {
   const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
-  const onboardingReplayDisabled =
-    isSaving || isRunningInspection || isReplayingOnboarding || onboardingLoading !== null || onboardingSession?.isOpen === true;
+  const onboardingReplayDisabled = isSaving || isRunningInspection || isReplayingOnboarding;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -905,16 +915,22 @@ export function ControlPanelApp() {
     setIsReplayingOnboarding(true);
     void (async () => {
       try {
-        await showShellBallWindow("ball");
-        await setDesktopOnboardingLoadingState({
-          message: "正在打开引导...",
-          windowLabel: "control-panel",
-        });
+        setSaveFeedback(null);
+        setLoadError(null);
+        let session = await startManualDesktopOnboardingReplay("control-panel");
 
-        const session = await startDesktopOnboarding("manual", "control-panel");
-        if (session !== null) {
-          await requestCurrentDesktopWindowClose();
+        if (session === null) {
+          const errorMessage = "重新打开新手引导失败。";
+          setLoadError(errorMessage);
+          setSaveFeedback(errorMessage);
+          return;
         }
+
+        await requestCurrentDesktopWindowClose();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "重新打开新手引导失败。";
+        setLoadError(errorMessage);
+        setSaveFeedback(errorMessage);
       } finally {
         setIsReplayingOnboarding(false);
       }
@@ -1733,9 +1749,9 @@ export function ControlPanelApp() {
           <div className="control-panel-shell__action-bar">
             <div className="control-panel-shell__action-statuses">
               {saveStateValue}
-              {onboardingLoading ? (
+              {isReplayingOnboarding ? (
                 <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
-                  {onboardingLoading.message}
+                  正在打开引导...
                 </Text>
               ) : null}
               {draft.warnings && draft.warnings.length > 0 ? (

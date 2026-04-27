@@ -6,7 +6,6 @@ import { desktopOnboardingEvents } from "./onboarding.events";
 import {
   advanceDesktopOnboarding,
   completeDesktopOnboarding,
-  type DesktopOnboardingPlacement,
   type DesktopOnboardingPresentation,
   type DesktopOnboardingSession,
   skipDesktopOnboarding,
@@ -87,87 +86,6 @@ function getOnboardingCopy(step: string) {
   }
 }
 
-function parseNumberParam(params: URLSearchParams, key: string, fallback: number) {
-  const value = Number(params.get(key));
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function parseOnboardingStep(value: string | null) {
-  const steps = new Set([
-    "welcome",
-    "shell_ball_intro",
-    "shell_ball_hold_voice",
-    "shell_ball_double_click",
-    "dashboard_overview",
-    "tray_hint",
-    "control_panel_api_key",
-    "done",
-  ]);
-
-  return steps.has(value ?? "") ? (value as DesktopOnboardingSession["step"]) : "welcome";
-}
-
-function parseOnboardingPlacement(value: string | null): DesktopOnboardingPlacement {
-  switch (value) {
-    case "top-left":
-    case "top-right":
-    case "bottom-left":
-    case "bottom-right":
-    case "center":
-      return value;
-    default:
-      return "center";
-  }
-}
-
-function parseOnboardingWindowLabel(value: string | null): DesktopOnboardingPresentation["windowLabel"] {
-  switch (value) {
-    case "dashboard":
-    case "control-panel":
-    case "shell-ball":
-      return value;
-    default:
-      return "shell-ball";
-  }
-}
-
-function parseOnboardingSource(value: string | null): DesktopOnboardingSession["source"] {
-  return value === "manual" ? "manual" : "first_launch";
-}
-
-function loadInitialOnboardingStateFromUrl() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const step = parseOnboardingStep(params.get("step"));
-  const placement = parseOnboardingPlacement(params.get("placement"));
-  const windowLabel = parseOnboardingWindowLabel(params.get("window_label"));
-  const startedAt = params.get("started_at") ?? new Date().toISOString();
-
-  const session: DesktopOnboardingSession = {
-    isOpen: true,
-    source: parseOnboardingSource(params.get("source")),
-    started_at: startedAt,
-    step,
-  };
-  const presentation: DesktopOnboardingPresentation = {
-    highlights: [],
-    monitorFrame: {
-      height: parseNumberParam(params, "monitor_height", 340),
-      width: parseNumberParam(params, "monitor_width", 460),
-      x: parseNumberParam(params, "monitor_x", 0),
-      y: parseNumberParam(params, "monitor_y", 0),
-    },
-    placement,
-    step,
-    windowLabel,
-  };
-
-  return { presentation, session };
-}
-
 /**
  * Renders the dedicated onboarding window. The window only displays step copy,
  * highlights, and flow buttons; all real interactions still happen in the
@@ -177,13 +95,9 @@ function loadInitialOnboardingStateFromUrl() {
  */
 export function OnboardingWindow() {
   const cardRef = useRef<HTMLElement | null>(null);
-  const [initialOnboardingState] = useState(() => loadInitialOnboardingStateFromUrl());
-  const syncedSession = useDesktopOnboardingSession();
-  const syncedPresentation = useDesktopOnboardingPresentation();
-  const [session, setLocalSession] = useState<DesktopOnboardingSession | null>(initialOnboardingState?.session ?? null);
-  const [stagedPresentation, setStagedPresentation] = useState<DesktopOnboardingPresentation | null>(
-    initialOnboardingState?.presentation ?? null,
-  );
+  const session = useDesktopOnboardingSession();
+  const presentation = useDesktopOnboardingPresentation();
+  const [stagedPresentation, setStagedPresentation] = useState<DesktopOnboardingPresentation | null>(null);
   const copy = useMemo(() => (session ? getOnboardingCopy(session.step) : null), [session]);
 
   useEffect(() => {
@@ -208,29 +122,23 @@ export function OnboardingWindow() {
   }, []);
 
   useEffect(() => {
-    if (syncedSession !== null) {
-      setLocalSession(syncedSession);
-    }
-  }, [syncedSession]);
-
-  useEffect(() => {
-    if (syncedPresentation !== null) {
-      setStagedPresentation(syncedPresentation);
+    if (presentation !== null) {
+      setStagedPresentation(presentation);
       return;
     }
 
     if (session === null) {
       setStagedPresentation(null);
     }
-  }, [syncedPresentation, session]);
+  }, [presentation, session]);
 
   const activePresentation = useMemo(() => {
     if (session === null) {
       return null;
     }
 
-    if (syncedPresentation?.step === session.step) {
-      return syncedPresentation;
+    if (presentation?.step === session.step) {
+      return presentation;
     }
 
     if (stagedPresentation?.step === session.step) {
@@ -247,7 +155,7 @@ export function OnboardingWindow() {
     }
 
     return null;
-  }, [syncedPresentation, session, stagedPresentation]);
+  }, [presentation, session, stagedPresentation]);
 
   useLayoutEffect(() => {
     if (!cardRef.current || !session || !activePresentation) {
@@ -281,12 +189,6 @@ export function OnboardingWindow() {
   }
 
   const advanceToStep = (step: DesktopOnboardingSession["step"]) => {
-    setLocalSession((current) => (current ? { ...current, step } : current));
-    setStagedPresentation((current) => current ? {
-      ...current,
-      placement: step === "welcome" || step === "done" ? "center" : current.placement,
-      step,
-    } : current);
     void advanceDesktopOnboarding(step);
   };
 
@@ -309,20 +211,27 @@ export function OnboardingWindow() {
         advanceToStep("dashboard_overview");
         return;
       case "dashboard_overview":
+        void requestDesktopOnboardingAction({
+          targetWindow: "dashboard",
+          type: "close_dashboard",
+        });
         advanceToStep("tray_hint");
         return;
       case "tray_hint":
         void requestDesktopOnboardingAction({
           targetWindow: "dashboard",
+          type: "close_dashboard",
+        });
+        void requestDesktopOnboardingAction({
+          targetWindow: "dashboard",
           type: "open_control_panel",
         });
+        advanceToStep("control_panel_api_key");
         return;
       case "control_panel_api_key":
         advanceToStep("done");
         return;
       case "done":
-        setLocalSession(null);
-        setStagedPresentation(null);
         void completeDesktopOnboarding();
         return;
       default:
@@ -333,8 +242,6 @@ export function OnboardingWindow() {
   const handleSecondary = () => {
     switch (session.step) {
       case "welcome":
-        setLocalSession(null);
-        setStagedPresentation(null);
         void skipDesktopOnboarding();
         return;
       case "shell_ball_intro":
@@ -408,8 +315,6 @@ export function OnboardingWindow() {
               color="gray"
               onClick={() => {
                 void skipDesktopOnboarding();
-                setLocalSession(null);
-                setStagedPresentation(null);
               }}
             >
               结束引导

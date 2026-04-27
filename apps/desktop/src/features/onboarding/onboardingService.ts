@@ -1,8 +1,13 @@
 import { Window, getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import {
   destroyOnboardingWindow,
-  recreateOnboardingWindow,
+  ensureOnboardingWindow,
+  getOnboardingWindow,
+  hideOnboardingWindow,
+  showOnboardingWindow,
   syncOnboardingWindowFrame,
+  waitForOnboardingCardReady,
+  waitForOnboardingWindowReady,
 } from "@/platform/onboardingWindowController";
 import { shellBallWindowLabels } from "@/platform/shellBallWindowController";
 import { loadStoredValue, removeStoredValue, saveStoredValue } from "@/platform/storage";
@@ -65,6 +70,8 @@ export type DesktopOnboardingLoadingState = {
 const DESKTOP_ONBOARDING_STATUS_KEY = "cialloclaw.desktop.onboarding.status";
 const DESKTOP_ONBOARDING_SESSION_KEY = "cialloclaw.desktop.onboarding.session";
 const DESKTOP_ONBOARDING_PRESENTATION_KEY = "cialloclaw.desktop.onboarding.presentation";
+const DESKTOP_ONBOARDING_RESET_MARKER_KEY = "cialloclaw.desktop.onboarding.reset.v1";
+const DESKTOP_ONBOARDING_READY_TIMEOUT_MS = 10_000;
 const DESKTOP_ONBOARDING_FALLBACK_FRAME = {
   height: 860,
   width: 1280,
@@ -79,6 +86,36 @@ const DESKTOP_ONBOARDING_WINDOW_LABELS = [
 
 let desktopOnboardingLoadingState: DesktopOnboardingLoadingState | null = null;
 let desktopOnboardingLaunchPromise: Promise<DesktopOnboardingSession | null> | null = null;
+
+async function clearDesktopOnboardingRuntimeState() {
+  removeStoredValue(DESKTOP_ONBOARDING_SESSION_KEY);
+  removeStoredValue(DESKTOP_ONBOARDING_PRESENTATION_KEY);
+  await destroyOnboardingWindow();
+  await broadcastSession(null);
+  await broadcastPresentation(null);
+}
+
+async function clearDesktopOnboardingViewState() {
+  removeStoredValue(DESKTOP_ONBOARDING_SESSION_KEY);
+  removeStoredValue(DESKTOP_ONBOARDING_PRESENTATION_KEY);
+  await hideOnboardingWindow();
+  await broadcastSession(null);
+  await broadcastPresentation(null);
+}
+
+async function clearDesktopOnboardingAfterGuideClosed() {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 1_000);
+  });
+
+  const controlPanelWindow = await Window.getByLabel("control-panel");
+  if (controlPanelWindow !== null) {
+    await clearDesktopOnboardingViewState();
+    return;
+  }
+
+  await clearDesktopOnboardingRuntimeState();
+}
 
 async function buildDefaultWelcomePresentation(windowLabel: DesktopOnboardingPresentation["windowLabel"]) {
   const currentWindow = getCurrentWindow();
@@ -118,6 +155,17 @@ function createDefaultDesktopOnboardingStatus(): DesktopOnboardingStatus {
     skipped: false,
     skipped_at: null,
   };
+}
+
+function ensureDesktopOnboardingStatusReset() {
+  if (loadStoredValue<boolean>(DESKTOP_ONBOARDING_RESET_MARKER_KEY) === true) {
+    return;
+  }
+
+  removeStoredValue(DESKTOP_ONBOARDING_STATUS_KEY);
+  removeStoredValue(DESKTOP_ONBOARDING_SESSION_KEY);
+  removeStoredValue(DESKTOP_ONBOARDING_PRESENTATION_KEY);
+  saveStoredValue(DESKTOP_ONBOARDING_RESET_MARKER_KEY, true);
 }
 
 function dispatchLocalSessionChanged(session: DesktopOnboardingSession | null) {
@@ -253,6 +301,7 @@ export async function requestDesktopOnboardingAction(action: DesktopOnboardingAc
 }
 
 export function loadDesktopOnboardingStatus(): DesktopOnboardingStatus {
+  ensureDesktopOnboardingStatusReset();
   return {
     ...createDefaultDesktopOnboardingStatus(),
     ...(loadStoredValue<DesktopOnboardingStatus>(DESKTOP_ONBOARDING_STATUS_KEY) ?? {}),
@@ -319,11 +368,40 @@ export async function startDesktopOnboarding(
     return desktopOnboardingLaunchPromise;
   }
 
+  const currentSession = loadDesktopOnboardingSession();
+  const currentPresentation = loadDesktopOnboardingPresentation();
+  const onboardingWindow = await getOnboardingWindow();
+
+  if (currentSession?.isOpen === true && onboardingWindow !== null) {
+    if (currentPresentation !== null) {
+      await syncOnboardingWindowFrame(currentPresentation.monitorFrame, {
+        alwaysOnTop: true,
+        placement: currentPresentation.placement,
+      });
+    }
+    await showOnboardingWindow();
+    await broadcastSession(currentSession);
+    if (currentPresentation !== null) {
+      await broadcastPresentation(currentPresentation);
+    }
+    return currentSession;
+  }
+
+  if (currentSession?.isOpen === true && onboardingWindow === null) {
+    await clearDesktopOnboardingRuntimeState();
+  }
+
   desktopOnboardingLaunchPromise = startDesktopOnboardingInner(source, preferredWindowLabel).finally(() => {
     desktopOnboardingLaunchPromise = null;
   });
 
   return desktopOnboardingLaunchPromise;
+}
+
+export async function startManualDesktopOnboardingReplay(
+  preferredWindowLabel: DesktopOnboardingPresentation["windowLabel"] = "control-panel",
+) {
+  return startDesktopOnboarding("manual", preferredWindowLabel);
 }
 
 async function startDesktopOnboardingInner(
@@ -367,26 +445,42 @@ async function startDesktopOnboardingInner(
   });
 
   try {
-    await setDesktopOnboardingSession(session);
-
     if (welcomePresentation !== null) {
-      await recreateOnboardingWindow({
-        monitorFrame: welcomePresentation.monitorFrame,
+      await ensureOnboardingWindow();
+      const readyPromise = waitForOnboardingWindowReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
+      await syncOnboardingWindowFrame(welcomePresentation.monitorFrame, {
+        alwaysOnTop: true,
         placement: welcomePresentation.placement,
-        source,
-        startedAt: session.started_at,
-        step: session.step,
-        windowLabel,
       });
+      await readyPromise;
+
+      const cardReadyPromise = waitForOnboardingCardReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
+      await setDesktopOnboardingSession(session);
       await broadcastPresentation(welcomePresentation);
+
+      while (true) {
+        const result = await Promise.race([
+          cardReadyPromise.then(() => "ready" as const),
+          new Promise<"retry">((resolve) => {
+            window.setTimeout(() => resolve("retry"), 250);
+          }),
+        ]);
+
+        if (result === "ready") {
+          break;
+        }
+
+        await broadcastSession(session);
+        await broadcastPresentation(welcomePresentation);
+      }
+
+      await showOnboardingWindow();
+    } else {
+      await setDesktopOnboardingSession(session);
     }
   } catch (error) {
     console.warn("desktop onboarding launch failed", error);
-    removeStoredValue(DESKTOP_ONBOARDING_SESSION_KEY);
-    removeStoredValue(DESKTOP_ONBOARDING_PRESENTATION_KEY);
-    await destroyOnboardingWindow();
-    await broadcastSession(null);
-    await broadcastPresentation(null);
+    await clearDesktopOnboardingRuntimeState();
     return null;
   } finally {
     await setDesktopOnboardingLoadingState(null);
@@ -421,7 +515,7 @@ export async function completeDesktopOnboarding() {
     completed_at: now,
   });
 
-  await setDesktopOnboardingSession(null);
+  await clearDesktopOnboardingAfterGuideClosed();
 }
 
 export async function skipDesktopOnboarding() {
@@ -435,5 +529,5 @@ export async function skipDesktopOnboarding() {
     skipped_at: now,
   });
 
-  await setDesktopOnboardingSession(null);
+  await clearDesktopOnboardingAfterGuideClosed();
 }

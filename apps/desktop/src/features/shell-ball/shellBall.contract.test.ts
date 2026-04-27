@@ -1188,6 +1188,7 @@ test("window controller focuses an existing labeled desktop window", async () =>
   ) as { permissions: string[]; windows: string[] };
 
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-unminimize"), true);
+  assert.equal(capabilityConfig.permissions.includes("core:window:allow-minimize"), true);
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-set-fullscreen"), true);
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-destroy"), false);
   assert.deepEqual(controlPanelCapabilityConfig.windows, ["control-panel"]);
@@ -1429,28 +1430,35 @@ test("onboarding window is card-sized, interactive, and promoted natively", () =
     /WebviewWindowBuilder::new\(\s*&handle,\s*ONBOARDING_WINDOW_LABEL,\s*WebviewUrl::App\("onboarding\.html"\.into\(\)\),[\s\S]*?\.inner_size\(460\.0, 340\.0\)[\s\S]*?\.visible\(false\)\s*[\s\S]*?\.focused\(false\)/,
   );
   assert.match(mainSource, /set_window_ignore_cursor_events\(hwnd, false\)/);
-  assert.match(mainSource, /fn desktop_recreate_onboarding\([\s\S]*?url: String,[\s\S]*?WebviewUrl::App\(url\.into\(\)\)/);
-  assert.match(mainSource, /desktop_recreate_onboarding,/);
+  assert.doesNotMatch(mainSource, /fn desktop_recreate_onboarding/);
   assert.match(mainSource, /fn desktop_promote_onboarding\(app: tauri::AppHandle\) -> Result<\(\), String> \{[\s\S]*?SetWindowPos\(/);
   assert.match(mainSource, /desktop_promote_onboarding,/);
   assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_WIDTH = 460/);
   assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_HEIGHT = 340/);
   assert.match(onboardingControllerSource, /function resolveOnboardingCardWindowFrame/);
-  assert.match(onboardingControllerSource, /export async function recreateOnboardingWindow/);
-  assert.match(onboardingControllerSource, /await invoke\("desktop_recreate_onboarding"/);
+  assert.match(onboardingControllerSource, /export async function getOnboardingWindow\(\)/);
   assert.match(onboardingControllerSource, /await setOnboardingIgnoreCursorEvents\(false\)/);
   assert.match(
     onboardingControllerSource,
     /export async function showOnboardingWindow\(\) \{[\s\S]*?await setOnboardingIgnoreCursorEvents\(false\);[\s\S]*?await onboardingWindow\.setFocusable\(true\);[\s\S]*?await onboardingWindow\.setAlwaysOnTop\(true\);[\s\S]*?await invoke\("desktop_promote_onboarding"\);[\s\S]*?\}/,
   );
-  assert.match(onboardingWindowSource, /function loadInitialOnboardingStateFromUrl\(\)/);
+  assert.doesNotMatch(onboardingWindowSource, /loadInitialOnboardingStateFromUrl/);
   assert.doesNotMatch(onboardingWindowSource, /setOnboardingInteractiveRegions/);
   assert.match(onboardingServiceSource, /let desktopOnboardingLaunchPromise: Promise<DesktopOnboardingSession \| null> \| null = null/);
+  assert.match(onboardingServiceSource, /export async function startManualDesktopOnboardingReplay/);
   assert.match(onboardingServiceSource, /currentWindow\.emitTo\(label, desktopOnboardingEvents\.sessionChanged, session\)/);
-  assert.match(onboardingServiceSource, /await recreateOnboardingWindow\(\{/);
-  assert.match(onboardingServiceSource, /placement: presentation\.placement/);
+  assert.match(onboardingServiceSource, /await showOnboardingWindow\(\)/);
   assert.match(controlPanelAppSource, /const \[isReplayingOnboarding, setIsReplayingOnboarding\] = useState\(false\)/);
-  assert.match(controlPanelAppSource, /disabled=\{onboardingReplayDisabled\}/);
+  assert.match(controlPanelAppSource, /const onboardingReplayDisabled = isSaving \|\| isRunningInspection \|\| isReplayingOnboarding/);
+  assert.match(controlPanelAppSource, /void ensureOnboardingWindow\(\)\.catch/);
+  assert.doesNotMatch(controlPanelAppSource, /showShellBallWindow\("ball"\)/);
+  assert.doesNotMatch(controlPanelAppSource, /5_000/);
+  assert.doesNotMatch(controlPanelAppSource, /retriedSession/);
+});
+
+test("hide-on-close helper destroys onboarding before closing the control panel", () => {
+  const hideOnCloseSource = readFileSync(resolve(desktopRoot, "src/platform/hideOnCloseRequest.ts"), "utf8");
+  assert.match(hideOnCloseSource, /await destroyOnboardingWindow\(\)/);
 });
 
 test("control-panel entrypoint and view keep frameless window close and drag controls wired", () => {
@@ -1462,6 +1470,8 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelMainSource, /installDesktopEscapeClose\(\)/);
   assert.match(controlPanelAppSource, /startCurrentDesktopWindowDragging/);
   assert.match(controlPanelAppSource, /requestCurrentDesktopWindowClose/);
+  assert.match(controlPanelAppSource, /minimizeCurrentDesktopWindow/);
+  assert.match(desktopWindowFrameSource, /export async function minimizeCurrentDesktopWindow\(\)/);
   assert.match(desktopWindowFrameSource, /export function installDesktopEscapeClose\(windowHandle\?: DesktopCloseHandle \| null\)/);
   assert.match(desktopWindowFrameSource, /const currentWindow = windowHandle \?\? getDesktopFrameWindow\(\)/);
   assert.match(controlPanelAppSource, /control-panel-shell__titlebar/);
