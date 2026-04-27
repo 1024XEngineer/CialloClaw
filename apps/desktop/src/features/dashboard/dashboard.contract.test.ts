@@ -231,6 +231,25 @@ function loadSourceNoteEditorModule() {
         title: string;
         updatedAt: string;
       }) => { content: string; sourceLine: number };
+      serializeSourceNoteEditorDraft: (draft: {
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      }, now?: Date) => { blockContent: string };
     },
   );
 }
@@ -1355,6 +1374,32 @@ test("source note editor keeps metadata-shaped natural lines visible", () => {
   assert.equal(blocks[0]?.title, "due: tomorrow");
   assert.equal(blocks[0]?.noteText, "note: remember rollback");
   assert.equal(blocks[0]?.bucket, "upcoming");
+});
+
+test("source note editor persists selected bucket before source path exists", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "later",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: null,
+    sourcePath: null,
+    title: "Follow up",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.match(serialized.blockContent, /^bucket: later$/m);
 });
 
 test("source note editor keeps adjacent heading notes separate", () => {

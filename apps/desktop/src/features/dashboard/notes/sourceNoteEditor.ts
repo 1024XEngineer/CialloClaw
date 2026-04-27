@@ -531,7 +531,8 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     updatedAt: normalizedNow,
   } satisfies SourceNoteEditorDraft);
   const sourceDefaultBucket = getDefaultBucketForSourcePath(normalizedDraft.sourcePath, normalizedDraft.checked, normalizedDraft.repeatRule !== "");
-  const shouldPersistBucket = normalizedDraft.bucket !== sourceDefaultBucket || normalizedDraft.repeatRule !== "";
+  const hasKnownSourcePath = normalizedDraft.sourcePath !== null && normalizedDraft.sourcePath.trim() !== "";
+  const shouldPersistBucket = !hasKnownSourcePath || normalizedDraft.bucket !== sourceDefaultBucket || normalizedDraft.repeatRule !== "";
   const metadataLines = [
     shouldPersistBucket ? `bucket: ${normalizedDraft.bucket}` : null,
     normalizedDraft.dueAt ? `due: ${normalizedDraft.dueAt}` : null,
