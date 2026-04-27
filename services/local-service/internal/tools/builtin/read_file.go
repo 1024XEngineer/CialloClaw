@@ -106,22 +106,18 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	}
 
 	mimeType, textType := detectReadFileTypes(readPath, content)
-	decodedContent, textEncoding, decodeWarning := decodeReadFileContent(content)
+	decodedContent, decodeWarning := decodeReadFileContent(content)
 	rawOutput := map[string]any{
-		"path":          safePath,
-		"content":       decodedContent,
-		"mime_type":     mimeType,
-		"text_type":     textType,
-		"text_encoding": textEncoding,
-	}
-	if decodeWarning != "" {
-		rawOutput["decode_warning"] = decodeWarning
+		"path":      safePath,
+		"content":   decodedContent,
+		"mime_type": mimeType,
+		"text_type": textType,
 	}
 
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: buildReadFileSummary(rawOutput),
+		SummaryOutput: buildReadFileSummary(rawOutput, decodeWarning),
 	}, nil
 }
 
@@ -171,17 +167,16 @@ func readFileToolPath(originalPath, normalizedPath, safePath string) string {
 	return normalizedPath
 }
 
-func buildReadFileSummary(raw map[string]any) map[string]any {
+func buildReadFileSummary(raw map[string]any, contentPreviewOverride string) map[string]any {
 	content, _ := raw["content"].(string)
 	contentPreview := previewReadFileText(content, readFilePreviewLimit)
-	if decodeWarning, _ := raw["decode_warning"].(string); decodeWarning != "" {
-		contentPreview = decodeWarning
+	if contentPreviewOverride != "" {
+		contentPreview = contentPreviewOverride
 	}
 	return map[string]any{
 		"path":            raw["path"],
 		"mime_type":       raw["mime_type"],
 		"text_type":       raw["text_type"],
-		"text_encoding":   raw["text_encoding"],
 		"content_preview": contentPreview,
 	}
 }
@@ -195,12 +190,12 @@ func detectReadFileTypes(path string, content []byte) (string, string) {
 	return mimeType, inferReadFileTextType(mimeType)
 }
 
-func decodeReadFileContent(content []byte) (string, string, string) {
+func decodeReadFileContent(content []byte) (string, string) {
 	decoded, err := textdecode.Decode(content)
 	if err != nil {
-		return "", "", textdecode.UnsupportedEncodingUserMessage
+		return "", textdecode.UnsupportedEncodingUserMessage
 	}
-	return decoded.Text, decoded.Encoding, ""
+	return decoded.Text, ""
 }
 
 func inferReadFileMimeType(path string, content []byte) string {

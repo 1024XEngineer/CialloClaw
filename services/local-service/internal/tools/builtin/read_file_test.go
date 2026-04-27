@@ -131,16 +131,22 @@ func TestReadFileToolDecodesWorkspaceTextEncodings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute returned error for GB18030 file: %v", err)
 	}
-	if gbResult.RawOutput["content"] != "修复乱码" || gbResult.RawOutput["text_encoding"] != "gb18030" {
+	if gbResult.RawOutput["content"] != "修复乱码" {
 		t.Fatalf("expected decoded GB18030 output, got %+v", gbResult.RawOutput)
+	}
+	if _, ok := gbResult.RawOutput["text_encoding"]; ok {
+		t.Fatalf("read_file raw output must not expose undocumented text_encoding: %+v", gbResult.RawOutput)
 	}
 
 	utf16Result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform}, map[string]any{"path": utf16Path})
 	if err != nil {
 		t.Fatalf("Execute returned error for UTF-16 file: %v", err)
 	}
-	if utf16Result.RawOutput["content"] != "统一提示" || utf16Result.RawOutput["text_encoding"] != "utf-16le" {
+	if utf16Result.RawOutput["content"] != "统一提示" {
 		t.Fatalf("expected decoded UTF-16 output, got %+v", utf16Result.RawOutput)
+	}
+	if _, ok := utf16Result.SummaryOutput["text_encoding"]; ok {
+		t.Fatalf("read_file summary output must not expose undocumented text_encoding: %+v", utf16Result.SummaryOutput)
 	}
 }
 
@@ -157,6 +163,9 @@ func TestReadFileToolReturnsExplicitMessageForUnsafeText(t *testing.T) {
 	}
 	if content, _ := result.RawOutput["content"].(string); content != "" {
 		t.Fatalf("expected unsafe content to stay empty, got %q", content)
+	}
+	if _, ok := result.RawOutput["decode_warning"]; ok {
+		t.Fatalf("read_file raw output must not expose undocumented decode_warning: %+v", result.RawOutput)
 	}
 	preview, _ := result.SummaryOutput["content_preview"].(string)
 	if !strings.Contains(preview, "UTF-8") || strings.ContainsRune(preview, '\uFFFD') {
