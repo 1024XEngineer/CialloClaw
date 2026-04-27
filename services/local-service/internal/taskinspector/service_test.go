@@ -132,6 +132,52 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	}
 }
 
+func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"明天整理发布说明",
+		"补充影响范围和回滚说明",
+		"",
+		"每周一同步巡检报告",
+		"",
+		"以后研究插件市场入口",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if len(result.NotepadItems) != 3 {
+		t.Fatalf("expected natural notes to become items, got %+v", result.NotepadItems)
+	}
+	first := result.NotepadItems[0]
+	if first["title"] != "明天整理发布说明" || first["bucket"] != notepadBucketUpcoming || first["due_at"] == nil {
+		t.Fatalf("expected tomorrow natural note to infer upcoming due date, got %+v", first)
+	}
+	if first["note_text"] != "补充影响范围和回滚说明" {
+		t.Fatalf("expected following paragraph line to become note text, got %+v", first)
+	}
+	recurring := result.NotepadItems[1]
+	if recurring["bucket"] != notepadBucketRecurringRule || recurring["type"] != "recurring" {
+		t.Fatalf("expected natural repeat hint to infer recurring rule, got %+v", recurring)
+	}
+	later := result.NotepadItems[2]
+	if later["bucket"] != notepadBucketLater {
+		t.Fatalf("expected natural later hint to infer later bucket, got %+v", later)
+	}
+}
+
 func TestServiceRunDecodesLegacyMarkdownSources(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

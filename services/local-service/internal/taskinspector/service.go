@@ -263,6 +263,8 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 	items := make([]map[string]any, 0)
 	var current map[string]any
 	noteLines := make([]string, 0)
+	naturalLines := make([]string, 0)
+	naturalStartLine := 0
 	flushCurrent := func() {
 		if current == nil {
 			return
@@ -274,26 +276,55 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		current = nil
 		noteLines = noteLines[:0]
 	}
+	flushNatural := func() {
+		if len(naturalLines) == 0 {
+			return
+		}
+		title, noteText := splitNaturalNoteContent(naturalLines)
+		if title != "" {
+			item := buildSourceBackedNotepadItem(sourcePath, naturalStartLine, title, false, now)
+			if noteText != "" {
+				item["note_text"] = noteText
+			}
+			applyNaturalNotepadHints(item, strings.Join(naturalLines, "\n"), now)
+			items = append(items, normalizeParsedNotepadItem(item, sourcePath, now))
+		}
+		naturalLines = naturalLines[:0]
+		naturalStartLine = 0
+	}
 
 	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		checked, title, ok := parseChecklistLine(trimmed)
 		if ok {
+			flushNatural()
 			flushCurrent()
-			current = map[string]any{
-				"item_id":     buildSourceBackedNotepadID(sourcePath, index+1, title),
-				"title":       title,
-				"bucket":      bucketFromSourcePath(sourcePath, checked, false),
-				"status":      statusFromChecklist(checked),
-				"type":        todoTypeFromChecklist(checked, false),
-				"source_path": sourcePath,
-				"source_line": index + 1,
-				"created_at":  now.UTC().Format(time.RFC3339),
-				"updated_at":  now.UTC().Format(time.RFC3339),
-			}
+			current = buildSourceBackedNotepadItem(sourcePath, index+1, title, checked, now)
 			continue
 		}
-		if current == nil || trimmed == "" {
+		if current == nil {
+			if trimmed == "" {
+				flushNatural()
+				continue
+			}
+			if strings.HasPrefix(trimmed, "#") {
+				flushNatural()
+				continue
+			}
+			if metadataKey, _, ok := splitMetadataLine(trimmed); ok && isKnownNotepadMetadataKey(metadataKey) {
+				continue
+			}
+			naturalLine := normalizeNaturalNotepadLine(trimmed)
+			if naturalLine == "" {
+				continue
+			}
+			if len(naturalLines) == 0 {
+				naturalStartLine = index + 1
+			}
+			naturalLines = append(naturalLines, naturalLine)
+			continue
+		}
+		if trimmed == "" {
 			continue
 		}
 		if handled := applyNotepadMetadataLine(current, trimmed, now); handled {
@@ -302,7 +333,22 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		noteLines = append(noteLines, trimmed)
 	}
 	flushCurrent()
+	flushNatural()
 	return items
+}
+
+func buildSourceBackedNotepadItem(sourcePath string, line int, title string, checked bool, now time.Time) map[string]any {
+	return map[string]any{
+		"item_id":     buildSourceBackedNotepadID(sourcePath, line, title),
+		"title":       title,
+		"bucket":      bucketFromSourcePath(sourcePath, checked, false),
+		"status":      statusFromChecklist(checked),
+		"type":        todoTypeFromChecklist(checked, false),
+		"source_path": sourcePath,
+		"source_line": line,
+		"created_at":  now.UTC().Format(time.RFC3339),
+		"updated_at":  now.UTC().Format(time.RFC3339),
+	}
 }
 
 func parseChecklistLine(line string) (bool, string, bool) {
@@ -378,6 +424,108 @@ func splitMetadataLine(line string) (string, string, bool) {
 	return key, value, true
 }
 
+func isKnownNotepadMetadataKey(key string) bool {
+	switch key {
+	case "agent", "bucket", "created_at", "due", "ended_at", "next", "note", "prerequisite", "recent_instance_status", "reminder", "repeat", "resource", "scope", "status", "suggest", "tags", "updated_at":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeNaturalNotepadLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimLeft(trimmed, "#")
+	trimmed = strings.TrimSpace(trimmed)
+	for _, prefix := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(trimmed, prefix) {
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+			break
+		}
+	}
+	return trimmed
+}
+
+func splitNaturalNoteContent(lines []string) (string, string) {
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = normalizeNaturalNotepadLine(line)
+		if line != "" {
+			normalized = append(normalized, line)
+		}
+	}
+	if len(normalized) == 0 {
+		return "", ""
+	}
+	title := normalized[0]
+	if len(normalized) == 1 {
+		return title, ""
+	}
+	return title, strings.Join(normalized[1:], "\n")
+}
+
+// applyNaturalNotepadHints keeps hand-written notes useful without requiring
+// users to learn the markdown metadata keys maintained by the compatibility
+// layer.
+func applyNaturalNotepadHints(item map[string]any, text string, now time.Time) {
+	lower := strings.ToLower(text)
+	if hasNaturalRepeatHint(lower) {
+		item["bucket"] = notepadBucketRecurringRule
+		item["type"] = "recurring"
+		item["repeat_rule_text"] = strings.TrimSpace(text)
+	}
+	if hasNaturalLaterHint(lower) && stringValue(item, "bucket") != notepadBucketRecurringRule {
+		item["bucket"] = notepadBucketLater
+	}
+	if dueAt := inferNaturalDueTime(lower, now); dueAt != "" {
+		item["due_at"] = dueAt
+		item["planned_at"] = dueAt
+		if stringValue(item, "bucket") == notepadBucketLater {
+			item["bucket"] = notepadBucketUpcoming
+		}
+	}
+}
+
+func hasNaturalRepeatHint(lowerText string) bool {
+	for _, hint := range []string{"every ", "daily", "weekly", "monthly", "repeat", "recurring", "每天", "每日", "每周", "每月", "工作日", "定期", "重复"} {
+		if strings.Contains(lowerText, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNaturalLaterHint(lowerText string) bool {
+	for _, hint := range []string{"later", "someday", "backlog", "以后", "稍后", "有空", "之后"} {
+		if strings.Contains(lowerText, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func inferNaturalDueTime(lowerText string, now time.Time) string {
+	switch {
+	case strings.Contains(lowerText, "今天") || strings.Contains(lowerText, "today"):
+		return naturalDateTime(now, 0, 0, 0)
+	case strings.Contains(lowerText, "明天") || strings.Contains(lowerText, "tomorrow"):
+		return naturalDateTime(now, 0, 0, 1)
+	case strings.Contains(lowerText, "后天"):
+		return naturalDateTime(now, 0, 0, 2)
+	case strings.Contains(lowerText, "下周") || strings.Contains(lowerText, "next week"):
+		return naturalDateTime(now, 0, 0, 7)
+	case strings.Contains(lowerText, "下个月") || strings.Contains(lowerText, "next month"):
+		return naturalDateTime(now, 0, 1, 0)
+	default:
+		return ""
+	}
+}
+
+func naturalDateTime(now time.Time, years, months, days int) string {
+	target := now.AddDate(years, months, days)
+	return time.Date(target.Year(), target.Month(), target.Day(), now.Hour(), now.Minute(), 0, 0, now.Location()).Format(time.RFC3339)
+}
+
 func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
@@ -444,7 +592,10 @@ func bucketFromSourcePath(sourcePath string, closed bool, recurring bool) string
 	if strings.Contains(normalized, "later") || strings.Contains(normalized, "backlog") {
 		return notepadBucketLater
 	}
-	return notepadBucketUpcoming
+	if strings.Contains(normalized, "inbox") || strings.Contains(normalized, "upcoming") || strings.Contains(normalized, "today") || strings.Contains(normalized, "urgent") {
+		return notepadBucketUpcoming
+	}
+	return notepadBucketLater
 }
 
 func statusFromChecklist(checked bool) string {
