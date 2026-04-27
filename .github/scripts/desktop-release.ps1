@@ -117,7 +117,7 @@ function Compare-SemVer {
   return 0
 }
 
-function Get-HighestPublishedReleaseCore {
+function Get-HighestPublishedStableReleaseVersion {
   param(
     [Parameter(Mandatory = $true)]
     [string]$SemVerPattern
@@ -165,11 +165,11 @@ function Get-HighestPublishedReleaseCore {
   }
 
   if ($null -eq $bestVersion) {
-    throw "Could not determine the highest published SemVer release."
+    throw "Could not determine the highest published stable SemVer release."
   }
 
   Assert-WindowsInstallerVersionBounds -Version $bestVersion.version -Major $bestVersion.major -Minor $bestVersion.minor -Patch $bestVersion.patch
-  return "$($bestVersion.major).$($bestVersion.minor).$($bestVersion.patch)"
+  return $bestVersion
 }
 
 function Get-PackageVersionFromCargoToml {
@@ -225,33 +225,40 @@ switch ($Action) {
     }
 
     if ($env:GITHUB_REF -eq "refs/heads/main") {
-      $baseCore = $null
+      $baseVersion = $null
       for ($attempt = 0; $attempt -lt 3; $attempt++) {
         try {
-          $baseCore = Get-HighestPublishedReleaseCore -SemVerPattern $semverPattern
+          $baseVersion = Get-HighestPublishedStableReleaseVersion -SemVerPattern $semverPattern
           break
         } catch {
           if ($attempt -eq 2) {
-            throw "Failed to determine the highest published SemVer release after 3 attempts: $_"
+            throw "Failed to determine the highest published stable SemVer release after 3 attempts: $_"
           }
           Start-Sleep -Seconds 2
         }
       }
 
-      if (-not $baseCore) {
-        throw "Could not determine base version from latest release"
+      if ($null -eq $baseVersion) {
+        throw "Could not determine base version from the highest published stable release"
       }
 
-      $releaseVersion = "$baseCore-tip.$env:GITHUB_RUN_NUMBER"
+      $nextPatch = $baseVersion.patch + 1
+      $releaseVersion = "$($baseVersion.major).$($baseVersion.minor).$nextPatch"
+      Assert-WindowsInstallerVersionBounds `
+        -Version $releaseVersion `
+        -Major $baseVersion.major `
+        -Minor $baseVersion.minor `
+        -Patch $nextPatch
+
       $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA"
       if ($env:PREVIOUS_SHA -and $env:PREVIOUS_SHA -ne "0000000000000000000000000000000000000000") {
         $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/compare/$env:PREVIOUS_SHA...$env:GITHUB_SHA"
       }
 
-      Write-WorkflowOutput -Name "release_mode" -Value "tip"
+      Write-WorkflowOutput -Name "release_mode" -Value "main"
       Write-WorkflowOutput -Name "release_version" -Value $releaseVersion
-      Write-WorkflowOutput -Name "release_is_prerelease" -Value "true"
-      Write-WorkflowOutput -Name "release_bundles" -Value "nsis"
+      Write-WorkflowOutput -Name "release_is_prerelease" -Value "false"
+      Write-WorkflowOutput -Name "release_bundles" -Value "nsis,msi"
       Write-WorkflowOutput -Name "release_compare_url" -Value $compareUrl
       return
     }

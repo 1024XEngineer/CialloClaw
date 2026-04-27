@@ -4,7 +4,7 @@ run-name: >-
   ${{
     github.ref_type == 'tag'
       && format('Release {0}', github.ref_name)
-      || 'Tip Build'
+      || 'Auto Release'
   }}
 
 on:
@@ -110,8 +110,8 @@ jobs:
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
 
-      - name: Publish release (tip)
-        if: steps.meta.outputs.release_mode == 'tip'
+      - name: Publish release (main)
+        if: steps.meta.outputs.release_mode == 'main'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -121,9 +121,9 @@ jobs:
           tagName: v${{ steps.meta.outputs.release_version }}
           releaseName: v${{ steps.meta.outputs.release_version }}
           releaseBody: |
-            ## Tip Build
+            ## Automated Release
             - Version: `v${{ steps.meta.outputs.release_version }}`
             - Compare: ${{ steps.meta.outputs.release_compare_url }}
-          prerelease: true
+          prerelease: false
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
