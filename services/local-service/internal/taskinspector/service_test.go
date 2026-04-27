@@ -193,6 +193,45 @@ func TestServiceRunPreservesMetadataShapedNaturalNotes(t *testing.T) {
 	}
 }
 
+func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"# Release prep",
+		"first paragraph",
+		"",
+		"second paragraph",
+		"- item A",
+		"- item B",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "release.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one multi-paragraph natural note, got %+v", result.NotepadItems)
+	}
+	item := result.NotepadItems[0]
+	if item["title"] != "Release prep" {
+		t.Fatalf("expected heading to remain the note title, got %+v", item)
+	}
+	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- item B"
+	if item["note_text"] != expectedNoteText {
+		t.Fatalf("expected paragraph breaks and list markers to remain, got %+v", item)
+	}
+}
+
 func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
@@ -210,7 +249,7 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 		"## 每周一同步巡检报告",
 		"### 后天检查巡检结果",
 		"",
-		"以后研究插件市场入口",
+		"## 以后研究插件市场入口",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)

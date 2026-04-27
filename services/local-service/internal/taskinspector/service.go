@@ -277,7 +277,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		noteLines = noteLines[:0]
 	}
 	flushNatural := func() {
-		if len(naturalLines) == 0 {
+		if !hasNaturalNotepadContent(naturalLines) {
 			return
 		}
 		title, noteText := splitNaturalNoteContent(naturalLines)
@@ -303,18 +303,17 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			continue
 		}
 		if current == nil {
-			if trimmed == "" {
-				flushNatural()
-				continue
-			}
-			if isNaturalNotepadHeadingLine(trimmed) && len(naturalLines) > 0 {
+			if isNaturalNotepadHeadingLine(line) && hasNaturalNotepadContent(naturalLines) {
 				flushNatural()
 			}
-			naturalLine := normalizeNaturalNotepadLine(trimmed)
-			if naturalLine == "" {
+			naturalLine := normalizeNaturalNotepadLine(line)
+			if strings.TrimSpace(naturalLine) == "" {
+				if hasNaturalNotepadContent(naturalLines) {
+					naturalLines = append(naturalLines, "")
+				}
 				continue
 			}
-			if len(naturalLines) == 0 {
+			if !hasNaturalNotepadContent(naturalLines) {
 				naturalStartLine = index + 1
 			}
 			naturalLines = append(naturalLines, naturalLine)
@@ -421,38 +420,56 @@ func splitMetadataLine(line string) (string, string, bool) {
 }
 
 func normalizeNaturalNotepadLine(line string) string {
-	trimmed := strings.TrimSpace(line)
-	trimmed = strings.TrimLeft(trimmed, "#")
-	trimmed = strings.TrimSpace(trimmed)
-	for _, prefix := range []string{"- ", "* ", "+ "} {
-		if strings.HasPrefix(trimmed, prefix) {
-			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
-			break
-		}
+	trimmedRight := strings.TrimRight(line, " \t\r")
+	trimmed := strings.TrimSpace(trimmedRight)
+	if strings.HasPrefix(trimmed, "#") {
+		return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
 	}
-	return trimmed
+	return trimmedRight
 }
 
 func isNaturalNotepadHeadingLine(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "#") && normalizeNaturalNotepadLine(line) != ""
 }
 
+func hasNaturalNotepadContent(lines []string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func splitNaturalNoteContent(lines []string) (string, string) {
 	normalized := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = normalizeNaturalNotepadLine(line)
-		if line != "" {
-			normalized = append(normalized, line)
-		}
+		normalized = append(normalized, normalizeNaturalNotepadLine(line))
 	}
+	normalized = trimNaturalNotepadBlankLines(normalized)
 	if len(normalized) == 0 {
 		return "", ""
 	}
-	title := normalized[0]
+	title := strings.TrimSpace(normalized[0])
 	if len(normalized) == 1 {
 		return title, ""
 	}
-	return title, strings.Join(normalized[1:], "\n")
+	bodyLines := trimNaturalNotepadBlankLines(normalized[1:])
+	return title, strings.Join(bodyLines, "\n")
+}
+
+// trimNaturalNotepadBlankLines preserves paragraph gaps inside a natural note
+// while removing only the leading and trailing blank boundaries.
+func trimNaturalNotepadBlankLines(lines []string) []string {
+	start := 0
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	end := len(lines)
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return lines[start:end]
 }
 
 // applyNaturalNotepadHints keeps hand-written notes useful without requiring
