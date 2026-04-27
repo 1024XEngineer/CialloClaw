@@ -244,7 +244,7 @@ func dedupeNonEmptyStrings(values []string) []string {
 // sourceToFSPath accepts both workspace-virtual paths and legacy absolute paths
 // that still point inside the current workspace root.
 func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (string, error) {
-	source = filepath.ToSlash(strings.TrimSpace(source))
+	source = normalizeTaskSourceInput(source)
 	if source == "" {
 		return "", nil
 	}
@@ -262,6 +262,13 @@ func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (strin
 			return "", ErrInspectionSourceOutsideWorkspace
 		}
 		return normalized, nil
+	}
+	// The workspace-virtual /workspace/... form has already been handled above.
+	// A single-leading-slash path without a bound workspace filesystem is treated
+	// as a legacy unix-style absolute path and rejected explicitly instead of
+	// flowing into the generic absolute-path branch.
+	if fileSystem == nil && strings.HasPrefix(source, "/") && !strings.HasPrefix(source, "//") {
+		return "", ErrInspectionSourceOutsideWorkspace
 	}
 	if strings.HasPrefix(source, "/") && !filepath.IsAbs(source) {
 		return "", ErrInspectionSourceOutsideWorkspace
@@ -324,9 +331,16 @@ func normalizeAbsoluteTaskSourcePath(source string) string {
 	return path.Clean(source)
 }
 
+// normalizeTaskSourceInput keeps the policy in forward-slash form regardless of
+// the host GOOS. filepath.ToSlash only rewrites the native separator, so a
+// second pass is still required for injected Windows literals on Unix CI.
+func normalizeTaskSourceInput(source string) string {
+	return strings.ReplaceAll(filepath.ToSlash(strings.TrimSpace(source)), "\\", "/")
+}
+
 func relativeAbsoluteTaskSourcePath(workspaceRoot string, source string) (string, bool) {
-	normalizedWorkspaceRoot := normalizeAbsoluteTaskSourcePath(filepath.ToSlash(strings.TrimSpace(workspaceRoot)))
-	normalizedSource := normalizeAbsoluteTaskSourcePath(filepath.ToSlash(strings.TrimSpace(source)))
+	normalizedWorkspaceRoot := normalizeAbsoluteTaskSourcePath(normalizeTaskSourceInput(workspaceRoot))
+	normalizedSource := normalizeAbsoluteTaskSourcePath(normalizeTaskSourceInput(source))
 	if normalizedWorkspaceRoot == "" || normalizedSource == "" {
 		return "", false
 	}
