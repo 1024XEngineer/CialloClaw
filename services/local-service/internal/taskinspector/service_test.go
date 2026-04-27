@@ -9,6 +9,8 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
@@ -130,6 +132,160 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	}
 }
 
+func TestServiceRunDecodesLegacyMarkdownSources(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content, _, err := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte("- [ ] 修复巡检乱码\n"))
+	if err != nil {
+		t.Fatalf("GB18030 encode failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "legacy.md"), content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if result.Summary["parsed_files"] != 1 || len(result.NotepadItems) != 1 {
+		t.Fatalf("expected legacy markdown source to be parsed, got summary=%+v items=%+v", result.Summary, result.NotepadItems)
+	}
+	if result.NotepadItems[0]["title"] != "修复巡检乱码" {
+		t.Fatalf("expected decoded notepad title, got %+v", result.NotepadItems[0])
+	}
+}
+
+func TestServiceRunPreservesNotepadWhenSourceDecodeFails(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] source item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "bad.md"), []byte{0x00, 0x01, 0x02, 0xff}, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{
+		Config: map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: []map[string]any{
+			{"item_id": "todo_existing", "title": "preserve me", "status": "normal"},
+		},
+	})
+
+	if result.SourceSynced {
+		t.Fatalf("expected failed source decode to block source sync")
+	}
+	if result.Summary["parsed_files"] != 1 {
+		t.Fatalf("expected readable source files to still be counted, got %+v", result.Summary)
+	}
+	if len(result.NotepadItems) != 1 || result.NotepadItems[0]["title"] != "preserve me" {
+		t.Fatalf("expected existing notepad items to be preserved, got %+v", result.NotepadItems)
+	}
+}
+
+func TestServiceRunSkipsBinaryAttachmentsAndKeepsTextSources(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] source item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.txt"), []byte("- [ ] txt item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "checklist"), []byte("- [ ] extensionless item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "attachment.bin"), []byte{0x00, 0x01, 0x02, 0xff}, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{
+		Config: map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: []map[string]any{
+			{"item_id": "todo_existing", "title": "old snapshot", "status": "normal"},
+		},
+	})
+
+	if !result.SourceSynced {
+		t.Fatalf("expected binary attachments to be skipped without blocking source sync")
+	}
+	if result.Summary["parsed_files"] != 3 {
+		t.Fatalf("expected text source files to be counted, got %+v", result.Summary)
+	}
+	if len(result.NotepadItems) != 3 {
+		t.Fatalf("expected readable text sources to replace old snapshot, got %+v", result.NotepadItems)
+	}
+	titles := map[string]bool{}
+	for _, item := range result.NotepadItems {
+		titles[stringValue(item, "title")] = true
+	}
+	for _, title := range []string{"source item", "txt item", "extensionless item"} {
+		if !titles[title] {
+			t.Fatalf("expected parsed title %q in %+v", title, result.NotepadItems)
+		}
+	}
+}
+
+func TestServiceRunIgnoresUnsupportedTextTaskSourceFiles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] markdown item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.txt"), []byte("- [ ] text item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "config.json"), []byte("{\n  \"checklist\": [\"- [ ] should stay ignored\"]\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if !result.SourceSynced {
+		t.Fatalf("expected supported task source files to sync cleanly, got %+v", result)
+	}
+	if result.Summary["parsed_files"] != 2 {
+		t.Fatalf("expected only markdown and txt task sources to be counted, got %+v", result.Summary)
+	}
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected unsupported text files to stay ignored, got %+v", result.NotepadItems)
+	}
+}
+
 func TestTaskInspectorHelperFunctions(t *testing.T) {
 	if countChecklistItems("- [ ] one\n* [x] two\nplain text") != 2 {
 		t.Fatal("expected checklist counter to include open and closed items")
@@ -143,6 +299,20 @@ func TestTaskInspectorHelperFunctions(t *testing.T) {
 	}
 	if sourceToFSPath("../../etc") != "" {
 		t.Fatalf("expected sourceToFSPath to reject outside-workspace paths")
+	}
+	for _, path := range []string{"todos/inbox.md", "todos/inbox.markdown", "todos/notes.txt", "todos/checklist"} {
+		if shouldSkipTaskSourceAttachment(path) || shouldSkipUnreadableTaskSourceFile(path) {
+			t.Fatalf("expected text task source file %q to be accepted", path)
+		}
+	}
+	if !shouldSkipTaskSourceAttachment("todos/attachment.bin") {
+		t.Fatal("expected binary attachment to be skipped")
+	}
+	if !isSupportedTextTaskSourceFile("todos/notes.txt") || !isSupportedTextTaskSourceFile("todos/checklist") {
+		t.Fatal("expected supported text source helper to preserve text compatibility")
+	}
+	if isSupportedTextTaskSourceFile("todos/config.json") {
+		t.Fatal("expected unsupported text source helper to reject non-task file types")
 	}
 	tags := splitTagList("urgent, weekly, notes")
 	if len(tags) != 3 || tags[1] != "weekly" {

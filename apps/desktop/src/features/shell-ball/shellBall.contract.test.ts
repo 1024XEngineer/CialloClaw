@@ -2458,7 +2458,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
     delivery_result: null;
     task: {
       task_id: string;
-      session_id: string | null;
       title: string;
       source_type: "dragged_file";
       status: "processing";
@@ -2474,7 +2473,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
     delivery_result: null,
     task: {
       task_id: "task_shell_ball_001",
-      session_id: null,
       title: "Process files",
       source_type: "dragged_file",
       status: "processing",
