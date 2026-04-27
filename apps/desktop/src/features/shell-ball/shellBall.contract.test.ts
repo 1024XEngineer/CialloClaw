@@ -7264,6 +7264,26 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
 });
 
+test("shell-ball direct input does not expose task follow-up steering controls", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+
+  assert.doesNotMatch(coordinatorSource, /shellBallFollowUpTarget/);
+  assert.doesNotMatch(coordinatorSource, /steerTask\(\{/);
+  assert.doesNotMatch(coordinatorSource, /onPrepareTextSubmitDraft/);
+  assert.doesNotMatch(coordinatorSource, /onRestoreTextSubmitDraft/);
+  assert.doesNotMatch(appSource, /followUpTarget/);
+  assert.doesNotMatch(appSource, /handleFollowUpToggle/);
+  assert.doesNotMatch(appSource, /prepareTextSubmitDraft/);
+  assert.doesNotMatch(appSource, /restorePreparedTextSubmitDraft/);
+  assert.doesNotMatch(inputBarSource, /followUpArmed\?: boolean;/);
+  assert.doesNotMatch(inputBarSource, /followUpLabel\?: string \| null;/);
+  assert.doesNotMatch(inputBarSource, /onToggleFollowUp\?: \(\) => void;/);
+  assert.doesNotMatch(inputBarSource, /\u53d1\u9001\u5230\u5f53\u524d\u4efb\u52a1/);
+  assert.doesNotMatch(inputBarSource, /\u8865\u5145\u5f53\u524d\u4efb\u52a1/);
+});
+
 test("shell-ball direct submit shows a detected-page status bubble before the task reply", async () => {
   const reactRuntime = createImmediateShellBallReactRuntime();
 

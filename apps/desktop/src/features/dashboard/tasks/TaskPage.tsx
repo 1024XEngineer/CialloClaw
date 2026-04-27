@@ -288,7 +288,7 @@ export function TaskPage() {
   const selectedTaskEnded = detailData ? isTaskEnded(detailData.task) : false;
   const selectedWaitingInputGuidance =
     detailData?.task.status === "waiting_input"
-      ? "如需修改或补充当前任务，请到悬浮球继续处理。"
+      ? "如需修改或补充当前任务，请直接使用当前任务详情里的“补充新的执行要求”输入框。"
       : null;
   const selectedStageDescription = detailData
     ? selectedTaskEnded
