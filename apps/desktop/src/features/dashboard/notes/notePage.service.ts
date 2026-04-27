@@ -15,26 +15,6 @@ import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, ru
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
-const SOURCE_NOTE_RESERVED_METADATA_KEYS = new Set([
-  "agent",
-  "bucket",
-  "created_at",
-  "due",
-  "ended_at",
-  "next",
-  "note",
-  "prerequisite",
-  "recent_instance_status",
-  "reminder",
-  "repeat",
-  "resource",
-  "scope",
-  "status",
-  "suggest",
-  "tags",
-  "updated_at",
-]);
-
 export type NotePageDataMode = "rpc" | "mock";
 
 export type NoteResourceOpenExecutionPlan = {
@@ -792,13 +772,8 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     if (!current) {
-      const trimmed = line.trim();
       if (isSourceNaturalHeadingLine(line) && naturalLines.length > 0) {
         flushNatural();
-      }
-      const metadata = splitSourceMetadataLine(trimmed);
-      if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
-        return;
       }
       const naturalLine = normalizeSourceNaturalNoteLine(line);
       if (naturalLine === "") {

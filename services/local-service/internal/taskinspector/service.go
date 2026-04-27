@@ -310,9 +310,6 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			if isNaturalNotepadHeadingLine(trimmed) && len(naturalLines) > 0 {
 				flushNatural()
 			}
-			if metadataKey, _, ok := splitMetadataLine(trimmed); ok && isKnownNotepadMetadataKey(metadataKey) {
-				continue
-			}
 			naturalLine := normalizeNaturalNotepadLine(trimmed)
 			if naturalLine == "" {
 				continue
@@ -421,15 +418,6 @@ func splitMetadataLine(line string) (string, string, bool) {
 		return "", "", false
 	}
 	return key, value, true
-}
-
-func isKnownNotepadMetadataKey(key string) bool {
-	switch key {
-	case "agent", "bucket", "created_at", "due", "ended_at", "next", "note", "prerequisite", "recent_instance_status", "reminder", "repeat", "resource", "scope", "status", "suggest", "tags", "updated_at":
-		return true
-	default:
-		return false
-	}
 }
 
 func normalizeNaturalNotepadLine(line string) string {

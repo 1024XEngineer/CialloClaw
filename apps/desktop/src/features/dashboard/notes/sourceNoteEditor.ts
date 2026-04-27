@@ -378,10 +378,6 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       if (isNaturalHeadingLine(line) && naturalLines.length > 0) {
         flushNatural(index);
       }
-      const metadata = splitMetadataLine(line.trim());
-      if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
-        return;
-      }
       const naturalLine = normalizeNaturalNoteLine(line);
       if (naturalLine === "") {
         return;

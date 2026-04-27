@@ -1338,6 +1338,25 @@ test("source note editor derives natural note buckets from source paths", () => 
   assert.doesNotMatch(updated.content, /^bucket:/m);
 });
 
+test("source note editor keeps metadata-shaped natural lines visible", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "due: tomorrow\nnote: remember rollback\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "due: tomorrow");
+  assert.equal(blocks[0]?.noteText, "note: remember rollback");
+  assert.equal(blocks[0]?.bucket, "upcoming");
+});
+
 test("source note editor keeps adjacent heading notes separate", () => {
   const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
   const note = {
@@ -1423,6 +1442,26 @@ test("source note fallback derives generic source checklist items as upcoming", 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Review report");
   assert.equal(items[0]?.item.bucket, "upcoming");
+});
+
+test("source note fallback keeps metadata-shaped natural lines visible", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "due: tomorrow\nnote: remember rollback\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "due: tomorrow");
+  assert.equal(items[0]?.item.note_text, "note: remember rollback");
+  assert.equal(items[0]?.item.bucket, "upcoming");
+  assert.ok(items[0]?.item.due_at);
 });
 
 test("source note fallback derives generic natural source items as upcoming", () => {
