@@ -423,6 +423,80 @@ function splitSourceMetadataLine(line: string) {
   return { key, value };
 }
 
+type SourceNaturalFallbackFields = {
+  bucket: TodoBucket;
+  dueAt: string | null;
+  nextOccurrenceAt: string | null;
+  repeatRule: string | null;
+};
+
+function hasSourceNaturalRepeatHint(lowerText: string) {
+  return ["every ", "daily", "weekly", "monthly", "repeat", "recurring", "每天", "每日", "每周", "每月", "工作日", "定期", "重复"].some((hint) =>
+    lowerText.includes(hint),
+  );
+}
+
+function formatSourceNaturalDateTime(now: Date, years: number, months: number, days: number) {
+  const target = new Date(now);
+  target.setFullYear(target.getFullYear() + years);
+  target.setMonth(target.getMonth() + months);
+  target.setDate(target.getDate() + days);
+  target.setSeconds(0, 0);
+  return target.toISOString();
+}
+
+function inferSourceNaturalDueTime(lowerText: string, now: Date) {
+  if (lowerText.includes("今天") || lowerText.includes("today")) {
+    return formatSourceNaturalDateTime(now, 0, 0, 0);
+  }
+  if (lowerText.includes("明天") || lowerText.includes("tomorrow")) {
+    return formatSourceNaturalDateTime(now, 0, 0, 1);
+  }
+  if (lowerText.includes("后天")) {
+    return formatSourceNaturalDateTime(now, 0, 0, 2);
+  }
+  if (lowerText.includes("下周") || lowerText.includes("next week")) {
+    return formatSourceNaturalDateTime(now, 0, 0, 7);
+  }
+  if (lowerText.includes("下个月") || lowerText.includes("next month")) {
+    return formatSourceNaturalDateTime(now, 0, 1, 0);
+  }
+  return null;
+}
+
+// Renderer fallback cards are local state, but they must infer the same natural
+// scheduling hints as the backend inspector to avoid visible pre-sync drift.
+function inferSourceNaturalFallbackFields(text: string, now = new Date()): SourceNaturalFallbackFields {
+  const lowerText = text.toLowerCase();
+  const dueAt = inferSourceNaturalDueTime(lowerText, now);
+  const repeatRule = hasSourceNaturalRepeatHint(lowerText) ? text.trim() : null;
+
+  if (repeatRule) {
+    return {
+      bucket: "recurring_rule",
+      dueAt,
+      nextOccurrenceAt: null,
+      repeatRule,
+    };
+  }
+
+  if (dueAt) {
+    return {
+      bucket: "upcoming",
+      dueAt,
+      nextOccurrenceAt: null,
+      repeatRule: null,
+    };
+  }
+
+  return {
+    bucket: "later",
+    dueAt: null,
+    nextOccurrenceAt: null,
+    repeatRule: null,
+  };
+}
+
 function normalizeFallbackBucket(value: string | null, checked: boolean) {
   if (value === "upcoming" || value === "later" || value === "recurring_rule" || value === "closed") {
     return value;
@@ -566,12 +640,12 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
 }
 
 /**
- * Builds one local fallback card for every checklist block found in the source
- * markdown file. The page uses these cards before the backend inspector has
- * finished translating the file into formal notepad items.
+ * Builds one local fallback card for every checklist or natural block found in
+ * the source markdown file. The page uses these cards before the backend
+ * inspector has finished translating the file into formal notepad items.
  *
  * @param note Markdown source note from the desktop bridge.
- * @returns Renderer-local cards derived from checklist blocks in the file.
+ * @returns Renderer-local cards derived from checklist or natural blocks in the file.
  */
 export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteListItem[] {
   const lines = note.content.replace(/\r\n/g, "\n").split("\n");
@@ -643,18 +717,19 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   const flushNatural = () => {
     const naturalContent = splitSourceNaturalNoteContent(naturalLines);
     if (naturalContent && naturalStartLine !== null) {
+      const inferred = inferSourceNaturalFallbackFields(naturalLines.join("\n"));
       current = {
         agentSuggestion: null,
         bodyLines: naturalContent.noteText ? [naturalContent.noteText] : [],
-        bucket: "later",
+        bucket: inferred.bucket,
         checked: false,
-        dueAt: null,
+        dueAt: inferred.dueAt,
         effectiveScope: null,
-        nextOccurrenceAt: null,
+        nextOccurrenceAt: inferred.nextOccurrenceAt,
         noteText: naturalContent.noteText || null,
         prerequisite: null,
         recentInstanceStatus: null,
-        repeatRule: null,
+        repeatRule: inferred.repeatRule,
         sourceLine: naturalStartLine,
         title: naturalContent.title,
       };
@@ -688,10 +763,6 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     if (!current) {
-      if (line.trim().startsWith("#")) {
-        flushNatural();
-        return;
-      }
       const naturalLine = normalizeSourceNaturalNoteLine(line);
       if (naturalLine === "") {
         flushNatural();

@@ -307,10 +307,6 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 				flushNatural()
 				continue
 			}
-			if strings.HasPrefix(trimmed, "#") {
-				flushNatural()
-				continue
-			}
 			if metadataKey, _, ok := splitMetadataLine(trimmed); ok && isKnownNotepadMetadataKey(metadataKey) {
 				continue
 			}

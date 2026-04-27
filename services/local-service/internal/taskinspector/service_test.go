@@ -143,10 +143,10 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
 	content := strings.Join([]string{
-		"明天整理发布说明",
+		"# 明天整理发布说明",
 		"补充影响范围和回滚说明",
 		"",
-		"每周一同步巡检报告",
+		"## 每周一同步巡检报告",
 		"",
 		"以后研究插件市场入口",
 	}, "\n")

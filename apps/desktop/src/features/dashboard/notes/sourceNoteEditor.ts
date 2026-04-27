@@ -347,10 +347,6 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
         flushNatural(index);
         return;
       }
-      if (line.trim().startsWith("#")) {
-        flushNatural(index);
-        return;
-      }
       const metadata = splitMetadataLine(line.trim());
       if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
         return;

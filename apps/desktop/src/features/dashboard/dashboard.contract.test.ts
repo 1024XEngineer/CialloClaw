@@ -135,6 +135,22 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildSourceNoteFallbackItems: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }) => Array<{
+        item: {
+          bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+          due_at: string | null;
+          note_text: string | null;
+          repeat_rule: string | null;
+          title: string;
+        };
+      }>;
       isAllowedNoteOpenUrl: (url: string) => boolean;
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
@@ -1244,7 +1260,7 @@ test("note page query helpers expose stable prefixes, bucket order, and refresh-
 test("source note editor accepts natural note text before compatibility metadata", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
-    content: "明天整理发布说明\n补充影响范围和回滚说明\n",
+    content: "# 明天整理发布说明\n补充影响范围和回滚说明\n",
     fileName: "notes.md",
     modifiedAtMs: null,
     path: "D:/workspace/notes.md",
@@ -1281,6 +1297,29 @@ test("source note editor accepts natural note text before compatibility metadata
   assert.match(updated.content, /^- \[ \] 明天整理发布说明/m);
   assert.doesNotMatch(updated.content, /bucket:/);
   assert.doesNotMatch(updated.content, /note:/);
+});
+
+test("source note fallback mirrors natural scheduling hints before inspector sync", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# 明天整理发布说明\n补充影响范围和回滚说明\n\n## 每周一同步巡检报告\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.item.title, "明天整理发布说明");
+  assert.equal(items[0]?.item.bucket, "upcoming");
+  assert.ok(items[0]?.item.due_at);
+  assert.equal(items[0]?.item.note_text, "补充影响范围和回滚说明");
+  assert.equal(items[1]?.item.title, "每周一同步巡检报告");
+  assert.equal(items[1]?.item.bucket, "recurring_rule");
+  assert.equal(items[1]?.item.repeat_rule, "每周一同步巡检报告");
 });
 
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {
