@@ -1,0 +1,129 @@
+name: Desktop Release
+
+run-name: >-
+  ${{
+    github.ref_type == 'tag'
+      && format('Release {0}', github.ref_name)
+      || 'Tip Build'
+  }}
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+jobs:
+  release-windows:
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out the target commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_SHA: ${{ github.event.before }}
+        run: ./.github/scripts/desktop-release.ps1 -Action resolve-metadata
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: go.sum
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rewrite version manifests (precise)
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.release_version }}
+        run: ./.github/scripts/desktop-release.ps1 -Action rewrite-version-manifests
+
+      - name: Verify version rewrite
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.release_version }}
+        run: ./.github/scripts/desktop-release.ps1 -Action verify-version-manifests
+
+      - name: Run release checks
+        run: |
+          pnpm --dir apps/desktop lint
+          pnpm --dir apps/desktop typecheck
+          pnpm --dir apps/desktop test:dashboard
+          pnpm --dir apps/desktop test:memory
+
+      - name: Build sidecar
+        id: sidecar
+        shell: pwsh
+        run: ./.github/scripts/desktop-release.ps1 -Action build-sidecar
+
+      - name: Publish release (tag)
+        if: steps.meta.outputs.release_mode == 'tag'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm exec tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          prerelease: ${{ steps.meta.outputs.release_is_prerelease == 'true' }}
+          generateReleaseNotes: true
+          retryAttempts: 4
+          args: --bundles ${{ steps.meta.outputs.release_bundles }}
+
+      - name: Publish release (tip)
+        if: steps.meta.outputs.release_mode == 'tip'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm exec tauri
+          tagName: v${{ steps.meta.outputs.release_version }}
+          releaseName: v${{ steps.meta.outputs.release_version }}
+          releaseBody: |
+            ## Tip Build
+            - Version: `v${{ steps.meta.outputs.release_version }}`
+            - Compare: ${{ steps.meta.outputs.release_compare_url }}
+          prerelease: true
+          retryAttempts: 4
+          args: --bundles ${{ steps.meta.outputs.release_bundles }}
