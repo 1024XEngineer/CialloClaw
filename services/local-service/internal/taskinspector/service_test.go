@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -487,8 +488,14 @@ func TestSourceToFSPathAcceptsWorkspaceAbsolutePaths(t *testing.T) {
 	}
 
 	absWithoutFileSystem, err := sourceToFSPath(nil, absoluteSource)
-	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
-		t.Fatalf("expected absolute source without file system to require workspace binding, path=%q err=%v", absWithoutFileSystem, err)
+	if runtime.GOOS == "windows" {
+		if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+			t.Fatalf("expected absolute source without file system to require workspace binding on windows, path=%q err=%v", absWithoutFileSystem, err)
+		}
+	} else {
+		if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+			t.Fatalf("expected absolute source without file system to stay outside workspace on non-windows hosts, path=%q err=%v", absWithoutFileSystem, err)
+		}
 	}
 
 	_, err = sourceToFSPath(fileSystem, `D:/workspace/notes`)
