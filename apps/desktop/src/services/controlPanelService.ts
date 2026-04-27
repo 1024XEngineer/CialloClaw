@@ -18,6 +18,7 @@ import {
 } from "@/rpc/methods";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
+  hydrateDesktopRuntimeDefaults,
   hydrateDesktopSettings,
   loadSettings,
   saveSettings,
@@ -318,6 +319,7 @@ function createRequestMeta(): RequestMeta {
 async function loadControlPanelRpcSnapshot(
   timeoutMs: number = CONTROL_PANEL_RPC_TIMEOUT_MS,
 ): Promise<Pick<ControlPanelData, "inspector" | "securitySummary" | "settings">> {
+  await hydrateDesktopRuntimeDefaults();
   const requestMeta = createRequestMeta();
   const localSettings = loadSettings().settings;
   const [settingsResult, inspectorResult, securityResult] = await Promise.all([

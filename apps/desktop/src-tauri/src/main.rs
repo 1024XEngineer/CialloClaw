@@ -3,11 +3,13 @@
 
 mod activity;
 mod local_path;
+mod runtime_paths;
 mod screen_capture;
 mod selection;
 mod source_notes;
 mod window_context;
 
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -44,6 +46,12 @@ use windows::Win32::{
 };
 
 type JsonChannel = Channel<Value>;
+
+#[derive(Clone, Serialize)]
+struct DesktopRuntimeDefaultsPayload {
+    workspace_path: String,
+    task_sources: Vec<String>,
+}
 
 const NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
 const CONTROL_PANEL_WINDOW_LABEL: &str = "control-panel";
@@ -404,12 +412,18 @@ async fn desktop_get_active_window_context(
 async fn desktop_open_local_path(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
     path: String,
 ) -> Result<(), String> {
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&bridge_state, &settings_snapshot_state);
+        let roots = build_local_path_roots(
+            &bridge_state,
+            &settings_snapshot_state,
+            &runtime_paths_state,
+        );
         local_path::open_local_path(&path, &roots)
     })
     .await
@@ -420,12 +434,18 @@ async fn desktop_open_local_path(
 async fn desktop_reveal_local_path(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
     path: String,
 ) -> Result<(), String> {
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_local_path_roots(&bridge_state, &settings_snapshot_state);
+        let roots = build_local_path_roots(
+            &bridge_state,
+            &settings_snapshot_state,
+            &runtime_paths_state,
+        );
         local_path::reveal_local_path(&path, &roots)
     })
     .await
@@ -436,15 +456,21 @@ async fn desktop_reveal_local_path(
 async fn desktop_load_source_notes(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
     sources: Vec<String>,
 ) -> Result<source_notes::DesktopSourceNoteSnapshot, String> {
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
         let trusted_sources =
             resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
-        let roots =
-            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        let roots = build_source_note_roots(
+            &bridge_state,
+            &settings_snapshot_state,
+            &runtime_paths_state,
+            &trusted_sources,
+        );
         source_notes::load_source_notes(&trusted_sources, &roots)
     })
     .await
@@ -455,15 +481,21 @@ async fn desktop_load_source_notes(
 async fn desktop_load_source_note_index(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
     sources: Vec<String>,
 ) -> Result<source_notes::DesktopSourceNoteIndexSnapshot, String> {
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
         let trusted_sources =
             resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
-        let roots =
-            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        let roots = build_source_note_roots(
+            &bridge_state,
+            &settings_snapshot_state,
+            &runtime_paths_state,
+            &trusted_sources,
+        );
         source_notes::load_source_note_index(&trusted_sources, &roots)
     })
     .await
@@ -474,16 +506,22 @@ async fn desktop_load_source_note_index(
 async fn desktop_create_source_note(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
     sources: Vec<String>,
     content: String,
 ) -> Result<source_notes::DesktopSourceNoteDocument, String> {
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
         let trusted_sources =
             resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
-        let roots =
-            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        let roots = build_source_note_roots(
+            &bridge_state,
+            &settings_snapshot_state,
+            &runtime_paths_state,
+            &trusted_sources,
+        );
         source_notes::create_source_note(&trusted_sources, &roots, &content)
     })
     .await
@@ -494,17 +532,23 @@ async fn desktop_create_source_note(
 async fn desktop_save_source_note(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
     sources: Vec<String>,
     path: String,
     content: String,
 ) -> Result<source_notes::DesktopSourceNoteDocument, String> {
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
         let trusted_sources =
             resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
-        let roots =
-            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        let roots = build_source_note_roots(
+            &bridge_state,
+            &settings_snapshot_state,
+            &runtime_paths_state,
+            &trusted_sources,
+        );
         source_notes::save_source_note(&trusted_sources, &roots, &path, &content)
     })
     .await
@@ -519,18 +563,36 @@ fn desktop_sync_settings_snapshot(
     state.replace(settings)
 }
 
+#[tauri::command]
+fn desktop_get_runtime_defaults(
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
+) -> DesktopRuntimeDefaultsPayload {
+    DesktopRuntimeDefaultsPayload {
+        workspace_path: runtime_paths_state
+            .workspace_root()
+            .to_string_lossy()
+            .replace('\\', "/"),
+        task_sources: vec![runtime_paths_state
+            .workspace_root()
+            .join("todos")
+            .to_string_lossy()
+            .replace('\\', "/")],
+    }
+}
+
 fn build_local_path_roots(
     bridge_state: &Arc<NamedPipeBridgeState>,
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
 ) -> local_path::LocalPathRoots {
     let repo_root = build_repo_root();
     let workspace_root = resolve_workspace_root(
         bridge_state,
         settings_snapshot_state,
-        repo_root.as_ref(),
+        runtime_paths_state,
         true,
     )
-    .or_else(|| repo_root.as_ref().map(|root| root.join("workspace")));
+    .or_else(|| Some(runtime_paths_state.workspace_root().clone()));
 
     local_path::LocalPathRoots::new(workspace_root, repo_root)
 }
@@ -538,6 +600,7 @@ fn build_local_path_roots(
 fn build_source_note_roots(
     bridge_state: &Arc<NamedPipeBridgeState>,
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
     sources: &[String],
 ) -> local_path::LocalPathRoots {
     let repo_root = build_repo_root();
@@ -545,10 +608,10 @@ fn build_source_note_roots(
         resolve_workspace_root(
             bridge_state,
             settings_snapshot_state,
-            repo_root.as_ref(),
+            runtime_paths_state,
             true,
         )
-        .or_else(|| repo_root.as_ref().map(|root| root.join("workspace")))
+        .or_else(|| Some(runtime_paths_state.workspace_root().clone()))
     } else {
         None
     };
@@ -609,19 +672,13 @@ fn build_repo_root() -> Option<PathBuf> {
 
 fn resolve_workspace_root_from_snapshot(
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
-    repo_root: Option<&PathBuf>,
+    runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
 ) -> Option<PathBuf> {
     settings_snapshot_state
         .workspace_root()
         .ok()
         .flatten()
-        .and_then(|workspace_root| {
-            if workspace_root.is_absolute() {
-                Some(workspace_root)
-            } else {
-                repo_root.map(|root| root.join(workspace_root))
-            }
-        })
+        .map(|workspace_root| runtime_paths_state.resolve_workspace_setting(&workspace_root))
 }
 
 /// The desktop host prefers the cached settings snapshot, but it may still be
@@ -630,10 +687,11 @@ fn resolve_workspace_root_from_snapshot(
 fn resolve_workspace_root(
     bridge_state: &Arc<NamedPipeBridgeState>,
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
-    repo_root: Option<&PathBuf>,
+    runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
     allow_refresh: bool,
 ) -> Option<PathBuf> {
-    let workspace_root = resolve_workspace_root_from_snapshot(settings_snapshot_state, repo_root);
+    let workspace_root =
+        resolve_workspace_root_from_snapshot(settings_snapshot_state, runtime_paths_state);
     if workspace_root.is_some() || !allow_refresh {
         return workspace_root;
     }
@@ -647,7 +705,7 @@ fn resolve_workspace_root(
         );
     }
 
-    resolve_workspace_root_from_snapshot(settings_snapshot_state, repo_root)
+    resolve_workspace_root_from_snapshot(settings_snapshot_state, runtime_paths_state)
 }
 
 fn seed_desktop_settings_snapshot(
@@ -829,11 +887,13 @@ fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
 mod desktop_settings_snapshot_tests {
     use super::{
         read_task_sources_from_settings_snapshot, read_trusted_source_note_sources,
-        read_workspace_root_from_settings_snapshot, source_note_sources_drift,
-        DesktopSettingsSnapshotState,
+        read_workspace_root_from_settings_snapshot, resolve_workspace_root_from_snapshot,
+        source_note_sources_drift, DesktopSettingsSnapshotState,
     };
+    use crate::runtime_paths::DesktopRuntimePaths;
     use serde_json::json;
     use std::env;
+    use std::sync::Arc;
 
     #[test]
     fn read_workspace_root_from_settings_snapshot_reads_workspace_path() {
@@ -970,6 +1030,27 @@ mod desktop_settings_snapshot_tests {
         assert_eq!(
             state.workspace_root().expect("read workspace root"),
             Some(newer_root)
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_root_from_snapshot_maps_legacy_relative_workspace_to_runtime_root() {
+        let runtime_root = env::temp_dir().join("desktop-runtime-root");
+        let runtime_paths = Arc::new(DesktopRuntimePaths::from_runtime_root(runtime_root.clone()));
+        let state = Arc::new(DesktopSettingsSnapshotState::default());
+        state
+            .replace(json!({
+                "general": {
+                    "download": {
+                        "workspace_path": "workspace",
+                    }
+                }
+            }))
+            .expect("replace legacy workspace settings snapshot");
+
+        assert_eq!(
+            resolve_workspace_root_from_snapshot(&state, &runtime_paths),
+            Some(runtime_root.join("workspace"))
         );
     }
 }
@@ -1999,6 +2080,9 @@ fn main() {
         .manage(Arc::new(DesktopSettingsSnapshotState::default()))
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
+            let runtime_paths = runtime_paths::DesktopRuntimePaths::detect()
+                .map_err(|error| std::io::Error::other(error))?;
+            app.manage(Arc::new(runtime_paths));
             activity::install_mouse_activity_listener()
                 .map_err(|error| std::io::Error::other(error))?;
             install_shell_ball_clipboard_hooks(app.handle())
@@ -2027,6 +2111,7 @@ fn main() {
             desktop_open_local_path,
             desktop_reveal_local_path,
             desktop_sync_settings_snapshot,
+            desktop_get_runtime_defaults,
             desktop_load_source_notes,
             desktop_load_source_note_index,
             desktop_create_source_note,

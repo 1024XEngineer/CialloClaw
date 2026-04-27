@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
@@ -3898,16 +3900,28 @@ func mergeSettingsPreview(target map[string]any, patch map[string]any) {
 
 func previewNeedsRestart(currentSettings, patch map[string]any) bool {
 	generalPatch := cloneMap(mapValue(patch, "general"))
-	if len(generalPatch) == 0 {
-		return false
+	if len(generalPatch) > 0 {
+		nextLanguage, ok := generalPatch["language"]
+		if ok {
+			currentGeneral := cloneMap(mapValue(currentSettings, "general"))
+			currentLanguage, hasCurrentLanguage := currentGeneral["language"]
+			if !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage) {
+				return true
+			}
+		}
+		downloadPatch := cloneMap(mapValue(generalPatch, "download"))
+		if len(downloadPatch) > 0 {
+			nextWorkspacePath, ok := downloadPatch["workspace_path"]
+			if ok {
+				currentDownload := cloneMap(mapValue(mapValue(currentSettings, "general"), "download"))
+				currentWorkspacePath, hasCurrentWorkspacePath := currentDownload["workspace_path"]
+				if !hasCurrentWorkspacePath || !reflect.DeepEqual(currentWorkspacePath, nextWorkspacePath) {
+					return true
+				}
+			}
+		}
 	}
-	nextLanguage, ok := generalPatch["language"]
-	if !ok {
-		return false
-	}
-	currentGeneral := cloneMap(mapValue(currentSettings, "general"))
-	currentLanguage, hasCurrentLanguage := currentGeneral["language"]
-	return !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage)
+	return false
 }
 
 func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []string) string {
@@ -4776,13 +4790,13 @@ func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
 func workspacePathFromSettings(settings map[string]any) string {
 	general, ok := settings["general"].(map[string]any)
 	if !ok {
-		return "workspace"
+		return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
 	}
 	download, ok := general["download"].(map[string]any)
 	if !ok {
-		return "workspace"
+		return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
 	}
-	return stringValue(download, "workspace_path", "workspace")
+	return stringValue(download, "workspace_path", filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot())))
 }
 
 // defaultIntentMap creates a minimal default intent payload for notepad
@@ -5863,12 +5877,33 @@ func targetPathFromIntent(taskIntent map[string]any) string {
 }
 
 func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
-	normalizedRoot := strings.Trim(strings.ReplaceAll(workspaceRoot, "\\", "/"), "/")
-	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
-	if normalizedRoot == "" {
-		normalizedRoot = "workspace"
+	trimmedPath := strings.TrimSpace(filePath)
+	if trimmedPath == "" {
+		return false
 	}
-	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
+	if !filepath.IsAbs(trimmedPath) {
+		if filepath.VolumeName(trimmedPath) != "" || strings.HasPrefix(trimmedPath, "\\") || strings.HasPrefix(trimmedPath, "/") {
+			return false
+		}
+	}
+	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
+	if normalizedPath == "" {
+		return false
+	}
+	if normalizedPath == "workspace" || strings.HasPrefix(normalizedPath, "workspace/") {
+		return true
+	}
+	if filepath.IsAbs(filePath) {
+		cleanRoot := filepath.Clean(strings.TrimSpace(workspaceRoot))
+		if cleanRoot == "" {
+			return false
+		}
+		cleanPath := filepath.Clean(strings.TrimSpace(filePath))
+		rootWithSeparator := cleanRoot + string(filepath.Separator)
+		return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, rootWithSeparator)
+	}
+	cleanRelative := path.Clean(normalizedPath)
+	return cleanRelative != ".." && !strings.HasPrefix(cleanRelative, "../")
 }
 
 func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
@@ -18,12 +19,24 @@ type storageTestAdapter struct {
 
 type failingSettingsStore struct{}
 
+type staticSettingsStore struct {
+	snapshot map[string]any
+}
+
 func (failingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
 	return errors.New("settings snapshot write failed")
 }
 
 func (failingSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
 	return nil, nil
+}
+
+func (s staticSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
+	return nil
+}
+
+func (s staticSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
+	return cloneMap(s.snapshot), nil
 }
 
 func (s storageTestAdapter) DatabasePath() string {
@@ -1050,22 +1063,86 @@ func TestEngineApplyRecoveryOutcomeSetsTerminalAndNonTerminalStatus(t *testing.T
 	}
 }
 
-// TestEngineDefaultsUseWorkspaceRelativePaths verifies defaults never write
-// platform-specific drive paths.
+// TestEngineDefaultsUseWorkspaceRelativePaths verifies defaults resolve from the
+// canonical runtime root instead of repo-relative placeholders.
 func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
 	engine := NewEngine()
 
 	settings := engine.Settings()
 	general := settings["general"].(map[string]any)
 	download := general["download"].(map[string]any)
-	if download["workspace_path"] != "workspace" {
-		t.Fatalf("expected workspace_path default to be workspace, got %v", download["workspace_path"])
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace"))
+	if download["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected workspace_path default to be %q, got %v", expectedWorkspaceRoot, download["workspace_path"])
 	}
 
 	inspector := engine.InspectorConfig()
 	taskSources := inspector["task_sources"].([]string)
-	if len(taskSources) != 1 || taskSources[0] != "workspace/todos" {
-		t.Fatalf("expected task_sources to default to workspace/todos, got %v", taskSources)
+	expectedTaskSource := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "todos"))
+	if len(taskSources) != 1 || taskSources[0] != expectedTaskSource {
+		t.Fatalf("expected task_sources to default to %q, got %v", expectedTaskSource, taskSources)
+	}
+}
+
+func TestEngineWithSettingsStoreMigratesLegacyWorkspaceDefaults(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(staticSettingsStore{snapshot: map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "workspace"},
+		},
+		"task_automation": map[string]any{
+			"task_sources": []string{"workspace/todos", "workspace/review"},
+		},
+	}}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace"))
+	if download["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected legacy workspace_path to migrate to %q, got %v", expectedWorkspaceRoot, download["workspace_path"])
+	}
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{
+		filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "todos")),
+		filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "review")),
+	}) {
+		t.Fatalf("expected legacy task_sources to migrate under runtime workspace, got %+v", taskAutomation)
+	}
+	if got := serviceconfig.DefaultWorkspaceRoot(); got != filepath.Join(runtimeRoot, "workspace") {
+		t.Fatalf("expected config default workspace root to honor runtime override, got %q", got)
+	}
+}
+
+func TestEngineWithSettingsStoreRejectsWorkspaceEscapesOutsideRuntimeRoot(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(staticSettingsStore{snapshot: map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "../outside"},
+		},
+		"task_automation": map[string]any{
+			"task_sources": []string{"../outside", "workspace/todos"},
+		},
+	}}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace"))
+	if download["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected unsafe workspace_path to reset to %q, got %v", expectedWorkspaceRoot, download["workspace_path"])
+	}
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "todos"))}) {
+		t.Fatalf("expected unsafe task_sources to be dropped during migration, got %+v", taskAutomation)
 	}
 }
 

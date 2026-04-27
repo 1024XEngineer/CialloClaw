@@ -4928,8 +4928,9 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	if trustSummary["has_restore_point"] != true {
 		t.Fatalf("expected completed task to provide restore point, got %v", trustSummary["has_restore_point"])
 	}
-	if trustSummary["workspace_path"] != "workspace" {
-		t.Fatalf("expected workspace-relative path in trust summary, got %v", trustSummary["workspace_path"])
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
+	if trustSummary["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected trust summary workspace path %q, got %v", expectedWorkspaceRoot, trustSummary["workspace_path"])
 	}
 
 	quickActions := overview["quick_actions"].([]string)
@@ -11264,6 +11265,49 @@ func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
 	}
 	if _, exists := effectiveSettings["models"]; exists {
 		t.Fatalf("expected unrelated settings update to avoid attaching model metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestSettingsUpdateMarksWorkspacePathAsRestartRequired(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings workspace restart")
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(filepath.Join(t.TempDir(), "workspace-next")),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	if result["apply_mode"] != "restart_required" || result["need_restart"] != true {
+		t.Fatalf("expected workspace_path update to require restart, got %+v", result)
+	}
+}
+
+func TestIsWorkspaceRelativePathAcceptsFormalAbsoluteAndRelativeWorkspaceTargets(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	absPath := filepath.Join(workspaceRoot, "drafts", "summary.md")
+	if !isWorkspaceRelativePath("workspace/drafts/summary.md", workspaceRoot) {
+		t.Fatal("expected formal workspace namespace to stay trusted")
+	}
+	if !isWorkspaceRelativePath(absPath, workspaceRoot) {
+		t.Fatal("expected absolute path inside runtime workspace to stay trusted")
+	}
+	if !isWorkspaceRelativePath("drafts/summary.md", workspaceRoot) {
+		t.Fatal("expected relative workspace path to stay trusted")
+	}
+	if isWorkspaceRelativePath(filepath.Join(t.TempDir(), "outside", "summary.md"), workspaceRoot) {
+		t.Fatal("expected absolute path outside runtime workspace to be rejected")
+	}
+	if isWorkspaceRelativePath("../outside/summary.md", workspaceRoot) {
+		t.Fatal("expected upward relative path to be rejected")
+	}
+	if isWorkspaceRelativePath(`C:temp\summary.md`, workspaceRoot) {
+		t.Fatal("expected volume-prefixed relative path to be rejected")
+	}
+	if isWorkspaceRelativePath(`\temp\summary.md`, workspaceRoot) {
+		t.Fatal("expected root-relative path to be rejected")
 	}
 }
 

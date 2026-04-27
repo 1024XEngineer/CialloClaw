@@ -16,7 +16,7 @@ import {
 } from "@/platform/desktopSourceNotes";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
-import { loadSettings } from "@/services/settingsService";
+import { hydrateDesktopRuntimeDefaults, loadSettings } from "@/services/settingsService";
 import type {
   SourceNoteDocument,
   SourceNoteIndexEntry,
@@ -115,6 +115,7 @@ export function areDesktopSourceNotesAvailable() {
  * Loads the current task-source configuration used by the note inspector.
  */
 export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGetResult> {
+  await hydrateDesktopRuntimeDefaults();
   try {
     const remoteConfig = await withTimeout(
       getTaskInspectorConfig({ request_meta: createRequestMeta("note_source_config") }),
@@ -123,8 +124,8 @@ export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGe
     const cachedTaskSources = loadCachedTaskSources();
 
     // The notes page should honor the persisted task-source list shown in the
-    // desktop settings snapshot when the backend still falls back to the
-    // workspace-relative default.
+    // desktop settings snapshot when the backend still replays a legacy
+    // workspace-relative source list from older snapshots.
     if (shouldPreferCachedTaskSources(remoteConfig.task_sources, cachedTaskSources)) {
       return {
         ...remoteConfig,

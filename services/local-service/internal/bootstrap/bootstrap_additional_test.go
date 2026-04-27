@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -87,6 +88,116 @@ func TestPersistPluginManifestsHandlesNilAndSuccessPaths(t *testing.T) {
 	}
 	if err := persistPluginManifests(context.Background(), service, &plugin.Service{}); err != nil {
 		t.Fatalf("expected empty plugin registry to be ignored, got %v", err)
+	}
+}
+
+func TestMigrateLegacyRuntimeDefaultsIfNeededCopiesLegacyWorkspaceAndDatabase(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	legacyRoot := t.TempDir()
+	legacyWorkspaceRoot := filepath.Join(legacyRoot, "workspace")
+	legacyDatabasePath := filepath.Join(legacyRoot, "data", "cialloclaw.db")
+	legacySecretPath := secretStorePathForDatabase(legacyDatabasePath)
+	if err := os.MkdirAll(filepath.Join(legacyWorkspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("mkdir legacy workspace: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyDatabasePath), 0o755); err != nil {
+		t.Fatalf("mkdir legacy database dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyWorkspaceRoot, "todos", "inbox.md"), []byte("- [ ] migrate me\n"), 0o644); err != nil {
+		t.Fatalf("write legacy workspace file: %v", err)
+	}
+	if err := os.WriteFile(legacyDatabasePath, []byte("legacy-db"), 0o644); err != nil {
+		t.Fatalf("write legacy database file: %v", err)
+	}
+	if err := os.WriteFile(legacySecretPath, []byte("legacy-secret"), 0o644); err != nil {
+		t.Fatalf("write legacy secret store file: %v", err)
+	}
+
+	cfg := config.Load()
+	if err := migrateLegacyRuntimeDefaultsIfNeeded(cfg, []string{legacyRoot}); err != nil {
+		t.Fatalf("migrateLegacyRuntimeDefaultsIfNeeded returned error: %v", err)
+	}
+	if migratedWorkspace, err := os.ReadFile(filepath.Join(cfg.WorkspaceRoot, "todos", "inbox.md")); err != nil || string(migratedWorkspace) != "- [ ] migrate me\n" {
+		t.Fatalf("expected migrated workspace file, content=%q err=%v", string(migratedWorkspace), err)
+	}
+	if migratedDatabase, err := os.ReadFile(cfg.DatabasePath); err != nil || string(migratedDatabase) != "legacy-db" {
+		t.Fatalf("expected migrated database file, content=%q err=%v", string(migratedDatabase), err)
+	}
+	if migratedSecret, err := os.ReadFile(secretStorePathForDatabase(cfg.DatabasePath)); err != nil || string(migratedSecret) != "legacy-secret" {
+		t.Fatalf("expected migrated secret store file, content=%q err=%v", string(migratedSecret), err)
+	}
+}
+
+func TestBuildRuntimeMigrationPlanSkipsCustomAndMissingRoots(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	defaultCfg := config.Load()
+	if _, ok := buildRuntimeMigrationPlan(defaultCfg, []string{t.TempDir()}); ok {
+		t.Fatal("expected missing legacy roots to skip migration plan")
+	}
+	customCfg := defaultCfg
+	customCfg.WorkspaceRoot = filepath.Join(t.TempDir(), "custom-workspace")
+	if _, ok := buildRuntimeMigrationPlan(customCfg, []string{t.TempDir()}); ok {
+		t.Fatal("expected custom workspace root to skip default-path migration")
+	}
+	legacyRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(legacyRoot, "workspace"), 0o755); err != nil {
+		t.Fatalf("mkdir legacy workspace: %v", err)
+	}
+	plan, ok := buildRuntimeMigrationPlan(defaultCfg, []string{"", legacyRoot, legacyRoot})
+	if !ok {
+		t.Fatal("expected legacy runtime plan to be created")
+	}
+	if plan.legacyWorkspaceRoot != filepath.Join(legacyRoot, "workspace") || plan.targetWorkspaceRoot != defaultCfg.WorkspaceRoot {
+		t.Fatalf("unexpected migration plan: %+v", plan)
+	}
+	if plan.targetSecretPath != secretStorePathForDatabase(defaultCfg.DatabasePath) {
+		t.Fatalf("expected secret-store target path to follow database path, got %+v", plan)
+	}
+}
+
+func TestCopyDirectoryIfMissingRetriesIntoPartiallyCreatedWorkspace(t *testing.T) {
+	sourceRoot := filepath.Join(t.TempDir(), "legacy-workspace")
+	targetRoot := filepath.Join(t.TempDir(), "runtime-workspace")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("mkdir source workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "todos", "inbox.md"), []byte("- [ ] recover partial migration\n"), 0o644); err != nil {
+		t.Fatalf("write source workspace file: %v", err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatalf("mkdir target workspace: %v", err)
+	}
+
+	if err := copyDirectoryIfMissing(sourceRoot, targetRoot); err != nil {
+		t.Fatalf("copyDirectoryIfMissing returned error: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(targetRoot, "todos", "inbox.md"))
+	if err != nil || string(content) != "- [ ] recover partial migration\n" {
+		t.Fatalf("expected retry-safe directory copy to fill missing file, content=%q err=%v", string(content), err)
+	}
+}
+
+func TestLegacyRuntimeRootsForCompatibilityPrefersExecutableDirectory(t *testing.T) {
+	legacyExecutableRoot := filepath.Join(t.TempDir(), "legacy-exe")
+	legacyWorkingRoot := filepath.Join(t.TempDir(), "legacy-cwd")
+	originalGetwd := getWorkingDirectoryForBootstrap
+	originalExecutable := getExecutablePathForBootstrap
+	defer func() {
+		getWorkingDirectoryForBootstrap = originalGetwd
+		getExecutablePathForBootstrap = originalExecutable
+	}()
+	getExecutablePathForBootstrap = func() (string, error) {
+		return filepath.Join(legacyExecutableRoot, "local-service.exe"), nil
+	}
+	getWorkingDirectoryForBootstrap = func() (string, error) {
+		return legacyWorkingRoot, nil
+	}
+
+	roots := legacyRuntimeRootsForCompatibility()
+	if len(roots) != 2 || roots[0] != filepath.Clean(legacyExecutableRoot) || roots[1] != filepath.Clean(legacyWorkingRoot) {
+		t.Fatalf("expected compatibility roots to prefer executable directory, got %+v", roots)
 	}
 }
 
