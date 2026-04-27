@@ -250,6 +250,7 @@ func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 		"- item A",
 		"- [ ] verify changelog",
 		"- [ ] update docs",
+		"due: keep visible",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "release.md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
@@ -269,9 +270,58 @@ func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 	if item["title"] != "Release prep" {
 		t.Fatalf("expected heading to remain the note title, got %+v", item)
 	}
-	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs"
+	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible"
 	if item["note_text"] != expectedNoteText {
 		t.Fatalf("expected paragraph breaks and list markers to remain, got %+v", item)
+	}
+}
+
+func TestServiceRunPreservesSerializedChecklistBodyMarkers(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Release prep",
+		"",
+		"  first paragraph",
+		"",
+		"  second paragraph",
+		"  - item A",
+		"  - [ ] verify changelog",
+		"  - [ ] update docs",
+		"  due: keep visible",
+		"- [ ] Separate top-level",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "release.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected serialized body checkboxes plus one top-level item, got %+v", result.NotepadItems)
+	}
+	first := result.NotepadItems[0]
+	if first["title"] != "Release prep" {
+		t.Fatalf("expected first serialized block to keep its title, got %+v", first)
+	}
+	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible"
+	if first["note_text"] != expectedNoteText {
+		t.Fatalf("expected editor-saved checklist body markers to remain body text, got %+v", first)
+	}
+	if result.NotepadItems[1]["title"] != "Separate top-level" {
+		t.Fatalf("expected unindented checklist row to remain a separate item, got %+v", result.NotepadItems[1])
 	}
 }
 

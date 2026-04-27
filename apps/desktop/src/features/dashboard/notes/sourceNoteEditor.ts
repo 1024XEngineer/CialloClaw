@@ -26,7 +26,12 @@ function normalizeLineEndings(value: string) {
 }
 
 function parseChecklistLine(line: string) {
-  const match = SOURCE_NOTE_CHECKLIST_PATTERN.exec(line.trim());
+  const candidate = line.trimEnd();
+  if (/^\s/.test(candidate)) {
+    return null;
+  }
+
+  const match = SOURCE_NOTE_CHECKLIST_PATTERN.exec(candidate);
   if (!match) {
     return null;
   }
@@ -42,6 +47,21 @@ function normalizeNaturalNoteLine(line: string) {
   const trimmed = trimmedRight.trim();
   if (trimmed.startsWith("#")) {
     return trimmed.replace(/^#+\s*/, "").trim();
+  }
+  return trimmedRight;
+}
+
+function serializeChecklistBodyLine(line: string) {
+  return line === "" ? "" : `  ${line}`;
+}
+
+function normalizeChecklistBodyLine(line: string) {
+  const trimmedRight = line.trimEnd();
+  if (trimmedRight.startsWith("  ")) {
+    return trimmedRight.slice(2);
+  }
+  if (trimmedRight.startsWith("\t")) {
+    return trimmedRight.slice(1);
   }
   return trimmedRight;
 }
@@ -381,8 +401,8 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
 
   normalizedLines.forEach((line, index) => {
     const checklist = parseChecklistLine(line);
-    // Once a natural block has started, markdown checklist lines belong to the
-    // handwritten note body instead of starting separate structured blocks.
+    // Only top-level checklist rows start structured blocks; indented rows are
+    // body content written by the editor for round-trip-safe natural notes.
     if (checklist && (current || !hasNaturalNoteContent(naturalLines))) {
       flushNatural(index);
       flushCurrent();
@@ -423,9 +443,9 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       return;
     }
 
-    const metadata = splitMetadataLine(line.trim());
+    const metadata = current.bodyLines.length === 0 ? splitMetadataLine(line.trim()) : null;
     if (!metadata) {
-      current.bodyLines.push(line.trimEnd());
+      current.bodyLines.push(normalizeChecklistBodyLine(line));
       return;
     }
 
@@ -478,7 +498,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
         current.extraMetadata.push(metadata);
         return;
       default:
-        current.bodyLines.push(line.trimEnd());
+        current.bodyLines.push(normalizeChecklistBodyLine(line));
     }
   });
 
@@ -577,7 +597,7 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
       .map((entry) => `${entry.key}: ${entry.value}`),
   ].filter((line): line is string => Boolean(line));
   const bodyText = normalizedDraft.noteText;
-  const bodyLines = bodyText === "" ? [] : ["", ...bodyText.split("\n")];
+  const bodyLines = bodyText === "" ? [] : ["", ...bodyText.split("\n").map(serializeChecklistBodyLine)];
   const checklistMarker = normalizedDraft.checked ? "[x]" : "[ ]";
   const blockLines = [
     `- ${checklistMarker} ${normalizedDraft.title}`,

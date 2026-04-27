@@ -381,7 +381,11 @@ export function partitionNoteItemsByBucket(items: NoteListItem[]): Record<TodoBu
 }
 
 function parseSourceChecklistLine(line: string) {
-  const trimmed = line.trim();
+  const trimmed = line.trimEnd();
+  if (/^\s/.test(trimmed)) {
+    return null;
+  }
+
   const match = /^[-*]\s+\[( |x|X)\]\s+(.+)$/.exec(trimmed);
   if (!match) {
     return null;
@@ -795,8 +799,8 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
   lines.forEach((line, index) => {
     const checklist = parseSourceChecklistLine(line);
-    // Natural fallback cards must keep markdown checkboxes inside the note
-    // body, matching the backend inspector and source editor parsers.
+    // Only top-level checklist rows start fallback cards; indented rows stay in
+    // the current card body to match editor serialization and backend parsing.
     if (checklist && (current || !hasSourceNaturalNoteContent(naturalLines))) {
       flushNatural();
       flushCurrent();
@@ -838,10 +842,11 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
     const trimmed = line.trim();
     if (trimmed === "") {
+      current.bodyLines.push("");
       return;
     }
 
-    const metadata = splitSourceMetadataLine(trimmed);
+    const metadata = current.bodyLines.length === 0 ? splitSourceMetadataLine(trimmed) : null;
     if (!metadata) {
       current.bodyLines.push(trimmed);
       return;

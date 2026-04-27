@@ -401,8 +401,9 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		if current == nil {
 			return
 		}
-		if len(noteLines) > 0 && stringValue(current, "note_text") == "" {
-			current["note_text"] = strings.Join(noteLines, "\n")
+		trimmedNoteLines := trimNaturalNotepadBlankLines(noteLines)
+		if len(trimmedNoteLines) > 0 && stringValue(current, "note_text") == "" {
+			current["note_text"] = strings.Join(trimmedNoteLines, "\n")
 		}
 		items = append(items, normalizeParsedNotepadItem(current, sourcePath, now))
 		current = nil
@@ -427,10 +428,10 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 
 	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// A started natural note owns markdown checklist lines in its body; only
-		// top-level checklist lines create structured notepad items.
+		// Only top-level checklist rows create structured notepad items; indented
+		// rows belong to the current body so editor-saved notes round-trip.
 		if current != nil || !hasNaturalNotepadContent(naturalLines) {
-			checked, title, ok := parseChecklistLine(trimmed)
+			checked, title, ok := parseChecklistLine(line)
 			if ok {
 				flushNatural()
 				flushCurrent()
@@ -456,10 +457,13 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			continue
 		}
 		if trimmed == "" {
+			noteLines = append(noteLines, "")
 			continue
 		}
-		if handled := applyNotepadMetadataLine(current, trimmed, now); handled {
-			continue
+		if len(noteLines) == 0 {
+			if handled := applyNotepadMetadataLine(current, trimmed, now); handled {
+				continue
+			}
 		}
 		noteLines = append(noteLines, trimmed)
 	}
@@ -483,7 +487,10 @@ func buildSourceBackedNotepadItem(sourcePath string, line int, title string, che
 }
 
 func parseChecklistLine(line string) (bool, string, bool) {
-	trimmed := strings.TrimSpace(line)
+	trimmed := strings.TrimRight(line, " \t\r")
+	if strings.HasPrefix(trimmed, " ") || strings.HasPrefix(trimmed, "\t") {
+		return false, "", false
+	}
 	switch {
 	case strings.HasPrefix(trimmed, "- [ ] "), strings.HasPrefix(trimmed, "* [ ] "):
 		return false, strings.TrimSpace(trimmed[6:]), true
