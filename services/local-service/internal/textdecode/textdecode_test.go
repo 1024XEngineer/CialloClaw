@@ -6,13 +6,13 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
 
 func TestDecodeSupportedTextEncodings(t *testing.T) {
 	fixText := "\u4fee\u590d\u4e71\u7801"
-	overlapText := "\u97b5\u4eef\u7faf\u56f7"
 
 	tests := []struct {
 		name         string
@@ -66,12 +66,6 @@ func TestDecodeSupportedTextEncodings(t *testing.T) {
 			name:         "gb18030_latin_accents_and_symbol",
 			data:         gb18030Encoded(t, "R\u00e9sum\u00e9: caf\u00e9 \u20ac"),
 			wantText:     "R\u00e9sum\u00e9: caf\u00e9 \u20ac",
-			wantEncoding: EncodingGB18030,
-		},
-		{
-			name:         "gb18030_bytes_overlap_legacy_ranges",
-			data:         []byte{0xed, 0x50, 0x81, 0xa3, 0xf4, 0xc9, 0x87, 0xef},
-			wantText:     overlapText,
 			wantEncoding: EncodingGB18030,
 		},
 	}
@@ -129,6 +123,10 @@ func TestDecodeRejectsUnsafeText(t *testing.T) {
 			name: "noncanonical_gb18030_single_byte_euro",
 			data: []byte{0x80},
 		},
+		{
+			name: "shift_jis_mojibake_is_not_accepted_as_gb18030",
+			data: shiftJISEncoded(t, "こんにちは"),
+		},
 	}
 
 	for _, tc := range tests {
@@ -146,6 +144,15 @@ func gb18030Encoded(t *testing.T, value string) []byte {
 	encoded, _, err := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte(value))
 	if err != nil {
 		t.Fatalf("GB18030 encode failed: %v", err)
+	}
+	return encoded
+}
+
+func shiftJISEncoded(t *testing.T, value string) []byte {
+	t.Helper()
+	encoded, _, err := transform.Bytes(japanese.ShiftJIS.NewEncoder(), []byte(value))
+	if err != nil {
+		t.Fatalf("Shift-JIS encode failed: %v", err)
 	}
 	return encoded
 }

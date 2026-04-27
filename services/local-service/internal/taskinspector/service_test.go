@@ -251,6 +251,41 @@ func TestServiceRunSkipsBinaryAttachmentsAndKeepsTextSources(t *testing.T) {
 	}
 }
 
+func TestServiceRunIgnoresUnsupportedTextTaskSourceFiles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] markdown item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.txt"), []byte("- [ ] text item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "config.json"), []byte("{\n  \"checklist\": [\"- [ ] should stay ignored\"]\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if !result.SourceSynced {
+		t.Fatalf("expected supported task source files to sync cleanly, got %+v", result)
+	}
+	if result.Summary["parsed_files"] != 2 {
+		t.Fatalf("expected only markdown and txt task sources to be counted, got %+v", result.Summary)
+	}
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected unsupported text files to stay ignored, got %+v", result.NotepadItems)
+	}
+}
+
 func TestTaskInspectorHelperFunctions(t *testing.T) {
 	if countChecklistItems("- [ ] one\n* [x] two\nplain text") != 2 {
 		t.Fatal("expected checklist counter to include open and closed items")
@@ -275,6 +310,9 @@ func TestTaskInspectorHelperFunctions(t *testing.T) {
 	}
 	if !isSupportedTextTaskSourceFile("todos/notes.txt") || !isSupportedTextTaskSourceFile("todos/checklist") {
 		t.Fatal("expected supported text source helper to preserve text compatibility")
+	}
+	if isSupportedTextTaskSourceFile("todos/config.json") {
+		t.Fatal("expected unsupported text source helper to reject non-task file types")
 	}
 	tags := splitTagList("urgent, weekly, notes")
 	if len(tags) != 3 || tags[1] != "weekly" {

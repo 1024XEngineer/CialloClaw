@@ -121,6 +121,9 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any, bool)
 			if shouldSkipTaskSourceAttachment(currentPath) {
 				return nil
 			}
+			if !isSupportedTextTaskSourceFile(currentPath) {
+				return nil
+			}
 			content, err := fs.ReadFile(s.fileSystem, currentPath)
 			if err != nil {
 				sourcesReady = false
@@ -169,7 +172,7 @@ func isSupportedTextTaskSourceFile(currentPath string) bool {
 	case "", ".markdown", ".md", ".text", ".txt":
 		return true
 	default:
-		return !shouldSkipTaskSourceAttachment(currentPath)
+		return false
 	}
 }
 
