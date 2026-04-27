@@ -3832,6 +3832,8 @@ test("shell-ball mascot supports passive rendering outside the floating ball hos
 
   assert.match(markup, /shell-ball-mascot/);
   assert.match(markup, /data-state="processing"/);
+  assert.match(markup, /shell-ball-mascot__crest-anchor/);
+  assert.match(markup, /shell-ball-mascot__face-anchor/);
 });
 
 test("shell-ball mascot surfaces a microphone marker while voice capture is active", () => {
@@ -3867,6 +3869,7 @@ test("shell-ball mascot shows a selection marker above the ball when text select
 
 test("shell-ball mascot exposes edge and corner posture states", () => {
   const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
+  const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
   const topMarkup = renderToStaticMarkup(
     createElement(ShellBallMascot, {
       visualState: "idle",
@@ -3925,12 +3928,18 @@ test("shell-ball mascot exposes edge and corner posture states", () => {
   assert.match(bottomRightDraggingMarkup, /data-shell-ball-dragging="true"/);
   assert.match(topRevealedMarkup, /data-edge-dock-revealed="true"/);
   assert.match(bottomRevealedMarkup, /data-edge-dock-revealed="true"/);
+  assert.match(mascotSource, /function getShellBallAmbientLoopProfile\(input:/);
+  assert.match(mascotSource, /const ambientLoopEnabled = !prefersReducedMotion && !isDragging && !isSettling;/);
+  assert.match(mascotSource, /shell-ball-mascot__crest-anchor/);
+  assert.match(mascotSource, /shell-ball-mascot__face-anchor/);
   assert.match(mascotSource, /if \(input\.edgeDockSide === "top_left"\) \{/);
   assert.match(mascotSource, /if \(input\.edgeDockSide === "top_right"\) \{/);
   assert.match(mascotSource, /if \(input\.edgeDockSide === "bottom_left"\) \{/);
   assert.match(mascotSource, /if \(input\.edgeDockSide === "bottom_right"\) \{/);
   assert.match(mascotSource, /shiftY: input\.edgeDockRevealed \? 0 : -8,/);
   assert.match(mascotSource, /shiftY: input\.edgeDockRevealed \? 0 : 4,/);
+  assert.match(shellBallStyles, /\.shell-ball-mascot__crest-anchor \{/);
+  assert.match(shellBallStyles, /\.shell-ball-mascot__face-anchor \{/);
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

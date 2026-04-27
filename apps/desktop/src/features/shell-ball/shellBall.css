@@ -1224,6 +1224,10 @@ body[data-app-window="shell-ball"],
   display: flex;
   gap: 0.17rem;
   justify-content: center;
+}
+
+.shell-ball-mascot__crest-anchor {
+  display: flex;
   left: 50%;
   position: absolute;
   top: -0.85rem;
@@ -1257,15 +1261,19 @@ body[data-app-window="shell-ball"],
   transform: rotate(20deg);
 }
 
-.shell-ball-mascot__face {
-  align-items: center;
-  display: grid;
-  justify-items: center;
+.shell-ball-mascot__face-anchor {
   left: 50%;
   position: absolute;
   top: 2.7rem;
   transform: translateX(-50%);
   z-index: 2;
+}
+
+.shell-ball-mascot__face {
+  align-items: center;
+  display: grid;
+  justify-items: center;
+  position: relative;
 }
 
 .shell-ball-mascot__eyes {
