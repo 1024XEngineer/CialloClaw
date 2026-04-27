@@ -1,8 +1,17 @@
-import type { ApprovalDecision, ApprovalRequest, BubbleMessage, DeliveryResult, InputContext, TaskUpdatedNotification } from "@cialloclaw/protocol";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  BubbleMessage,
+  DeliveryResult,
+  InputContext,
+  TaskRuntimeNotification,
+  TaskSteeredNotification,
+  TaskUpdatedNotification,
+} from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { respondSecurityDetailed } from "@/rpc/methods";
-import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
+import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
 import {
   SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME,
@@ -79,6 +88,7 @@ type QueuedDeliveryReadyNotification = {
 };
 
 type QueuedTaskUpdatedNotification = TaskUpdatedNotification;
+type ShellBallRuntimeNotification = TaskRuntimeNotification | TaskSteeredNotification;
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -415,6 +425,34 @@ function createShellBallApprovalPendingReply(approvalRequest: ApprovalRequest) {
 }
 
 /**
+ * Runtime notifications stay observation-only in shell-ball. The formal task
+ * status still comes from task.updated, while selected runtime events become
+ * lightweight local bubbles for the current task conversation.
+ */
+export function createShellBallRuntimeObservationReply(payload: ShellBallRuntimeNotification) {
+  if ("message" in payload) {
+    const message = payload.message.trim();
+    return message === "" ? null : message;
+  }
+
+  const stopReason = payload.stop_reason?.trim();
+
+  if (payload.event.type === "loop.retrying") {
+    return stopReason === undefined || stopReason === ""
+      ? "Retrying the current task step."
+      : `Retrying the current task step after ${stopReason}.`;
+  }
+
+  if (payload.event.type === "loop.failed") {
+    return stopReason === undefined || stopReason === ""
+      ? "Task runtime failed. Open task detail for more context."
+      : `Task runtime failed: ${stopReason}. Open task detail for more context.`;
+  }
+
+  return null;
+}
+
+/**
  * Pending approval bubbles keep one approval id in shell-ball-local state so
  * the floating surface can submit the formal decision RPC without inventing a
  * second approval object outside the backend contract.
@@ -671,6 +709,7 @@ export function applyShellBallBubbleAction(
 
 export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const [bubbleItems, setBubbleItems] = useState(() => sortShellBallBubbleItemsByTimestamp(cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS)));
+  const [activeShellBallTaskId, setActiveShellBallTaskId] = useState<string | null>(null);
   const appendedVoiceBubbleSequenceRef = useRef(0);
   const handledFinalizedSpeechPayloadRef = useRef<string | null>(null);
   const bubbleTurnIndexRef = useRef(0);
@@ -706,6 +745,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const approvalPendingBubbleKeysRef = useRef(new Set<string>());
+  const runtimeObservationBubbleKeysRef = useRef(new Set<string>());
   // Approval notifications can win the race against `agent.input.submit`.
   // Keep them task-scoped until the submit result binds the formal task id to
   // this shell-ball turn, then replay them into the local bubble timeline.
@@ -863,6 +903,42 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     void autoOpenShellBallDeliveryResultRef.current(input.taskId, input.deliveryResult);
   }, [allocateBubbleTurnIndex, bindTaskToBubbleTurn, getTaskBubbleTurnIndex]);
 
+  const appendRuntimeObservationBubble = useCallback((taskId: string, payload: ShellBallRuntimeNotification) => {
+    const bubbleText = createShellBallRuntimeObservationReply(payload);
+    if (bubbleText === null) {
+      return;
+    }
+
+    const bubbleKey = "message" in payload
+      ? `${taskId}:task.steered:${bubbleText}`
+      : `${taskId}:${payload.event.event_id}`;
+
+    if (runtimeObservationBubbleKeysRef.current.has(bubbleKey)) {
+      return;
+    }
+
+    runtimeObservationBubbleKeysRef.current.add(bubbleKey);
+
+    const turnIndex = getTaskBubbleTurnIndex(taskId) ?? allocateBubbleTurnIndex();
+    bindTaskToBubbleTurn(taskId, turnIndex);
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallTextBubbleItem({
+          role: "agent",
+          text: bubbleText,
+          bubbleType: "status",
+          createdAt: "message" in payload ? new Date().toISOString() : payload.event.created_at,
+          taskId,
+          turnIndex,
+          turnPhase: 2,
+        }),
+      ]),
+    );
+    revealBubbleRegionRef.current();
+  }, [allocateBubbleTurnIndex, bindTaskToBubbleTurn, getTaskBubbleTurnIndex]);
+
   const registerShellBallTask = useCallback((
     taskId: string,
     turnIndex?: number,
@@ -870,6 +946,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   ) => {
     shellBallTaskIdsRef.current.add(taskId);
     activeShellBallTaskIdRef.current = taskId;
+    setActiveShellBallTaskId((currentTaskId) => currentTaskId === taskId ? currentTaskId : taskId);
 
     if (turnIndex !== undefined) {
       shellBallTaskTurnIndexRef.current.set(taskId, turnIndex);
@@ -1875,6 +1952,16 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       });
     });
   }, [appendDeliveryReadyBubble]);
+
+  useEffect(() => {
+    if (activeShellBallTaskId === null) {
+      return;
+    }
+
+    return subscribeTaskRuntime(activeShellBallTaskId, (payload) => {
+      appendRuntimeObservationBubble(activeShellBallTaskId, payload);
+    });
+  }, [activeShellBallTaskId, appendRuntimeObservationBubble]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
