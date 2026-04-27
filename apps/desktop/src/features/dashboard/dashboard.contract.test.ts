@@ -1425,6 +1425,46 @@ test("source note editor keeps metadata-shaped natural lines visible", () => {
   assert.equal(blocks[0]?.bucket, "upcoming");
 });
 
+test("source note editor keeps natural paragraph breaks and list markers", () => {
+  const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
+  const note = {
+    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- item B\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "Release prep");
+  assert.equal(blocks[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A\n- item B");
+
+  const updated = upsertSourceNoteEditorBlock(note, {
+    agentSuggestion: "",
+    bucket: "upcoming",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: blocks[0]?.noteText ?? "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: blocks[0]?.sourceLine ?? null,
+    sourcePath: note.path,
+    title: blocks[0]?.title ?? "",
+    updatedAt: "",
+  });
+
+  assert.equal(updated.content, "- [ ] Release prep\n\nfirst paragraph\n\nsecond paragraph\n- item A\n- item B\n");
+});
+
 test("source note editor persists selected bucket before source path exists", () => {
   const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
 
@@ -1592,6 +1632,24 @@ test("source note fallback keeps metadata-shaped natural lines visible", () => {
   assert.equal(items[0]?.item.note_text, "note: remember rollback");
   assert.equal(items[0]?.item.bucket, "upcoming");
   assert.ok(items[0]?.item.due_at);
+});
+
+test("source note fallback keeps natural paragraph breaks and list markers", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- item B\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Release prep");
+  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- item B");
 });
 
 test("source note fallback derives generic natural source items as upcoming", () => {

@@ -372,23 +372,46 @@ function parseSourceChecklistLine(line: string) {
 }
 
 function normalizeSourceNaturalNoteLine(line: string) {
-  const withoutHeading = line.trim().replace(/^#+\s*/, "");
-  return withoutHeading.replace(/^[-*+]\s+/, "").trim();
+  const trimmedRight = line.trimEnd();
+  const trimmed = trimmedRight.trim();
+  if (trimmed.startsWith("#")) {
+    return trimmed.replace(/^#+\s*/, "").trim();
+  }
+  return trimmedRight;
 }
 
 function isSourceNaturalHeadingLine(line: string) {
   return line.trim().startsWith("#") && normalizeSourceNaturalNoteLine(line) !== "";
 }
 
+function hasSourceNaturalNoteContent(lines: string[]) {
+  return lines.some((line) => line.trim() !== "");
+}
+
+// Blank lines inside natural notes are content; only outer blank boundaries are trimmed.
+function trimSourceNaturalBlankLines(lines: string[]) {
+  let start = 0;
+  while (start < lines.length && lines[start]?.trim() === "") {
+    start += 1;
+  }
+
+  let end = lines.length;
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end -= 1;
+  }
+
+  return lines.slice(start, end);
+}
+
 function splitSourceNaturalNoteContent(lines: string[]) {
-  const normalized = lines.map(normalizeSourceNaturalNoteLine).filter(Boolean);
+  const normalized = trimSourceNaturalBlankLines(lines.map(normalizeSourceNaturalNoteLine));
   if (normalized.length === 0) {
     return null;
   }
 
   return {
-    noteText: normalized.slice(1).join("\n"),
-    title: normalized[0],
+    noteText: trimSourceNaturalBlankLines(normalized.slice(1)).join("\n"),
+    title: normalized[0]?.trim() ?? "",
   };
 }
 
@@ -772,12 +795,14 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     if (!current) {
-      if (isSourceNaturalHeadingLine(line) && naturalLines.length > 0) {
+      if (isSourceNaturalHeadingLine(line) && hasSourceNaturalNoteContent(naturalLines)) {
         flushNatural();
       }
       const naturalLine = normalizeSourceNaturalNoteLine(line);
-      if (naturalLine === "") {
-        flushNatural();
+      if (naturalLine.trim() === "") {
+        if (hasSourceNaturalNoteContent(naturalLines)) {
+          naturalLines.push("");
+        }
         return;
       }
       if (naturalStartLine === null) {
