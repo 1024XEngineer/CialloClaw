@@ -106,7 +106,22 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	}
 
 	mimeType, textType := detectReadFileTypes(readPath, content)
-	decodedContent, decodeWarning := decodeReadFileContent(content)
+	decodedContent, err := decodeReadFileContent(content)
+	if err != nil {
+		rawOutput := map[string]any{
+			"path":      safePath,
+			"mime_type": mimeType,
+			"text_type": textType,
+		}
+		return &tools.ToolResult{
+			ToolName:      t.meta.Name,
+			RawOutput:     rawOutput,
+			SummaryOutput: buildReadFileSummary(rawOutput, textdecode.UnsupportedEncodingUserMessage),
+			Error: &tools.ToolResultError{
+				Message: textdecode.UnsupportedEncodingUserMessage,
+			},
+		}, fmt.Errorf("%w: %w", tools.ErrToolExecutionFailed, err)
+	}
 	rawOutput := map[string]any{
 		"path":      safePath,
 		"content":   decodedContent,
@@ -117,7 +132,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: buildReadFileSummary(rawOutput, decodeWarning),
+		SummaryOutput: buildReadFileSummary(rawOutput, ""),
 	}, nil
 }
 
@@ -190,12 +205,12 @@ func detectReadFileTypes(path string, content []byte) (string, string) {
 	return mimeType, inferReadFileTextType(mimeType)
 }
 
-func decodeReadFileContent(content []byte) (string, string) {
+func decodeReadFileContent(content []byte) (string, error) {
 	decoded, err := textdecode.Decode(content)
 	if err != nil {
-		return "", textdecode.UnsupportedEncodingUserMessage
+		return "", err
 	}
-	return decoded.Text, ""
+	return decoded.Text, nil
 }
 
 func inferReadFileMimeType(path string, content []byte) string {

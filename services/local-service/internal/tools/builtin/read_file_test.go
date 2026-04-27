@@ -150,7 +150,7 @@ func TestReadFileToolDecodesWorkspaceTextEncodings(t *testing.T) {
 	}
 }
 
-func TestReadFileToolReturnsExplicitMessageForUnsafeText(t *testing.T) {
+func TestReadFileToolFailsForUnsafeText(t *testing.T) {
 	workspace := filepath.Clean("D:/workspace")
 	platform := newStubReadFilePlatform(workspace)
 	target := filepath.Join(workspace, "notes", "unsafe.txt")
@@ -158,11 +158,17 @@ func TestReadFileToolReturnsExplicitMessageForUnsafeText(t *testing.T) {
 	tool := NewReadFileTool()
 
 	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform}, map[string]any{"path": target})
-	if err != nil {
-		t.Fatalf("Execute should return an explicit tool result instead of an execution error: %v", err)
+	if !errors.Is(err, tools.ErrToolExecutionFailed) {
+		t.Fatalf("expected unsafe text to fail the tool call, got %v", err)
 	}
-	if content, _ := result.RawOutput["content"].(string); content != "" {
-		t.Fatalf("expected unsafe content to stay empty, got %q", content)
+	if result == nil || result.Error == nil {
+		t.Fatalf("expected tool result with machine-readable error, got %+v", result)
+	}
+	if !strings.Contains(result.Error.Message, "UTF-8") {
+		t.Fatalf("expected decode warning in tool error, got %+v", result.Error)
+	}
+	if _, ok := result.RawOutput["content"]; ok {
+		t.Fatalf("failed read_file raw output must not look like an empty file: %+v", result.RawOutput)
 	}
 	if _, ok := result.RawOutput["decode_warning"]; ok {
 		t.Fatalf("read_file raw output must not expose undocumented decode_warning: %+v", result.RawOutput)
