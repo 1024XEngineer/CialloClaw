@@ -62,6 +62,7 @@ const TRAY_MENU_QUIT_ID: &str = "quit-app";
 const DESKTOP_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
 static DESKTOP_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static ONBOARDING_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 const DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS: u64 = 1_500;
 
 #[cfg(windows)]
@@ -1095,6 +1096,114 @@ fn desktop_open_or_focus_control_panel(app: tauri::AppHandle) -> Result<(), Stri
     Ok(())
 }
 
+fn ensure_onboarding_window(app: &tauri::AppHandle) {
+    if app.get_webview_window(ONBOARDING_WINDOW_LABEL).is_some() {
+        return;
+    }
+
+    if ONBOARDING_WINDOW_CREATION_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let create_result = WebviewWindowBuilder::new(
+            &handle,
+            ONBOARDING_WINDOW_LABEL,
+            WebviewUrl::App("onboarding.html".into()),
+        )
+        .title("CialloClaw Onboarding")
+        .inner_size(460.0, 340.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .shadow(false)
+        // Keep the card window hidden until the frontend finishes its first
+        // layout, then promote it as a normal interactive topmost surface.
+        .visible(false)
+        .focused(false)
+        .build();
+
+        ONBOARDING_WINDOW_CREATION_IN_PROGRESS.store(false, Ordering::SeqCst);
+
+        match create_result {
+            Ok(window) => {
+                if let Ok(hwnd) = window.hwnd() {
+                    unsafe {
+                        set_forward_mouse_messages(hwnd, false);
+                        set_window_ignore_cursor_events(hwnd, false);
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("failed to create onboarding window: {error}");
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn desktop_open_or_focus_onboarding(app: tauri::AppHandle) -> Result<(), String> {
+    ensure_onboarding_window(&app);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn desktop_promote_onboarding(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(ONBOARDING_WINDOW_LABEL)
+        .ok_or_else(|| format!("webview window not found: {ONBOARDING_WINDOW_LABEL}"))?;
+
+    if let Err(error) = window.unminimize() {
+        eprintln!("failed to unminimize onboarding window: {error}");
+    }
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get onboarding hwnd: {error}"))?;
+
+    unsafe {
+        // Promote the card-sized onboarding window in one native operation.
+        // SWP_NOACTIVATE avoids stealing focus from the workflow surface while
+        // still making the first visible frame reliable on cold launches.
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+        .map_err(|error| format!("failed to promote onboarding window: {error}"))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn desktop_promote_onboarding(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(ONBOARDING_WINDOW_LABEL)
+        .ok_or_else(|| format!("webview window not found: {ONBOARDING_WINDOW_LABEL}"))?;
+
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to unminimize onboarding window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show onboarding window: {error}"))?;
+
+    Ok(())
+}
+
 fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Result<(), String> {
     app.emit_to(
         SHELL_BALL_WINDOW_LABEL,
@@ -1720,13 +1829,42 @@ unsafe fn update_onboarding_native_tracking() {
     set_forward_mouse_messages(hwnd, should_track);
 
     if !should_track {
-        set_window_ignore_cursor_events(hwnd, false);
+        set_window_ignore_cursor_events(hwnd, true);
         if let Ok(mut state) = ONBOARDING_INTERACTIVE_STATE.lock() {
             if state.hwnd == Some(hwnd_value) {
-                state.current_ignore = Some(false);
+                state.current_ignore = Some(true);
             }
         }
     }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn onboarding_reset_interactive_state(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("failed to get onboarding hwnd: {error}"))?;
+
+        unsafe {
+            set_forward_mouse_messages(hwnd, false);
+            set_window_ignore_cursor_events(hwnd, true);
+        }
+    }
+
+    let mut state = ONBOARDING_INTERACTIVE_STATE
+        .lock()
+        .map_err(|_| "onboarding interactive state lock poisoned".to_string())?;
+    state.hwnd = None;
+    state.regions.clear();
+    state.current_ignore = None;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn onboarding_reset_interactive_state(_app: tauri::AppHandle) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1777,6 +1915,29 @@ unsafe extern "system" fn mousemove_forward(
     }
 
     CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn onboarding_set_ignore_cursor_events(app: tauri::AppHandle, ignore: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(ONBOARDING_WINDOW_LABEL) {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("failed to get onboarding hwnd: {error}"))?;
+
+        unsafe {
+            set_forward_mouse_messages(hwnd, false);
+            set_window_ignore_cursor_events(hwnd, ignore);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn onboarding_set_ignore_cursor_events(_app: tauri::AppHandle, _ignore: bool) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -2018,12 +2179,16 @@ fn main() {
             shell_ball_set_ignore_cursor_events,
             shell_ball_get_mouse_position,
             shell_ball_set_interactive_regions,
+            onboarding_set_ignore_cursor_events,
             onboarding_set_interactive_regions,
+            onboarding_reset_interactive_state,
             shell_ball_set_press_lock,
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,
             desktop_open_or_focus_control_panel,
+            desktop_open_or_focus_onboarding,
+            desktop_promote_onboarding,
             desktop_open_local_path,
             desktop_reveal_local_path,
             desktop_sync_settings_snapshot,
