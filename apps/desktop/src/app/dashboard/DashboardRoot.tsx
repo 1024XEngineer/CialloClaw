@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
 import {
   loadDashboardHomeData,
@@ -301,6 +301,13 @@ type DashboardHomeStatusShellProps = {
   onRetry: (() => void) | null;
 };
 
+const dashboardHomeStatusShellModules = [
+  { label: "任务", route: resolveDashboardModuleRoutePath("tasks") },
+  { label: "便签", route: resolveDashboardModuleRoutePath("notes") },
+  { label: "镜子", route: resolveDashboardModuleRoutePath("memory") },
+  { label: "安全", route: resolveDashboardModuleRoutePath("safety") },
+] as const;
+
 function DashboardHomeStatusShell({ title, message, onRetry }: DashboardHomeStatusShellProps) {
   return (
     <main className="dashboard-home dashboard-home--status">
@@ -308,6 +315,13 @@ function DashboardHomeStatusShell({ title, message, onRetry }: DashboardHomeStat
         <p className="dashboard-page__eyebrow">dashboard</p>
         <h1 className="dashboard-home__status-title">{title}</h1>
         <p className="dashboard-home__status-copy">{message}</p>
+        <div className="dashboard-home__status-links">
+          {dashboardHomeStatusShellModules.map((module) => (
+            <Link key={module.route} className="dashboard-home__status-link" to={module.route}>
+              打开{module.label}
+            </Link>
+          ))}
+        </div>
         {onRetry ? (
           <button className="dashboard-home__status-action" onClick={onRetry} type="button">
             重试

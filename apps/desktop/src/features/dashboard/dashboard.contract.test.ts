@@ -1368,6 +1368,8 @@ test("dashboard root no longer falls back to mock home data when the live query 
   assert.match(dashboardRootSource, /const dashboardHomeData = dashboardHomeQuery\.data \?\? null;/);
   assert.match(dashboardRootSource, /DashboardHomeStatusShell/);
   assert.match(dashboardRootSource, /sequences=\{dashboardHomeData\?\.voiceSequences \?\? \[\]\}/);
+  assert.match(dashboardRootSource, /dashboardHomeStatusShellModules/);
+  assert.match(dashboardRootSource, /to=\{module\.route\}/);
   assert.doesNotMatch(dashboardHomeServiceSource, /export function getDashboardHomeFallbackData/);
   assert.match(dashboardHomeServiceSource, /Promise\.allSettled/);
 });
