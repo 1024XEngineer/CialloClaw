@@ -1,5 +1,4 @@
 import type { AgentSettingsUpdateParams, ApplyMode, RequestMeta } from "@cialloclaw/protocol";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { updateSettings as requestUpdateSettings } from "@/rpc/methods";
 import { loadSettings, saveSettings, type DesktopSettings } from "@/services/settingsService";
 import {
@@ -170,10 +169,6 @@ function persistPatchedSettings(patch: DashboardSettingsPatch) {
   return nextSettings;
 }
 
-function inferUpdatedKeys(patch: DashboardSettingsPatch) {
-  return (Object.keys(patch) as Array<keyof DashboardSettingsPatch>).filter((key) => patch[key] !== undefined).map((key) => String(key));
-}
-
 function inferDashboardSettingsRefreshScope(patch: DashboardSettingsPatch): DashboardSettingsSnapshotScope {
   const touchedScopes = new Set<DashboardSettingsSnapshotScope>();
 
@@ -209,53 +204,22 @@ function inferDashboardSettingsRefreshScope(patch: DashboardSettingsPatch): Dash
  */
 export async function updateDashboardSettings(
   patch: DashboardSettingsPatch,
-  source: DashboardSettingsSource = "rpc",
+  _source: DashboardSettingsSource = "rpc",
 ): Promise<DashboardSettingsMutationResult> {
-  if (source === "mock") {
-    persistPatchedSettings(patch);
+  const response = await requestUpdateSettings(buildRpcSettingsPatch(patch));
+  const refreshScope = inferDashboardSettingsRefreshScope(patch);
 
-    return {
-      snapshot: await loadDashboardSettingsSnapshot("mock"),
-      applyMode: "immediate",
-      needRestart: false,
-      updatedKeys: inferUpdatedKeys(patch),
-      source: "mock",
-      persisted: true,
-    };
-  }
+  persistPatchedSettings(response.effective_settings as DashboardSettingsPatch);
+  const snapshot = await loadDashboardSettingsSnapshot("rpc", refreshScope);
 
-  try {
-    const response = await requestUpdateSettings(buildRpcSettingsPatch(patch));
-    const refreshScope = inferDashboardSettingsRefreshScope(patch);
-
-    persistPatchedSettings(response.effective_settings as DashboardSettingsPatch);
-    const snapshot = await loadDashboardSettingsSnapshot("rpc", refreshScope);
-
-    return {
-      snapshot,
-      applyMode: response.apply_mode,
-      needRestart: response.need_restart,
-      updatedKeys: response.updated_keys,
-      source: snapshot.source,
-      persisted: true,
-    };
-  } catch (error) {
-    if (!isRpcChannelUnavailable(error)) {
-      throw error;
-    }
-
-    logRpcMockFallback("dashboard settings update", error);
-    const snapshot = await loadDashboardSettingsSnapshot("mock");
-
-    return {
-      snapshot,
-      applyMode: "immediate",
-      needRestart: false,
-      updatedKeys: [],
-      source: snapshot.source,
-      persisted: false,
-    };
-  }
+  return {
+    snapshot,
+    applyMode: response.apply_mode,
+    needRestart: response.need_restart,
+    updatedKeys: response.updated_keys,
+    source: snapshot.source,
+    persisted: true,
+  };
 }
 
 /**
@@ -270,15 +234,13 @@ export function formatDashboardSettingsMutationFeedback(result: DashboardSetting
     return `${subject}未保存，当前仅显示本地快照。`;
   }
 
-  const suffix = result.source === "mock" ? " 当前使用本地快照。" : "";
-
   if (result.needRestart || result.applyMode === "restart_required") {
-    return `${subject}已保存，重启桌面端后生效。${suffix}`;
+    return `${subject}已保存，重启桌面端后生效。`;
   }
 
   if (result.applyMode === "next_task_effective") {
-    return `${subject}已保存，将在下一任务周期生效。${suffix}`;
+    return `${subject}已保存，将在下一任务周期生效。`;
   }
 
-  return `${subject}已更新。${suffix}`;
+  return `${subject}已更新。`;
 }

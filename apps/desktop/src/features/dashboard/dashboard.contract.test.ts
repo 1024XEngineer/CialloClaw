@@ -490,7 +490,7 @@ function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMe
     delete requireFn.cache[snapshotModulePath];
 
     return requireFn(modulePath) as {
-      updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc" | "mock") => Promise<{
+      updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc") => Promise<{
         applyMode: string;
         needRestart: boolean;
         persisted: boolean;
@@ -528,7 +528,7 @@ function loadDashboardSettingsSnapshotModule(rpcMethods?: Pick<DashboardContract
 
     return requireFn(modulePath) as {
       loadDashboardSettingsSnapshot: (
-        source?: "rpc" | "mock",
+        source?: "rpc",
         scope?: AgentSettingsGetParams["scope"],
       ) => Promise<{
         source: string;
@@ -1834,9 +1834,51 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
 });
 
-test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
+test("dashboard settings mutation persists rpc-effective settings into the local snapshot", async () => {
   const { loadSettings } = loadSettingsServiceModule();
-  const { updateDashboardSettings } = loadDashboardSettingsMutationModule();
+  const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
+    updateSettings: async () => ({
+      apply_mode: "immediate",
+      need_restart: false,
+      updated_keys: ["general.download.ask_before_save_each_file", "memory.enabled", "memory.lifecycle", "models.budget_auto_downgrade"],
+      effective_settings: {
+        general: {
+          download: {
+            ask_before_save_each_file: false,
+          },
+        },
+        memory: {
+          enabled: false,
+          lifecycle: "session",
+        },
+        models: {
+          budget_auto_downgrade: false,
+        },
+      },
+    }),
+    getSettingsDetailed: async () => ({
+      data: {
+        settings: {
+          general: {
+            download: {
+              ask_before_save_each_file: false,
+            },
+          },
+          memory: {
+            enabled: false,
+            lifecycle: "session",
+          },
+          models: {
+            budget_auto_downgrade: false,
+          },
+        },
+      },
+      meta: {
+        server_time: "2026-04-28T09:30:00Z",
+      },
+      warnings: [],
+    }),
+  });
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
   const localStorage = {
@@ -1873,14 +1915,18 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
           lifecycle: "session",
         },
       },
-      "mock",
     );
 
-    assert.equal(result.source, "mock");
+    assert.equal(result.source, "rpc");
     assert.equal(result.applyMode, "immediate");
     assert.equal(result.needRestart, false);
     assert.equal(result.persisted, true);
-    assert.deepEqual(result.updatedKeys.sort(), ["general", "memory", "models"]);
+    assert.deepEqual(result.updatedKeys.sort(), [
+      "general.download.ask_before_save_each_file",
+      "memory.enabled",
+      "memory.lifecycle",
+      "models.budget_auto_downgrade",
+    ]);
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.memory.lifecycle, "session");
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, false);
@@ -1978,6 +2024,56 @@ test("dashboard settings snapshot merges scoped memory payloads onto the local b
       Object.assign(globalThis, { window: originalWindow });
     }
   }
+});
+
+test("dashboard settings snapshot keeps transport failures visible instead of returning a local fallback snapshot", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+  const { loadDashboardSettingsSnapshot } = loadDashboardSettingsSnapshotModule({
+    getSettingsDetailed: async () => {
+      throw transportError;
+    },
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    await assert.rejects(() => loadDashboardSettingsSnapshot("rpc", "memory"), /transport is not wired/i);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard settings shared services no longer expose product mock snapshot branches", () => {
+  const snapshotSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardSettingsSnapshot.ts"), "utf8");
+  const mutationSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardSettingsMutation.ts"), "utf8");
+
+  assert.doesNotMatch(snapshotSource, /source === "mock"/);
+  assert.doesNotMatch(snapshotSource, /getInitialDashboardSettingsSnapshot/);
+  assert.doesNotMatch(snapshotSource, /logRpcMockFallback/);
+  assert.doesNotMatch(mutationSource, /source === "mock"/);
+  assert.doesNotMatch(mutationSource, /loadDashboardSettingsSnapshot\("mock"\)/);
+  assert.doesNotMatch(mutationSource, /logRpcMockFallback/);
 });
 
 test("dashboard settings mutation reloads only the touched memory scope after rpc writes", async () => {
@@ -3065,15 +3161,18 @@ test("mirror overview can reuse a refreshed settings snapshot without reloading 
 
 test("mirror app reuses the mutation snapshot instead of triggering a second mirror overview reload", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+  const mirrorDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorDetailContent.tsx"), "utf8");
 
   assert.match(mirrorAppSource, /applyMirrorSettingsSnapshot\(current, result\.snapshot\)/);
   assert.doesNotMatch(
     mirrorAppSource,
     /const handleSettingsUpdate = useCallback\([\s\S]*loadMirrorOverviewData\(dataMode\)/,
   );
+  assert.doesNotMatch(mirrorDetailSource, /local fallback/);
+  assert.doesNotMatch(mirrorDetailSource, /本地设置回退快照/);
 });
 
-test("dashboard settings mutation keeps fallback snapshots read-only when the RPC transport is unavailable", async () => {
+test("dashboard settings mutation keeps transport failures visible and does not mutate local settings", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
     updateSettings: async () => {
@@ -3102,19 +3201,14 @@ test("dashboard settings mutation keeps fallback snapshots read-only when the RP
 
   try {
     const before = loadSettings();
-    const result = await updateDashboardSettings({
+    await assert.rejects(() => updateDashboardSettings({
       memory: {
         enabled: false,
         lifecycle: "session",
       },
-    });
+    }), /transport is not wired/i);
     const after = loadSettings();
 
-    assert.equal(result.source, "mock");
-    assert.equal(result.persisted, false);
-    assert.deepEqual(result.updatedKeys, []);
-    assert.equal(result.snapshot.settings.memory.enabled, before.settings.memory.enabled);
-    assert.equal(result.snapshot.settings.memory.lifecycle, before.settings.memory.lifecycle);
     assert.equal(after.settings.memory.enabled, before.settings.memory.enabled);
     assert.equal(after.settings.memory.lifecycle, before.settings.memory.lifecycle);
   } finally {
