@@ -351,7 +351,10 @@ fn collect_existing_markdown_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, St
             continue;
         }
         if !root.is_dir() {
-            return Err(format!("task source is not a directory: {}", root.display()));
+            return Err(format!(
+                "task source is not a directory: {}",
+                root.display()
+            ));
         }
 
         collect_markdown_files(root, &mut result)?;
@@ -554,7 +557,8 @@ fn normalize_new_source_note_block(content: &str) -> String {
 fn append_source_note_block(existing_content: &str, new_block_content: &str) -> String {
     let normalized_existing = existing_content.replace("\r\n", "\n");
     let trimmed_existing = normalized_existing.trim_end_matches('\n');
-    let normalized_block = normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
+    let normalized_block =
+        normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
     let trimmed_block = normalized_block.trim_end_matches('\n');
 
     if trimmed_existing.trim().is_empty() {

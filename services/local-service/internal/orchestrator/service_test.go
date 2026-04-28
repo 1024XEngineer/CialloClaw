@@ -52,6 +52,11 @@ type stubToolCallingModelClient struct {
 	generateToolCallsCount int
 }
 
+type blockingModelClient struct {
+	started  chan string
+	released chan struct{}
+}
+
 type failingExecutionBackend struct {
 	err error
 }
@@ -747,6 +752,40 @@ func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, plug
 	}
 }
 
+func (s *blockingModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.GenerateTextResponse{}, ctx.Err()
+}
+
+func (s *blockingModelClient) GenerateToolCalls(ctx context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.ToolCallResult{}, ctx.Err()
+}
+
 func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengine.Engine {
 	t.Helper()
 	engine, err := runengine.NewEngineWithStore(taskStore)
@@ -1076,6 +1115,92 @@ func TestServiceSubmitInputUsesSuggestedWorkspaceDeliveryForLongAgentLoopInput(t
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))); err != nil {
 		t.Fatalf("expected workspace delivery file to exist, got %v", err)
+	}
+}
+
+func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
+	modelService := model.NewService(modelConfig(), &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	})
+	service, _, _ := newTestServiceWithModelService(t, modelService)
+	service.executionTimeout = 20 * time.Millisecond
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_execution_timeout",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please rewrite this draft.",
+		},
+		"intent": map[string]any{
+			"name":      "rewrite",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "failed" {
+		t.Fatalf("expected timed out execution to fail the task, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "执行失败：本地任务执行超时，请重试。" {
+		t.Fatalf("expected timeout bubble text, got %+v", bubble)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected timed out execution not to return delivery result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestServiceSubmitInputReturnsImmediatelyForExplicitBubbleDelivery(t *testing.T) {
+	blockingClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	modelService := model.NewService(modelConfig(), blockingClient)
+	service, _, _ := newTestServiceWithModelService(t, modelService)
+	service.executionTimeout = 50 * time.Millisecond
+
+	start := time.Now()
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_async_bubble_delivery",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+		"options": map[string]any{
+			"preferred_delivery": "bubble",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected explicit bubble delivery submit to return quickly, took %s", time.Since(start))
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "processing" {
+		t.Fatalf("expected async bubble submit to return processing task, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" || bubble["text"] != "已收到，正在处理。" {
+		t.Fatalf("expected async bubble submit to expose processing bubble, got %+v", bubble)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected async bubble submit not to return delivery result yet, got %+v", result["delivery_result"])
+	}
+
+	select {
+	case <-blockingClient.released:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected async bubble submit background execution to finish after timeout")
 	}
 }
 
@@ -12291,6 +12416,58 @@ func TestServiceSubmitInputDoesNotContinuePausedTask(t *testing.T) {
 	secondTask := followUpResult["task"].(map[string]any)
 	if secondTask["task_id"] == activeTask.TaskID {
 		t.Fatalf("expected paused task to reject implicit continuation, got %+v", secondTask)
+	}
+}
+
+func TestServiceSubmitInputFallsBackWhenContinuationModelTimesOut(t *testing.T) {
+	originalTimeout := taskContinuationModelTimeout
+	taskContinuationModelTimeout = 20 * time.Millisecond
+	defer func() {
+		taskContinuationModelTimeout = originalTimeout
+	}()
+
+	modelService := model.NewService(modelConfig(), &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	})
+	service, _, _ := newTestServiceWithModelService(t, modelService)
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_timeout_continuation",
+		Title:       "Investigate the current failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+
+	start := time.Now()
+	result, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Translate this note into English",
+			"input_mode": "text",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected continuation timeout fallback to return quickly, took %s", time.Since(start))
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected timed out continuation classifier to fall back to a new task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected fallback task to stay in confirming_intent, got %+v", task)
 	}
 }
 

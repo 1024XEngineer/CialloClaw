@@ -138,6 +138,7 @@ function loadShellBallTaskOutputService() {
 const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
+const SHELL_BALL_SUBMIT_STALL_NOTICE_MS = 15_000;
 const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";
 const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";
 const SHELL_BALL_WINDOW_COMMAND = "窗口";
@@ -205,6 +206,26 @@ function replaceShellBallPendingBubble(
 ) {
   const nextItems = items.filter((item) => item.bubble.bubble_id !== pendingBubbleId);
   return nextItem === undefined ? sortShellBallBubbleItemsByTimestamp(nextItems) : sortShellBallBubbleItemsByTimestamp([...nextItems, nextItem]);
+}
+
+function markShellBallPendingBubbleAsStalled(items: ShellBallBubbleItem[], pendingBubbleId: string) {
+  return sortShellBallBubbleItemsByTimestamp(items.map((item) => {
+    if (item.bubble.bubble_id !== pendingBubbleId) {
+      return item;
+    }
+
+    return {
+      ...item,
+      bubble: {
+        ...item.bubble,
+        text: "还在处理中…如果长时间没有结果，请重试或到任务面板查看。",
+      },
+      desktop: {
+        ...item.desktop,
+        presentationHint: undefined,
+      },
+    } satisfies ShellBallBubbleItem;
+  }));
 }
 
 export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem, right: ShellBallBubbleItem) {
@@ -552,6 +573,10 @@ function getShellBallTaskErrorText(error: unknown) {
 
   if (error instanceof Error) {
     const message = error.message.trim();
+    const normalizedMessage = message.toLowerCase();
+    if (normalizedMessage.includes("timed out waiting for local service response") || normalizedMessage.includes("named pipe response wait timed out")) {
+      return "任务提交超时：本地服务长时间未返回结果，请重试。";
+    }
     if (message !== "") {
       return `任务提交失败：${message}`;
     }
@@ -1752,6 +1777,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
      * formal delivery auto-open consistently.
      */
     const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+    const pendingBubbleId = pendingAgentBubbleItem.bubble.bubble_id;
+    const stallTimeout = window.setTimeout(() => {
+      setBubbleItems((currentItems) => markShellBallPendingBubbleAsStalled(currentItems, pendingBubbleId));
+      revealBubbleRegionRef.current();
+    }, SHELL_BALL_SUBMIT_STALL_NOTICE_MS);
 
     void Promise.resolve(handlersRef.current.onSubmitVoiceText(finalizedSpeechPayload))
       .then((result) => {
@@ -1805,6 +1835,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         revealBubbleRegion();
       })
       .finally(() => {
+        window.clearTimeout(stallTimeout);
         finishPendingTaskRegistration();
         handlersRef.current.onFinalizedSpeechHandled();
       });
@@ -2149,14 +2180,20 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         );
         revealBubbleRegion();
 
-        let result: ShellBallInputSubmitResult | null | void;
+		let result: ShellBallInputSubmitResult | null | void;
 
-        const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+		const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+		const pendingBubbleId = pendingAgentBubbleItem.bubble.bubble_id;
+		const stallTimeout = window.setTimeout(() => {
+		  setBubbleItems((currentItems) => markShellBallPendingBubbleAsStalled(currentItems, pendingBubbleId));
+		  revealBubbleRegionRef.current();
+		}, SHELL_BALL_SUBMIT_STALL_NOTICE_MS);
 
-        try {
-          result = await handlersRef.current.onSubmitText();
-        } catch (error) {
-          console.warn("shell-ball text submit failed", error);
+		try {
+		  result = await handlersRef.current.onSubmitText();
+		} catch (error) {
+		  window.clearTimeout(stallTimeout);
+		  console.warn("shell-ball text submit failed", error);
           setBubbleItems((currentItems) =>
             replaceShellBallPendingBubble(
               currentItems,
@@ -2174,8 +2211,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           break;
         }
 
-        if (isShellBallInputSubmitResult(result)) {
-          registerShellBallTask(result.task.task_id, turnIndex, result.task.status);
+		if (isShellBallInputSubmitResult(result)) {
+		  window.clearTimeout(stallTimeout);
+		  registerShellBallTask(result.task.task_id, turnIndex, result.task.status);
           setBubbleItems((currentItems) => {
             const nextItems = currentItems.map((item) =>
               item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
@@ -2204,11 +2242,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           break;
         }
 
-        setBubbleItems((currentItems) =>
-          replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
-        );
-        finishPendingTaskRegistration();
-        break;
+		setBubbleItems((currentItems) =>
+		  replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+		);
+		window.clearTimeout(stallTimeout);
+		finishPendingTaskRegistration();
+		break;
       }
       case "primary_click":
         handlersRef.current.onPrimaryClick();

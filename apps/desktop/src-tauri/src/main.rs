@@ -14,12 +14,15 @@ use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 #[cfg(windows)]
 use once_cell::sync::Lazy;
@@ -45,7 +48,7 @@ use windows::Win32::{
 
 type JsonChannel = Channel<Value>;
 
-const NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
+const DEFAULT_NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
 const CONTROL_PANEL_WINDOW_LABEL: &str = "control-panel";
 const DASHBOARD_WINDOW_LABEL: &str = "dashboard";
 const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
@@ -60,6 +63,13 @@ const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
 const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
 const DESKTOP_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
+const LOCAL_SERVICE_LOG_FILE_NAME: &str = "local-service-sidecar.log";
+const LOCAL_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(20);
+const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
+const LOCAL_SERVICE_REQUEST_TIMEOUT: Duration = Duration::from_secs(100);
+const LOCAL_SERVICE_PIPE_BUSY_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
+const LOCAL_SERVICE_PIPE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(40);
+static LOCAL_SERVICE_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static DESKTOP_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 const DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS: u64 = 1_500;
@@ -81,6 +91,7 @@ struct BridgeSession {
 }
 
 struct NamedPipeBridgeState {
+    pipe_name: Mutex<String>,
     session: Mutex<Option<BridgeSession>>,
     pending: Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>,
     subscriptions: Mutex<HashMap<String, HashMap<u32, JsonChannel>>>,
@@ -90,6 +101,7 @@ struct NamedPipeBridgeState {
 impl Default for NamedPipeBridgeState {
     fn default() -> Self {
         Self {
+            pipe_name: Mutex::new(DEFAULT_NAMED_PIPE_PATH.to_string()),
             session: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             subscriptions: Mutex::new(HashMap::new()),
@@ -169,8 +181,34 @@ impl DesktopSettingsSnapshotState {
 }
 
 impl NamedPipeBridgeState {
+    /// configure_pipe_name updates the runtime pipe path before the renderer
+    /// issues any requests, allowing packaged builds to avoid global pipe name
+    /// collisions with other desktop sessions.
+    fn configure_pipe_name(&self, pipe_name: String) -> Result<(), String> {
+        let mut configured_pipe_name = self
+            .pipe_name
+            .lock()
+            .map_err(|_| "named pipe name lock poisoned".to_string())?;
+        *configured_pipe_name = pipe_name;
+
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|_| "named pipe session lock poisoned".to_string())?;
+        *session = None;
+
+        Ok(())
+    }
+
+    fn pipe_name(&self) -> Result<String, String> {
+        self.pipe_name
+            .lock()
+            .map(|pipe_name| pipe_name.clone())
+            .map_err(|_| "named pipe name lock poisoned".to_string())
+    }
+
     fn request(self: &Arc<Self>, payload: Value) -> Result<Value, String> {
-        self.request_internal(payload, None)
+        self.request_internal(payload, Some(LOCAL_SERVICE_REQUEST_TIMEOUT))
     }
 
     fn request_with_timeout(
@@ -186,6 +224,11 @@ impl NamedPipeBridgeState {
         payload: Value,
         timeout: Option<Duration>,
     ) -> Result<Value, String> {
+        let method = extract_request_method(&payload)?;
+        if should_use_isolated_named_pipe_request(&method) {
+            return self.request_via_isolated_connection(payload, timeout);
+        }
+
         let request_id = extract_request_id(&payload)?;
         let session = self.ensure_session()?;
         let (response_tx, response_rx) = mpsc::channel();
@@ -231,6 +274,41 @@ impl NamedPipeBridgeState {
         }
     }
 
+    /// request_via_isolated_connection keeps short control-panel style reads off
+    /// the shared streaming session so a long-running shell-ball task cannot
+    /// delay unrelated settings fetches behind the same pipe connection.
+    fn request_via_isolated_connection(
+        self: &Arc<Self>,
+        payload: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, String> {
+        let pipe_name = self.pipe_name()?;
+        let request_id = extract_request_id(&payload)?;
+        let (response_tx, response_rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = send_isolated_named_pipe_request(&pipe_name, &request_id, payload);
+            let _ = response_tx.send(result);
+        });
+
+        match timeout {
+            Some(timeout) => response_rx
+                .recv_timeout(timeout)
+                .map_err(|error| match error {
+                    mpsc::RecvTimeoutError::Timeout => format!(
+                        "isolated named pipe response wait timed out after {}ms",
+                        timeout.as_millis()
+                    ),
+                    mpsc::RecvTimeoutError::Disconnected => {
+                        "isolated named pipe response wait failed: channel disconnected".to_string()
+                    }
+                })?,
+            None => response_rx
+                .recv()
+                .map_err(|error| format!("isolated named pipe response wait failed: {error}"))?,
+        }
+    }
+
     fn subscribe(self: &Arc<Self>, topic: String, channel: JsonChannel) -> Result<u32, String> {
         self.ensure_session()?;
 
@@ -273,11 +351,9 @@ impl NamedPipeBridgeState {
             return Ok(session);
         }
 
-        let stream = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(NAMED_PIPE_PATH)
-            .map_err(|error| format!("failed to open named pipe {NAMED_PIPE_PATH}: {error}"))?;
+        let pipe_name = self.pipe_name()?;
+
+        let stream = open_named_pipe_with_retry(&pipe_name, "shared")?;
 
         let reader = stream
             .try_clone()
@@ -346,15 +422,273 @@ impl NamedPipeBridgeState {
     }
 }
 
+/// LocalServiceSidecarState retains the spawned Go service child so the desktop
+/// host can keep it alive during runtime and terminate it during shutdown.
+struct LocalServiceSidecarState {
+    child: Mutex<Option<CommandChild>>,
+}
+
+impl Default for LocalServiceSidecarState {
+    fn default() -> Self {
+        Self {
+            child: Mutex::new(None),
+        }
+    }
+}
+
+impl LocalServiceSidecarState {
+    fn is_running(&self) -> Result<bool, String> {
+        self.child
+            .lock()
+            .map(|child| child.is_some())
+            .map_err(|_| "local service sidecar lock poisoned".to_string())
+    }
+
+    fn store(&self, child: CommandChild) -> Result<(), String> {
+        let mut guard = self
+            .child
+            .lock()
+            .map_err(|_| "local service sidecar lock poisoned".to_string())?;
+        *guard = Some(child);
+        Ok(())
+    }
+
+    fn clear(&self) {
+        if let Ok(mut guard) = self.child.lock() {
+            *guard = None;
+        }
+    }
+
+    fn stop(&self) -> Result<(), String> {
+        let mut guard = self
+            .child
+            .lock()
+            .map_err(|_| "local service sidecar lock poisoned".to_string())?;
+
+        if let Some(child) = guard.take() {
+            child
+                .kill()
+                .map_err(|error| format!("failed to stop local service sidecar: {error}"))?;
+        }
+
+        Ok(())
+    }
+}
+
+/// resolve_required_path normalizes a host-side filesystem path before it is
+/// forwarded to the bundled Go service as a CLI argument.
+fn resolve_required_path(path: PathBuf, label: &str) -> Result<String, String> {
+    let resolved = path.to_string_lossy().trim().to_string();
+    if resolved.is_empty() {
+        return Err(format!("failed to resolve {label}"));
+    }
+    Ok(resolved)
+}
+
+/// derive_local_service_pipe_name uses the per-user application data directory
+/// as a stable input so packaged desktop builds do not collide with other local
+/// CialloClaw sessions that may already own the default global pipe name.
+fn derive_local_service_pipe_name(app_data_dir: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in app_data_dir.bytes() {
+        hash ^= byte.to_ascii_lowercase() as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    format!(r"\\.\pipe\cialloclaw-rpc-{hash:016x}")
+}
+
+/// append_local_service_log writes lightweight startup diagnostics into the
+/// user data directory so packaged failures can be investigated without a console.
+fn append_local_service_log(app: &tauri::AppHandle, message: &str) {
+    let Ok(app_data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+
+    let log_dir = app_data_dir.join("logs");
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+
+    let lock = LOCAL_SERVICE_LOG_WRITE_LOCK.get_or_init(|| Mutex::new(()));
+    let Ok(_guard) = lock.lock() else {
+        return;
+    };
+
+    let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join(LOCAL_SERVICE_LOG_FILE_NAME))
+    else {
+        return;
+    };
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let _ = writeln!(file, "[{timestamp}] {message}");
+}
+
+/// start_local_service_sidecar boots the bundled Go service before the desktop
+/// renderer starts issuing JSON-RPC requests against the named pipe bridge.
+fn start_local_service_sidecar(
+    app: &tauri::AppHandle,
+    sidecar_state: &Arc<LocalServiceSidecarState>,
+    named_pipe_path: &str,
+) -> Result<bool, String> {
+    if sidecar_state.is_running()? {
+        append_local_service_log(app, "local service sidecar is already running");
+        return Ok(true);
+    }
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data dir: {error}"))?;
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|error| format!("failed to create app data dir: {error}"))?;
+    let app_data_dir_arg = resolve_required_path(app_data_dir, "app data dir")?;
+    append_local_service_log(
+        app,
+        &format!(
+            "starting local service sidecar with data_dir={app_data_dir_arg} named_pipe={named_pipe_path}"
+        ),
+    );
+
+    let sidecar_command = match app.shell().sidecar("local-service") {
+        Ok(command) => command,
+        Err(error) => {
+            if cfg!(debug_assertions) {
+                eprintln!("local service sidecar is unavailable in this debug session: {error}");
+                append_local_service_log(
+                    app,
+                    &format!("local service sidecar unavailable in debug session: {error}"),
+                );
+                return Ok(false);
+            }
+
+            return Err(format!("failed to resolve local service sidecar: {error}"));
+        }
+    };
+
+    let (mut rx, child) = sidecar_command
+        .args([
+            "--data-dir",
+            app_data_dir_arg.as_str(),
+            "--named-pipe",
+            named_pipe_path,
+            "--debug-http",
+            "127.0.0.1:0",
+        ])
+        .spawn()
+        .map_err(|error| format!("failed to start local service sidecar: {error}"))?;
+    sidecar_state.store(child)?;
+
+    let sidecar_app_handle = app.clone();
+    let tracked_state = Arc::clone(sidecar_state);
+    tauri::async_runtime::spawn(async move {
+        // Drain sidecar process events so stdout/stderr cannot block the child,
+        // and release the tracked handle once the process exits.
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Terminated(payload) => {
+                    append_local_service_log(
+                        &sidecar_app_handle,
+                        &format!("local service sidecar terminated: {:?}", payload),
+                    );
+                    tracked_state.clear();
+                    break;
+                }
+                CommandEvent::Error(error) => {
+                    append_local_service_log(
+                        &sidecar_app_handle,
+                        &format!("local service sidecar error: {error}"),
+                    );
+                }
+                _ => {}
+            }
+        }
+    });
+
+    Ok(true)
+}
+
+/// wait_for_local_service_ready blocks the renderer bootstrap until the named
+/// pipe becomes reachable, avoiding first-load request races in packaged builds.
+fn wait_for_local_service_ready(
+    app: &tauri::AppHandle,
+    bridge_state: &Arc<NamedPipeBridgeState>,
+) -> Result<(), String> {
+    let start = Instant::now();
+    let mut last_error = String::from("local service did not become ready");
+
+    while start.elapsed() < LOCAL_SERVICE_READY_TIMEOUT {
+        match bridge_state.ensure_session() {
+            Ok(_) => {
+                append_local_service_log(app, "local service named pipe became ready");
+                return Ok(());
+            }
+            Err(error) => {
+                last_error = error;
+                thread::sleep(LOCAL_SERVICE_READY_RETRY_DELAY);
+            }
+        }
+    }
+
+    append_local_service_log(
+        app,
+        &format!("timed out waiting for local service readiness: {last_error}"),
+    );
+    Err(format!(
+        "timed out waiting for local service readiness: {last_error}"
+    ))
+}
+
 #[tauri::command]
 async fn named_pipe_request(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     payload: Value,
 ) -> Result<Value, String> {
+    let request_method = extract_request_method(&payload).unwrap_or_else(|_| "unknown".to_string());
+    let request_id = extract_request_id(&payload).unwrap_or_else(|_| "unknown".to_string());
+    let request_mode = if should_use_isolated_named_pipe_request(&request_method) {
+        "isolated"
+    } else {
+        "shared"
+    };
+    let started_at = Instant::now();
+    append_local_service_log(
+        &app,
+        &format!(
+            "named pipe request started: method={request_method} id={request_id} mode={request_mode}"
+        ),
+    );
+
     let state = Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || state.request(payload))
+    let result = tauri::async_runtime::spawn_blocking(move || state.request(payload))
         .await
-        .map_err(|error| format!("named pipe bridge task failed: {error}"))?
+        .map_err(|error| format!("named pipe bridge task failed: {error}"))?;
+
+    match &result {
+        Ok(_) => append_local_service_log(
+            &app,
+            &format!(
+                "named pipe request finished: method={request_method} id={request_id} mode={request_mode} duration_ms={}",
+                started_at.elapsed().as_millis()
+            ),
+        ),
+        Err(error) => append_local_service_log(
+            &app,
+            &format!(
+                "named pipe request failed: method={request_method} id={request_id} mode={request_mode} duration_ms={} error={error}",
+                started_at.elapsed().as_millis()
+            ),
+        ),
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1022,12 +1356,114 @@ fn reader_loop(reader: std::fs::File, state: Arc<NamedPipeBridgeState>) {
     );
 }
 
+/// should_use_isolated_named_pipe_request identifies request types that only
+/// need one response payload and do not rely on streamed task notifications.
+/// Routing them to a fresh connection prevents shell-ball task streams from
+/// head-of-line blocking control-panel reads on the shared session.
+fn should_use_isolated_named_pipe_request(method: &str) -> bool {
+    !requires_shared_named_pipe_request(method)
+}
+
+/// requires_shared_named_pipe_request keeps task-mutating calls on the shared
+/// session because those methods may emit request-scoped runtime notifications
+/// that shell-ball and dashboard flows consume through the bridge subscription
+/// fan-out.
+fn requires_shared_named_pipe_request(method: &str) -> bool {
+    matches!(
+        method,
+        "agent.input.submit"
+            | "agent.task.start"
+            | "agent.task.confirm"
+            | "agent.task.control"
+            | "agent.task.steer"
+            | "agent.security.respond"
+            | "agent.security.restore.apply"
+            | "agent.notepad.convert_to_task"
+    )
+}
+
+/// send_isolated_named_pipe_request performs one request/response exchange on a
+/// fresh pipe connection. Notifications are ignored because the isolated mode is
+/// only used for RPC methods that do not depend on streamed task updates.
+fn send_isolated_named_pipe_request(
+    pipe_name: &str,
+    request_id: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    let stream = open_named_pipe_with_retry(pipe_name, "isolated")?;
+    let reader = stream
+        .try_clone()
+        .map_err(|error| format!("failed to clone isolated named pipe handle: {error}"))?;
+    let mut writer = BufWriter::new(stream);
+
+    serde_json::to_writer(&mut writer, &payload)
+        .map_err(|error| format!("failed to serialize isolated json-rpc payload: {error}"))?;
+    writer
+        .write_all(b"\n")
+        .map_err(|error| format!("failed to write isolated named pipe delimiter: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("failed to flush isolated named pipe payload: {error}"))?;
+
+    let mut responses =
+        serde_json::Deserializer::from_reader(BufReader::new(reader)).into_iter::<Value>();
+    while let Some(result) = responses.next() {
+        let message = result
+            .map_err(|error| format!("failed to decode isolated named pipe response: {error}"))?;
+        let Some(id) = message.get("id") else {
+            continue;
+        };
+        if normalize_id(id) == request_id {
+            return Ok(message);
+        }
+    }
+
+    Err("isolated named pipe response stream ended before the matching json-rpc envelope was returned".to_string())
+}
+
+/// open_named_pipe_with_retry tolerates transient `ERROR_PIPE_BUSY` windows that
+/// occur while the listener rotates pipe instances for concurrent desktop
+/// requests. Without this retry, short-lived control-panel reads can fail even
+/// though the local service is healthy and ready.
+fn open_named_pipe_with_retry(pipe_name: &str, mode: &str) -> Result<std::fs::File, String> {
+    let started_at = Instant::now();
+
+    loop {
+        match OpenOptions::new().read(true).write(true).open(pipe_name) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.raw_os_error() == Some(231) => {
+                if started_at.elapsed() >= LOCAL_SERVICE_PIPE_BUSY_RETRY_TIMEOUT {
+                    return Err(format!(
+                        "failed to open {mode} named pipe {pipe_name} before retry timeout: {}",
+                        error
+                    ));
+                }
+                thread::sleep(LOCAL_SERVICE_PIPE_BUSY_RETRY_DELAY);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to open {mode} named pipe {pipe_name}: {error}"
+                ));
+            }
+        }
+    }
+}
+
 fn extract_request_id(payload: &Value) -> Result<String, String> {
     let id = payload
         .get("id")
         .ok_or_else(|| "json-rpc payload missing id".to_string())?;
 
     Ok(normalize_id(id))
+}
+
+fn extract_request_method(payload: &Value) -> Result<String, String> {
+    payload
+        .get("method")
+        .and_then(Value::as_str)
+        .map(|method| method.trim().to_string())
+        .filter(|method| !method.is_empty())
+        .ok_or_else(|| "json-rpc payload missing method".to_string())
 }
 
 fn normalize_id(id: &Value) -> String {
@@ -1994,11 +2430,35 @@ async fn shell_ball_read_selection_snapshot(
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
+        .manage(Arc::new(LocalServiceSidecarState::default()))
         .manage(Arc::new(DesktopSettingsSnapshotState::default()))
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            let sidecar_state = app.state::<Arc<LocalServiceSidecarState>>();
+            let bridge_state = app.state::<Arc<NamedPipeBridgeState>>();
+            let app_data_dir = app.path().app_data_dir().map_err(|error| {
+                std::io::Error::other(format!("failed to resolve app data dir: {error}"))
+            })?;
+            let app_data_dir = resolve_required_path(app_data_dir, "app data dir")
+                .map_err(std::io::Error::other)?;
+            let named_pipe_path = derive_local_service_pipe_name(&app_data_dir);
+            bridge_state
+                .configure_pipe_name(named_pipe_path.clone())
+                .map_err(std::io::Error::other)?;
+            append_local_service_log(
+                app.handle(),
+                &format!("configured local service named pipe: {named_pipe_path}"),
+            );
+            let sidecar_started =
+                start_local_service_sidecar(app.handle(), sidecar_state.inner(), &named_pipe_path)
+                    .map_err(std::io::Error::other)?;
+            if sidecar_started {
+                wait_for_local_service_ready(app.handle(), bridge_state.inner())
+                    .map_err(std::io::Error::other)?;
+            }
             activity::install_mouse_activity_listener()
                 .map_err(|error| std::io::Error::other(error))?;
             install_shell_ball_clipboard_hooks(app.handle())
@@ -2035,6 +2495,13 @@ fn main() {
             shell_ball_apply_window_frame,
             shell_ball_read_selection_snapshot
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+            let sidecar_state = app_handle.state::<Arc<LocalServiceSidecarState>>();
+            let _ = sidecar_state.stop();
+        }
+    });
 }

@@ -690,6 +690,102 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 	close(modelClient.generateToolWait)
 }
 
+func TestHandleStreamConnAllowsSettingsReadWhileTaskConfirmWaits(t *testing.T) {
+	server := newTestServer()
+	blockingSeen := make(chan struct{})
+	releaseBlocking := make(chan struct{})
+	releasedBlocking := false
+	defer func() {
+		if !releasedBlocking {
+			close(releaseBlocking)
+		}
+	}()
+
+	server.handlers["test.blocking"] = func(_ map[string]any) (any, *rpcError) {
+		select {
+		case <-blockingSeen:
+		default:
+			close(blockingSeen)
+		}
+		<-releaseBlocking
+		return map[string]any{"status": "released"}, nil
+	}
+	server.handlers["test.fast"] = func(_ map[string]any) (any, *rpcError) {
+		return map[string]any{"status": "fast"}, nil
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	blockingRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-blocking"`),
+		Method:  "test.blocking",
+		Params:  mustMarshal(t, map[string]any{}),
+	}
+	if err := encoder.Encode(blockingRequest); err != nil {
+		t.Fatalf("encode blocked request: %v", err)
+	}
+
+	select {
+	case <-blockingSeen:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocking request to start running")
+	}
+
+	settingsRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-fast"`),
+		Method:  "test.fast",
+		Params:  mustMarshal(t, map[string]any{}),
+	}
+	if err := encoder.Encode(settingsRequest); err != nil {
+		t.Fatalf("encode fast request: %v", err)
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	seenSettingsResponse := false
+	for !seenSettingsResponse {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode concurrent envelope: %v", err)
+		}
+
+		id, _ := envelope["id"].(string)
+		if id != "req-fast" {
+			continue
+		}
+
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected fast response result envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected fast response data payload, got %+v", result)
+		}
+		if stringValue(data, "status", "") != "fast" {
+			t.Fatalf("expected fast request result payload, got %+v", data)
+		}
+		seenSettingsResponse = true
+	}
+
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(releaseBlocking)
+	releasedBlocking = true
+}
+
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	server := newTestServer()
 

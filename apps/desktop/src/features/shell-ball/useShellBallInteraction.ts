@@ -763,7 +763,9 @@ export function useShellBallInteraction() {
   }
 
   async function handleSubmitText() {
+    const submittedInputValue = inputValue;
     const currentDraft = inputValue.trim();
+    const submittedFiles = [...pendingFiles];
     const reset = getShellBallPostSubmitReset({
       inputValue,
       pendingFiles,
@@ -772,12 +774,18 @@ export function useShellBallInteraction() {
       return null;
     }
 
+    dispatch("submit_text");
+    setInputValue(reset.nextInputValue);
+    setPendingFiles(reset.nextPendingFiles);
+    inputFocusedRef.current = reset.nextFocused;
+    setInputFocused(reset.nextFocused);
+
     try {
       const result =
-        pendingFiles.length > 0
+        submittedFiles.length > 0
           ? await startShellBallFileTask({
               text: currentDraft,
-              files: pendingFiles,
+              files: submittedFiles,
               sessionId: getCurrentConversationSessionId(),
             })
           : await submitShellBallInput({
@@ -786,16 +794,20 @@ export function useShellBallInteraction() {
               inputMode: "text",
               sessionId: getCurrentConversationSessionId(),
             });
-      dispatch("submit_text");
-      setInputValue(reset.nextInputValue);
-      setPendingFiles(reset.nextPendingFiles);
-      inputFocusedRef.current = reset.nextFocused;
-      setInputFocused(reset.nextFocused);
       if (result !== null) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
       return result;
     } catch (error) {
+      setInputValue(submittedInputValue);
+      setPendingFiles(submittedFiles);
+      inputFocusedRef.current = true;
+      setInputFocused(true);
+      controllerRef.current?.forceState("hover_input", {
+        regionActive: regionActiveRef.current,
+        hoverRetained: true,
+      });
+      syncVisualState();
       console.warn("shell-ball text submit failed", error);
       throw error;
     }

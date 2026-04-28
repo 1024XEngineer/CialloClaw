@@ -49,34 +49,36 @@ var (
 )
 
 const (
-	executionSegmentInitial = "initial"
-	executionSegmentResume  = "resume"
-	executionSegmentRestart = "restart"
+	executionSegmentInitial     = "initial"
+	executionSegmentResume      = "resume"
+	executionSegmentRestart     = "restart"
+	defaultTaskExecutionTimeout = 95 * time.Second
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
 // backend.
 type Service struct {
-	context        *contextsvc.Service
-	intent         *intent.Service
-	runEngine      *runengine.Engine
-	delivery       *delivery.Service
-	memory         *memory.Service
-	risk           *risk.Service
-	model          *model.Service
-	tools          *tools.Registry
-	plugin         *plugin.Service
-	audit          *audit.Service
-	recommendation *recommendation.Service
-	traceEval      *traceeval.Service
-	executor       *execution.Service
-	inspector      *taskinspector.Service
-	storage        *storage.Service
-	modelMu        sync.RWMutex
-	runtimeMu      sync.RWMutex
-	runtimeNextID  uint64
-	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
-	taskStartTaps  map[uint64]func(taskID, sessionID, traceID string)
+	context          *contextsvc.Service
+	intent           *intent.Service
+	runEngine        *runengine.Engine
+	delivery         *delivery.Service
+	memory           *memory.Service
+	risk             *risk.Service
+	model            *model.Service
+	tools            *tools.Registry
+	plugin           *plugin.Service
+	audit            *audit.Service
+	recommendation   *recommendation.Service
+	traceEval        *traceeval.Service
+	executor         *execution.Service
+	inspector        *taskinspector.Service
+	storage          *storage.Service
+	modelMu          sync.RWMutex
+	runtimeMu        sync.RWMutex
+	executionTimeout time.Duration
+	runtimeNextID    uint64
+	runtimeTaps      map[uint64]func(taskID, method string, params map[string]any)
+	taskStartTaps    map[uint64]func(taskID, sessionID, traceID string)
 }
 
 // budgetDowngradeDecision describes one real execution-time downgrade decision
@@ -111,21 +113,22 @@ func NewService(
 	plugin *plugin.Service,
 ) *Service {
 	return &Service{
-		context:        context,
-		intent:         intent,
-		runEngine:      runEngine,
-		delivery:       delivery,
-		memory:         memory,
-		risk:           risk,
-		model:          model,
-		tools:          tools,
-		plugin:         plugin,
-		audit:          audit.NewService(),
-		recommendation: recommendation.NewService(),
-		traceEval:      traceeval.NewService(nil, nil),
-		inspector:      taskinspector.NewService(nil),
-		runtimeTaps:    map[uint64]func(taskID, method string, params map[string]any){},
-		taskStartTaps:  map[uint64]func(taskID, sessionID, traceID string){},
+		context:          context,
+		intent:           intent,
+		runEngine:        runEngine,
+		delivery:         delivery,
+		memory:           memory,
+		risk:             risk,
+		model:            model,
+		tools:            tools,
+		plugin:           plugin,
+		audit:            audit.NewService(),
+		recommendation:   recommendation.NewService(),
+		traceEval:        traceeval.NewService(nil, nil),
+		inspector:        taskinspector.NewService(nil),
+		executionTimeout: defaultTaskExecutionTimeout,
+		runtimeTaps:      map[uint64]func(taskID, method string, params map[string]any){},
+		taskStartTaps:    map[uint64]func(taskID, sessionID, traceID string){},
 	}
 }
 
@@ -385,10 +388,19 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 				return governedResponse, nil
 			}
 			task = governedTask
-			var execErr error
-			task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
-			if execErr != nil {
-				return nil, execErr
+			if shouldRunAsyncBubbleDelivery(task) && strings.TrimSpace(stringValue(options, "preferred_delivery", "")) == "bubble" {
+				asyncTask, asyncBubble, asyncErr := s.beginAsyncTaskExecution(task, snapshot, suggestion.Intent)
+				if asyncErr != nil {
+					return nil, asyncErr
+				}
+				task = asyncTask
+				bubble = asyncBubble
+			} else {
+				var execErr error
+				task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+				if execErr != nil {
+					return nil, execErr
+				}
 			}
 		}
 	} else {
@@ -4694,6 +4706,40 @@ func bubbleTextForStart(suggestion intent.Suggestion) string {
 	return suggestion.ResultBubbleText
 }
 
+// shouldRunAsyncBubbleDelivery limits the asynchronous submit hotfix to floating
+// ball requests that explicitly prefer short bubble delivery. Other entry points
+// keep their synchronous semantics so existing task.start / confirm contracts do
+// not change outside the stalled shell-ball path.
+func shouldRunAsyncBubbleDelivery(task runengine.TaskRecord) bool {
+	return strings.TrimSpace(task.RequestSource) == "floating_ball" && strings.TrimSpace(task.PreferredDelivery) == "bubble"
+}
+
+// beginAsyncTaskExecution persists an immediate processing bubble, then lets the
+// formal execution continue in the background. Shell-ball already listens to
+// task.updated / delivery.ready notifications, so it can move forward without
+// keeping the submit RPC open until the model finishes.
+func (s *Service) beginAsyncTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, error) {
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已收到，正在处理。", task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil)
+	if !ok {
+		return runengine.TaskRecord{}, nil, ErrTaskNotFound
+	}
+
+	taskID := updatedTask.TaskID
+	clonedSnapshot := cloneTaskSnapshot(snapshot)
+	clonedIntent := cloneMap(taskIntent)
+
+	go func() {
+		runtimeTask, exists := s.runEngine.GetTask(taskID)
+		if !exists {
+			return
+		}
+		_, _, _, _, _ = s.executeTask(runtimeTask, clonedSnapshot, clonedIntent)
+	}()
+
+	return updatedTask, bubble, nil
+}
+
 func confirmIntentText(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "") {
 	case "translate":
@@ -7034,7 +7080,14 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 
 	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
-	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
+	executionTimeout := s.executionTimeout
+	if executionTimeout <= 0 {
+		executionTimeout = defaultTaskExecutionTimeout
+	}
+	executionCtx, cancelExecution := context.WithTimeout(context.Background(), executionTimeout)
+	defer cancelExecution()
+
+	executionResult, err := s.executor.Execute(executionCtx, execution.Request{
 		TaskID:               processingTask.TaskID,
 		RunID:                processingTask.RunID,
 		SourceType:           processingTask.SourceType,
@@ -7755,6 +7808,10 @@ func executionFailureBubble(err error) string {
 		return "执行失败：目标超出工作区边界，已阻止本次操作。"
 	case errors.Is(err, tools.ErrCommandNotAllowed):
 		return "执行失败：命令存在高危风险，已被策略拦截。"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, tools.ErrToolExecutionTimeout):
+		return "执行失败：本地任务执行超时，请重试。"
+	case errors.Is(err, context.Canceled):
+		return "执行失败：本地任务已取消。"
 	case errors.Is(err, tools.ErrCapabilityDenied):
 		return "执行失败：当前平台能力不可用，请检查环境后重试。"
 	case errors.Is(err, tools.ErrToolExecutionFailed):
