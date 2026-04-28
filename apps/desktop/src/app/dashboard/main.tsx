@@ -41,9 +41,9 @@ void installHideOnCloseRequest();
 installDashboardEscapeClose();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <AppProviders>
-    <DashboardWindowErrorBoundary>
+  <DashboardWindowErrorBoundary>
+    <AppProviders>
       <DashboardRoot />
-    </DashboardWindowErrorBoundary>
-  </AppProviders>,
+    </AppProviders>
+  </DashboardWindowErrorBoundary>,
 );

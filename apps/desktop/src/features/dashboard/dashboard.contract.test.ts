@@ -3524,7 +3524,10 @@ test("dashboard entry keeps a window-level error boundary so runtime faults do n
   );
 
   assert.match(dashboardMainSource, /DashboardWindowErrorBoundary/);
-  assert.match(dashboardMainSource, /<DashboardWindowErrorBoundary>[\s\S]*<DashboardRoot \/>[\s\S]*<\/DashboardWindowErrorBoundary>/);
+  assert.match(
+    dashboardMainSource,
+    /<DashboardWindowErrorBoundary>[\s\S]*<AppProviders>[\s\S]*<DashboardRoot \/>[\s\S]*<\/AppProviders>[\s\S]*<\/DashboardWindowErrorBoundary>/,
+  );
   assert.match(dashboardErrorBoundarySource, /static getDerivedStateFromError/);
   assert.match(dashboardErrorBoundarySource, /window\.location\.reload\(\)/);
   assert.match(dashboardErrorBoundarySource, /dashboard window render failed/);
