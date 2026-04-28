@@ -17,6 +17,7 @@ import { getTaskPreviewStatusLabel, getTaskStatusBadgeClass } from "./taskPage.m
 import { buildDashboardTaskArtifactQueryKey, buildDashboardTaskDetailQueryKey } from "./taskPage.query";
 import { loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
 import {
+  isAllowedTaskOpenUrl,
   loadTaskArtifactPage,
   openTaskArtifactForTask,
   openTaskDeliveryForTask,
@@ -91,6 +92,8 @@ export function TaskDeliveryPage() {
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "交付详情请求失败") : null;
   const artifactItems = artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? [];
   const formalDeliveryResult = detailData?.detail.delivery_result ?? null;
+  const formalDeliveryUrl = formalDeliveryResult?.payload.url ?? null;
+  const formalDeliveryUrlIsAllowed = formalDeliveryUrl !== null && isAllowedTaskOpenUrl(formalDeliveryUrl);
   const citations = useMemo(() => detailData?.detail.citations ?? [], [detailData?.detail.citations]);
   const evidenceArtifactRefs = useMemo(
     () =>
@@ -371,10 +374,14 @@ export function TaskDeliveryPage() {
               <div>
                 <dt>URL</dt>
                 <dd>
-                  {formalDeliveryResult.payload.url ? (
-                    <a href={formalDeliveryResult.payload.url} rel="noreferrer noopener" target="_blank">
-                      {formalDeliveryResult.payload.url}
-                    </a>
+                  {formalDeliveryUrl ? (
+                    formalDeliveryUrlIsAllowed ? (
+                      <a href={formalDeliveryUrl} rel="noreferrer noopener" target="_blank">
+                        {formalDeliveryUrl}
+                      </a>
+                    ) : (
+                      <span>{formalDeliveryUrl}</span>
+                    )
                   ) : (
                     "无"
                   )}

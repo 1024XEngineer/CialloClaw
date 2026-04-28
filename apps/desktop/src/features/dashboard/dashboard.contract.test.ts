@@ -3480,6 +3480,9 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskPageSource, /readDashboardTaskDetailRouteState/);
   assert.match(taskPageSource, /subscribeTaskUpdated\(\(payload\) =>/);
   assert.match(taskPageSource, /subscribeDeliveryReady\(\(payload\) =>/);
+  assert.match(taskPageSource, /scheduleBucketQueryRefresh/);
+  assert.match(taskPageSource, /TASK_BUCKET_REFRESH_DEBOUNCE_MS/);
+  assert.match(taskPageSource, /dashboardTaskEventQueryPrefix/);
   assert.match(taskPageSource, /payload\.task_id/);
   assert.doesNotMatch(taskPageSource, /subscribeTask\(/);
   assert.doesNotMatch(taskPageSource, /\["dashboard", "tasks", "artifacts"/);
@@ -3490,6 +3493,9 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /subscribeTaskUpdated/);
   assert.match(taskDeliverySource, /subscribeDeliveryReady/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
+  assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
+  assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
+  assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
   assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
@@ -3981,7 +3987,7 @@ test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserv
   assert.doesNotMatch(panelSource, /handleSubmitSteering\(\)[\s\S]*setSteeringMessage\(""\)/);
   assert.match(panelSource, /\{renderRuntimeSummarySection\(\)\}/);
   assert.match(panelSource, /\{renderRuntimeEventsSection\(\)\}/);
-  assert.match(taskPageSource, /invalidateSelectedTaskDetail\(selectedTaskId\)/);
+  assert.match(taskPageSource, /invalidateTaskRuntimeQueries\(selectedTaskId\)/);
 });
 
 test("TaskDetailPanel exposes formal runtime event filters and applies them explicitly", () => {

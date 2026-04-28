@@ -39,6 +39,7 @@ import {
   buildDashboardTaskBucketQueryKey,
   buildDashboardTaskDetailQueryKey,
   buildDashboardTaskEventQueryKey,
+  dashboardTaskEventQueryPrefix,
   getDashboardTaskSecurityRefreshPlan,
   resolveDashboardTaskSafetyOpenPlan,
   shouldEnableDashboardTaskDetailQuery,
@@ -82,6 +83,7 @@ const INITIAL_UNFINISHED_LIMIT = 12;
 const INITIAL_FINISHED_LIMIT = 24;
 const LOAD_MORE_UNFINISHED_STEP = 12;
 const LOAD_MORE_FINISHED_STEP = 24;
+const TASK_BUCKET_REFRESH_DEBOUNCE_MS = 300;
 
 const clusterIcons = {
   archive: Archive,
@@ -343,43 +345,64 @@ export function TaskPage() {
       return;
     }
 
-    function invalidateSelectedTaskDetail(taskId: string) {
+    let bucketQueryRefreshTimeoutId: number | null = null;
+
+    function invalidateTaskDetailQueries(taskId: string) {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
-      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskEventQueryKey(dataMode, taskId, taskEventFilters) });
     }
 
-    function invalidateTaskQueries(deliveryTaskId?: string) {
-      for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
-        void queryClient.invalidateQueries({ queryKey });
+    function invalidateTaskRuntimeQueries(taskId: string) {
+      invalidateTaskDetailQueries(taskId);
+      void queryClient.invalidateQueries({ queryKey: [...dashboardTaskEventQueryPrefix, dataMode, taskId] });
+    }
+
+    function flushBucketQueryRefresh() {
+      bucketQueryRefreshTimeoutId = null;
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit) });
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskBucketQueryKey(dataMode, "finished", finishedLimit) });
+    }
+
+    /**
+     * Batch list refreshes in local dashboard view state so high-frequency
+     * backend task.updated notifications do not refetch the full workspace on
+     * every progress tick.
+     */
+    function scheduleBucketQueryRefresh() {
+      if (bucketQueryRefreshTimeoutId !== null) {
+        return;
       }
-      if (selectedTaskId && (!deliveryTaskId || deliveryTaskId === selectedTaskId)) {
-        invalidateSelectedTaskDetail(selectedTaskId);
-      }
+
+      bucketQueryRefreshTimeoutId = window.setTimeout(() => {
+        flushBucketQueryRefresh();
+      }, TASK_BUCKET_REFRESH_DEBOUNCE_MS);
     }
 
     const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
-      invalidateTaskQueries(payload.task_id);
+      invalidateTaskDetailQueries(payload.task_id);
+      scheduleBucketQueryRefresh();
     });
 
     const clearTaskUpdatedSubscription = subscribeTaskUpdated((payload) => {
-      // The task deck needs every task.updated hit so non-focused cards do not
-      // drift behind the backend while only the selected detail is subscribed.
-      invalidateTaskQueries(payload.task_id);
+      invalidateTaskDetailQueries(payload.task_id);
+      scheduleBucketQueryRefresh();
     });
 
     const clearRuntimeSubscription = selectedTaskId
       ? subscribeTaskRuntime(selectedTaskId, () => {
-          invalidateSelectedTaskDetail(selectedTaskId);
+          invalidateTaskRuntimeQueries(selectedTaskId);
         })
       : () => {};
 
     return () => {
+      if (bucketQueryRefreshTimeoutId !== null) {
+        window.clearTimeout(bucketQueryRefreshTimeoutId);
+      }
       clearDeliverySubscription();
       clearTaskUpdatedSubscription();
       clearRuntimeSubscription();
     };
-  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId, taskEventFilters]);
+  }, [dataMode, finishedLimit, queryClient, selectedTaskId, unfinishedLimit]);
 
   useEffect(() => {
     return () => {
