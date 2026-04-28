@@ -457,6 +457,7 @@ export function NotePage() {
     [noteItemsById, sourceEditorItemId],
   );
   const primarySourceNote = useMemo(() => sourceNotes[0] ?? null, [sourceNotes]);
+  const draftSourcePathHint = primarySourceNote?.path ?? resolvedSourceRoots[0] ?? null;
   const selectedSourceNote = useMemo(
     () => sourceNotes.find((note) => note.path === selectedSourceNotePath) ?? primarySourceNote,
     [primarySourceNote, selectedSourceNotePath, sourceNotes],
@@ -652,7 +653,7 @@ export function NotePage() {
   }
 
   function startCreatingSourceNote() {
-    const nextDraft = createEmptySourceNoteEditorDraft(primarySourceNote?.path ?? null);
+    const nextDraft = createEmptySourceNoteEditorDraft(draftSourcePathHint);
 
     setIsCreatingSourceNote(true);
     setSourceEditorItemId(null);
@@ -948,7 +949,7 @@ export function NotePage() {
     if (!nextSourceNote) {
       setSelectedSourceNotePath(null);
       if (!sourceEditorDirty) {
-        const emptyDraft = createEmptySourceNoteEditorDraft();
+        const emptyDraft = createEmptySourceNoteEditorDraft(draftSourcePathHint);
         const emptySignature = createSourceNoteEditorDraftSignature(emptyDraft);
         if (sourceNoteBaseline !== emptySignature || sourceNoteBaselineContent !== "") {
           applySourceNoteDraft(emptyDraft, "");
@@ -979,6 +980,7 @@ export function NotePage() {
 
     setSourceNoteSyncMessage(null);
   }, [
+    draftSourcePathHint,
     isCreatingSourceNote,
     primarySourceNote,
     selectedSourceNotePath,

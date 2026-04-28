@@ -203,6 +203,10 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
 function loadSourceNoteEditorModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, "src/features/dashboard/notes/sourceNoteEditor.ts")) as {
+      createEmptySourceNoteEditorDraft: (sourcePath?: string | null) => {
+        bucket: string;
+        sourcePath: string | null;
+      };
       parseSourceNoteEditorBlocks: (note: {
         content: string;
         fileName: string;
@@ -1380,7 +1384,7 @@ test("source note editor accepts natural note text before compatibility metadata
 });
 
 test("source note editor derives natural note buckets from source paths", () => {
-  const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
+  const { createEmptySourceNoteEditorDraft, parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
     content: "# Follow up\n",
     fileName: "tasks.md",
@@ -1394,6 +1398,8 @@ test("source note editor derives natural note buckets from source paths", () => 
 
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.bucket, "upcoming");
+  assert.equal(createEmptySourceNoteEditorDraft("D:/workspace/todos").bucket, "upcoming");
+  assert.equal(createEmptySourceNoteEditorDraft("D:/workspace/later").bucket, "later");
 
   const updated = upsertSourceNoteEditorBlock(note, {
     agentSuggestion: "",

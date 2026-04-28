@@ -477,9 +477,6 @@ function getDefaultBucketForSourcePath(sourcePath: string | null, checked: boole
   }
 
   const normalized = sourcePath?.trim().toLowerCase() ?? "";
-  if (normalized === "") {
-    return "later";
-  }
   if (recurring || normalized.includes("recurring") || normalized.includes("weekly") || normalized.includes("repeat")) {
     return "recurring_rule";
   }
