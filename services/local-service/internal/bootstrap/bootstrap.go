@@ -58,7 +58,6 @@ var (
 	registerOCRToolsForBootstrap          = sidecarclient.RegisterOCRTools
 	registerMediaToolsForBootstrap        = sidecarclient.RegisterMediaTools
 	newModelServiceFromConfigForBootstrap = model.NewServiceFromConfig
-	getWorkingDirectoryForBootstrap       = os.Getwd
 	getExecutablePathForBootstrap         = os.Executable
 )
 
@@ -261,15 +260,14 @@ func buildRuntimeMigrationPlan(cfg config.Config, legacyRoots []string) (runtime
 	return runtimeMigrationPlan{}, false
 }
 
+// legacyRuntimeRootsForCompatibility trusts only the executable-adjacent legacy
+// layout because the process working directory is not a stable bootstrap trust
+// boundary in packaged builds.
 func legacyRuntimeRootsForCompatibility() []string {
-	roots := make([]string, 0, 2)
 	if executablePath, err := getExecutablePathForBootstrap(); err == nil {
-		roots = append(roots, filepath.Dir(executablePath))
+		return dedupePaths([]string{filepath.Dir(executablePath)})
 	}
-	if workingDirectory, err := getWorkingDirectoryForBootstrap(); err == nil {
-		roots = append(roots, workingDirectory)
-	}
-	return dedupePaths(roots)
+	return nil
 }
 
 func dedupePaths(paths []string) []string {

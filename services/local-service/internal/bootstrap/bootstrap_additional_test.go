@@ -182,25 +182,33 @@ func TestCopyDirectoryIfMissingRetriesIntoPartiallyCreatedWorkspace(t *testing.T
 	}
 }
 
-func TestLegacyRuntimeRootsForCompatibilityPrefersExecutableDirectory(t *testing.T) {
+func TestLegacyRuntimeRootsForCompatibilityUsesExecutableDirectoryOnly(t *testing.T) {
 	legacyExecutableRoot := filepath.Join(t.TempDir(), "legacy-exe")
-	legacyWorkingRoot := filepath.Join(t.TempDir(), "legacy-cwd")
-	originalGetwd := getWorkingDirectoryForBootstrap
 	originalExecutable := getExecutablePathForBootstrap
 	defer func() {
-		getWorkingDirectoryForBootstrap = originalGetwd
 		getExecutablePathForBootstrap = originalExecutable
 	}()
 	getExecutablePathForBootstrap = func() (string, error) {
 		return filepath.Join(legacyExecutableRoot, "local-service.exe"), nil
 	}
-	getWorkingDirectoryForBootstrap = func() (string, error) {
-		return legacyWorkingRoot, nil
-	}
 
 	roots := legacyRuntimeRootsForCompatibility()
-	if len(roots) != 2 || roots[0] != filepath.Clean(legacyExecutableRoot) || roots[1] != filepath.Clean(legacyWorkingRoot) {
-		t.Fatalf("expected compatibility roots to prefer executable directory, got %+v", roots)
+	if len(roots) != 1 || roots[0] != filepath.Clean(legacyExecutableRoot) {
+		t.Fatalf("expected compatibility roots to use executable directory only, got %+v", roots)
+	}
+}
+
+func TestLegacyRuntimeRootsForCompatibilityReturnsEmptyWhenExecutableUnavailable(t *testing.T) {
+	originalExecutable := getExecutablePathForBootstrap
+	defer func() {
+		getExecutablePathForBootstrap = originalExecutable
+	}()
+	getExecutablePathForBootstrap = func() (string, error) {
+		return "", errors.New("executable path unavailable")
+	}
+
+	if roots := legacyRuntimeRootsForCompatibility(); len(roots) != 0 {
+		t.Fatalf("expected empty compatibility roots when executable path is unavailable, got %+v", roots)
 	}
 }
 
