@@ -362,42 +362,54 @@ function splitSourceMetadataLine(line: string) {
   return { key, value };
 }
 
-function normalizeFallbackBucket(value: string | null, checked: boolean) {
+function normalizeFallbackBucket(value: string | null) {
   if (value === "upcoming" || value === "later" || value === "recurring_rule" || value === "closed") {
     return value;
   }
 
-  return checked ? "closed" : "later";
+  return "later";
 }
 
-function inferFallbackStatus(dueAt: string | null, checked: boolean): TodoItem["status"] {
-  if (checked) {
-    return "completed";
-  }
+function createSourceNoteFallbackExperience(input: {
+  agentSuggestion: string;
+  checked: boolean;
+  effectiveScope: string | null;
+  noteText: string;
+  plannedAt: string | null;
+  recentInstanceStatus: string | null;
+  relatedResources: NoteDetailExperience["relatedResources"];
+  repeatRule: string | null;
+  summaryLabel: string;
+  timeHint: string;
+  title: string;
+}) {
+  const detailStatus = input.checked ? "已勾选，等待巡检同步" : "等待巡检同步";
 
-  if (!dueAt) {
-    return "normal";
-  }
-
-  const parsedDueAt = new Date(dueAt);
-  if (Number.isNaN(parsedDueAt.getTime())) {
-    return "normal";
-  }
-
-  const now = new Date();
-  if (parsedDueAt.getTime() < now.getTime()) {
-    return "overdue";
-  }
-
-  if (
-    parsedDueAt.getFullYear() === now.getFullYear()
-    && parsedDueAt.getMonth() === now.getMonth()
-    && parsedDueAt.getDate() === now.getDate()
-  ) {
-    return "due_today";
-  }
-
-  return "normal";
+  return {
+    agentSuggestion: {
+      detail: input.agentSuggestion,
+      label: "下一步建议",
+    },
+    canConvertToTask: false,
+    detailStatus,
+    detailStatusTone: input.checked ? "done" : "normal",
+    effectiveScope: input.effectiveScope,
+    endedAt: null,
+    isRecurringEnabled: input.repeatRule !== null,
+    nextOccurrenceAt: input.repeatRule ? input.plannedAt : null,
+    noteText: input.noteText,
+    noteType: input.repeatRule ? "recurring" : "reminder",
+    plannedAt: input.plannedAt,
+    prerequisite: "当前还没有正式巡检结果，这条记录仍停留在桌面本地同步态。",
+    previewStatus: input.checked ? "已勾选" : "待巡检",
+    recentInstanceStatus: input.recentInstanceStatus,
+    relatedResources: input.relatedResources,
+    repeatRule: input.repeatRule,
+    summaryLabel: input.summaryLabel,
+    timeHint: input.timeHint,
+    title: input.title,
+    typeLabel: input.repeatRule ? "源重复事项" : "源便签",
+  } satisfies NoteDetailExperience;
 }
 
 function buildSourceNoteResource(itemId: string, path: string) {
@@ -426,43 +438,32 @@ function buildSourceNoteResource(itemId: string, path: string) {
 export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListItem {
   const itemId = createSourceNoteFallbackId(note.path);
   const previewText = extractSourceNotePreview(note.content);
+  const sourceResources: NoteDetailExperience["relatedResources"] = [
+    {
+      id: `${itemId}_source`,
+      label: "源 markdown",
+      openAction: "open_file",
+      path: note.path,
+      taskId: null,
+      type: "Markdown 文件",
+      url: null,
+    },
+  ];
 
   return {
-    experience: {
-      agentSuggestion: {
-        detail: "这张便签已经保存在任务来源目录里。你可以继续编辑它，巡检识别后会切换成正式便签项。",
-        label: "下一步建议",
-      },
-      canConvertToTask: false,
-      detailStatus: "等待巡检同步",
-      detailStatusTone: "normal",
+    experience: createSourceNoteFallbackExperience({
+      agentSuggestion: "这张便签已经保存在任务来源目录里。你可以继续编辑它，巡检识别后会切换成正式便签项。",
+      checked: false,
       effectiveScope: note.sourceRoot,
-      endedAt: null,
-      isRecurringEnabled: false,
-      nextOccurrenceAt: null,
       noteText: previewText || "这张源便签还没有提炼出正式事项，当前先作为本地便签卡片显示。",
-      noteType: "reminder",
       plannedAt: null,
-      prerequisite: "当前还没有正式巡检结果，这张卡片直接来自任务来源目录中的 markdown 文件。",
-      previewStatus: "待巡检",
       recentInstanceStatus: null,
-      relatedResources: [
-        {
-          id: `${itemId}_source`,
-          label: "源 markdown",
-          openAction: "open_file",
-          path: note.path,
-          taskId: null,
-          type: "Markdown 文件",
-          url: null,
-        },
-      ],
+      relatedResources: sourceResources,
       repeatRule: null,
       summaryLabel: "源便签",
       timeHint: note.modifiedAtMs ? `最后修改 ${formatAbsoluteTimestamp(note.modifiedAtMs)}` : "刚创建",
       title: note.title,
-      typeLabel: "源便签",
-    },
+    }),
     item: {
       agent_suggestion: "等待巡检同步后再进入正式事项流。",
       bucket: "later",
@@ -506,8 +507,9 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
 
 /**
  * Builds one local fallback card for every checklist block found in the source
- * markdown file. The page uses these cards before the backend inspector has
- * finished translating the file into formal notepad items.
+ * markdown file. These cards stay renderer-local and intentionally avoid
+ * recreating formal bucket/status inference before the backend inspector has
+ * translated the source file into stable notepad items.
  *
  * @param note Markdown source note from the desktop bridge.
  * @returns Renderer-local cards derived from checklist blocks in the file.
@@ -540,32 +542,55 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
     const itemId = createSourceNoteFallbackId(`${note.path}:${current.sourceLine}:${current.title}`);
     const noteText = current.noteText ?? (current.bodyLines.join("\n").trim() || current.title);
-    const bucket = normalizeFallbackBucket(current.bucket, current.checked);
+    const bucket = normalizeFallbackBucket(current.bucket);
     const dueAt = current.nextOccurrenceAt ?? current.dueAt;
+    const sourceResources: NoteDetailExperience["relatedResources"] = [
+      {
+        id: `${itemId}_source`,
+        label: "源 markdown",
+        openAction: "open_file",
+        path: note.path,
+        taskId: null,
+        type: "Markdown 文件",
+        url: null,
+      },
+    ];
     const item = {
       agent_suggestion: current.agentSuggestion ?? "等待巡检把这个 markdown 便签块同步成正式事项。",
       bucket,
       due_at: dueAt,
       effective_scope: current.effectiveScope ?? note.sourceRoot,
-      ended_at: current.checked ? dueAt : null,
+      ended_at: null,
       item_id: itemId,
       linked_task_id: null,
       next_occurrence_at: current.nextOccurrenceAt,
       note_text: noteText,
       prerequisite: current.prerequisite,
       recent_instance_status: current.recentInstanceStatus,
-      recurring_enabled: bucket === "recurring_rule",
+      recurring_enabled: current.repeatRule !== null,
       related_resources: [buildSourceNoteResource(itemId, note.path)],
       repeat_rule: current.repeatRule,
       source_line: current.sourceLine,
       source_path: note.path,
-      status: inferFallbackStatus(dueAt, current.checked),
+      status: current.checked ? "completed" : "normal",
       title: current.title,
-      type: bucket === "recurring_rule" ? "recurring" : "note",
+      type: current.repeatRule !== null ? "recurring" : "note",
     } as TodoItem;
 
     items.push({
-      experience: createFallbackExperience(item),
+      experience: createSourceNoteFallbackExperience({
+        agentSuggestion: current.agentSuggestion ?? "这条 markdown 事项还在等待巡检同步，正式识别后才会进入便签流程。",
+        checked: current.checked,
+        effectiveScope: current.effectiveScope ?? note.sourceRoot,
+        noteText,
+        plannedAt: dueAt,
+        recentInstanceStatus: current.recentInstanceStatus,
+        relatedResources: sourceResources,
+        repeatRule: current.repeatRule,
+        summaryLabel: current.repeatRule ? "源规则" : "源便签",
+        timeHint: dueAt ? `计划 ${formatAbsoluteTime(dueAt)}` : `来自 ${note.fileName}`,
+        title: current.title,
+      }),
       item,
       sourceNote: {
         localOnly: true,

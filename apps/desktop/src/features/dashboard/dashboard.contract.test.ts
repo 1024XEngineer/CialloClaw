@@ -135,6 +135,25 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildSourceNoteFallbackItems: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }) => Array<{
+        experience: {
+          canConvertToTask: boolean;
+          detailStatus: string;
+          previewStatus: string;
+          repeatRule: string | null;
+        };
+        item: {
+          bucket: string;
+          status: string;
+        };
+      }>;
       isAllowedNoteOpenUrl: (url: string) => boolean;
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
@@ -3750,6 +3769,30 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.doesNotMatch(notePageSource, /\["dashboard", "notes", "bucket", dataMode/);
   assert.match(noteServiceSource, /isAllowedNoteOpenUrl/);
   assert.match(noteServiceSource, /mode === "open_url"/);
+});
+
+test("source-note fallback cards stay local instead of inferring formal todo bucket and due status", () => {
+  const noteService = loadNotePageServiceModule();
+  const items = noteService.buildSourceNoteFallbackItems({
+    content: [
+      "- [ ] 复查仪表盘文案",
+      "due: 2024-04-30T10:00:00.000Z",
+      "note: 保留这一条给巡检同步。",
+    ].join("\n"),
+    fileName: "review.md",
+    modifiedAtMs: 1714300000000,
+    path: "D:/notes/review.md",
+    sourceRoot: "D:/notes",
+    title: "review",
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].item.bucket, "later");
+  assert.equal(items[0].item.status, "normal");
+  assert.equal(items[0].experience.canConvertToTask, false);
+  assert.equal(items[0].experience.detailStatus, "等待巡检同步");
+  assert.equal(items[0].experience.previewStatus, "待巡检");
+  assert.equal(items[0].experience.repeatRule, null);
 });
 
 test("note service no longer invents related resources from title keywords", () => {
