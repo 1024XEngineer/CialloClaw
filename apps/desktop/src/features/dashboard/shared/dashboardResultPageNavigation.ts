@@ -12,36 +12,122 @@ type DashboardResultPageLocationInput = {
   state: unknown;
 };
 
-function readDashboardResultPageSearch(search: string): DashboardResultPageRouteState | null {
-  const params = new URLSearchParams(search);
-  const url = (params.get("url") ?? "").trim();
-  const taskId = (params.get("task_id") ?? "").trim() || null;
-  const title = (params.get("title") ?? "").trim() || null;
+type StoredDashboardResultPageRouteState = DashboardResultPageRouteState & {
+  storedAt: number;
+};
 
-  if (!url) {
+const dashboardResultPageStoragePrefix = "dashboard.result-page.";
+const dashboardResultPageStorageMaxAgeMs = 1000 * 60 * 60 * 6;
+const dashboardResultPageStorageMaxEntries = 12;
+
+function getDashboardResultPageStorage() {
+  if (typeof window === "undefined") {
     return null;
   }
 
-  return {
-    taskId,
-    title,
-    url,
-  };
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
 }
 
-function buildDashboardResultPageSearch(input: DashboardResultPageRouteState) {
-  const params = new URLSearchParams();
-  params.set("url", input.url);
+function listDashboardResultPageStorageKeys(storage: Storage) {
+  const keys: string[] = [];
 
-  if (input.taskId) {
-    params.set("task_id", input.taskId);
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key && key.startsWith(dashboardResultPageStoragePrefix)) {
+      keys.push(key);
+    }
   }
 
-  if (input.title?.trim()) {
-    params.set("title", input.title.trim());
+  return keys.sort();
+}
+
+function pruneDashboardResultPageStorage(storage: Storage, now: number) {
+  const keys = listDashboardResultPageStorageKeys(storage);
+
+  for (const key of keys) {
+    const raw = storage.getItem(key);
+    if (!raw) {
+      storage.removeItem(key);
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<StoredDashboardResultPageRouteState>;
+      if (typeof parsed.storedAt !== "number" || now - parsed.storedAt > dashboardResultPageStorageMaxAgeMs) {
+        storage.removeItem(key);
+      }
+    } catch {
+      storage.removeItem(key);
+    }
   }
 
-  return params.toString();
+  const remainingKeys = listDashboardResultPageStorageKeys(storage);
+
+  while (remainingKeys.length > dashboardResultPageStorageMaxEntries) {
+    const oldestKey = remainingKeys.shift();
+    if (!oldestKey) {
+      break;
+    }
+    storage.removeItem(oldestKey);
+  }
+}
+
+function storeDashboardResultPageRouteState(input: DashboardResultPageRouteState) {
+  const storage = getDashboardResultPageStorage();
+  if (!storage) {
+    return null;
+  }
+
+  const now = Date.now();
+  const token = `${now.toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  const key = `${dashboardResultPageStoragePrefix}${token}`;
+  const value: StoredDashboardResultPageRouteState = {
+    ...input,
+    storedAt: now,
+  };
+
+  pruneDashboardResultPageStorage(storage, now);
+  storage.setItem(key, JSON.stringify(value));
+  return token;
+}
+
+function readStoredDashboardResultPageRouteState(token: string): DashboardResultPageRouteState | null {
+  const storage = getDashboardResultPageStorage();
+  if (!storage) {
+    return null;
+  }
+
+  const now = Date.now();
+  pruneDashboardResultPageStorage(storage, now);
+  const raw = storage.getItem(`${dashboardResultPageStoragePrefix}${token}`);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredDashboardResultPageRouteState>;
+    if (typeof parsed.url !== "string" || parsed.url.trim() === "") {
+      return null;
+    }
+
+    return {
+      taskId: typeof parsed.taskId === "string" ? parsed.taskId : null,
+      title: typeof parsed.title === "string" ? parsed.title : null,
+      url: parsed.url.trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readDashboardResultPageSearch(search: string): DashboardResultPageRouteState | null {
+  const params = new URLSearchParams(search);
+  const token = (params.get("result_id") ?? "").trim();
+  return token ? readStoredDashboardResultPageRouteState(token) : null;
 }
 
 /**
@@ -125,8 +211,9 @@ export function navigateToDashboardResultPage(
   navigate: NavigateFunction,
   input: DashboardResultPageRouteState,
 ) {
-  const search = buildDashboardResultPageSearch(input);
-  navigate(`${resolveDashboardRoutePath("result")}?${search}`, {
+  const token = storeDashboardResultPageRouteState(input);
+  const search = token ? `?result_id=${encodeURIComponent(token)}` : "";
+  navigate(`${resolveDashboardRoutePath("result")}${search}`, {
     state: buildDashboardResultPageRouteState(input),
   });
 }

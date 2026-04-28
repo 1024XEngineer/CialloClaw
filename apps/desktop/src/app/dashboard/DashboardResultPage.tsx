@@ -5,10 +5,23 @@ import { DashboardBackHomeLink } from "@/features/dashboard/shared/DashboardBack
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { readDashboardResultPageLocation } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 
+function isLoopbackHost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
 function isAllowedDashboardResultPageUrl(url: string) {
   try {
     const parsed = new URL(url);
     return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function isEmbeddableDashboardResultPageUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname));
   } catch {
     return false;
   }
@@ -29,9 +42,10 @@ export function DashboardResultPage() {
     state: location.state,
   });
   const resultUrl = routeState?.url ?? null;
-  const canEmbed = resultUrl ? isAllowedDashboardResultPageUrl(resultUrl) : false;
+  const canOpenExternally = resultUrl ? isAllowedDashboardResultPageUrl(resultUrl) : false;
+  const canEmbed = resultUrl ? isEmbeddableDashboardResultPageUrl(resultUrl) : false;
   const hostLabel = useMemo(() => {
-    if (!resultUrl || !canEmbed) {
+    if (!resultUrl || !canOpenExternally) {
       return null;
     }
 
@@ -40,9 +54,9 @@ export function DashboardResultPage() {
     } catch {
       return null;
     }
-  }, [canEmbed, resultUrl]);
+  }, [canOpenExternally, resultUrl]);
 
-  if (!resultUrl || !canEmbed) {
+  if (!resultUrl || !canOpenExternally) {
     return (
       <main className="dashboard-page dashboard-result-page">
         <DashboardBackHomeLink />
@@ -60,6 +74,8 @@ export function DashboardResultPage() {
     );
   }
 
+  const showBrowserOnlyFallback = !canEmbed;
+
   return (
     <main className="dashboard-page dashboard-result-page">
       <DashboardBackHomeLink />
@@ -72,7 +88,9 @@ export function DashboardResultPage() {
             <h1>{routeState?.title?.trim() || "结果页承接"}</h1>
           </div>
           <p className="dashboard-page__description">
-            当前交付使用正式 `result_page` 入口承接，优先留在 dashboard 内查看；需要时也可以切回任务详情或外部浏览器。
+            {showBrowserOnlyFallback
+              ? "当前结果页地址不满足站内嵌入条件，已切换为浏览器承接模式；你仍然可以回到任务详情继续查看正式上下文。"
+              : "当前交付使用正式 `result_page` 入口承接，优先留在 dashboard 内查看；需要时也可以切回任务详情或外部浏览器。"}
           </p>
         </div>
 
@@ -100,9 +118,17 @@ export function DashboardResultPage() {
         </div>
       </section>
 
-      <section className="dashboard-result-page__frame-shell">
-        <iframe className="dashboard-result-page__frame" src={resultUrl} title={routeState?.title?.trim() || "dashboard-result-page"} />
-      </section>
+      {showBrowserOnlyFallback ? null : (
+        <section className="dashboard-result-page__frame-shell">
+          <iframe
+            className="dashboard-result-page__frame"
+            referrerPolicy="no-referrer"
+            sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
+            src={resultUrl}
+            title={routeState?.title?.trim() || "dashboard-result-page"}
+          />
+        </section>
+      )}
     </main>
   );
 }

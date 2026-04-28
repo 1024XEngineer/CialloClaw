@@ -1386,52 +1386,100 @@ test("dashboard home no longer replays mock summon or voice presets when live re
 test("dashboard result-page navigation helper keeps recoverable route data in both search and state", () => {
   const navigation = loadDashboardResultPageNavigationModule();
   const navigateCalls: Array<{ options?: { state?: unknown }; to: string }> = [];
-
-  navigation.navigateToDashboardResultPage(
-    (to, options) => {
-      navigateCalls.push({ options, to });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const sessionStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
     },
-    {
-      taskId: "task_dashboard_001",
-      title: "Result page",
-      url: "https://example.test/result?page=summary",
+    key(index: number) {
+      return Array.from(storage.keys())[index] ?? null;
     },
-  );
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    get length() {
+      return storage.size;
+    },
+  };
 
-  assert.deepEqual(
-    navigation.readDashboardResultPageLocation({
-      search: "?url=https%3A%2F%2Fexample.test%2Fresult%3Fpage%3Dsummary&task_id=task_dashboard_001&title=Result+page",
-      state: navigation.buildDashboardResultPageRouteState({
+  Object.assign(globalThis, {
+    window: {
+      sessionStorage,
+    },
+  });
+
+  try {
+    navigation.navigateToDashboardResultPage(
+      (to, options) => {
+        navigateCalls.push({ options, to });
+      },
+      {
         taskId: "task_dashboard_001",
         title: "Result page",
         url: "https://example.test/result?page=summary",
-      }),
-    }),
-    {
-      taskId: "task_dashboard_001",
-      title: "Result page",
-      url: "https://example.test/result?page=summary",
-    },
-  );
-  assert.deepEqual(navigateCalls, [
-    {
-      options: {
-        state: {
-          taskId: "task_dashboard_001",
-          title: "Result page",
-          url: "https://example.test/result?page=summary",
-        },
       },
-      to: "/result?url=https%3A%2F%2Fexample.test%2Fresult%3Fpage%3Dsummary&task_id=task_dashboard_001&title=Result+page",
-    },
-  ]);
-  assert.equal(
-    navigation.readDashboardResultPageLocation({
-      search: "",
-      state: { title: "Missing url" },
-    }),
-    null,
-  );
+    );
+
+    const persistedRoute = navigateCalls[0]?.to ?? "";
+    assert.match(persistedRoute, /^\/result\?result_id=[a-z0-9]+$/i);
+    assert.doesNotMatch(persistedRoute, /example\.test/);
+    assert.doesNotMatch(persistedRoute, /task_dashboard_001/);
+    assert.doesNotMatch(persistedRoute, /Result\+page/);
+
+    assert.deepEqual(
+      navigation.readDashboardResultPageLocation({
+        search: persistedRoute.replace("/result", ""),
+        state: null,
+      }),
+      {
+        taskId: "task_dashboard_001",
+        title: "Result page",
+        url: "https://example.test/result?page=summary",
+      },
+    );
+    assert.deepEqual(navigateCalls, [
+      {
+        options: {
+          state: {
+            taskId: "task_dashboard_001",
+            title: "Result page",
+            url: "https://example.test/result?page=summary",
+          },
+        },
+        to: persistedRoute,
+      },
+    ]);
+    assert.equal(
+      navigation.readDashboardResultPageLocation({
+        search: "",
+        state: { title: "Missing url" },
+      }),
+      null,
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard result page keeps raw delivery URLs out of the visible query and embeds only sandboxed allowlisted pages", () => {
+  const resultPageSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardResultPage.tsx"), "utf8");
+  const navigationSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardResultPageNavigation.ts"), "utf8");
+
+  assert.match(resultPageSource, /function isEmbeddableDashboardResultPageUrl/);
+  assert.match(resultPageSource, /parsed\.protocol === "https:" \|\| \(parsed\.protocol === "http:" && isLoopbackHost\(parsed\.hostname\)\)/);
+  assert.match(resultPageSource, /sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"/);
+  assert.match(resultPageSource, /referrerPolicy="no-referrer"/);
+  assert.doesNotMatch(navigationSource, /params\.set\("url"/);
+  assert.doesNotMatch(navigationSource, /params\.set\("task_id"/);
+  assert.match(navigationSource, /params\.get\("result_id"\)/);
 });
 
 test("rpc-only dashboard pages no longer expose mock-only page copy", () => {
