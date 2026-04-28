@@ -415,7 +415,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     const checklist = parseChecklistLine(line);
     // Only top-level checklist rows start structured blocks; indented rows are
     // body content written by the editor for round-trip-safe natural notes.
-    if (checklist && (current || !hasNaturalNoteContent(naturalLines))) {
+    if (checklist) {
       flushNatural(index);
       flushCurrent();
       current = {

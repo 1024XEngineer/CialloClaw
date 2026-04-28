@@ -836,7 +836,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     const checklist = parseSourceChecklistLine(line);
     // Only top-level checklist rows start fallback cards; indented rows stay in
     // the current card body to match editor serialization and backend parsing.
-    if (checklist && (current || !hasSourceNaturalNoteContent(naturalLines))) {
+    if (checklist) {
       flushNatural();
       flushCurrent();
       current = {

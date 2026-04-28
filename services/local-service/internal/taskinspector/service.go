@@ -437,15 +437,13 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		trimmed := strings.TrimSpace(line)
 		// Only top-level checklist rows create structured notepad items; indented
 		// rows belong to the current body so editor-saved notes round-trip.
-		if current != nil || !hasNaturalNotepadContent(naturalLines) {
-			checked, title, ok := parseChecklistLine(line)
-			if ok {
-				flushNatural()
-				flushCurrent()
-				current = buildSourceBackedNotepadItem(sourcePath, index+1, title, checked, now)
-				pendingNoteSpacer = false
-				continue
-			}
+		checked, title, ok := parseChecklistLine(line)
+		if ok {
+			flushNatural()
+			flushCurrent()
+			current = buildSourceBackedNotepadItem(sourcePath, index+1, title, checked, now)
+			pendingNoteSpacer = false
+			continue
 		}
 		if current == nil {
 			if isNaturalNotepadHeadingLine(line) && hasNaturalNotepadContent(naturalLines) {

@@ -312,7 +312,7 @@ func TestServiceRunCombinesNoteMetadataAndChecklistBody(t *testing.T) {
 	}
 }
 
-func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
+func TestServiceRunSplitsTopLevelChecklistAwayFromNaturalNote(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
 	if err != nil {
@@ -343,16 +343,24 @@ func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	if len(result.NotepadItems) != 1 {
-		t.Fatalf("expected one multi-paragraph natural note, got %+v", result.NotepadItems)
+	if len(result.NotepadItems) != 3 {
+		t.Fatalf("expected one natural note plus two top-level checklist items, got %+v", result.NotepadItems)
 	}
-	item := result.NotepadItems[0]
-	if item["title"] != "Release prep" {
-		t.Fatalf("expected heading to remain the note title, got %+v", item)
+	natural := result.NotepadItems[0]
+	if natural["title"] != "Release prep" {
+		t.Fatalf("expected heading to remain the natural note title, got %+v", natural)
 	}
-	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible"
-	if item["note_text"] != expectedNoteText {
-		t.Fatalf("expected paragraph breaks and list markers to remain, got %+v", item)
+	if natural["note_text"] != "first paragraph\n\nsecond paragraph\n- item A" {
+		t.Fatalf("expected natural note body to stop before top-level checklist items, got %+v", natural)
+	}
+	if result.NotepadItems[1]["title"] != "verify changelog" || result.NotepadItems[1]["note_text"] != "verify changelog" {
+		t.Fatalf("expected first top-level checklist to become its own item, got %+v", result.NotepadItems[1])
+	}
+	if result.NotepadItems[2]["title"] != "update docs" || result.NotepadItems[2]["note_text"] != "update docs" {
+		t.Fatalf("expected final checklist row to remain its own note, got %+v", result.NotepadItems[2])
+	}
+	if result.NotepadItems[2]["due_at"] != "keep visible" || result.NotepadItems[2]["planned_at"] != "keep visible" {
+		t.Fatalf("expected following metadata lines to stay attached to the checklist item they belong to, got %+v", result.NotepadItems[2])
 	}
 }
 

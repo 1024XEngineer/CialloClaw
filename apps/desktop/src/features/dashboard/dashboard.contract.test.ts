@@ -1481,7 +1481,7 @@ test("source note editor keeps note metadata and checklist body together", () =>
   assert.equal(blocks[0]?.noteText, "collect rollout context\n\nkeep the rollback checklist nearby");
 });
 
-test("source note editor keeps natural paragraph breaks and list markers", () => {
+test("source note editor splits top-level checklist items away from natural notes", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
     content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible\n",
@@ -1494,9 +1494,14 @@ test("source note editor keeps natural paragraph breaks and list markers", () =>
 
   const blocks = parseSourceNoteEditorBlocks(note);
 
-  assert.equal(blocks.length, 1);
+  assert.equal(blocks.length, 3);
   assert.equal(blocks[0]?.title, "Release prep");
-  assert.equal(blocks[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible");
+  assert.equal(blocks[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A");
+  assert.equal(blocks[1]?.title, "verify changelog");
+  assert.equal(blocks[1]?.noteText, "");
+  assert.equal(blocks[2]?.title, "update docs");
+  assert.equal(blocks[2]?.noteText, "");
+  assert.equal(blocks[2]?.dueAt, "keep visible");
 
   const updated = upsertSourceNoteEditorBlock(note, {
     agentSuggestion: "",
@@ -1518,15 +1523,20 @@ test("source note editor keeps natural paragraph breaks and list markers", () =>
     updatedAt: "",
   });
 
-  assert.equal(updated.content, "- [ ] Release prep\n\n  first paragraph\n\n  second paragraph\n  - item A\n  - [ ] verify changelog\n  - [ ] update docs\n  due: keep visible\n");
+  assert.equal(updated.content, "- [ ] Release prep\n\n  first paragraph\n\n  second paragraph\n  - item A\n- [ ] verify changelog\n- [ ] update docs\n\n  due: keep visible\n");
 
   const reparsed = parseSourceNoteEditorBlocks({
     ...note,
     content: updated.content,
   });
-  assert.equal(reparsed.length, 1);
+  assert.equal(reparsed.length, 3);
   assert.equal(reparsed[0]?.title, "Release prep");
-  assert.equal(reparsed[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible");
+  assert.equal(reparsed[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A");
+  assert.equal(reparsed[1]?.title, "verify changelog");
+  assert.equal(reparsed[1]?.noteText, "");
+  assert.equal(reparsed[2]?.title, "update docs");
+  assert.equal(reparsed[2]?.noteText, "");
+  assert.equal(reparsed[2]?.dueAt, "keep visible");
 });
 
 test("source note editor splits heading-less natural paragraphs into separate blocks", () => {
@@ -1942,10 +1952,10 @@ test("source note fallback keeps metadata-shaped natural lines visible", () => {
   assert.ok(items[0]?.item.due_at);
 });
 
-test("source note fallback keeps natural paragraph breaks and list markers", () => {
+test("source note fallback splits top-level checklist lines into separate items", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
-    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n",
+    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible\n",
     fileName: "tasks.md",
     modifiedAtMs: null,
     path: "D:/workspace/todos/tasks.md",
@@ -1955,9 +1965,14 @@ test("source note fallback keeps natural paragraph breaks and list markers", () 
 
   const items = buildSourceNoteFallbackItems(note);
 
-  assert.equal(items.length, 1);
+  assert.equal(items.length, 3);
   assert.equal(items[0]?.item.title, "Release prep");
-  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs");
+  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A");
+  assert.equal(items[1]?.item.title, "verify changelog");
+  assert.equal(items[1]?.item.note_text, "verify changelog");
+  assert.equal(items[2]?.item.title, "update docs");
+  assert.equal(items[2]?.item.note_text, "update docs");
+  assert.equal(items[2]?.item.due_at, "keep visible");
 });
 
 test("source note fallback splits heading-less natural paragraphs into separate cards", () => {
