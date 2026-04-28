@@ -83,6 +83,10 @@ export function DashboardHome({
   const isOverlayOpen = Boolean(activeState || voiceOpen);
 
   const scheduleSummon = useCallback(() => {
+    if (data.summonTemplates.length === 0) {
+      return;
+    }
+
     const template = data.summonTemplates[summonIndexRef.current % data.summonTemplates.length];
     summonIndexRef.current += 1;
 
@@ -109,6 +113,10 @@ export function DashboardHome({
     summonIdRef.current = 0;
     setSummons([]);
 
+    if (data.summonTemplates.length === 0) {
+      return;
+    }
+
     summonTimerRef.current = window.setTimeout(scheduleSummon, 2_500);
 
     return () => {
@@ -116,7 +124,7 @@ export function DashboardHome({
         window.clearTimeout(summonTimerRef.current);
       }
     };
-  }, [scheduleSummon]);
+  }, [data.summonTemplates.length, scheduleSummon]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

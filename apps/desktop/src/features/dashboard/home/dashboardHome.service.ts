@@ -706,7 +706,7 @@ function buildRecommendationSummons(
     } satisfies Omit<DashboardHomeSummonEvent, "id">;
   });
 
-  return templates.length > 0 ? templates : dashboardSummonTemplates.map(cloneSummonTemplate);
+  return templates;
 }
 
 function buildVoiceSequences(
@@ -729,7 +729,7 @@ function buildVoiceSequences(
     } satisfies DashboardVoiceSequence;
   });
 
-  return sequences.length > 0 ? sequences : dashboardVoiceSequences.map(cloneVoiceSequence);
+  return sequences;
 }
 
 function buildFocusLine(
