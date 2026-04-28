@@ -3429,16 +3429,16 @@ test("task output execution delegates task-detail routing through the shared cal
     taskId: "task_dashboard_001",
     path: null,
     url: null,
-    feedback: "宸插畾浣嶅埌浠诲姟璇︽儏銆?",
+    feedback: "已定位到任务详情。",
   }, {
     onOpenTaskDetail: ({ taskId }) => {
       openedTaskIds.push(taskId);
-      return "宸插湪浠〃鐩樹腑鎵撳紑浠诲姟璇︽儏銆?";
+      return "已在仪表盘中打开任务详情。";
     },
   });
 
   assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
-  assert.equal(feedback, "宸插湪浠〃鐩樹腑鎵撳紑浠诲姟璇︽儏銆?");
+  assert.equal(feedback, "已在仪表盘中打开任务详情。");
 });
 
 test("note resource execution delegates task-detail routing through the shared callback", async () => {
@@ -3447,19 +3447,19 @@ test("note resource execution delegates task-detail routing through the shared c
 
   const feedback = await noteService.performNoteResourceOpenExecution({
     mode: "task_detail",
-    feedback: "宸插畾浣嶅埌浠诲姟 Task detail銆?",
+    feedback: "已定位到任务 Task detail。",
     path: null,
     taskId: "task_dashboard_001",
     url: null,
   }, {
     onOpenTaskDetail: ({ taskId }) => {
       openedTaskIds.push(taskId);
-      return "宸插湪浠〃鐩樹腑鎵撳紑 Task detail銆?";
+      return "已在仪表盘中打开 Task detail。";
     },
   });
 
   assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
-  assert.equal(feedback, "宸插湪浠〃鐩樹腑鎵撳紑 Task detail銆?");
+  assert.equal(feedback, "已在仪表盘中打开 Task detail。");
 });
 
 test("task workspace routes formal delivery through a dedicated page and keeps list refresh task-updated aware", () => {

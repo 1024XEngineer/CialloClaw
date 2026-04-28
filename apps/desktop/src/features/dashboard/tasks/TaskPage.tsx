@@ -357,6 +357,18 @@ export function TaskPage() {
       void queryClient.invalidateQueries({ queryKey: [...dashboardTaskEventQueryPrefix, dataMode, taskId] });
     }
 
+    function invalidateTaskQueriesForNotification(taskId: string) {
+      // Plain task.updated or delivery.ready notifications can advance runtime
+      // state without a matching loop.* event, so the focused task needs both
+      // detail and event queries to stay in sync.
+      if (taskId === selectedTaskId) {
+        invalidateTaskRuntimeQueries(taskId);
+        return;
+      }
+
+      invalidateTaskDetailQueries(taskId);
+    }
+
     function flushBucketQueryRefresh() {
       bucketQueryRefreshTimeoutId = null;
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit) });
@@ -379,12 +391,12 @@ export function TaskPage() {
     }
 
     const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
-      invalidateTaskDetailQueries(payload.task_id);
+      invalidateTaskQueriesForNotification(payload.task_id);
       scheduleBucketQueryRefresh();
     });
 
     const clearTaskUpdatedSubscription = subscribeTaskUpdated((payload) => {
-      invalidateTaskDetailQueries(payload.task_id);
+      invalidateTaskQueriesForNotification(payload.task_id);
       scheduleBucketQueryRefresh();
     });
 
