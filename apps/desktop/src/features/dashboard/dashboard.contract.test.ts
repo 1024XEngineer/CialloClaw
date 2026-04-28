@@ -4664,6 +4664,120 @@ test("dashboard home rpc service keeps transport failures visible instead of swi
   );
 });
 
+test("mirror overview keeps rendering when memory settings snapshot falls back to a warning snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    await withDesktopAliasRuntime(
+      async (requireFn) => {
+        const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/memory/mirrorService.js");
+        const snapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
+        delete requireFn.cache[modulePath];
+        delete requireFn.cache[snapshotModulePath];
+
+        const service = requireFn(modulePath) as {
+          loadMirrorOverviewData: () => Promise<{
+            overview: { history_summary: string[] };
+            rpcContext: { warnings: string[] };
+            settingsSnapshot: {
+              rpcContext: { warnings: string[] };
+              settings: { memory: { enabled: boolean } };
+              source: string;
+            };
+          }>;
+        };
+
+        const result = await service.loadMirrorOverviewData();
+
+        assert.equal(result.overview.history_summary[0], "memory overview");
+        assert.equal(result.settingsSnapshot.source, "rpc");
+        assert.equal(result.settingsSnapshot.settings.memory.enabled, true);
+        assert.deepEqual(result.settingsSnapshot.rpcContext.warnings, ["settings-context: memory settings unavailable"]);
+        assert.ok(result.rpcContext.warnings.includes("settings-context: memory settings unavailable"));
+      },
+      {
+        getMirrorOverviewDetailed: async () => ({
+          data: {
+            daily_summary: null,
+            history_summary: ["memory overview"],
+            memory_references: [],
+            profile: null,
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        getSettingsDetailed: async () => {
+          throw new Error("memory settings unavailable");
+        },
+        getSecuritySummaryDetailed: async () => ({
+          data: {
+            summary: {
+              latest_restore_point: null,
+              pending_authorizations: 0,
+              risk_level: "green",
+              security_status: "normal",
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        listSecurityPendingDetailed: async () => ({
+          data: {
+            items: [],
+            page: {
+              has_more: false,
+              limit: 20,
+              offset: 0,
+              total: 0,
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        listTasks: async () => ({
+          items: [],
+          page: {
+            has_more: false,
+            limit: 20,
+            offset: 0,
+            total: 0,
+          },
+        }),
+      },
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("dashboard home keeps module and recommendation failures local instead of blanking the full orbit", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {

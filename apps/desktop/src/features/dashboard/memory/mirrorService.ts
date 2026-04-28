@@ -13,6 +13,7 @@ import { loadMirrorConversationRecords, type MirrorConversationRecord } from "@/
 import { loadSecurityModuleData } from "@/features/dashboard/safety/securityService";
 import { loadTaskBuckets } from "@/features/dashboard/tasks/taskPage.service";
 import {
+  buildDashboardSettingsWarningSnapshot,
   loadDashboardSettingsSnapshot,
   type DashboardSettingsSnapshotScope,
   type DashboardSettingsSnapshotData,
@@ -190,19 +191,35 @@ export async function loadMirrorOverviewData(_source: MirrorOverviewSource = "rp
 
   // Support context and settings are independent read paths, so load them in
   // parallel with the main mirror overview request to keep refreshes responsive.
-  const [response, supportContext, settingsSnapshot] = await Promise.all([
+  // Settings are advisory for the mirror settings card, so a transient
+  // `agent.settings.get` failure should degrade into a warning instead of
+  // blanking the whole mirror overview page.
+  const [response, supportContext, settingsSnapshotResult] = await Promise.all([
     requestMirrorOverview(params),
     loadMirrorSupportContext(),
-    loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE),
+    loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE)
+      .then((snapshot) => ({ snapshot, warning: null as string | null }))
+      .catch((error) => {
+        const warning = error instanceof Error
+          ? `settings-context: ${error.message}`
+          : "settings-context: load failed";
+
+        return {
+          snapshot: buildDashboardSettingsWarningSnapshot(warning),
+          warning,
+        };
+      }),
   ]);
   const overview = response.data;
+  const settingsSnapshot = settingsSnapshotResult.snapshot;
+  const settingsWarnings = settingsSnapshotResult.warning ? [settingsSnapshotResult.warning] : [];
 
   return buildMirrorOverviewData(
     overview,
     "rpc",
     {
       serverTime: response.meta?.server_time ?? null,
-      warnings: response.warnings,
+      warnings: [...response.warnings, ...settingsWarnings],
     },
     supportContext,
     settingsSnapshot,

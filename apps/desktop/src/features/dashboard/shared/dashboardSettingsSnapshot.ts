@@ -69,6 +69,26 @@ function getDashboardSettingsBaseline() {
 }
 
 /**
+ * Builds a warning-bearing dashboard settings snapshot from the current local
+ * baseline when a caller chooses to keep rendering after a scoped RPC read
+ * failed. This keeps the degraded state explicit without reintroducing global
+ * transport fallbacks into every dashboard page.
+ *
+ * @param warning The user-visible warning that explains why the formal read is missing.
+ * @returns A snapshot based on the persisted local settings plus the warning.
+ */
+export function buildDashboardSettingsWarningSnapshot(warning: string): DashboardSettingsSnapshotData {
+  return {
+    settings: getDashboardSettingsBaseline(),
+    source: "rpc",
+    rpcContext: {
+      serverTime: null,
+      warnings: [warning],
+    },
+  };
+}
+
+/**
  * Loads one dashboard settings snapshot from JSON-RPC, then merges any scoped
  * payload back into the full local baseline.
  *
