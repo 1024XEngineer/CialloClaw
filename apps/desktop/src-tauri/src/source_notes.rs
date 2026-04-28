@@ -309,7 +309,27 @@ fn resolve_source_root(raw_source: &str, roots: &LocalPathRoots) -> Result<PathB
         runtime_root.join(candidate)
     };
 
-    Ok(resolved.canonicalize().unwrap_or(resolved))
+    let canonical_resolved = resolved.canonicalize().unwrap_or(resolved);
+    let in_workspace = roots
+        .workspace_root()
+        .map(|root| canonical_resolved.starts_with(root))
+        .unwrap_or(false);
+    let in_runtime = roots
+        .runtime_root()
+        .map(|root| canonical_resolved.starts_with(root))
+        .unwrap_or(false);
+
+    // Source-note roots remain a trusted host bridge, so absolute sources must
+    // stay pinned to the active workspace/runtime roots instead of inheriting
+    // arbitrary persisted host paths from older settings snapshots.
+    if !in_workspace && !in_runtime {
+        return Err(format!(
+            "task source root is outside the trusted workspace and runtime roots: {}",
+            canonical_resolved.display()
+        ));
+    }
+
+    Ok(canonical_resolved)
 }
 
 /// Reports whether any configured source still depends on the trusted
@@ -601,27 +621,78 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn resolve_source_root_accepts_absolute_paths_without_trusted_roots() {
-        let absolute = unique_temp_path("你好").join("notes");
+    fn resolve_source_root_accepts_absolute_path_within_runtime_root() {
+        let runtime_root = unique_temp_path("runtime-root-absolute");
+        let absolute = runtime_root.join("notes");
+        fs::create_dir_all(&absolute).expect("create runtime source root");
         let resolved = resolve_source_root(
             absolute.to_string_lossy().as_ref(),
-            &LocalPathRoots::new(None, None, None),
+            &LocalPathRoots::new(None, Some(runtime_root), None),
         )
-        .expect("resolve absolute path without workspace root");
+        .expect("resolve absolute path within runtime root");
 
-        assert_eq!(resolved, absolute);
+        assert_eq!(
+            resolved,
+            absolute
+                .canonicalize()
+                .expect("canonicalize runtime source root")
+        );
+    }
+
+    #[test]
+    fn resolve_source_root_accepts_absolute_path_within_workspace_root() {
+        let workspace_root = unique_temp_path("workspace-root-absolute");
+        let absolute = workspace_root.join("notes");
+        fs::create_dir_all(&absolute).expect("create workspace source root");
+        let resolved = resolve_source_root(
+            absolute.to_string_lossy().as_ref(),
+            &LocalPathRoots::new(Some(workspace_root), None, None),
+        )
+        .expect("resolve absolute path within workspace root");
+
+        assert_eq!(
+            resolved,
+            absolute
+                .canonicalize()
+                .expect("canonicalize workspace source root")
+        );
     }
 
     #[test]
     fn resolve_source_root_joins_runtime_relative_sources_against_runtime_root() {
         let runtime_root = unique_temp_path("runtime-root");
+        fs::create_dir_all(runtime_root.join("notes").join("manual"))
+            .expect("create runtime-relative source root");
         let resolved = resolve_source_root(
             "notes/manual",
             &LocalPathRoots::new(None, Some(runtime_root.clone()), None),
         )
         .expect("resolve runtime-relative source root");
 
-        assert_eq!(resolved, runtime_root.join("notes").join("manual"));
+        assert_eq!(
+            resolved,
+            runtime_root
+                .join("notes")
+                .join("manual")
+                .canonicalize()
+                .expect("canonicalize runtime-relative source root")
+        );
+    }
+
+    #[test]
+    fn resolve_source_root_rejects_absolute_path_outside_trusted_roots() {
+        let runtime_root = unique_temp_path("trusted-runtime-root");
+        let outside_root = unique_temp_path("outside-source-root");
+        fs::create_dir_all(&runtime_root).expect("create trusted runtime root");
+        fs::create_dir_all(&outside_root).expect("create outside source root");
+
+        let error = resolve_source_root(
+            outside_root.to_string_lossy().as_ref(),
+            &LocalPathRoots::new(None, Some(runtime_root), None),
+        )
+        .expect_err("reject absolute path outside trusted roots");
+
+        assert!(error.contains("outside the trusted workspace and runtime roots"));
     }
 
     #[test]

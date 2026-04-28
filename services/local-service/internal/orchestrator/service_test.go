@@ -1973,6 +1973,54 @@ func TestTaskInspectorSettingsHelpersCoverDefaultsAndCompatibilityInputs(t *test
 	if values, ok := optionalStringSliceValue("invalid"); ok || values != nil {
 		t.Fatalf("expected invalid task source payload to be rejected, got ok=%v values=%+v", ok, values)
 	}
+
+	workspaceRoot := filepath.Clean(serviceconfig.DefaultWorkspaceRoot())
+	runtimeRoot := filepath.Clean(serviceconfig.DefaultRuntimeRoot())
+	if presentInspectorTaskSource("") != "" {
+		t.Fatal("expected blank task source presentation to stay empty")
+	}
+	if presentInspectorTaskSource("workspace/review") != "workspace/review" {
+		t.Fatal("expected relative compatibility path to stay unchanged")
+	}
+	if presentInspectorTaskSource(workspaceRoot) != "workspace" {
+		t.Fatalf("expected workspace root to collapse to compatibility workspace token")
+	}
+	if presented := presentInspectorTaskSource(filepath.Join(workspaceRoot, "review")); presented != "workspace/review" {
+		t.Fatalf("expected workspace child to stay workspace-relative, got %q", presented)
+	}
+	if presentInspectorTaskSource(runtimeRoot) != "." {
+		t.Fatal("expected runtime root to collapse to current-directory compatibility token")
+	}
+	if presented := presentInspectorTaskSource(filepath.Join(runtimeRoot, "notes", "manual")); presented != "notes/manual" {
+		t.Fatalf("expected runtime child to stay runtime-relative, got %q", presented)
+	}
+	outsideRoot := filepath.Join(t.TempDir(), "outside-source-root", "notes")
+	if presented := presentInspectorTaskSource(outsideRoot); presented != filepath.ToSlash(filepath.Clean(outsideRoot)) {
+		t.Fatalf("expected outside source to stay absolute, got %q", presented)
+	}
+
+	if relative, ok := relativizePathWithinRoot(workspaceRoot, workspaceRoot); !ok || relative != "" {
+		t.Fatalf("expected identical root relativization to succeed, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(workspaceRoot, "notes"), workspaceRoot); !ok || relative != "notes" {
+		t.Fatalf("expected child relativization to succeed, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(t.TempDir(), "outside"), workspaceRoot); ok || relative != "" {
+		t.Fatalf("expected outside relativization to fail, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(workspaceRoot, "notes"), ""); ok || relative != "" {
+		t.Fatalf("expected empty root relativization to fail, relative=%q ok=%v", relative, ok)
+	}
+	if !hasWindowsDriveLetterPrefix(`C:/notes`) || hasWindowsDriveLetterPrefix("notes") {
+		t.Fatal("expected drive-letter helper to distinguish windows prefixes")
+	}
+	if !isWindowsStyleAbsolutePath(`C:/notes`) || isWindowsStyleAbsolutePath(`C:notes`) {
+		t.Fatal("expected windows absolute helper to reject drive-relative paths")
+	}
+
+	if currentRuntimeWorkspaceRoot(nil) != filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot())) {
+		t.Fatal("expected nil executor workspace root to fall back to default runtime workspace")
+	}
 }
 
 func TestPreviewNeedsRestartCoversWorkspaceAndNoopCases(t *testing.T) {
@@ -11544,6 +11592,9 @@ func TestIsWorkspaceRelativePathAcceptsFormalAbsoluteAndRelativeWorkspaceTargets
 	}
 	if isWorkspaceRelativePath(`\temp\summary.md`, workspaceRoot) {
 		t.Fatal("expected root-relative path to be rejected")
+	}
+	if isWorkspaceRelativePath("temp", workspaceRoot) {
+		t.Fatal("expected bare runtime temp root to stay outside workspace scope")
 	}
 }
 
