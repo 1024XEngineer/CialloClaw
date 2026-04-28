@@ -133,11 +133,6 @@ function readDashboardResultPageSearch(search: string): DashboardResultPageRoute
   return token ? readStoredDashboardResultPageRouteState(token) : null;
 }
 
-function readDashboardResultPageToken(search: string) {
-  const params = new URLSearchParams(search);
-  return (params.get("result_id") ?? "").trim();
-}
-
 /**
  * Builds the router state used by dashboard result-page views so task- and
  * note-driven result openings can converge on one renderer entry.
@@ -188,8 +183,8 @@ export function readDashboardResultPageRouteState(value: unknown): DashboardResu
 
 /**
  * Resolves dashboard result-page input from both router search params and route
- * state so refreshes can recover the formal delivery address while the page
- * remains active in the current dashboard session.
+ * state so refreshes can recover the formal delivery address while the cached
+ * recovery token remains valid in the current dashboard session.
  *
  * @param input The current location search string and route state payload.
  * @returns The recoverable result-page route payload or null when missing.
@@ -207,26 +202,6 @@ export function readDashboardResultPageLocation(input: DashboardResultPageLocati
     title: searchState.title ?? routedState?.title ?? null,
     url: searchState.url,
   };
-}
-
-/**
- * Clears one persisted result-page recovery token after the user explicitly
- * leaves that result-page route or navigates to another result-page payload.
- *
- * @param search The route search string that may contain `result_id`.
- */
-export function clearDashboardResultPageRecoveryForSearch(search: string) {
-  const token = readDashboardResultPageToken(search);
-  if (!token) {
-    return;
-  }
-
-  const storage = getDashboardResultPageStorage();
-  if (!storage) {
-    return;
-  }
-
-  storage.removeItem(`${dashboardResultPageStoragePrefix}${token}`);
 }
 
 /**

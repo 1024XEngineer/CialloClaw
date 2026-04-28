@@ -16,7 +16,6 @@ import {
   navigateToDashboardTaskDetail,
   type DashboardTaskDetailOpenRequest,
 } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
-import { clearDashboardResultPageRecoveryForSearch } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
@@ -83,10 +82,6 @@ function DashboardRoutes() {
   const isOpening = useDashboardDomainExpansion();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
-  const previousLocationRef = useRef({
-    pathname: location.pathname,
-    search: location.search,
-  });
   const dashboardHomeQuery = useQuery({
     queryKey: ["dashboard", "home"],
     queryFn: loadDashboardHomeData,
@@ -238,22 +233,6 @@ function DashboardRoutes() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigate, voiceOpen]);
-
-  useEffect(() => {
-    const previousLocation = previousLocationRef.current;
-    const resultRoutePath = resolveDashboardRoutePath("result");
-    const previousWasResult = previousLocation.pathname === resultRoutePath;
-    const currentIsResult = location.pathname === resultRoutePath;
-
-    if (previousWasResult && (!currentIsResult || previousLocation.search !== location.search)) {
-      clearDashboardResultPageRecoveryForSearch(previousLocation.search);
-    }
-
-    previousLocationRef.current = {
-      pathname: location.pathname,
-      search: location.search,
-    };
-  }, [location.pathname, location.search]);
 
   const handleRecommendationFeedback = (recommendationId: string, feedback: "positive" | "negative") => {
     recommendationFeedbackMutation.mutate({ feedback, recommendationId });

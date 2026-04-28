@@ -191,7 +191,12 @@ export function getFinishedTaskGroups(items: TaskListItem[], expanded: boolean):
 }
 
 function buildTaskSafetyAction(task: Task, detail: AgentTaskDetailGetResult | null): TaskPrimaryAction {
-  const hasAnchor = task.status === "waiting_auth" || detail?.approval_request !== null || detail?.security_summary.latest_restore_point !== null;
+  const hasAnchor = detail !== null
+    && (
+      task.status === "waiting_auth"
+      || detail.approval_request !== null
+      || detail.security_summary.latest_restore_point !== null
+    );
 
   return {
     action: "open-safety",

@@ -86,7 +86,6 @@ function loadDashboardResultPageNavigationModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, "src/features/dashboard/shared/dashboardResultPageNavigation.ts")) as {
       buildDashboardResultPageRouteState: (input: { taskId: string | null; title: string | null; url: string }) => unknown;
-      clearDashboardResultPageRecoveryForSearch: (search: string) => void;
       navigateToDashboardResultPage: (navigate: (to: string, options?: { state?: unknown }) => void, input: { taskId: string | null; title: string | null; url: string }) => void;
       readDashboardResultPageLocation: (input: { search: string; state: unknown }) => { taskId: string | null; title: string | null; url: string } | null;
       readDashboardResultPageRouteState: (value: unknown) => { taskId: string | null; title: string | null; url: string } | null;
@@ -1371,6 +1370,7 @@ test("dashboard root no longer falls back to mock home data when the live query 
   assert.match(dashboardRootSource, /sequences=\{dashboardHomeData\?\.voiceSequences \?\? \[\]\}/);
   assert.match(dashboardRootSource, /dashboardHomeStatusShellModules/);
   assert.match(dashboardRootSource, /to=\{module\.route\}/);
+  assert.doesNotMatch(dashboardRootSource, /clearDashboardResultPageRecoveryForSearch/);
   assert.doesNotMatch(dashboardHomeServiceSource, /export function getDashboardHomeFallbackData/);
   assert.match(dashboardHomeServiceSource, /Promise\.allSettled/);
 });
@@ -1444,13 +1444,16 @@ test("dashboard result-page navigation helper keeps recoverable route data in bo
         url: "https://example.test/result?page=summary",
       },
     );
-    navigation.clearDashboardResultPageRecoveryForSearch(persistedRoute.replace("/result", ""));
-    assert.equal(
+    assert.deepEqual(
       navigation.readDashboardResultPageLocation({
         search: persistedRoute.replace("/result", ""),
         state: null,
       }),
-      null,
+      {
+        taskId: "task_dashboard_001",
+        title: "Result page",
+        url: "https://example.test/result?page=summary",
+      },
     );
     assert.deepEqual(navigateCalls, [
       {
@@ -4868,6 +4871,8 @@ test("task detail fallback keeps operator controls available from the selected t
   assert.doesNotMatch(panelSource, /detailData \? <TaskActionBar/);
   assert.match(actionBarSource, /detail: AgentTaskDetailGetResult \| null;/);
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
+  assert.match(mapperSource, /const hasAnchor = detail !== null/);
+  assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);
 });
 
 test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
