@@ -17,6 +17,8 @@ type StoredDashboardResultPageRouteState = DashboardResultPageRouteState & {
 };
 
 const dashboardResultPageStoragePrefix = "dashboard.result-page.";
+const dashboardResultPageStorageMaxAgeMs = 1000 * 60 * 60 * 12;
+const dashboardResultPageStorageMaxEntries = 64;
 
 function getDashboardResultPageStorage() {
   if (typeof window === "undefined") {
@@ -45,6 +47,8 @@ function listDashboardResultPageStorageKeys(storage: Storage) {
 
 function pruneDashboardResultPageStorage(storage: Storage) {
   const keys = listDashboardResultPageStorageKeys(storage);
+  const now = Date.now();
+  const validEntries: Array<{ key: string; storedAt: number }> = [];
 
   for (const key of keys) {
     const raw = storage.getItem(key);
@@ -55,13 +59,28 @@ function pruneDashboardResultPageStorage(storage: Storage) {
 
     try {
       const parsed = JSON.parse(raw) as Partial<StoredDashboardResultPageRouteState>;
-      if (typeof parsed.storedAt !== "number" || typeof parsed.url !== "string" || parsed.url.trim() === "") {
+      if (
+        typeof parsed.storedAt !== "number"
+        || now - parsed.storedAt > dashboardResultPageStorageMaxAgeMs
+        || typeof parsed.url !== "string"
+        || parsed.url.trim() === ""
+      ) {
         storage.removeItem(key);
+        continue;
       }
+
+      validEntries.push({ key, storedAt: parsed.storedAt });
     } catch {
       storage.removeItem(key);
     }
   }
+
+  validEntries
+    .sort((left, right) => left.storedAt - right.storedAt)
+    .slice(0, Math.max(0, validEntries.length - dashboardResultPageStorageMaxEntries))
+    .forEach((entry) => {
+      storage.removeItem(entry.key);
+    });
 }
 
 function storeDashboardResultPageRouteState(input: DashboardResultPageRouteState) {

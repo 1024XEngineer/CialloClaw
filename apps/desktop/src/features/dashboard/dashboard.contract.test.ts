@@ -1557,8 +1557,8 @@ test("dashboard result page keeps raw delivery URLs out of the visible query and
   assert.doesNotMatch(navigationSource, /params\.set\("url"/);
   assert.doesNotMatch(navigationSource, /params\.set\("task_id"/);
   assert.match(navigationSource, /params\.get\("result_id"\)/);
-  assert.doesNotMatch(navigationSource, /dashboardResultPageStorageMaxAgeMs/);
-  assert.doesNotMatch(navigationSource, /dashboardResultPageStorageMaxEntries/);
+  assert.match(navigationSource, /dashboardResultPageStorageMaxAgeMs = 1000 \* 60 \* 60 \* 12/);
+  assert.match(navigationSource, /dashboardResultPageStorageMaxEntries = 64/);
 });
 
 test("rpc-only dashboard pages no longer expose mock-only page copy", () => {
