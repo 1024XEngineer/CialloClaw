@@ -2339,6 +2339,12 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 		return nil
 	}
 	reason := strings.TrimSpace(generationErr.Error())
+	if strings.Contains(reason, context.Canceled.Error()) {
+		reason = context.Canceled.Error()
+	}
+	if strings.Contains(reason, context.DeadlineExceeded.Error()) {
+		reason = context.DeadlineExceeded.Error()
+	}
 	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !isBudgetFailureReason(reason) {
 		return nil
 	}
@@ -2353,7 +2359,7 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 func isBudgetFailureReason(reason string) bool {
 	trimmed := strings.TrimSpace(reason)
 	switch trimmed {
-	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error():
+	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error(), context.Canceled.Error(), context.DeadlineExceeded.Error():
 		return true
 	default:
 		return false
