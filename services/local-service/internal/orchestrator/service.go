@@ -426,8 +426,18 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
-	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
+	options := mapValue(params, "options")
+	forceConfirmRequired := boolValue(options, "confirm_required", false)
+	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
+	suggestion := s.intent.Suggest(snapshot, explicitIntent, confirmRequired)
+	fallbackConfirmRequired := confirmRequired
+	// Screen inference already carries its own authorization boundary; only an
+	// explicit caller request should turn an unavailable screen path back into
+	// intent confirmation.
+	if stringValue(suggestion.Intent, "name", "") == "screen_analyze" && !forceConfirmRequired {
+		fallbackConfirmRequired = suggestion.RequiresConfirm
+	}
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, fallbackConfirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -502,6 +512,28 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		response["delivery_result"] = nil
 	}
 	return response, nil
+}
+
+// taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.
+// Object-based task starts with their own instruction can enter the Agent Loop
+// directly, while bare objects still stop for intent confirmation.
+func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, forceConfirm bool) bool {
+	if forceConfirm {
+		return true
+	}
+	if len(explicitIntent) > 0 {
+		return false
+	}
+	return !taskStartHasExplicitGoal(snapshot)
+}
+
+func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
+	switch snapshot.InputType {
+	case "file":
+		return strings.TrimSpace(snapshot.Text) != ""
+	default:
+		return false
+	}
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {

@@ -3277,6 +3277,77 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskFileInstructionSkipsForcedIntentConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_file_instruction",
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "帮我看看这里面有什么",
+			"files": []any{"workspace/MyToDos_Vue"},
+		},
+		"delivery": map[string]any{
+			"preferred": "bubble",
+			"fallback":  "task_detail",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected instructed file task to execute without intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected file task to preserve dragged_file source, got %+v", task)
+	}
+	if task["intent"].(map[string]any)["name"] != "agent_loop" {
+		t.Fatalf("expected instructed file task to enter agent_loop, got %+v", task["intent"])
+	}
+	if result["delivery_result"] == nil {
+		t.Fatal("expected instructed file task to return delivery_result")
+	}
+}
+
+func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_file_needs_goal",
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []any{"workspace/MyToDos_Vue"},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected bare file task to wait for intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected bare file task to preserve dragged_file source, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected bare file task to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected bare file task to return intent confirmation bubble, got %+v", bubble)
+	}
+}
+
 func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
 	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
