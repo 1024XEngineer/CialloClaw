@@ -476,7 +476,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			}
 		}
 		pendingNoteSpacer = false
-		noteLines = append(noteLines, trimmed)
+		noteLines = append(noteLines, normalizeNotepadChecklistBodyLine(line))
 	}
 	flushCurrent()
 	flushNatural()
@@ -514,6 +514,17 @@ func parseChecklistLine(line string) (bool, string, bool) {
 
 func isIndentedMarkdownLine(line string) bool {
 	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
+}
+
+func normalizeNotepadChecklistBodyLine(line string) string {
+	trimmedRight := strings.TrimRight(line, " \t\r")
+	if strings.HasPrefix(trimmedRight, "  ") {
+		return strings.TrimPrefix(trimmedRight, "  ")
+	}
+	if strings.HasPrefix(trimmedRight, "\t") {
+		return strings.TrimPrefix(trimmedRight, "\t")
+	}
+	return trimmedRight
 }
 
 func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) bool {

@@ -401,6 +401,17 @@ function isIndentedSourceLine(line: string) {
   return /^\s/.test(line);
 }
 
+function normalizeSourceChecklistBodyLine(line: string) {
+  const trimmedRight = line.trimEnd();
+  if (trimmedRight.startsWith("  ")) {
+    return trimmedRight.slice(2);
+  }
+  if (trimmedRight.startsWith("\t")) {
+    return trimmedRight.slice(1);
+  }
+  return trimmedRight;
+}
+
 function normalizeSourceNaturalNoteLine(line: string) {
   const trimmedRight = line.trimEnd();
   const trimmed = trimmedRight.trim();
@@ -865,7 +876,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         : null;
     if (!metadata) {
       currentPendingBodySpacer = false;
-      current.bodyLines.push(trimmed);
+      current.bodyLines.push(normalizeSourceChecklistBodyLine(line));
       return;
     }
 
@@ -901,7 +912,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         current.recentInstanceStatus = metadata.value;
         return;
       default:
-        current.bodyLines.push(trimmed);
+        current.bodyLines.push(normalizeSourceChecklistBodyLine(line));
     }
   });
 

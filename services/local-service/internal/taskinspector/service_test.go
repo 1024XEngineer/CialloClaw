@@ -295,6 +295,8 @@ func TestServiceRunPreservesSerializedChecklistBodyMarkers(t *testing.T) {
 		"  - item A",
 		"  - [ ] verify changelog",
 		"  - [ ] update docs",
+		"    code block",
+		"    - nested item",
 		"  due: keep visible",
 		"- [ ] Separate top-level",
 	}, "\n")
@@ -316,7 +318,7 @@ func TestServiceRunPreservesSerializedChecklistBodyMarkers(t *testing.T) {
 	if first["title"] != "Release prep" {
 		t.Fatalf("expected first serialized block to keep its title, got %+v", first)
 	}
-	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible"
+	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n  code block\n  - nested item\ndue: keep visible"
 	if first["note_text"] != expectedNoteText {
 		t.Fatalf("expected editor-saved checklist body markers to remain body text, got %+v", first)
 	}

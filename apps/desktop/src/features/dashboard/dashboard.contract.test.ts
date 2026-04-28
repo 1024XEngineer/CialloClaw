@@ -1742,7 +1742,7 @@ test("source note fallback keeps natural paragraph breaks and list markers", () 
 test("source note fallback keeps editor-saved checklist body markers inside one card", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
-    content: "- [ ] Release prep\n\n  first paragraph\n\n  second paragraph\n  - item A\n  - [ ] verify changelog\n  - [ ] update docs\n  due: keep visible\n- [ ] Separate top-level\n",
+    content: "- [ ] Release prep\n\n  first paragraph\n\n  second paragraph\n  - item A\n  - [ ] verify changelog\n  - [ ] update docs\n    code block\n    - nested item\n  due: keep visible\n- [ ] Separate top-level\n",
     fileName: "tasks.md",
     modifiedAtMs: null,
     path: "D:/workspace/todos/tasks.md",
@@ -1754,7 +1754,7 @@ test("source note fallback keeps editor-saved checklist body markers inside one 
 
   assert.equal(items.length, 2);
   assert.equal(items[0]?.item.title, "Release prep");
-  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible");
+  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n  code block\n  - nested item\ndue: keep visible");
   assert.equal(items[1]?.item.title, "Separate top-level");
 });
 
