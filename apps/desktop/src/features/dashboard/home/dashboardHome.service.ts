@@ -19,7 +19,7 @@ import {
   dashboardHomeStates,
   dashboardSummonTemplates,
   dashboardVoiceSequences,
-} from "./dashboardHome.mocks";
+} from "./dashboardHome.presets";
 import type {
   DashboardHomeContextItem,
   DashboardHomeEventStateKey,
