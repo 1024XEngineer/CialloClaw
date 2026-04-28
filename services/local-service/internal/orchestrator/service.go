@@ -2090,7 +2090,7 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 			"risk_level":             aggregateRiskLevel(allTasks, pendingApprovals, s.risk.DefaultLevel()),
 			"pending_authorizations": pendingTotal,
 			"has_restore_point":      hasRestorePoint,
-			"workspace_path":         workspacePathFromSettings(s.runEngine.Settings()),
+			"workspace_path":         currentRuntimeWorkspaceRoot(s.executor),
 		}
 	}
 
@@ -4785,18 +4785,17 @@ func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
 	return task.UpdatedAt.Format(dateTimeLayout)
 }
 
-// workspacePathFromSettings extracts the current workspace path from the
-// settings snapshot.
-func workspacePathFromSettings(settings map[string]any) string {
-	general, ok := settings["general"].(map[string]any)
-	if !ok {
-		return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
+// currentRuntimeWorkspaceRoot returns the workspace root that the currently
+// running local-service instance is actually using. This avoids displaying or
+// evaluating against a pending settings value before the required restart
+// rebuilds bootstrap-scoped dependencies.
+func currentRuntimeWorkspaceRoot(executorService *execution.Service) string {
+	if executorService != nil {
+		if workspaceRoot := strings.TrimSpace(executorService.WorkspaceRoot()); workspaceRoot != "" {
+			return filepath.ToSlash(filepath.Clean(workspaceRoot))
+		}
 	}
-	download, ok := general["download"].(map[string]any)
-	if !ok {
-		return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
-	}
-	return stringValue(download, "workspace_path", filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot())))
+	return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
 }
 
 // defaultIntentMap creates a minimal default intent payload for notepad
@@ -5997,7 +5996,7 @@ func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution m
 		return cloneMap(impactScope)
 	}
 	files := deriveImpactScopeFiles(task, pendingExecution, s.delivery)
-	workspacePath := workspacePathFromSettings(s.runEngine.Settings())
+	workspacePath := currentRuntimeWorkspaceRoot(s.executor)
 	outOfWorkspace := false
 	for _, filePath := range files {
 		if !isWorkspaceRelativePath(filePath, workspacePath) {

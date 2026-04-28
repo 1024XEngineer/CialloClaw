@@ -46,9 +46,25 @@ impl DesktopRuntimePaths {
         }
     }
 
+    /// Returns the canonical runtime root used for host-managed relative paths.
+    pub fn runtime_root(&self) -> &PathBuf {
+        &self.runtime_root
+    }
+
     /// Returns the canonical workspace root used for workspace-relative paths.
     pub fn workspace_root(&self) -> &PathBuf {
         &self.workspace_root
+    }
+
+    /// Returns the runtime temp directory used for transient desktop captures.
+    pub fn temp_dir(&self) -> PathBuf {
+        self.runtime_root.join("temp")
+    }
+
+    /// Returns the trusted runtime subroot that desktop open/reveal flows may
+    /// expose to the renderer for transient runtime-managed files.
+    pub fn local_open_runtime_root(&self) -> PathBuf {
+        self.temp_dir()
     }
 
     /// Resolves a persisted workspace_path setting against the canonical runtime

@@ -394,10 +394,15 @@ fn desktop_get_mouse_activity_snapshot() -> Option<activity::MouseActivitySnapsh
 }
 
 #[tauri::command]
-async fn desktop_capture_screenshot() -> Result<screen_capture::ScreenCapturePayload, String> {
-    tauri::async_runtime::spawn_blocking(screen_capture::capture_screenshot)
-        .await
-        .map_err(|error| format!("desktop screenshot task failed: {error}"))?
+async fn desktop_capture_screenshot(
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
+) -> Result<screen_capture::ScreenCapturePayload, String> {
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        screen_capture::capture_screenshot(runtime_paths_state.temp_dir())
+    })
+    .await
+    .map_err(|error| format!("desktop screenshot task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -585,7 +590,6 @@ fn build_local_path_roots(
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
     runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
 ) -> local_path::LocalPathRoots {
-    let repo_root = build_repo_root();
     let workspace_root = resolve_workspace_root(
         bridge_state,
         settings_snapshot_state,
@@ -594,7 +598,11 @@ fn build_local_path_roots(
     )
     .or_else(|| Some(runtime_paths_state.workspace_root().clone()));
 
-    local_path::LocalPathRoots::new(workspace_root, repo_root)
+    local_path::LocalPathRoots::new(
+        workspace_root,
+        Some(runtime_paths_state.runtime_root().clone()),
+        Some(runtime_paths_state.local_open_runtime_root()),
+    )
 }
 
 fn build_source_note_roots(
@@ -603,7 +611,6 @@ fn build_source_note_roots(
     runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
     sources: &[String],
 ) -> local_path::LocalPathRoots {
-    let repo_root = build_repo_root();
     let workspace_root = if source_notes::sources_require_workspace_root(sources) {
         resolve_workspace_root(
             bridge_state,
@@ -616,7 +623,11 @@ fn build_source_note_roots(
         None
     };
 
-    local_path::LocalPathRoots::new(workspace_root, repo_root)
+    local_path::LocalPathRoots::new(
+        workspace_root,
+        Some(runtime_paths_state.runtime_root().clone()),
+        None,
+    )
 }
 
 /// Source-note file access must be scoped by the host-side settings snapshot
@@ -661,13 +672,6 @@ fn resolve_trusted_source_note_sources(
         })?;
     report_source_note_source_drift(renderer_sources, &task_sources);
     Ok(task_sources)
-}
-
-fn build_repo_root() -> Option<PathBuf> {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .ok()
 }
 
 fn resolve_workspace_root_from_snapshot(

@@ -4967,6 +4967,57 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardOverviewUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingRestart(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "runtime workspace summary")
+	nextWorkspaceRoot := filepath.Join(t.TempDir(), "workspace-next")
+	if _, _, _, _, err := service.runEngine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(nextWorkspaceRoot),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	trustSummary := result["overview"].(map[string]any)["trust_summary"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Clean(workspaceRoot))
+	if trustSummary["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected trust summary to stay on current runtime workspace %q, got %v", expectedWorkspaceRoot, trustSummary["workspace_path"])
+	}
+}
+
+func TestBuildImpactScopeUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingRestart(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "runtime workspace impact scope")
+	nextWorkspaceRoot := filepath.Join(t.TempDir(), "workspace-next")
+	if _, _, _, _, err := service.runEngine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(nextWorkspaceRoot),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
+
+	impactScope := service.buildImpactScope(runengine.TaskRecord{
+		DeliveryResult: map[string]any{
+			"payload": map[string]any{
+				"path": filepath.Join(workspaceRoot, "drafts", "summary.md"),
+			},
+		},
+	}, nil)
+
+	if impactScope["out_of_workspace"] != false {
+		t.Fatalf("expected current runtime workspace path to stay trusted, got %+v", impactScope)
+	}
+}
+
 func TestServiceTaskDetailGetExposesActiveApprovalAnchor(t *testing.T) {
 	service := newTestService()
 

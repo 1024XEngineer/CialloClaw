@@ -303,10 +303,10 @@ fn resolve_source_root(raw_source: &str, roots: &LocalPathRoots) -> Result<PathB
         })?;
         workspace_root.join(workspace_relative_path)
     } else {
-        let repo_root = roots.repo_root().ok_or_else(|| {
-            "repository root is unavailable for task source resolution".to_string()
-        })?;
-        repo_root.join(candidate)
+        let runtime_root = roots
+            .runtime_root()
+            .ok_or_else(|| "runtime root is unavailable for task source resolution".to_string())?;
+        runtime_root.join(candidate)
     };
 
     Ok(resolved.canonicalize().unwrap_or(resolved))
@@ -351,7 +351,10 @@ fn collect_existing_markdown_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, St
             continue;
         }
         if !root.is_dir() {
-            return Err(format!("task source is not a directory: {}", root.display()));
+            return Err(format!(
+                "task source is not a directory: {}",
+                root.display()
+            ));
         }
 
         collect_markdown_files(root, &mut result)?;
@@ -554,7 +557,8 @@ fn normalize_new_source_note_block(content: &str) -> String {
 fn append_source_note_block(existing_content: &str, new_block_content: &str) -> String {
     let normalized_existing = existing_content.replace("\r\n", "\n");
     let trimmed_existing = normalized_existing.trim_end_matches('\n');
-    let normalized_block = normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
+    let normalized_block =
+        normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
     let trimmed_block = normalized_block.trim_end_matches('\n');
 
     if trimmed_existing.trim().is_empty() {
@@ -601,11 +605,23 @@ mod tests {
         let absolute = unique_temp_path("你好").join("notes");
         let resolved = resolve_source_root(
             absolute.to_string_lossy().as_ref(),
-            &LocalPathRoots::new(None, None),
+            &LocalPathRoots::new(None, None, None),
         )
         .expect("resolve absolute path without workspace root");
 
         assert_eq!(resolved, absolute);
+    }
+
+    #[test]
+    fn resolve_source_root_joins_runtime_relative_sources_against_runtime_root() {
+        let runtime_root = unique_temp_path("runtime-root");
+        let resolved = resolve_source_root(
+            "notes/manual",
+            &LocalPathRoots::new(None, Some(runtime_root.clone()), None),
+        )
+        .expect("resolve runtime-relative source root");
+
+        assert_eq!(resolved, runtime_root.join("notes").join("manual"));
     }
 
     #[test]
