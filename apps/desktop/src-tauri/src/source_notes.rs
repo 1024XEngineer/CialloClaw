@@ -2,7 +2,7 @@ use crate::local_path::LocalPathRoots;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PRIMARY_SOURCE_NOTE_FILE_NAME: &str = "notes.md";
@@ -309,7 +309,13 @@ fn resolve_source_root(raw_source: &str, roots: &LocalPathRoots) -> Result<PathB
         runtime_root.join(candidate)
     };
 
-    let canonical_resolved = resolved.canonicalize().unwrap_or(resolved);
+    // Normalize lexical `..` segments before any filesystem lookup so a
+    // not-yet-created source root cannot escape the trusted workspace/runtime
+    // boundary through the `canonicalize()` fallback path.
+    let normalized_resolved = normalize_path_without_fs(&resolved)?;
+    let canonical_resolved = normalized_resolved
+        .canonicalize()
+        .unwrap_or(normalized_resolved);
     let in_workspace = roots
         .workspace_root()
         .map(|root| canonical_resolved.starts_with(root))
@@ -330,6 +336,29 @@ fn resolve_source_root(raw_source: &str, roots: &LocalPathRoots) -> Result<PathB
     }
 
     Ok(canonical_resolved)
+}
+
+fn normalize_path_without_fs(path: &Path) -> Result<PathBuf, String> {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => normalized.push(segment),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!(
+                        "task source root escapes the trusted workspace or runtime root: {}",
+                        path.display()
+                    ));
+                }
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+        }
+    }
+
+    Ok(normalized)
 }
 
 /// Reports whether any configured source still depends on the trusted
@@ -691,6 +720,52 @@ mod tests {
             &LocalPathRoots::new(None, Some(runtime_root), None),
         )
         .expect_err("reject absolute path outside trusted roots");
+
+        assert!(error.contains("outside the trusted workspace and runtime roots"));
+    }
+
+    #[test]
+    fn resolve_source_root_rejects_workspace_relative_escape_when_target_does_not_exist() {
+        let workspace_root = unique_temp_path("workspace-relative-root");
+        fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+        let error = resolve_source_root(
+            "workspace/../../outside",
+            &LocalPathRoots::new(Some(workspace_root), None, None),
+        )
+        .expect_err("reject workspace-relative escape");
+
+        assert!(error.contains("outside the trusted workspace and runtime roots"));
+    }
+
+    #[test]
+    fn resolve_source_root_rejects_runtime_relative_escape_when_target_does_not_exist() {
+        let runtime_root = unique_temp_path("runtime-relative-root");
+        fs::create_dir_all(&runtime_root).expect("create runtime root");
+
+        let error = resolve_source_root(
+            "notes/../../outside",
+            &LocalPathRoots::new(None, Some(runtime_root), None),
+        )
+        .expect_err("reject runtime-relative escape");
+
+        assert!(error.contains("outside the trusted workspace and runtime roots"));
+    }
+
+    #[test]
+    fn resolve_source_root_rejects_absolute_escape_when_target_does_not_exist() {
+        let workspace_root = unique_temp_path("workspace-absolute-root");
+        fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+        let error = resolve_source_root(
+            workspace_root
+                .join("..")
+                .join("outside")
+                .to_string_lossy()
+                .as_ref(),
+            &LocalPathRoots::new(Some(workspace_root), None, None),
+        )
+        .expect_err("reject absolute escape outside trusted root");
 
         assert!(error.contains("outside the trusted workspace and runtime roots"));
     }
