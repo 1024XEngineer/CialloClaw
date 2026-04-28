@@ -8,142 +8,8 @@ export type DashboardResultPageRouteState = {
 };
 
 type DashboardResultPageLocationInput = {
-  search: string;
   state: unknown;
 };
-
-type StoredDashboardResultPageRouteState = DashboardResultPageRouteState & {
-  storedAt: number;
-};
-
-const dashboardResultPageStoragePrefix = "dashboard.result-page.";
-const dashboardResultPageStorageMaxAgeMs = 1000 * 60 * 5;
-const dashboardResultPageStorageMaxEntries = 8;
-
-function getDashboardResultPageStorage() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    return window.sessionStorage;
-  } catch {
-    return null;
-  }
-}
-
-function listDashboardResultPageStorageKeys(storage: Storage) {
-  const keys: string[] = [];
-
-  for (let index = 0; index < storage.length; index += 1) {
-    const key = storage.key(index);
-    if (key && key.startsWith(dashboardResultPageStoragePrefix)) {
-      keys.push(key);
-    }
-  }
-
-  return keys.sort();
-}
-
-function pruneDashboardResultPageStorage(storage: Storage) {
-  const keys = listDashboardResultPageStorageKeys(storage);
-  const now = Date.now();
-  const validEntries: Array<{ key: string; storedAt: number }> = [];
-
-  for (const key of keys) {
-    const raw = storage.getItem(key);
-    if (!raw) {
-      storage.removeItem(key);
-      continue;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as Partial<StoredDashboardResultPageRouteState>;
-      if (
-        typeof parsed.storedAt !== "number"
-        || now - parsed.storedAt > dashboardResultPageStorageMaxAgeMs
-        || typeof parsed.url !== "string"
-        || parsed.url.trim() === ""
-      ) {
-        storage.removeItem(key);
-        continue;
-      }
-
-      validEntries.push({ key, storedAt: parsed.storedAt });
-    } catch {
-      storage.removeItem(key);
-    }
-  }
-
-  validEntries
-    .sort((left, right) => left.storedAt - right.storedAt)
-    .slice(0, Math.max(0, validEntries.length - dashboardResultPageStorageMaxEntries))
-    .forEach((entry) => {
-      storage.removeItem(entry.key);
-    });
-}
-
-function storeDashboardResultPageRouteState(input: DashboardResultPageRouteState) {
-  const storage = getDashboardResultPageStorage();
-  if (!storage) {
-    return null;
-  }
-
-  const now = Date.now();
-  const token = `${now.toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-  const key = `${dashboardResultPageStoragePrefix}${token}`;
-  const value: StoredDashboardResultPageRouteState = {
-    ...input,
-    storedAt: now,
-  };
-
-  try {
-    pruneDashboardResultPageStorage(storage);
-    storage.setItem(key, JSON.stringify(value));
-    return token;
-  } catch {
-    return null;
-  }
-}
-
-function readStoredDashboardResultPageRouteState(token: string): DashboardResultPageRouteState | null {
-  const storage = getDashboardResultPageStorage();
-  if (!storage) {
-    return null;
-  }
-
-  pruneDashboardResultPageStorage(storage);
-  const storageKey = `${dashboardResultPageStoragePrefix}${token}`;
-  const raw = storage.getItem(storageKey);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as Partial<StoredDashboardResultPageRouteState>;
-    if (typeof parsed.url !== "string" || parsed.url.trim() === "") {
-      storage.removeItem(storageKey);
-      return null;
-    }
-
-    storage.removeItem(storageKey);
-
-    return {
-      taskId: typeof parsed.taskId === "string" ? parsed.taskId : null,
-      title: typeof parsed.title === "string" ? parsed.title : null,
-      url: parsed.url.trim(),
-    };
-  } catch {
-    storage.removeItem(storageKey);
-    return null;
-  }
-}
-
-function readDashboardResultPageSearch(search: string): DashboardResultPageRouteState | null {
-  const params = new URLSearchParams(search);
-  const token = (params.get("result_id") ?? "").trim();
-  return token ? readStoredDashboardResultPageRouteState(token) : null;
-}
 
 /**
  * Builds the router state used by dashboard result-page views so task- and
@@ -194,27 +60,15 @@ export function readDashboardResultPageRouteState(value: unknown): DashboardResu
 }
 
 /**
- * Resolves dashboard result-page input from both router search params and route
- * state so current navigation relies on `history.state`, while the cached token
- * only acts as a one-time recovery backup when that state is missing.
+ * Resolves dashboard result-page input from router state so current navigation
+ * stays within the browser history entry instead of persisting delivery URLs to
+ * renderer-readable storage.
  *
  * @param input The current location search string and route state payload.
  * @returns The recoverable result-page route payload or null when missing.
  */
 export function readDashboardResultPageLocation(input: DashboardResultPageLocationInput): DashboardResultPageRouteState | null {
-  const routedState = readDashboardResultPageRouteState(input.state);
-
-  if (routedState) {
-    return routedState;
-  }
-
-  const searchState = readDashboardResultPageSearch(input.search);
-
-  if (!searchState) {
-    return null;
-  }
-
-  return searchState;
+  return readDashboardResultPageRouteState(input.state);
 }
 
 /**
@@ -228,9 +82,7 @@ export function navigateToDashboardResultPage(
   navigate: NavigateFunction,
   input: DashboardResultPageRouteState,
 ) {
-  const token = storeDashboardResultPageRouteState(input);
-  const search = token ? `?result_id=${encodeURIComponent(token)}` : "";
-  navigate(`${resolveDashboardRoutePath("result")}${search}`, {
+  navigate(resolveDashboardRoutePath("result"), {
     state: buildDashboardResultPageRouteState(input),
   });
 }

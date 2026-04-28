@@ -39,10 +39,9 @@ export function DashboardResultPage() {
   const navigate = useNavigate();
   const routeState = useMemo(
     () => readDashboardResultPageLocation({
-      search: location.search,
       state: location.state,
     }),
-    [location.search, location.state],
+    [location.state],
   );
   const resultUrl = routeState?.url ?? null;
   const canOpenExternally = resultUrl ? isAllowedDashboardResultPageUrl(resultUrl) : false;
