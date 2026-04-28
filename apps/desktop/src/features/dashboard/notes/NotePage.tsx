@@ -12,8 +12,6 @@ import { AnimatePresence, motion } from "motion/react";
 import type { NotepadAction } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
-import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
@@ -224,7 +222,7 @@ export function NotePage() {
   const [draggingBoardItemId, setDraggingBoardItemId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [boardLayerSize, setBoardLayerSize] = useState<{ height: number; width: number } | null>(null);
-  const [dataMode, setDataMode] = useState<NotePageDataMode>(() => loadDashboardDataMode("notes") as NotePageDataMode);
+  const dataMode: NotePageDataMode = "rpc";
   const [selectedSourceNotePath, setSelectedSourceNotePath] = useState<string | null>(null);
   const [sourceNoteDraft, setSourceNoteDraft] = useState<SourceNoteEditorDraft>(() => createEmptySourceNoteEditorDraft());
   const [sourceNoteBaseline, setSourceNoteBaseline] = useState(() => createSourceNoteEditorDraftSignature(createEmptySourceNoteEditorDraft()));
@@ -266,12 +264,8 @@ export function NotePage() {
     startY: number;
     width: number;
   } | null>(null);
-  const noteRefreshPlan = useMemo(() => getDashboardNoteRefreshPlan(dataMode), [dataMode]);
+  const noteRefreshPlan = getDashboardNoteRefreshPlan(dataMode);
   const desktopSourceNotesAvailable = useMemo(() => areDesktopSourceNotesAvailable(), []);
-
-  useEffect(() => {
-    saveDashboardDataMode("notes", dataMode);
-  }, [dataMode]);
 
   const [upcomingQuery, laterQuery, recurringQuery, closedQuery] = useQueries({
     queries: [
@@ -2057,14 +2051,6 @@ export function NotePage() {
             ) : null}
         </AnimatePresence>
 
-        <DashboardMockToggle
-          enabled={dataMode === "mock"}
-          onToggle={() => {
-            setFeedback(null);
-            setSourceNoteSyncMessage(null);
-            setDataMode((current) => (current === "rpc" ? "mock" : "rpc"));
-          }}
-        />
       </>
     </main>
   );
