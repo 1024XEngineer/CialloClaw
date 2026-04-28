@@ -23,70 +23,35 @@ import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated 
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
+import { createDashboardOpeningTransitionController } from "./dashboardOpeningTransition";
 import "./dashboard.css";
 
 const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
 
 function useDashboardDomainExpansion() {
   const [isOpening, setIsOpening] = useState(true);
-  const hiddenRef = useRef(false);
 
   useEffect(() => {
-    let frame = 0;
-    let timeout = 0;
     let disposed = false;
     let clearWindowFocusListener: (() => void) | null = null;
-
-    const clearPendingRelease = () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
-    };
-
-    const trigger = () => {
-      clearPendingRelease();
-      setIsOpening(true);
-      frame = window.requestAnimationFrame(() => {
-        setIsOpening(false);
-      });
-      // Hidden/background Tauri windows can miss the RAF edge and stay clipped.
-      timeout = window.setTimeout(() => {
-        setIsOpening(false);
-      }, 720);
-    };
-
-    const markHidden = () => {
-      hiddenRef.current = true;
-      clearPendingRelease();
-    };
-
-    const restoreIfNeeded = () => {
-      if (!hiddenRef.current || document.visibilityState === "hidden") {
-        return;
-      }
-
-      hiddenRef.current = false;
-      trigger();
-    };
+    const controller = createDashboardOpeningTransitionController({
+      cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
+      clearTimeout: (handle) => window.clearTimeout(handle),
+      getVisibilityState: () => document.visibilityState,
+      requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
+      setIsOpening,
+      setTimeout: (callback, timeoutMs) => window.setTimeout(callback, timeoutMs),
+    });
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        markHidden();
-        return;
-      }
-
-      restoreIfNeeded();
+      controller.handleVisibilityChange();
     };
 
-    trigger();
+    controller.trigger();
     document.addEventListener("visibilitychange", handleVisibilityChange);
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
-        if (!focused) {
-          markHidden();
-          return;
-        }
-
-        restoreIfNeeded();
+        controller.handleWindowFocusChanged(focused);
       })
       .then((unlisten) => {
         if (disposed) {
@@ -102,7 +67,7 @@ function useDashboardDomainExpansion() {
 
     return () => {
       disposed = true;
-      clearPendingRelease();
+      controller.dispose();
       clearWindowFocusListener?.();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
