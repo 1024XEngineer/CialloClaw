@@ -1,5 +1,7 @@
 use std::env;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 const DEFAULT_RUNTIME_DIRECTORY_NAME: &str = "CialloClaw";
 const DEFAULT_WORKSPACE_DIRECTORY_NAME: &str = "workspace";
@@ -69,6 +71,7 @@ impl DesktopRuntimePaths {
 
     /// Resolves a persisted workspace_path setting against the canonical runtime
     /// root when that setting still contains a legacy relative placeholder.
+    #[cfg(test)]
     pub fn resolve_workspace_setting(&self, configured_root: &Path) -> PathBuf {
         if configured_root.is_absolute() {
             return configured_root.to_path_buf();
@@ -136,12 +139,14 @@ fn clean_env_path(key: &str) -> Option<PathBuf> {
     })
 }
 
+#[cfg(test)]
 fn uses_legacy_workspace_placeholder(raw_path: &str) -> bool {
     let normalized = raw_path.replace('\\', "/");
     let trimmed = normalized.trim().trim_matches('/');
     trimmed.is_empty() || trimmed == "." || trimmed == DEFAULT_WORKSPACE_DIRECTORY_NAME
 }
 
+#[cfg(test)]
 fn is_safe_runtime_relative_path(configured_root: &Path) -> bool {
     configured_root.components().all(|component| {
         matches!(

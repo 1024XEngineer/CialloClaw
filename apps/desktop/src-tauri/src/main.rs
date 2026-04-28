@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Write};
+#[cfg(test)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -145,6 +146,7 @@ impl DesktopSettingsSnapshotState {
         Ok(())
     }
 
+    #[cfg(test)]
     fn workspace_root(&self) -> Result<Option<PathBuf>, String> {
         let snapshot = self
             .settings
@@ -165,15 +167,6 @@ impl DesktopSettingsSnapshotState {
         Ok(snapshot
             .as_ref()
             .map(read_task_sources_from_settings_snapshot))
-    }
-
-    fn has_snapshot(&self) -> Result<bool, String> {
-        let snapshot = self
-            .settings
-            .lock()
-            .map_err(|_| "desktop settings snapshot lock poisoned".to_string())?;
-
-        Ok(snapshot.is_some())
     }
 }
 
@@ -587,17 +580,13 @@ fn desktop_get_runtime_defaults(
 }
 
 fn build_local_path_roots(
-    bridge_state: &Arc<NamedPipeBridgeState>,
-    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    _bridge_state: &Arc<NamedPipeBridgeState>,
+    _settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
     runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
 ) -> local_path::LocalPathRoots {
-    let workspace_root = resolve_workspace_root(
-        bridge_state,
-        settings_snapshot_state,
-        runtime_paths_state,
-        true,
-    )
-    .or_else(|| Some(runtime_paths_state.workspace_root().clone()));
+    // Workspace delivery paths must stay pinned to the bootstrap runtime until
+    // local-service restarts and actually rebinds the backend workspace.
+    let workspace_root = Some(runtime_paths_state.workspace_root().clone());
 
     local_path::LocalPathRoots::new(
         workspace_root,
@@ -607,19 +596,15 @@ fn build_local_path_roots(
 }
 
 fn build_source_note_roots(
-    bridge_state: &Arc<NamedPipeBridgeState>,
-    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    _bridge_state: &Arc<NamedPipeBridgeState>,
+    _settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
     runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
     sources: &[String],
 ) -> local_path::LocalPathRoots {
     let workspace_root = if source_notes::sources_require_workspace_root(sources) {
-        resolve_workspace_root(
-            bridge_state,
-            settings_snapshot_state,
-            runtime_paths_state,
-            true,
-        )
-        .or_else(|| Some(runtime_paths_state.workspace_root().clone()))
+        // Source-note access to workspace-relative sources must match the
+        // currently running backend workspace instead of a restart-pending draft.
+        Some(runtime_paths_state.workspace_root().clone())
     } else {
         None
     };
@@ -675,6 +660,7 @@ fn resolve_trusted_source_note_sources(
     Ok(task_sources)
 }
 
+#[cfg(test)]
 fn resolve_workspace_root_from_snapshot(
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
     runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
@@ -684,33 +670,6 @@ fn resolve_workspace_root_from_snapshot(
         .ok()
         .flatten()
         .map(|workspace_root| runtime_paths_state.resolve_workspace_setting(&workspace_root))
-}
-
-/// The desktop host prefers the cached settings snapshot, but it may still be
-/// empty during the first few local actions if startup prefetch raced the pipe.
-/// In that case, perform one bounded refresh and keep the result for later calls.
-fn resolve_workspace_root(
-    bridge_state: &Arc<NamedPipeBridgeState>,
-    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
-    runtime_paths_state: &Arc<runtime_paths::DesktopRuntimePaths>,
-    allow_refresh: bool,
-) -> Option<PathBuf> {
-    let workspace_root =
-        resolve_workspace_root_from_snapshot(settings_snapshot_state, runtime_paths_state);
-    if workspace_root.is_some() || !allow_refresh {
-        return workspace_root;
-    }
-
-    let should_refresh = settings_snapshot_state.has_snapshot().ok() == Some(false);
-    if should_refresh {
-        let _ = seed_desktop_settings_snapshot(
-            bridge_state,
-            settings_snapshot_state,
-            Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
-        );
-    }
-
-    resolve_workspace_root_from_snapshot(settings_snapshot_state, runtime_paths_state)
 }
 
 fn seed_desktop_settings_snapshot(
@@ -792,6 +751,7 @@ fn validate_desktop_settings_snapshot(settings: &Value) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 fn read_workspace_root_from_settings_snapshot(settings: &Value) -> Option<PathBuf> {
     settings
         .get("general")
@@ -891,13 +851,15 @@ fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
 #[cfg(test)]
 mod desktop_settings_snapshot_tests {
     use super::{
-        read_task_sources_from_settings_snapshot, read_trusted_source_note_sources,
-        read_workspace_root_from_settings_snapshot, resolve_workspace_root_from_snapshot,
-        source_note_sources_drift, DesktopSettingsSnapshotState,
+        build_local_path_roots, build_source_note_roots, read_task_sources_from_settings_snapshot,
+        read_trusted_source_note_sources, read_workspace_root_from_settings_snapshot,
+        resolve_workspace_root_from_snapshot, source_note_sources_drift,
+        DesktopSettingsSnapshotState, NamedPipeBridgeState,
     };
     use crate::runtime_paths::DesktopRuntimePaths;
     use serde_json::json;
     use std::env;
+    use std::fs;
     use std::sync::Arc;
 
     #[test]
@@ -1057,6 +1019,60 @@ mod desktop_settings_snapshot_tests {
             resolve_workspace_root_from_snapshot(&state, &runtime_paths),
             Some(runtime_root.join("workspace"))
         );
+    }
+
+    #[test]
+    fn build_local_path_roots_stays_pinned_to_runtime_workspace_before_restart() {
+        let runtime_root = env::temp_dir().join("desktop-runtime-pinned-local-path-roots");
+        let runtime_workspace = runtime_root.join("workspace");
+        fs::create_dir_all(&runtime_workspace).expect("create runtime workspace root");
+        fs::create_dir_all(runtime_root.join("temp")).expect("create runtime temp root");
+        let runtime_paths = Arc::new(DesktopRuntimePaths::from_runtime_root(runtime_root));
+        let pending_workspace = env::temp_dir().join("desktop-pending-workspace");
+        let bridge_state = Arc::new(NamedPipeBridgeState::default());
+        let snapshot_state = Arc::new(DesktopSettingsSnapshotState::default());
+        snapshot_state
+            .replace(json!({
+                "general": {
+                    "download": {
+                        "workspace_path": pending_workspace.to_string_lossy().to_string(),
+                    }
+                }
+            }))
+            .expect("replace pending workspace settings snapshot");
+
+        let roots = build_local_path_roots(&bridge_state, &snapshot_state, &runtime_paths);
+
+        assert_eq!(roots.workspace_root(), Some(runtime_paths.workspace_root()));
+    }
+
+    #[test]
+    fn build_source_note_roots_stays_pinned_to_runtime_workspace_before_restart() {
+        let runtime_root = env::temp_dir().join("desktop-runtime-pinned-source-note-roots");
+        let runtime_workspace = runtime_root.join("workspace");
+        fs::create_dir_all(&runtime_workspace).expect("create runtime workspace root");
+        let runtime_paths = Arc::new(DesktopRuntimePaths::from_runtime_root(runtime_root));
+        let pending_workspace = env::temp_dir().join("desktop-pending-source-workspace");
+        let bridge_state = Arc::new(NamedPipeBridgeState::default());
+        let snapshot_state = Arc::new(DesktopSettingsSnapshotState::default());
+        snapshot_state
+            .replace(json!({
+                "general": {
+                    "download": {
+                        "workspace_path": pending_workspace.to_string_lossy().to_string(),
+                    }
+                }
+            }))
+            .expect("replace pending source-note workspace snapshot");
+
+        let roots = build_source_note_roots(
+            &bridge_state,
+            &snapshot_state,
+            &runtime_paths,
+            &[String::from("workspace/notes")],
+        );
+
+        assert_eq!(roots.workspace_root(), Some(runtime_paths.workspace_root()));
     }
 }
 
@@ -2021,7 +2037,10 @@ fn onboarding_set_ignore_cursor_events(app: tauri::AppHandle, ignore: bool) -> R
 
 #[cfg(not(windows))]
 #[tauri::command]
-fn onboarding_set_ignore_cursor_events(_app: tauri::AppHandle, _ignore: bool) -> Result<(), String> {
+fn onboarding_set_ignore_cursor_events(
+    _app: tauri::AppHandle,
+    _ignore: bool,
+) -> Result<(), String> {
     Ok(())
 }
 

@@ -127,6 +127,9 @@ func TestMigrateLegacyRuntimeDefaultsIfNeededCopiesLegacyWorkspaceAndDatabase(t 
 	if migratedSecret, err := os.ReadFile(secretStorePathForDatabase(cfg.DatabasePath)); err != nil || string(migratedSecret) != "legacy-secret" {
 		t.Fatalf("expected migrated secret store file, content=%q err=%v", string(migratedSecret), err)
 	}
+	if err := migrateLegacyRuntimeDefaultsIfNeeded(cfg, []string{legacyRoot}); err != nil {
+		t.Fatalf("expected repeated migration to stay idempotent, got %v", err)
+	}
 }
 
 func TestBuildRuntimeMigrationPlanSkipsCustomAndMissingRoots(t *testing.T) {

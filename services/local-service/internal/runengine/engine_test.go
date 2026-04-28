@@ -1173,6 +1173,50 @@ func TestEngineWithSettingsStoreRejectsWorkspaceEscapesOutsideRuntimeRoot(t *tes
 	}
 }
 
+func TestEngineWithSettingsStorePreservesWindowsAbsolutePathsAcrossHosts(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(staticSettingsStore{snapshot: map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "D:/legacy-workspace"},
+		},
+		"task_automation": map[string]any{
+			"task_sources": []string{"D:/legacy-workspace/todos"},
+		},
+	}}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	if download["workspace_path"] != "D:/legacy-workspace" {
+		t.Fatalf("expected windows-style absolute workspace path to stay absolute, got %v", download["workspace_path"])
+	}
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"D:/legacy-workspace/todos"}) {
+		t.Fatalf("expected windows-style absolute task source to stay absolute, got %+v", taskAutomation)
+	}
+	if migratedWorkspace, _ := migrateWorkspaceRootSetting("D:/legacy-workspace"); migratedWorkspace != "D:/legacy-workspace" {
+		t.Fatalf("expected windows-style absolute workspace path to stay absolute during migration, got %q", migratedWorkspace)
+	}
+	if migratedSource, _ := migrateTaskSourceSetting("D:/legacy-workspace/todos"); migratedSource != "D:/legacy-workspace/todos" {
+		t.Fatalf("expected windows-style absolute task source to stay absolute during migration, got %q", migratedSource)
+	}
+	if isSafeRuntimeRelativePath("D:/legacy-workspace") {
+		t.Fatal("expected windows-style absolute path to be rejected as runtime-relative")
+	}
+	if isSafeRuntimeRelativePath("D:relative") {
+		t.Fatal("expected drive-prefixed relative path to be rejected as runtime-relative")
+	}
+	if migratedWorkspace, changed := migrateWorkspaceRootSetting("D:relative"); !changed || migratedWorkspace != defaultSettingsWorkspaceRoot() {
+		t.Fatalf("expected drive-prefixed relative workspace path to reset to default runtime workspace, migrated=%q changed=%v", migratedWorkspace, changed)
+	}
+	if migrated, changed := migrateTaskSourceSetting("D:relative"); !changed || migrated != "" {
+		t.Fatalf("expected drive-prefixed relative source to be dropped during migration, migrated=%q changed=%v", migrated, changed)
+	}
+}
+
 func TestEngineNotepadItemsNormalizeAndSortRuntimeState(t *testing.T) {
 	engine := NewEngine()
 	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)

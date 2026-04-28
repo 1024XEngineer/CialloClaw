@@ -360,6 +360,11 @@ func copyFileContents(sourcePath, targetPath string, entryMode os.FileMode) erro
 	}
 	writer, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
+		// Legacy runtime migration must stay idempotent across repeated launches, so
+		// pre-existing destination files are treated as already migrated content.
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
 		return err
 	}
 	defer func() { _ = writer.Close() }()
