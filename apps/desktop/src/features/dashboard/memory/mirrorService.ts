@@ -9,7 +9,6 @@ import type {
   TokenCostSummary,
 } from "@cialloclaw/protocol";
 import mirrorOverviewMock from "./mirrorOverview.json";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getMirrorOverviewDetailed as requestMirrorOverview } from "@/rpc/methods";
 import { loadMirrorConversationRecords, type MirrorConversationRecord } from "@/services/mirrorMemoryService";
 import { loadSecurityModuleData } from "@/features/dashboard/safety/securityService";
@@ -263,52 +262,28 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
     );
   }
 
-  try {
-    const params: AgentMirrorOverviewGetParams = {
-      request_meta: createRequestMeta(),
-      include: ["history_summary", "daily_summary", "profile", "memory_references"],
-    };
+  const params: AgentMirrorOverviewGetParams = {
+    request_meta: createRequestMeta(),
+    include: ["history_summary", "daily_summary", "profile", "memory_references"],
+  };
 
-    // Support context and settings are independent read paths, so load them in
-    // parallel with the main mirror overview request to keep refreshes responsive.
-    const [response, supportContext, settingsSnapshot] = await Promise.all([
-      requestMirrorOverview(params),
-      loadMirrorSupportContext("rpc"),
-      loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE),
-    ]);
-    const overview = response.data;
+  // Support context and settings are independent read paths, so load them in
+  // parallel with the main mirror overview request to keep refreshes responsive.
+  const [response, supportContext, settingsSnapshot] = await Promise.all([
+    requestMirrorOverview(params),
+    loadMirrorSupportContext("rpc"),
+    loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE),
+  ]);
+  const overview = response.data;
 
-    return buildMirrorOverviewData(
-      overview,
-      "rpc",
-      {
-        serverTime: response.meta?.server_time ?? null,
-        warnings: response.warnings,
-      },
-      supportContext,
-      settingsSnapshot,
-    );
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("mirror overview", error);
-      const overview = buildFallbackOverview();
-      const [supportContext, settingsSnapshot] = await Promise.all([
-        loadMirrorSupportContext("mock"),
-        loadDashboardSettingsSnapshot("mock", MIRROR_SETTINGS_SCOPE),
-      ]);
-
-      return buildMirrorOverviewData(
-        overview,
-        "mock",
-        {
-          serverTime: null,
-          warnings: [],
-        },
-        supportContext,
-        settingsSnapshot,
-      );
-    }
-
-    throw error;
-  }
+  return buildMirrorOverviewData(
+    overview,
+    "rpc",
+    {
+      serverTime: response.meta?.server_time ?? null,
+      warnings: response.warnings,
+    },
+    supportContext,
+    settingsSnapshot,
+  );
 }

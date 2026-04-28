@@ -589,6 +589,7 @@ type DashboardContractRpcMethodOverrides = {
   applySecurityRestoreDetailed?: (params: unknown) => Promise<unknown>;
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
+  getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
   getSecuritySummaryDetailed?: (params: unknown) => Promise<unknown>;
   getSettings?: (params: unknown) => Promise<unknown>;
@@ -696,6 +697,9 @@ function withDesktopAliasRuntime<T>(
         getSecuritySummary:
           rpcMethods?.getSecuritySummary ??
           (() => Promise.reject(new Error("getSecuritySummary should not run in dashboard contract tests"))),
+        getMirrorOverviewDetailed:
+          rpcMethods?.getMirrorOverviewDetailed ??
+          (() => Promise.reject(new Error("getMirrorOverviewDetailed should not run in dashboard contract tests"))),
         getSecuritySummaryDetailed:
           rpcMethods?.getSecuritySummaryDetailed ??
           (() => Promise.reject(new Error("getSecuritySummaryDetailed should not run in dashboard contract tests"))),
@@ -3963,6 +3967,26 @@ test("security rpc service keeps transport failures visible instead of switching
     {
       getSecuritySummaryDetailed: () => Promise.reject(transportError),
       listSecurityPendingDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("mirror rpc service keeps transport failures visible instead of switching to mock overview data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/memory/mirrorService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadMirrorOverviewData: (source?: "rpc" | "mock") => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadMirrorOverviewData("rpc"), /transport is not wired/i);
+    },
+    {
+      getMirrorOverviewDetailed: () => Promise.reject(transportError),
     },
   );
 });
