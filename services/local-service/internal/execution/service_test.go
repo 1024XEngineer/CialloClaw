@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2490,6 +2491,31 @@ func TestExecuteScreenCleanupPlanDeletesExistingWorkspacePath(t *testing.T) {
 	}
 	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected target file to be removed, got %v", err)
+	}
+}
+
+func TestServiceWorkspaceRootAndArtifactPromotionNoops(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	if got := service.WorkspaceRoot(); got != workspaceRoot {
+		t.Fatalf("expected workspace root %q, got %q", workspaceRoot, got)
+	}
+	var nilService *Service
+	if got := nilService.WorkspaceRoot(); got != "" {
+		t.Fatalf("expected nil service workspace root to be empty, got %q", got)
+	}
+
+	nonTempArtifact := map[string]any{"path": "workspace/report.md", "artifact_id": "art_report"}
+	promoted, cleanup := service.promoteScreenArtifactForPersistence(context.Background(), "task_workspace", nonTempArtifact)
+	if cleanup != nil {
+		t.Fatalf("expected non-temp artifact promotion to skip cleanup, got %+v", cleanup)
+	}
+	if !reflect.DeepEqual(promoted, nonTempArtifact) {
+		t.Fatalf("expected non-temp artifact promotion to leave artifact unchanged, got %+v", promoted)
+	}
+
+	promoted, cleanup = nilService.promoteScreenArtifactForPersistence(context.Background(), "task_nil", map[string]any{"path": "temp/screen/frame.png"})
+	if cleanup != nil || promoted["path"] != "temp/screen/frame.png" {
+		t.Fatalf("expected nil service promotion to noop, promoted=%+v cleanup=%+v", promoted, cleanup)
 	}
 }
 

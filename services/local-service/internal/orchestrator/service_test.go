@@ -5166,6 +5166,36 @@ func TestBuildImpactScopeUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingResta
 	}
 }
 
+func TestBuildImpactScopeMarksRuntimeTempPathsOutOfWorkspace(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime temp impact scope")
+
+	impactScope := service.buildImpactScope(runengine.TaskRecord{
+		DeliveryResult: map[string]any{
+			"payload": map[string]any{
+				"path": "temp/screen_sess_001/frame_001.png",
+			},
+		},
+	}, nil)
+
+	if impactScope["out_of_workspace"] != true {
+		t.Fatalf("expected runtime temp path to stay out of workspace, got %+v", impactScope)
+	}
+	files, _ := impactScope["files"].([]string)
+	if len(files) != 1 || files[0] != "temp/screen_sess_001/frame_001.png" {
+		t.Fatalf("expected runtime temp path to remain listed in impact scope, got %+v", impactScope)
+	}
+}
+
+func TestIsWorkspaceRelativePathKeepsArtifactsInsideWorkspaceScope(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	if !isWorkspaceRelativePath("artifacts/screen/task_001/frame.png", workspaceRoot) {
+		t.Fatal("expected workspace artifact path to remain trusted")
+	}
+	if isWorkspaceRelativePath("temp/screen_sess_001/frame.png", workspaceRoot) {
+		t.Fatal("expected runtime temp artifact path to stay outside workspace scope")
+	}
+}
+
 func TestServiceTaskDetailGetExposesActiveApprovalAnchor(t *testing.T) {
 	service := newTestService()
 

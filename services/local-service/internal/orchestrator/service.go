@@ -6041,6 +6041,11 @@ func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
 		return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, rootWithSeparator)
 	}
 	cleanRelative := path.Clean(normalizedPath)
+	// Runtime temp artifacts remain openable from the desktop host, but governance
+	// must not classify them as workspace-contained when computing trust scope.
+	if cleanRelative == "temp" || strings.HasPrefix(cleanRelative, "temp/") {
+		return false
+	}
 	return cleanRelative != ".." && !strings.HasPrefix(cleanRelative, "../")
 }
 
