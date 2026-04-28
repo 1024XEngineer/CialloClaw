@@ -1705,6 +1705,183 @@ test("settings service loadHydratedSettings keeps existing snapshot when host hy
   }
 });
 
+test("settings service preserves user-owned workspace-relative task sources during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/review"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.equal(hydrated.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service preserves multi-root workspace-relative task sources during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/backlog", "workspace/review"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["workspace/backlog", "workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service rewrites only the legacy single-root task source placeholder during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["d:/workspace/todos"],
+          },
+        },
+      }),
+    );
+    const rewrittenWindowsLegacy = await settingsService.loadHydratedSettings();
+    assert.deepEqual(rewrittenWindowsLegacy.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("note source config prefers hydrated unix task sources over legacy workspace snapshots", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();

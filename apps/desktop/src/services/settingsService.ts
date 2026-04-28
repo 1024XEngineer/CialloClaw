@@ -211,14 +211,15 @@ function usesLegacyWorkspaceDefault(workspacePath: string) {
 }
 
 function usesLegacyTaskSourceDefaults(taskSources: string[]) {
-  if (taskSources.length === 0) {
+  if (taskSources.length !== 1) {
     return false;
   }
 
-  return taskSources.every((source) => {
-    const normalized = source.trim().replaceAll("\\", "/");
-    return normalized === LEGACY_DEFAULT_TASK_SOURCES[0] || /^workspace(?:[\\/]|$)/i.test(normalized);
-  });
+  // Only the historical single-root placeholder should be replaced during
+  // runtime-default hydration. User-owned workspace-relative source layouts
+  // must stay intact even when they happen to live under `workspace/...`.
+  const normalized = taskSources[0]?.trim().replaceAll("\\", "/").toLowerCase() ?? "";
+  return normalized === LEGACY_DEFAULT_TASK_SOURCES[0].toLowerCase() || normalized === "workspace/todos";
 }
 
 /**
