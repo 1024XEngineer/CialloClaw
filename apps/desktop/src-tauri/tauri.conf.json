@@ -32,21 +32,6 @@
         "decorations": false,
         "visible": false,
         "url": "dashboard.html"
-      },
-      {
-        "label": "onboarding",
-        "title": "CialloClaw Onboarding",
-        "width": 1280,
-        "height": 860,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "focus": false,
-        "url": "onboarding.html"
       }
     ]
   }

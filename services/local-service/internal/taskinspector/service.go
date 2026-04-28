@@ -1,11 +1,14 @@
-// Package taskinspector aggregates the minimum runtime state for task inspection.
+// Package taskinspector aggregates the minimal runtime state used by task
+// inspection flows.
 package taskinspector
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io/fs"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +51,21 @@ type RunResult struct {
 	SourceSynced bool
 }
 
+var (
+	// ErrInspectionFileSystemUnavailable reports that inspection sources were
+	// provided but no workspace-bound filesystem is available to read them.
+	ErrInspectionFileSystemUnavailable = errors.New("task inspection file system unavailable")
+	// ErrInspectionSourceOutsideWorkspace reports that one configured source tries
+	// to escape the current workspace boundary.
+	ErrInspectionSourceOutsideWorkspace = errors.New("task inspection source outside workspace")
+	// ErrInspectionSourceNotFound reports that the configured source path does not
+	// exist under the current runtime workspace root.
+	ErrInspectionSourceNotFound = errors.New("task inspection source not found")
+	// ErrInspectionSourceUnreadable reports that the source exists but runtime
+	// traversal or file reads failed.
+	ErrInspectionSourceUnreadable = errors.New("task inspection source unreadable")
+)
+
 // NewService creates a task inspector service.
 func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	return &Service{
@@ -56,13 +74,18 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	}
 }
 
-// Run executes one minimum real inspection.
-func (s *Service) Run(input RunInput) RunResult {
+// Run executes one inspection pass and fails explicitly when configured sources
+// cannot be read from the current runtime workspace.
+func (s *Service) Run(input RunInput) (RunResult, error) {
 	sources := resolveSources(input.TargetSources, input.Config)
-	parsedFiles, parsedNotepadItems, sourcesReady := s.inspectSources(sources)
-	// Source sync replaces downstream notepad state, so keep the previous
-	// snapshot unless every configured source was read and decoded safely.
-	sourceSynced := len(sources) > 0 && s.fileSystem != nil && sourcesReady
+	if len(sources) > 0 && s.fileSystem == nil {
+		return RunResult{}, ErrInspectionFileSystemUnavailable
+	}
+	sourceSynced := len(sources) > 0 && s.fileSystem != nil
+	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources)
+	if err != nil {
+		return RunResult{}, err
+	}
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
 	if sourceSynced {
 		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
@@ -84,34 +107,35 @@ func (s *Service) Run(input RunInput) RunResult {
 		Suggestions:  buildSuggestions(resolvedNotepadItems, input.UnfinishedTasks, sources, parsedFiles, dueToday, overdue, staleCount, fileItems),
 		NotepadItems: cloneMapSlice(resolvedNotepadItems),
 		SourceSynced: sourceSynced,
-	}
+	}, nil
 }
 
-func (s *Service) inspectSources(sources []string) (int, []map[string]any, bool) {
+func (s *Service) inspectSources(sources []string) (int, []map[string]any, error) {
 	if s.fileSystem == nil || len(sources) == 0 {
-		return 0, nil, false
+		return 0, nil, nil
 	}
 
 	parsedFiles := 0
 	identifiedItems := make([]map[string]any, 0)
 	seenFiles := map[string]struct{}{}
-	visitedRoot := false
-	sourcesReady := true
 
 	for _, source := range sources {
-		root := sourceToFSPath(source)
-		if root == "" {
-			sourcesReady = false
-			continue
+		root, err := sourceToFSPath(s.fileSystem, source)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(source))
 		}
-		visitedRoot = true
-
-		walkErr := fs.WalkDir(s.fileSystem, root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				sourcesReady = false
-				return nil
+		if _, err := fs.Stat(s.fileSystem, root); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return 0, nil, fmt.Errorf("%w: %s", ErrInspectionSourceNotFound, strings.TrimSpace(source))
 			}
-			if entry == nil || entry.IsDir() {
+			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
+		}
+
+		if err := fs.WalkDir(s.fileSystem, root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil || entry == nil || entry.IsDir() {
+				if walkErr != nil {
+					return walkErr
+				}
 				return nil
 			}
 			if _, seen := seenFiles[currentPath]; seen {
@@ -124,29 +148,27 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any, bool)
 			if !isSupportedTextTaskSourceFile(currentPath) {
 				return nil
 			}
+			parsedFiles++
+
 			content, err := fs.ReadFile(s.fileSystem, currentPath)
 			if err != nil {
-				sourcesReady = false
-				return nil
+				return err
 			}
 			decoded, err := textdecode.Decode(content)
 			if err != nil {
 				if shouldSkipUnreadableTaskSourceFile(currentPath) {
 					return nil
 				}
-				sourcesReady = false
-				return nil
+				return fmt.Errorf("decode task source file %s: %w", currentPath, err)
 			}
-			parsedFiles++
 			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now())...)
 			return nil
-		})
-		if walkErr != nil {
-			sourcesReady = false
+		}); err != nil {
+			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
 		}
 	}
 
-	return parsedFiles, identifiedItems, visitedRoot && sourcesReady
+	return parsedFiles, identifiedItems, nil
 }
 
 func shouldSkipTaskSourceAttachment(currentPath string) bool {
@@ -219,25 +241,135 @@ func dedupeNonEmptyStrings(values []string) []string {
 	return result
 }
 
-func sourceToFSPath(source string) string {
-	source = strings.TrimSpace(source)
+// sourceToFSPath accepts both workspace-virtual paths and legacy absolute paths
+// that still point inside the current workspace root.
+func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (string, error) {
+	source = normalizeTaskSourceInput(source)
 	if source == "" {
-		return ""
+		return "", nil
+	}
+	trimmedVirtual := strings.TrimPrefix(source, "/")
+	switch trimmedVirtual {
+	case "", "workspace", ".":
+		return ".", nil
+	}
+	if strings.HasPrefix(trimmedVirtual, "workspace/") {
+		normalized := path.Clean(strings.TrimPrefix(trimmedVirtual, "workspace/"))
+		if normalized == "." {
+			return ".", nil
+		}
+		if strings.HasPrefix(normalized, "../") || normalized == ".." {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		return normalized, nil
+	}
+	// The workspace-virtual /workspace/... form has already been handled above.
+	// A single-leading-slash path without a bound workspace filesystem is treated
+	// as a legacy unix-style absolute path and rejected explicitly instead of
+	// flowing into the generic absolute-path branch.
+	if fileSystem == nil && strings.HasPrefix(source, "/") && !strings.HasPrefix(source, "//") {
+		return "", ErrInspectionSourceOutsideWorkspace
+	}
+	if strings.HasPrefix(source, "/") && !filepath.IsAbs(source) {
+		return "", ErrInspectionSourceOutsideWorkspace
 	}
 
-	source = strings.TrimPrefix(source, "workspace/")
-	if source == "workspace" || source == "." || source == "/" {
-		return "."
+	if isAbsoluteTaskSourcePath(source) {
+		if fileSystem == nil {
+			return "", ErrInspectionFileSystemUnavailable
+		}
+		workspaceRoot, err := fileSystem.EnsureWithinWorkspace(".")
+		if err != nil {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		relPath, ok := relativeAbsoluteTaskSourcePath(workspaceRoot, source)
+		if !ok {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		if filepath.Clean(relPath) == "." {
+			return ".", nil
+		}
+		return relPath, nil
 	}
 
 	normalized := path.Clean(strings.TrimPrefix(source, "/"))
 	if normalized == "." {
-		return "."
+		return ".", nil
 	}
 	if strings.HasPrefix(normalized, "../") || normalized == ".." {
-		return ""
+		return "", ErrInspectionSourceOutsideWorkspace
 	}
-	return normalized
+	return normalized, nil
+}
+
+// isAbsoluteTaskSourcePath recognizes both native absolute paths for the
+// current GOOS and Windows drive-letter paths so non-Windows tests can still
+// validate Windows-style inspection sources such as D:/todos.
+func isAbsoluteTaskSourcePath(source string) bool {
+	if filepath.IsAbs(source) {
+		return true
+	}
+	if strings.HasPrefix(source, "//") {
+		return true
+	}
+	if len(source) < 3 || source[1] != ':' || source[2] != '/' {
+		return false
+	}
+	driveLetter := source[0]
+	return (driveLetter >= 'a' && driveLetter <= 'z') || (driveLetter >= 'A' && driveLetter <= 'Z')
+}
+
+func normalizeAbsoluteTaskSourcePath(source string) string {
+	if strings.HasPrefix(source, "//") {
+		trimmed := strings.TrimPrefix(source, "//")
+		cleaned := path.Clean("/" + trimmed)
+		return "//" + strings.TrimPrefix(cleaned, "/")
+	}
+	if filepath.IsAbs(source) {
+		return filepath.ToSlash(filepath.Clean(source))
+	}
+	return path.Clean(source)
+}
+
+// normalizeTaskSourceInput keeps the policy in forward-slash form regardless of
+// the host GOOS. filepath.ToSlash only rewrites the native separator, so a
+// second pass is still required for injected Windows literals on Unix CI.
+func normalizeTaskSourceInput(source string) string {
+	return strings.ReplaceAll(filepath.ToSlash(strings.TrimSpace(source)), "\\", "/")
+}
+
+func relativeAbsoluteTaskSourcePath(workspaceRoot string, source string) (string, bool) {
+	normalizedWorkspaceRoot := normalizeAbsoluteTaskSourcePath(normalizeTaskSourceInput(workspaceRoot))
+	normalizedSource := normalizeAbsoluteTaskSourcePath(normalizeTaskSourceInput(source))
+	if normalizedWorkspaceRoot == "" || normalizedSource == "" {
+		return "", false
+	}
+	caseInsensitive := strings.HasPrefix(normalizedWorkspaceRoot, "//") || (len(normalizedWorkspaceRoot) >= 2 && normalizedWorkspaceRoot[1] == ':')
+	if pathsEqualForTaskSource(normalizedSource, normalizedWorkspaceRoot, caseInsensitive) {
+		return ".", true
+	}
+	workspacePrefix := normalizedWorkspaceRoot
+	if !strings.HasSuffix(workspacePrefix, "/") {
+		workspacePrefix += "/"
+	}
+	if !pathHasPrefixForTaskSource(normalizedSource, workspacePrefix, caseInsensitive) {
+		return "", false
+	}
+	return strings.TrimPrefix(normalizedSource, workspacePrefix), true
+}
+
+func pathsEqualForTaskSource(left string, right string, caseInsensitive bool) bool {
+	if caseInsensitive {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func pathHasPrefixForTaskSource(value string, prefix string, caseInsensitive bool) bool {
+	if caseInsensitive {
+		return strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix))
+	}
+	return strings.HasPrefix(value, prefix)
 }
 
 func countChecklistItems(content string) int {

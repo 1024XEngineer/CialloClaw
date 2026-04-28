@@ -916,7 +916,7 @@ flowchart TB
 
 补充约束：
 
-- `task_automation` 相关表单当前由 `agent.task_inspector.config.get / update / run` 与 `agent.settings.get / update` 组合承接，而不是单纯落在一个设置 RPC 中。
+- `task_automation` 当前以 `agent.settings.get / update` 中的正式 settings snapshot 为真源；`agent.task_inspector.config.get / update` 仅作为巡检配置兼容入口复用同一份 `task_automation` 数据，不再维护独立 runtime config。
 - “关于”、日志查看、数据清理等入口仍属后续扩展项，当前桌面控制面板尚未冻结为独立导航分组。
 
 ### 3.7.7 扩展能力中心与多模型配置域
