@@ -85,8 +85,9 @@ function loadCachedTaskSources() {
     .filter(Boolean);
 }
 
-function isAbsoluteWindowsPath(value: string) {
-  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+function isAbsoluteHostPath(value: string) {
+  const trimmed = value.trim();
+  return /^[a-zA-Z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed) || trimmed.startsWith("/");
 }
 
 function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSources: string[]) {
@@ -99,7 +100,7 @@ function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSo
   }
 
   const remoteRequiresWorkspaceRoot = remoteTaskSources.every((source) => /^workspace(?:[\\/]|$)/i.test(source.trim()));
-  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteWindowsPath(source));
+  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteHostPath(source));
 
   return remoteRequiresWorkspaceRoot && cachedUsesAbsolutePaths;
 }

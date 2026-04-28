@@ -279,6 +279,16 @@ export async function hydrateDesktopRuntimeDefaults() {
 }
 
 /**
+ * Loads the persisted desktop settings after best-effort runtime-default
+ * hydration so fallback UI surfaces prefer trusted host paths over legacy
+ * packaged placeholders when the RPC channel is temporarily unavailable.
+ */
+export async function loadHydratedSettings(): Promise<DesktopSettings> {
+  await hydrateDesktopRuntimeDefaults();
+  return loadSettings();
+}
+
+/**
  * Hydrates shared RPC settings into the desktop-local settings shape.
  *
  * @param settings Shared or desktop-local settings snapshot.
