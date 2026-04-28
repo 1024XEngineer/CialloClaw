@@ -42,11 +42,13 @@ import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
   advanceDesktopOnboarding,
+  setDesktopOnboardingLoadingState,
   setDesktopOnboardingPresentation,
   shouldAutoStartDesktopOnboarding,
   startDesktopOnboarding,
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
+import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 
 type ShellBallAppProps = {
@@ -242,6 +244,7 @@ async function animateShellBallDashboardWindow(input: {
 export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   void isDev;
   const onboardingSession = useDesktopOnboardingSession();
+  const onboardingLoading = useDesktopOnboardingLoading("shell-ball");
   const {
     visualState,
     inputValue,
@@ -477,6 +480,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       return;
     }
 
+    void setDesktopOnboardingLoadingState({
+      message: "正在打开引导...",
+      windowLabel: "shell-ball",
+    });
     void startDesktopOnboarding("first_launch");
   }, [onboardingSession]);
 
@@ -1073,6 +1080,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onPressMove={handlePressMove}
       onPressEnd={handleLockedPressEnd}
       onPressCancel={handleLockedPressCancel}
-    />
+    >
+      {onboardingLoading ? <div className="shell-ball-onboarding-loading">{onboardingLoading.message}</div> : null}
+    </ShellBallSurface>
   );
 }

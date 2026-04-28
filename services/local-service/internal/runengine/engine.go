@@ -1681,6 +1681,16 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 					needRestart = true
 				}
 			}
+			if downloadPatch, ok := sectionPatch["download"].(map[string]any); ok {
+				currentDownload := cloneMap(mapValue(previousSection, "download"))
+				if nextWorkspacePath, ok := downloadPatch["workspace_path"]; ok {
+					currentWorkspacePath, hasCurrentWorkspacePath := currentDownload["workspace_path"]
+					if !hasCurrentWorkspacePath || !reflect.DeepEqual(currentWorkspacePath, nextWorkspacePath) {
+						applyMode = "restart_required"
+						needRestart = true
+					}
+				}
+			}
 		}
 		if section == "models" && modelRouteSettingsChanged(sectionUpdatedKeys) {
 			modelSettingsChanged = true

@@ -1,3 +1,6 @@
+//go:build live_openai_responses
+// +build live_openai_responses
+
 package model
 
 import (
@@ -8,6 +11,11 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
+
+// These tests intentionally stay behind an explicit build tag so the default CI
+// suite never exercises network-bound live-provider checks. Developers can run
+// them manually with `go test -tags=live_openai_responses ./internal/model` and
+// the matching runtime environment variables.
 
 func TestLiveOpenAIResponsesGenerateText(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("RUN_LIVE_OPENAI_RESPONSES_TEST")) != "1" {

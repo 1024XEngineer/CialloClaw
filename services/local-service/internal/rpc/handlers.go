@@ -8,6 +8,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -380,6 +381,38 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			Message: "TOOL_OUTPUT_INVALID",
 			Detail:  err.Error(),
 			TraceID: "trace_tool_output_invalid",
+		}
+	}
+	if errors.Is(err, taskinspector.ErrInspectionSourceOutsideWorkspace) {
+		return nil, &rpcError{
+			Code:    1004003,
+			Message: "WORKSPACE_BOUNDARY_DENIED",
+			Detail:  err.Error(),
+			TraceID: "trace_workspace_boundary_denied",
+		}
+	}
+	if errors.Is(err, taskinspector.ErrInspectionFileSystemUnavailable) {
+		return nil, &rpcError{
+			Code:    1007006,
+			Message: "INSPECTION_FILESYSTEM_UNAVAILABLE",
+			Detail:  err.Error(),
+			TraceID: "trace_inspection_filesystem_unavailable",
+		}
+	}
+	if errors.Is(err, taskinspector.ErrInspectionSourceNotFound) {
+		return nil, &rpcError{
+			Code:    1007007,
+			Message: "INSPECTION_SOURCE_NOT_FOUND",
+			Detail:  err.Error(),
+			TraceID: "trace_inspection_source_not_found",
+		}
+	}
+	if errors.Is(err, taskinspector.ErrInspectionSourceUnreadable) {
+		return nil, &rpcError{
+			Code:    1007008,
+			Message: "INSPECTION_SOURCE_UNREADABLE",
+			Detail:  err.Error(),
+			TraceID: "trace_inspection_source_unreadable",
 		}
 	}
 	if model.IsProviderRuntimeUnavailable(err) {

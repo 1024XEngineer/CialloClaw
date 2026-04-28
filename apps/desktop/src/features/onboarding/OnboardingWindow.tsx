@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button, Heading, Text } from "@radix-ui/themes";
 import { cn } from "@/utils/cn";
-import { setOnboardingInteractiveRegions } from "@/platform/onboardingWindow";
+import { desktopOnboardingEvents } from "./onboarding.events";
 import {
   advanceDesktopOnboarding,
   completeDesktopOnboarding,
   type DesktopOnboardingPresentation,
+  type DesktopOnboardingSession,
   skipDesktopOnboarding,
   requestDesktopOnboardingAction,
 } from "./onboardingService";
@@ -90,14 +91,50 @@ function getOnboardingCopy(step: string) {
  * highlights, and flow buttons; all real interactions still happen in the
  * underlying business windows.
  *
- * @returns The onboarding overlay window contents.
+ * @returns The onboarding card window contents.
  */
 export function OnboardingWindow() {
   const cardRef = useRef<HTMLElement | null>(null);
   const session = useDesktopOnboardingSession();
   const presentation = useDesktopOnboardingPresentation();
   const [stagedPresentation, setStagedPresentation] = useState<DesktopOnboardingPresentation | null>(null);
+  const currentWindowRef = useRef(getCurrentWindow());
+  const cardReadyRef = useRef(false);
   const copy = useMemo(() => (session ? getOnboardingCopy(session.step) : null), [session]);
+
+  useEffect(() => {
+    const currentWindow = currentWindowRef.current;
+    let disposed = false;
+    let disposeReadyRequestListener: (() => void) | null = null;
+
+    const announceReady = () => {
+      if (disposed) {
+        return;
+      }
+
+      void currentWindow.emit(desktopOnboardingEvents.ready);
+    };
+
+    announceReady();
+
+    void currentWindow
+      .listen(desktopOnboardingEvents.readyRequested, () => {
+        announceReady();
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        disposeReadyRequestListener = unlisten;
+      });
+
+    return () => {
+      disposed = true;
+      disposeReadyRequestListener?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (presentation !== null) {
@@ -137,30 +174,45 @@ export function OnboardingWindow() {
 
   useLayoutEffect(() => {
     if (!cardRef.current || !session || !activePresentation) {
-      void setOnboardingInteractiveRegions([]);
+      cardReadyRef.current = false;
       return;
     }
 
-    void (async () => {
-      const rect = cardRef.current?.getBoundingClientRect();
-      if (!rect) {
+    let disposed = false;
+    let disposeCardReadyRequestListener: (() => void) | null = null;
+
+    const announceCardReady = () => {
+      if (disposed || !cardRef.current) {
         return;
       }
 
-      const scaleFactor = await getCurrentWindow().scaleFactor();
-      const interactivePadding = 12;
-      await setOnboardingInteractiveRegions([
-        {
-          x: Math.round((rect.left - interactivePadding) * scaleFactor),
-          y: Math.round((rect.top - interactivePadding) * scaleFactor),
-          width: Math.max(1, Math.round((rect.width + interactivePadding * 2) * scaleFactor)),
-          height: Math.max(1, Math.round((rect.height + interactivePadding * 2) * scaleFactor)),
-        },
-      ]);
-    })();
+      cardReadyRef.current = true;
+      void currentWindowRef.current.emit(desktopOnboardingEvents.cardReady);
+    };
+
+    announceCardReady();
+
+    void currentWindowRef.current
+      .listen(desktopOnboardingEvents.cardReadyRequested, () => {
+        if (!cardReadyRef.current) {
+          return;
+        }
+
+        announceCardReady();
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        disposeCardReadyRequestListener = unlisten;
+      });
 
     return () => {
-      void setOnboardingInteractiveRegions([]);
+      disposed = true;
+      cardReadyRef.current = false;
+      disposeCardReadyRequestListener?.();
     };
   }, [activePresentation, session]);
 
@@ -168,35 +220,48 @@ export function OnboardingWindow() {
     return <main className="desktop-onboarding-window" />;
   }
 
+  const advanceToStep = (step: DesktopOnboardingSession["step"]) => {
+    void advanceDesktopOnboarding(step);
+  };
+
   const handlePrimary = () => {
     switch (session.step) {
       case "welcome":
-        void advanceDesktopOnboarding("shell_ball_intro");
+        advanceToStep("shell_ball_intro");
         return;
       case "shell_ball_intro":
-        void advanceDesktopOnboarding("shell_ball_hold_voice");
+        advanceToStep("shell_ball_hold_voice");
         return;
       case "shell_ball_hold_voice":
-        void advanceDesktopOnboarding("shell_ball_double_click");
+        advanceToStep("shell_ball_double_click");
         return;
       case "shell_ball_double_click":
         void requestDesktopOnboardingAction({
           targetWindow: "shell-ball",
           type: "open_dashboard",
         });
-        void advanceDesktopOnboarding("dashboard_overview");
+        advanceToStep("dashboard_overview");
         return;
       case "dashboard_overview":
-        void advanceDesktopOnboarding("tray_hint");
+        void requestDesktopOnboardingAction({
+          targetWindow: "dashboard",
+          type: "close_dashboard",
+        });
+        advanceToStep("tray_hint");
         return;
       case "tray_hint":
         void requestDesktopOnboardingAction({
           targetWindow: "dashboard",
+          type: "close_dashboard",
+        });
+        void requestDesktopOnboardingAction({
+          targetWindow: "dashboard",
           type: "open_control_panel",
         });
+        advanceToStep("control_panel_api_key");
         return;
       case "control_panel_api_key":
-        void advanceDesktopOnboarding("done");
+        advanceToStep("done");
         return;
       case "done":
         void completeDesktopOnboarding();
@@ -212,13 +277,13 @@ export function OnboardingWindow() {
         void skipDesktopOnboarding();
         return;
       case "shell_ball_intro":
-        void advanceDesktopOnboarding("welcome");
+        advanceToStep("welcome");
         return;
       case "shell_ball_hold_voice":
-        void advanceDesktopOnboarding("shell_ball_intro");
+        advanceToStep("shell_ball_intro");
         return;
       case "shell_ball_double_click":
-        void advanceDesktopOnboarding("shell_ball_hold_voice");
+        advanceToStep("shell_ball_hold_voice");
         return;
       case "dashboard_overview":
         void requestDesktopOnboardingAction({
@@ -229,10 +294,10 @@ export function OnboardingWindow() {
           targetWindow: "shell-ball",
           type: "show_shell_ball",
         });
-        void advanceDesktopOnboarding("shell_ball_double_click");
+        advanceToStep("shell_ball_double_click");
         return;
       case "tray_hint":
-        void advanceDesktopOnboarding("dashboard_overview");
+        advanceToStep("dashboard_overview");
         return;
       case "control_panel_api_key":
         void requestDesktopOnboardingAction({
@@ -243,7 +308,7 @@ export function OnboardingWindow() {
           targetWindow: "dashboard",
           type: "open_dashboard",
         });
-        void advanceDesktopOnboarding("tray_hint");
+        advanceToStep("tray_hint");
         return;
       default:
         return;

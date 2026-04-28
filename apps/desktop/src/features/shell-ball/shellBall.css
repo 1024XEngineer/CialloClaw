@@ -693,6 +693,19 @@ body[data-app-window="shell-ball"],
   z-index: 7;
 }
 
+.shell-ball-onboarding-loading {
+  align-self: center;
+  backdrop-filter: blur(12px);
+  background: rgba(255, 250, 245, 0.88);
+  border: 1px solid rgba(202, 176, 149, 0.28);
+  border-radius: 999px;
+  box-shadow: 0 18px 34px -24px rgba(38, 27, 19, 0.34);
+  color: rgba(56, 44, 33, 0.92);
+  justify-self: center;
+  padding: 0.5rem 0.85rem;
+  pointer-events: none;
+}
+
 .shell-ball-input-bar,
 .shell-ball-input-bar--hidden {
   min-width: var(--shell-ball-helper-width);

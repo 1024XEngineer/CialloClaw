@@ -19,3 +19,21 @@ export async function setOnboardingInteractiveRegions(regions: OnboardingInterac
     regions,
   });
 }
+
+/**
+ * Resets the native onboarding hit-test state so a recreated overlay starts in
+ * a fully click-through mode until the first card layout registers new regions.
+ */
+export async function resetOnboardingInteractiveState() {
+  await invoke("onboarding_reset_interactive_state");
+}
+
+/**
+ * Forces the onboarding window back into a fully click-through state until the
+ * frontend registers the first interactive guide card.
+ */
+export async function setOnboardingIgnoreCursorEvents(ignore = true) {
+  await invoke("onboarding_set_ignore_cursor_events", {
+    ignore,
+  });
+}
