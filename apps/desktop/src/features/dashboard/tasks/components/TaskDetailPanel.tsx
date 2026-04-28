@@ -756,8 +756,6 @@ export function TaskDetailPanel({
             </>
           ) : (
             <>
-              {detail ? (
-                <>
               <section className="task-detail-card task-detail-card--spotlight">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
                   <div>
@@ -772,16 +770,6 @@ export function TaskDetailPanel({
                 <p className="task-detail-ended-copy">{experience?.endedSummary ?? stateVoice.body}</p>
                 <p className="task-detail-ended-time">结束时间：{formatTimestamp(task.finished_at)}</p>
               </section>
-
-              {renderRuntimeSummarySection()}
-
-              {renderFormalDeliverySection()}
-
-              {renderEvidenceSection()}
-
-              {renderScreenGovernanceSection()}
-
-              {renderRuntimeEventsSection()}
 
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
@@ -821,6 +809,18 @@ export function TaskDetailPanel({
                   ) : null}
                 </div>
               </section>
+
+              {detail ? (
+                <>
+                  {renderRuntimeSummarySection()}
+
+                  {renderFormalDeliverySection()}
+
+                  {renderEvidenceSection()}
+
+                  {renderScreenGovernanceSection()}
+
+                  {renderRuntimeEventsSection()}
                 </>
               ) : null}
             </>

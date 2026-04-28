@@ -4827,6 +4827,7 @@ test("task detail fallback keeps operator controls available from the selected t
   assert.match(taskPageSource, /taskId: selectedTask\.task_id/);
   assert.match(panelSource, /task \? <TaskActionBar detail=\{detail\} onAction=\{onAction\} task=\{task\} \/> : null/);
   assert.doesNotMatch(panelSource, /detailData \? <TaskActionBar/);
+  assert.match(panelSource, /<h3 className="task-detail-card__title">已生成的结果<\/h3>/);
   assert.match(actionBarSource, /detail: AgentTaskDetailGetResult \| null;/);
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
   assert.match(mapperSource, /const hasAnchor = detail !== null/);
