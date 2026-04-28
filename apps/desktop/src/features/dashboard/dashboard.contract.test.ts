@@ -4269,6 +4269,9 @@ test("note rpc service derives experience from protocol note data instead of moc
 
   assert.match(noteServiceSource, /function mapItems\(items: TodoItem\[\]\)/);
   assert.doesNotMatch(noteServiceSource, /getMockNoteExperience\(/);
+  assert.doesNotMatch(noteServiceSource, /getMockNoteBuckets\(/);
+  assert.doesNotMatch(noteServiceSource, /runMockConvertNoteToTask\(/);
+  assert.doesNotMatch(noteServiceSource, /runMockUpdateNote\(/);
 });
 
 test("security rpc service keeps transport failures visible instead of switching to mock governance data", async () => {
