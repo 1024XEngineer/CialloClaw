@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("resolve-metadata", "rewrite-version-manifests", "verify-version-manifests", "build-sidecar")]
+  [ValidateSet("resolve-metadata", "rewrite-version-manifests", "verify-version-manifests", "build-sidecar", "remove-release-by-tag")]
   [string]$Action
 )
 
@@ -22,6 +22,39 @@ function Write-WorkflowOutput {
   "$Name=$Value" >> $env:GITHUB_OUTPUT
 }
 
+function New-GitHubApiHeaders {
+  if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
+    throw "GITHUB_TOKEN is required."
+  }
+
+  return @{
+    Authorization = "Bearer $env:GITHUB_TOKEN"
+    Accept = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2022-11-28"
+  }
+}
+
+function Invoke-GitHubApiRequest {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Method,
+    [Parameter(Mandatory = $true)]
+    [string]$Uri
+  )
+
+  $headers = New-GitHubApiHeaders
+  try {
+    return Invoke-RestMethod -Headers $headers -Method $Method -Uri $Uri
+  } catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    if ($statusCode -eq 404) {
+      return $null
+    }
+
+    throw
+  }
+}
+
 function Assert-WindowsInstallerVersionBounds {
   param(
     [Parameter(Mandatory = $true)]
@@ -39,137 +72,34 @@ function Assert-WindowsInstallerVersionBounds {
   }
 }
 
-function New-SemVerInfo {
+function Remove-GitHubReleaseByTag {
   param(
-    [Parameter(Mandatory = $true)]
-    [string]$Version,
-    [Parameter(Mandatory = $true)]
-    [System.Text.RegularExpressions.Match]$Match,
     [Parameter(Mandatory = $true)]
     [string]$TagName
   )
 
-  $prereleaseIdentifiers = @()
-  if ($Match.Groups["prerelease"].Success) {
-    $prereleaseIdentifiers = @(
-      $Match.Groups["prerelease"].Value.Split(".") | ForEach-Object {
-        $isNumeric = $_ -match "^\d+$"
-        [pscustomobject]@{
-          raw = $_
-          is_numeric = $isNumeric
-          numeric_value = if ($isNumeric) { [int64]$_ } else { $null }
-        }
-      }
-    )
+  $releaseUri = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/tags/$TagName"
+  $release = Invoke-GitHubApiRequest -Method "GET" -Uri $releaseUri
+  if ($null -eq $release) {
+    return
   }
 
-  [pscustomobject]@{
-    version = $Version
-    tag_name = $TagName
-    major = [int64]$Match.Groups["major"].Value
-    minor = [int64]$Match.Groups["minor"].Value
-    patch = [int64]$Match.Groups["patch"].Value
-    prerelease = $prereleaseIdentifiers
-  }
+  Invoke-GitHubApiRequest -Method "DELETE" -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/$($release.id)" | Out-Null
 }
 
-function Compare-SemVer {
+function Remove-GitHubTagRef {
   param(
     [Parameter(Mandatory = $true)]
-    [pscustomobject]$Left,
-    [Parameter(Mandatory = $true)]
-    [pscustomobject]$Right
+    [string]$TagName
   )
 
-  foreach ($part in "major", "minor", "patch") {
-    if ($Left.$part -gt $Right.$part) { return 1 }
-    if ($Left.$part -lt $Right.$part) { return -1 }
+  $refUri = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/git/refs/tags/$TagName"
+  $tagRef = Invoke-GitHubApiRequest -Method "GET" -Uri $refUri
+  if ($null -eq $tagRef) {
+    return
   }
 
-  $leftHasPrerelease = $Left.prerelease.Count -gt 0
-  $rightHasPrerelease = $Right.prerelease.Count -gt 0
-  if (-not $leftHasPrerelease -and -not $rightHasPrerelease) { return 0 }
-  if (-not $leftHasPrerelease) { return 1 }
-  if (-not $rightHasPrerelease) { return -1 }
-
-  $identifierCount = [Math]::Max($Left.prerelease.Count, $Right.prerelease.Count)
-  for ($index = 0; $index -lt $identifierCount; $index++) {
-    if ($index -ge $Left.prerelease.Count) { return -1 }
-    if ($index -ge $Right.prerelease.Count) { return 1 }
-
-    $leftIdentifier = $Left.prerelease[$index]
-    $rightIdentifier = $Right.prerelease[$index]
-
-    if ($leftIdentifier.is_numeric -and $rightIdentifier.is_numeric) {
-      if ($leftIdentifier.numeric_value -gt $rightIdentifier.numeric_value) { return 1 }
-      if ($leftIdentifier.numeric_value -lt $rightIdentifier.numeric_value) { return -1 }
-      continue
-    }
-
-    if ($leftIdentifier.is_numeric -and -not $rightIdentifier.is_numeric) { return -1 }
-    if (-not $leftIdentifier.is_numeric -and $rightIdentifier.is_numeric) { return 1 }
-
-    $stringComparison = [string]::CompareOrdinal($leftIdentifier.raw, $rightIdentifier.raw)
-    if ($stringComparison -gt 0) { return 1 }
-    if ($stringComparison -lt 0) { return -1 }
-  }
-
-  return 0
-}
-
-function Get-HighestPublishedReleaseCore {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$SemVerPattern
-  )
-
-  if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
-    throw "GITHUB_TOKEN is required."
-  }
-
-  $headers = @{
-    Authorization = "Bearer $env:GITHUB_TOKEN"
-    Accept = "application/vnd.github+json"
-    "X-GitHub-Api-Version" = "2022-11-28"
-  }
-  $bestVersion = $null
-
-  for ($page = 1; $page -le 10; $page++) {
-    $uri = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases?per_page=100&page=$page"
-    $releases = Invoke-RestMethod -Headers $headers -Uri $uri
-    if ($releases.Count -eq 0) { break }
-
-    foreach ($release in $releases) {
-      if ($release.draft -or $release.prerelease) { continue }
-
-      $tagName = [string]$release.tag_name
-      if (-not $tagName.StartsWith("v")) {
-        Write-Warning "Skipping published release tag '$tagName' because it does not start with 'v'."
-        continue
-      }
-
-      $version = $tagName.Substring(1)
-      $match = [regex]::Match($version, $SemVerPattern)
-      if (-not $match.Success) {
-        Write-Warning "Skipping published release tag '$tagName' because it is not valid SemVer."
-        continue
-      }
-
-      $candidate = New-SemVerInfo -Version $version -Match $match -TagName $tagName
-      if ($null -eq $bestVersion -or (Compare-SemVer -Left $candidate -Right $bestVersion) -gt 0) {
-        $bestVersion = $candidate
-      }
-    }
-
-    if ($releases.Count -lt 100) { break }
-  }
-
-  if ($null -eq $bestVersion) {
-    throw "Could not determine the highest published SemVer release."
-  }
-
-  Assert-WindowsInstallerVersionBounds -Version $bestVersion.version -Major $bestVersion.major -Minor $bestVersion.minor -Patch $bestVersion.patch
-  return "$($bestVersion.major).$($bestVersion.minor).$($bestVersion.patch)"
+  Invoke-GitHubApiRequest -Method "DELETE" -Uri $refUri | Out-Null
 }
 
 function Get-PackageVersionFromCargoToml {
@@ -218,38 +148,19 @@ switch ($Action) {
       $bundles = if ($isPrerelease) { "nsis" } else { "nsis,msi" }
 
       Write-WorkflowOutput -Name "release_mode" -Value "tag"
-      Write-WorkflowOutput -Name "release_version" -Value $version
+      Write-WorkflowOutput -Name "manifest_version" -Value $version
       Write-WorkflowOutput -Name "release_is_prerelease" -Value $isPrerelease.ToString().ToLowerInvariant()
       Write-WorkflowOutput -Name "release_bundles" -Value $bundles
       return
     }
 
     if ($env:GITHUB_REF -eq "refs/heads/main") {
-      $baseCore = $null
-      for ($attempt = 0; $attempt -lt 3; $attempt++) {
-        try {
-          $baseCore = Get-HighestPublishedReleaseCore -SemVerPattern $semverPattern
-          break
-        } catch {
-          if ($attempt -eq 2) {
-            throw "Failed to determine the highest published SemVer release after 3 attempts: $_"
-          }
-          Start-Sleep -Seconds 2
-        }
-      }
-
-      if (-not $baseCore) {
-        throw "Could not determine base version from latest release"
-      }
-
-      $releaseVersion = "$baseCore-tip.$env:GITHUB_RUN_NUMBER"
       $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA"
       if ($env:PREVIOUS_SHA -and $env:PREVIOUS_SHA -ne "0000000000000000000000000000000000000000") {
         $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/compare/$env:PREVIOUS_SHA...$env:GITHUB_SHA"
       }
 
       Write-WorkflowOutput -Name "release_mode" -Value "tip"
-      Write-WorkflowOutput -Name "release_version" -Value $releaseVersion
       Write-WorkflowOutput -Name "release_is_prerelease" -Value "true"
       Write-WorkflowOutput -Name "release_bundles" -Value "nsis"
       Write-WorkflowOutput -Name "release_compare_url" -Value $compareUrl
@@ -260,11 +171,11 @@ switch ($Action) {
   }
 
   "rewrite-version-manifests" {
-    if ([string]::IsNullOrWhiteSpace($env:RELEASE_VERSION)) {
-      throw "RELEASE_VERSION is required."
+    if ([string]::IsNullOrWhiteSpace($env:MANIFEST_VERSION)) {
+      throw "MANIFEST_VERSION is required."
     }
 
-    $version = $env:RELEASE_VERSION
+    $version = $env:MANIFEST_VERSION
 
     $packageJsonPath = "apps/desktop/package.json"
     $packageJson = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
@@ -312,11 +223,11 @@ switch ($Action) {
   }
 
   "verify-version-manifests" {
-    if ([string]::IsNullOrWhiteSpace($env:RELEASE_VERSION)) {
-      throw "RELEASE_VERSION is required."
+    if ([string]::IsNullOrWhiteSpace($env:MANIFEST_VERSION)) {
+      throw "MANIFEST_VERSION is required."
     }
 
-    $version = $env:RELEASE_VERSION
+    $version = $env:MANIFEST_VERSION
     if ((Get-Content "apps/desktop/package.json" -Raw | ConvertFrom-Json).version -ne $version) {
       throw "package.json mismatch"
     }
@@ -341,6 +252,16 @@ switch ($Action) {
     New-Item -ItemType Directory -Force "apps/desktop/src-tauri/binaries" | Out-Null
     go build -trimpath -o "apps/desktop/src-tauri/binaries/$name" "./services/local-service/cmd/server"
     Write-WorkflowOutput -Name "sidecar_file_name" -Value $name
+    return
+  }
+
+  "remove-release-by-tag" {
+    if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG_NAME)) {
+      throw "RELEASE_TAG_NAME is required."
+    }
+
+    Remove-GitHubReleaseByTag -TagName $env:RELEASE_TAG_NAME
+    Remove-GitHubTagRef -TagName $env:RELEASE_TAG_NAME
     return
   }
 }

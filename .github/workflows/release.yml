@@ -71,16 +71,18 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Rewrite version manifests (precise)
+      - name: Rewrite version manifests (tag)
+        if: steps.meta.outputs.release_mode == 'tag'
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ steps.meta.outputs.release_version }}
+          MANIFEST_VERSION: ${{ steps.meta.outputs.manifest_version }}
         run: ./.github/scripts/desktop-release.ps1 -Action rewrite-version-manifests
 
-      - name: Verify version rewrite
+      - name: Verify version rewrite (tag)
+        if: steps.meta.outputs.release_mode == 'tag'
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ steps.meta.outputs.release_version }}
+          MANIFEST_VERSION: ${{ steps.meta.outputs.manifest_version }}
         run: ./.github/scripts/desktop-release.ps1 -Action verify-version-manifests
 
       - name: Run release checks
@@ -110,6 +112,14 @@ jobs:
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
 
+      - name: Replace previous tip release/tag
+        if: steps.meta.outputs.release_mode == 'tip'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG_NAME: tip
+        run: ./.github/scripts/desktop-release.ps1 -Action remove-release-by-tag
+
       - name: Publish release (tip)
         if: steps.meta.outputs.release_mode == 'tip'
         uses: tauri-apps/tauri-action@v0
@@ -118,11 +128,11 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm exec tauri
-          tagName: v${{ steps.meta.outputs.release_version }}
-          releaseName: v${{ steps.meta.outputs.release_version }}
+          tagName: tip
+          releaseName: tip
           releaseBody: |
             ## Tip Build
-            - Version: `v${{ steps.meta.outputs.release_version }}`
+            - Channel: `tip`
             - Compare: ${{ steps.meta.outputs.release_compare_url }}
           prerelease: true
           retryAttempts: 4
