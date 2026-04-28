@@ -264,37 +264,7 @@ function createResourceHints(item: TodoItem) {
     });
   }
 
-  const normalizedTitle = item.title.toLowerCase();
-  const resources: NoteResource[] = [];
-
-  if (normalizedTitle.includes("template") || normalizedTitle.includes("模板")) {
-    resources.push({
-      id: `${item.item_id}_template`,
-      label: "关联模板",
-      path: "workspace/templates",
-      type: "模板目录",
-    });
-  }
-
-  if (normalizedTitle.includes("report") || normalizedTitle.includes("周报") || normalizedTitle.includes("报告")) {
-    resources.push({
-      id: `${item.item_id}_report`,
-      label: "文档草稿区",
-      path: "workspace/drafts",
-      type: "草稿目录",
-    });
-  }
-
-  if (normalizedTitle.includes("design") || normalizedTitle.includes("设计") || normalizedTitle.includes("page") || normalizedTitle.includes("页面")) {
-    resources.push({
-      id: `${item.item_id}_ui`,
-      label: "Dashboard 前端目录",
-      path: "apps/desktop/src/features/dashboard",
-      type: "代码目录",
-    });
-  }
-
-  return resources;
+  return [];
 }
 
 function createFallbackExperience(item: TodoItem): NoteDetailExperience {

@@ -3610,6 +3610,16 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.match(noteServiceSource, /mode === "open_url"/);
 });
 
+test("note service no longer invents related resources from title keywords", () => {
+  const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+
+  assert.match(noteServiceSource, /function createResourceHints\(item: TodoItem\)/);
+  assert.doesNotMatch(noteServiceSource, /normalizedTitle\.includes\("template"\)/);
+  assert.doesNotMatch(noteServiceSource, /normalizedTitle\.includes\("report"\)/);
+  assert.doesNotMatch(noteServiceSource, /normalizedTitle\.includes\("design"\)/);
+  assert.match(noteServiceSource, /return \[\];/);
+});
+
 test("task fallback copy no longer claims backend output actions are missing", () => {
   const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
   const taskTabsSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskTabsPanel.tsx"), "utf8");
