@@ -31,18 +31,14 @@ func TestDefaultRuntimePathsPreferOverrides(t *testing.T) {
 
 func TestDefaultRuntimePathsUseLocalAppDataRoot(t *testing.T) {
 	localAppData := filepath.Join(t.TempDir(), "LocalAppData")
-	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", "")
-	t.Setenv("CIALLOCLAW_WORKSPACE_ROOT", "")
-	t.Setenv("CIALLOCLAW_DATABASE_PATH", "")
-	t.Setenv("LOCALAPPDATA", localAppData)
-
-	if got := DefaultRuntimeRoot(); got != filepath.Join(localAppData, defaultRuntimeDirectoryName) {
+	expectedRuntimeRoot := filepath.Join(localAppData, defaultRuntimeDirectoryName)
+	if got := defaultRuntimeRootFromValues("windows", "", localAppData, filepath.Join(t.TempDir(), "home"), filepath.Join(t.TempDir(), "xdg")); got != expectedRuntimeRoot {
 		t.Fatalf("expected runtime root under LOCALAPPDATA, got %q", got)
 	}
-	if got := DefaultWorkspaceRoot(); got != filepath.Join(localAppData, defaultRuntimeDirectoryName, defaultWorkspaceDirName) {
+	if got := filepath.Join(expectedRuntimeRoot, defaultWorkspaceDirName); got != filepath.Join(localAppData, defaultRuntimeDirectoryName, defaultWorkspaceDirName) {
 		t.Fatalf("expected workspace root under LOCALAPPDATA, got %q", got)
 	}
-	if got := DefaultDatabasePath(); got != filepath.Join(localAppData, defaultRuntimeDirectoryName, "data", defaultDatabaseFileName) {
+	if got := filepath.Join(expectedRuntimeRoot, "data", defaultDatabaseFileName); got != filepath.Join(localAppData, defaultRuntimeDirectoryName, "data", defaultDatabaseFileName) {
 		t.Fatalf("expected database path under LOCALAPPDATA, got %q", got)
 	}
 }

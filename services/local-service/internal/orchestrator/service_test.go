@@ -1884,7 +1884,11 @@ func TestTaskInspectorConfigUsesTaskAutomationSettingsSource(t *testing.T) {
 
 	settings := normalizeSettingsSnapshot(service.runEngine.Settings())
 	taskAutomation := settings["task_automation"].(map[string]any)
-	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"workspace/review", "workspace/backlog"}) {
+	expectedStoredSources := []string{
+		filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "review")),
+		filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "backlog")),
+	}
+	if !reflect.DeepEqual(taskAutomation["task_sources"], expectedStoredSources) {
 		t.Fatalf("expected task_automation settings to be updated, got %+v", taskAutomation)
 	}
 	if taskAutomation["inspect_on_file_change"] != false || taskAutomation["inspect_on_startup"] != false {
@@ -1898,7 +1902,7 @@ func TestTaskInspectorConfigUsesTaskAutomationSettingsSource(t *testing.T) {
 	if !reflect.DeepEqual(config, effectiveConfig) {
 		t.Fatalf("expected inspector config get to mirror effective config, got config=%+v effective=%+v", config, effectiveConfig)
 	}
-	if !reflect.DeepEqual(service.runEngine.InspectorConfig()["task_sources"], []string{"workspace/todos"}) {
+	if !reflect.DeepEqual(service.runEngine.InspectorConfig()["task_sources"], []string{filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "todos"))}) {
 		t.Fatalf("expected legacy in-memory inspector config to stop being the authoritative source, got %+v", service.runEngine.InspectorConfig())
 	}
 

@@ -3947,13 +3947,75 @@ func inspectorConfigFromSettings(settings map[string]any) map[string]any {
 		taskAutomation = map[string]any{}
 	}
 	return map[string]any{
-		"task_sources":           stringSliceValue(taskAutomation["task_sources"]),
+		"task_sources":           inspectorTaskSourcesFromSettings(taskAutomation["task_sources"]),
 		"inspection_interval":    cloneMap(mapValue(taskAutomation, "inspection_interval")),
 		"inspect_on_file_change": boolValue(taskAutomation, "inspect_on_file_change", true),
 		"inspect_on_startup":     boolValue(taskAutomation, "inspect_on_startup", true),
 		"remind_before_deadline": boolValue(taskAutomation, "remind_before_deadline", true),
 		"remind_when_stale":      boolValue(taskAutomation, "remind_when_stale", false),
 	}
+}
+
+// inspectorTaskSourcesFromSettings keeps compatibility RPCs aligned with the
+// formal task_automation snapshot shape while preserving workspace-relative
+// sources instead of eagerly migrating them to runtime absolute paths.
+func inspectorTaskSourcesFromSettings(rawValue any) []string {
+	sources, recognized := optionalStringSliceValue(rawValue)
+	if recognized {
+		result := make([]string, 0, len(sources))
+		for _, source := range sources {
+			result = append(result, presentInspectorTaskSource(source))
+		}
+		return result
+	}
+	return stringSliceValue(rawValue)
+}
+
+// presentInspectorTaskSource maps persisted runtime-absolute task sources back to
+// the compatibility RPC shape expected by desktop inspector settings so the UI
+// continues to reason about workspace-formal paths instead of host-specific
+// runtime locations.
+func presentInspectorTaskSource(source string) string {
+	trimmed := strings.TrimSpace(source)
+	if trimmed == "" {
+		return ""
+	}
+	if !filepath.IsAbs(trimmed) {
+		return trimmed
+	}
+	cleanSource := filepath.Clean(trimmed)
+	workspaceRoot := filepath.Clean(serviceconfig.DefaultWorkspaceRoot())
+	if relative, ok := relativizePathWithinRoot(cleanSource, workspaceRoot); ok {
+		if relative == "" {
+			return "workspace"
+		}
+		return filepath.ToSlash(path.Join("workspace", filepath.ToSlash(relative)))
+	}
+	runtimeRoot := filepath.Clean(serviceconfig.DefaultRuntimeRoot())
+	if relative, ok := relativizePathWithinRoot(cleanSource, runtimeRoot); ok {
+		if relative == "" {
+			return "."
+		}
+		return filepath.ToSlash(relative)
+	}
+	return filepath.ToSlash(cleanSource)
+}
+
+func relativizePathWithinRoot(candidate, root string) (string, bool) {
+	if root == "" {
+		return "", false
+	}
+	if candidate == root {
+		return "", true
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", false
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return relative, true
 }
 
 func taskAutomationSettingsPatchFromInspectorConfig(params map[string]any) map[string]any {
@@ -5952,8 +6014,13 @@ func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
 	if trimmedPath == "" {
 		return false
 	}
-	if !filepath.IsAbs(trimmedPath) {
-		if filepath.VolumeName(trimmedPath) != "" || strings.HasPrefix(trimmedPath, "\\") || strings.HasPrefix(trimmedPath, "/") {
+	if hasWindowsDriveLetterPrefix(trimmedPath) {
+		if !isWindowsStyleAbsolutePath(trimmedPath) {
+			return false
+		}
+	}
+	if !filepath.IsAbs(trimmedPath) && !isWindowsStyleAbsolutePath(trimmedPath) {
+		if strings.HasPrefix(trimmedPath, "\\") || strings.HasPrefix(trimmedPath, "/") {
 			return false
 		}
 	}
@@ -5964,17 +6031,29 @@ func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
 	if normalizedPath == "workspace" || strings.HasPrefix(normalizedPath, "workspace/") {
 		return true
 	}
-	if filepath.IsAbs(filePath) {
+	if filepath.IsAbs(trimmedPath) || isWindowsStyleAbsolutePath(trimmedPath) {
 		cleanRoot := filepath.Clean(strings.TrimSpace(workspaceRoot))
 		if cleanRoot == "" {
 			return false
 		}
-		cleanPath := filepath.Clean(strings.TrimSpace(filePath))
+		cleanPath := filepath.Clean(trimmedPath)
 		rootWithSeparator := cleanRoot + string(filepath.Separator)
 		return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, rootWithSeparator)
 	}
 	cleanRelative := path.Clean(normalizedPath)
 	return cleanRelative != ".." && !strings.HasPrefix(cleanRelative, "../")
+}
+
+func hasWindowsDriveLetterPrefix(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	letter := value[0]
+	return ((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z')) && value[1] == ':'
+}
+
+func isWindowsStyleAbsolutePath(value string) bool {
+	return hasWindowsDriveLetterPrefix(value) && len(value) >= 3 && (value[2] == '\\' || value[2] == '/')
 }
 
 func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
