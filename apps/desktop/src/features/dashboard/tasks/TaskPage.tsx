@@ -16,6 +16,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
+import { navigateToDashboardResultPage } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
@@ -454,6 +455,14 @@ export function TaskPage() {
     showFeedback(await performTaskOpenExecution(plan, {
       onOpenTaskDetail: ({ taskId }) => {
         focusTaskDetail(taskId);
+        return plan.feedback;
+      },
+      onOpenResultPage: ({ taskId, url }) => {
+        navigateToDashboardResultPage(navigate, {
+          taskId,
+          title: result.delivery_result.title,
+          url,
+        });
         return plan.feedback;
       },
     }));

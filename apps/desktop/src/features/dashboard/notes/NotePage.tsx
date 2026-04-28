@@ -13,6 +13,7 @@ import type { NotepadAction } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import { navigateToDashboardResultPage } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
@@ -909,6 +910,14 @@ export function NotePage() {
     showFeedback(await performNoteResourceOpenExecution(plan, {
       onOpenTaskDetail: ({ taskId }) => {
         navigateToDashboardTaskDetail(navigate, taskId);
+        return plan.feedback;
+      },
+      onOpenResultPage: ({ taskId, url }) => {
+        navigateToDashboardResultPage(navigate, {
+          taskId,
+          title: resource.label,
+          url,
+        });
         return plan.feedback;
       },
     }));

@@ -22,6 +22,7 @@ import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated 
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
+import { DashboardResultPage } from "./DashboardResultPage";
 import "./dashboard.css";
 
 const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
@@ -273,6 +274,7 @@ function DashboardRoutes() {
               element={dashboardHomeRoute}
               path={resolveDashboardRoutePath("home")}
             />
+            <Route element={<DashboardResultPage />} path={resolveDashboardRoutePath("result")} />
             <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
             <Route element={<NotesPage />} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
             <Route element={<MemoryPage />} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
