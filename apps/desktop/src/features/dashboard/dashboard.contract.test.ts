@@ -3859,6 +3859,14 @@ test("task rpc service keeps transport failures visible instead of switching to 
   );
 });
 
+test("task rpc service builds protocol-only experience instead of reusing mock task fixtures", () => {
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
+
+  assert.match(taskServiceSource, /function buildProtocolTaskExperience\(task: Task, detail\?: AgentTaskDetailGetResult\)/);
+  assert.doesNotMatch(taskServiceSource, /getTaskExperience\(/);
+  assert.doesNotMatch(taskServiceSource, /createFallbackExperience\(/);
+});
+
 test("note rpc service keeps transport failures visible instead of switching to mock data", async () => {
   const transportError = new Error("Named Pipe transport is not wired.");
 
