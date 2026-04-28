@@ -137,42 +137,33 @@ export async function loadSecurityModuleData(source: SecurityModuleSource = "rpc
 }
 
 export async function loadSecurityModuleRpcData(): Promise<SecurityModuleData> {
-  try {
-    const summaryParams: AgentSecuritySummaryGetParams = {
-      request_meta: createRequestMeta(),
-    };
+  const summaryParams: AgentSecuritySummaryGetParams = {
+    request_meta: createRequestMeta(),
+  };
 
-    const pendingParams: AgentSecurityPendingListParams = {
-      request_meta: createRequestMeta(),
-      limit: 20,
-      offset: 0,
-    };
+  const pendingParams: AgentSecurityPendingListParams = {
+    request_meta: createRequestMeta(),
+    limit: 20,
+    offset: 0,
+  };
 
-    const [summaryResult, pendingResult] = await Promise.all([
-      getSecuritySummaryDetailed(summaryParams),
-      listSecurityPendingDetailed(pendingParams),
-    ]);
+  const [summaryResult, pendingResult] = await Promise.all([
+    getSecuritySummaryDetailed(summaryParams),
+    listSecurityPendingDetailed(pendingParams),
+  ]);
 
-    const serverTime = pendingResult.meta?.server_time ?? summaryResult.meta?.server_time ?? null;
+  const serverTime = pendingResult.meta?.server_time ?? summaryResult.meta?.server_time ?? null;
 
-    return {
-      summary: summaryResult.data.summary,
-      pending: pendingResult.data.items,
-      pendingPage: pendingResult.data.page,
-      rpcContext: {
-        serverTime,
-        warnings: [...summaryResult.warnings, ...pendingResult.warnings],
-      },
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("security module", error);
-      return getInitialSecurityModuleData();
-    }
-
-    throw error;
-  }
+  return {
+    summary: summaryResult.data.summary,
+    pending: pendingResult.data.items,
+    pendingPage: pendingResult.data.page,
+    rpcContext: {
+      serverTime,
+      warnings: [...summaryResult.warnings, ...pendingResult.warnings],
+    },
+    source: "rpc",
+  };
 }
 
 export async function respondToApproval(

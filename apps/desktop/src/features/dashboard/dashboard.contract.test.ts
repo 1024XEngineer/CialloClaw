@@ -586,16 +586,22 @@ function loadMirrorServiceModule() {
 }
 
 type DashboardContractRpcMethodOverrides = {
+  applySecurityRestoreDetailed?: (params: unknown) => Promise<unknown>;
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
+  getSecuritySummaryDetailed?: (params: unknown) => Promise<unknown>;
   getSettings?: (params: unknown) => Promise<unknown>;
   updateSettings?: (params: unknown) => Promise<unknown>;
   getSettingsDetailed?: (params: unknown) => Promise<unknown>;
   getTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
+  listSecurityAuditDetailed?: (params: unknown) => Promise<unknown>;
+  listSecurityPendingDetailed?: (params: unknown) => Promise<unknown>;
+  listSecurityRestorePointsDetailed?: (params: unknown) => Promise<unknown>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
+  respondSecurityDetailed?: (params: unknown) => Promise<unknown>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
   validateSettingsModel?: (params: unknown) => Promise<unknown>;
   updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
@@ -690,6 +696,9 @@ function withDesktopAliasRuntime<T>(
         getSecuritySummary:
           rpcMethods?.getSecuritySummary ??
           (() => Promise.reject(new Error("getSecuritySummary should not run in dashboard contract tests"))),
+        getSecuritySummaryDetailed:
+          rpcMethods?.getSecuritySummaryDetailed ??
+          (() => Promise.reject(new Error("getSecuritySummaryDetailed should not run in dashboard contract tests"))),
         getSettings:
           rpcMethods?.getSettings ??
           (() => Promise.reject(new Error("getSettings should not run in dashboard contract tests"))),
@@ -698,6 +707,15 @@ function withDesktopAliasRuntime<T>(
           (() => {
             throw new Error("listNotepad should not run in dashboard contract tests");
           }),
+        listSecurityAuditDetailed:
+          rpcMethods?.listSecurityAuditDetailed ??
+          (() => Promise.reject(new Error("listSecurityAuditDetailed should not run in dashboard contract tests"))),
+        listSecurityPendingDetailed:
+          rpcMethods?.listSecurityPendingDetailed ??
+          (() => Promise.reject(new Error("listSecurityPendingDetailed should not run in dashboard contract tests"))),
+        listSecurityRestorePointsDetailed:
+          rpcMethods?.listSecurityRestorePointsDetailed ??
+          (() => Promise.reject(new Error("listSecurityRestorePointsDetailed should not run in dashboard contract tests"))),
         listTaskArtifacts() {
           throw new Error("listTaskArtifacts should not run in dashboard contract tests");
         },
@@ -712,6 +730,12 @@ function withDesktopAliasRuntime<T>(
         openTaskArtifact() {
           throw new Error("openTaskArtifact should not run in dashboard contract tests");
         },
+        respondSecurityDetailed:
+          rpcMethods?.respondSecurityDetailed ??
+          (() => Promise.reject(new Error("respondSecurityDetailed should not run in dashboard contract tests"))),
+        applySecurityRestoreDetailed:
+          rpcMethods?.applySecurityRestoreDetailed ??
+          (() => Promise.reject(new Error("applySecurityRestoreDetailed should not run in dashboard contract tests"))),
         updateNotepad:
           rpcMethods?.updateNotepad ??
           (() => {
@@ -3899,6 +3923,29 @@ test("note rpc service keeps transport failures visible instead of switching to 
       convertNotepadToTask: () => Promise.reject(transportError),
       listNotepad: () => Promise.reject(transportError),
       updateNotepad: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("security rpc service keeps transport failures visible instead of switching to mock governance data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityModuleData: (source?: "rpc" | "mock") => Promise<unknown>;
+        loadSecurityModuleRpcData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityModuleData("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityModuleRpcData(), /transport is not wired/i);
+    },
+    {
+      getSecuritySummaryDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
     },
   );
 });
