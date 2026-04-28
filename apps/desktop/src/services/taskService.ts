@@ -109,6 +109,9 @@ export async function startTaskFromFiles(files: string[], context: StartTaskCont
       preferred: "bubble",
       fallback: "task_detail",
     },
+    options: {
+      confirm_required: normalizedText === undefined,
+    },
   });
   rememberConversationSessionFromTask(result.task);
   return result;

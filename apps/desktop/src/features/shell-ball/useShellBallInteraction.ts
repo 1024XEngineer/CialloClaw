@@ -206,6 +206,9 @@ export function createShellBallTaskStartParams(input: {
     delivery: {
       preferred: "bubble",
     },
+    options: {
+      confirm_required: normalizedText === "",
+    },
   };
 }
 

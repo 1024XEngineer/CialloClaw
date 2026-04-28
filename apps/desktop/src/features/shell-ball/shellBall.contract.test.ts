@@ -2296,6 +2296,18 @@ test("shell-ball file task params preserve attachment descriptions for agent.tas
     text: "explain these files",
     files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
   });
+  assert.deepEqual(fileParams.options, {
+    confirm_required: false,
+  });
+  const fileParamsWithoutDescription = createShellBallTaskStartParams({
+    text: "   ",
+    files: ["C:\\workspace\\notes.md"],
+  });
+  assert.ok(fileParamsWithoutDescription);
+  assert.deepEqual(fileParamsWithoutDescription.options, {
+    confirm_required: true,
+  });
+  assert.equal(fileParamsWithoutDescription.input.text, undefined);
   assert.equal(createShellBallTaskStartParams({ text: "   ", files: [] }), null);
 });
 
@@ -2433,6 +2445,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
           title: "Quick Intake",
           url: "local://shell-ball",
         },
+      });
+      assert.deepEqual(startTaskCalls[0]?.options, {
+        confirm_required: false,
       });
 
       await service.startTaskFromSelectedText("  selected text  ", {
