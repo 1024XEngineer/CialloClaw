@@ -1205,6 +1205,16 @@ test("task page no longer exposes edit guidance and uses 安全总览 without an
   assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
+test("task page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+
+  assert.match(taskPageSource, /const dataMode: TaskPageDataMode = "rpc";/);
+  assert.doesNotMatch(taskPageSource, /DashboardMockToggle/);
+  assert.doesNotMatch(taskPageSource, /loadDashboardDataMode\("tasks"\)/);
+  assert.doesNotMatch(taskPageSource, /saveDashboardDataMode\("tasks"\)/);
+  assert.doesNotMatch(taskPageSource, /setDataMode\(/);
+});
+
 test("dashboard home entrance labels stay hidden until hover or focus", () => {
   const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
   const entranceOrbSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEntranceOrb.tsx"), "utf8");

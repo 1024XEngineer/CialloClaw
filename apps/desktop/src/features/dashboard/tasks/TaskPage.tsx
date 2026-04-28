@@ -14,8 +14,6 @@ import {
 } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
-import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
-import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
@@ -106,12 +104,12 @@ export function TaskPage() {
   const [showMoreFinished, setShowMoreFinished] = useState(false);
   const [expandedClusterKey, setExpandedClusterKey] = useState<TaskClusterKey | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [dataMode, setDataMode] = useState<TaskPageDataMode>(() => loadDashboardDataMode("tasks") as TaskPageDataMode);
+  const dataMode: TaskPageDataMode = "rpc";
   const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
   const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
   const [taskEventFilters, setTaskEventFilters] = useState<TaskEventFilters>(DEFAULT_TASK_EVENT_FILTERS);
   const feedbackTimeoutRef = useRef<number | null>(null);
-  const securityRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
+  const securityRefreshPlan = getDashboardTaskSecurityRefreshPlan(dataMode);
   const detailRouteState = readDashboardTaskDetailRouteState(location.state);
   const routeFocusTaskId = detailRouteState?.focusTaskId ?? null;
 
@@ -336,14 +334,6 @@ export function TaskPage() {
   }, [allTasks, requestedTaskId, routeFocusTaskId, selectedDetailTaskId, selectedTaskId]);
 
   useEffect(() => {
-    saveDashboardDataMode("tasks", dataMode);
-  }, [dataMode]);
-
-  useEffect(() => {
-    if (dataMode === "mock") {
-      return;
-    }
-
     function invalidateSelectedTaskDetail(taskId: string) {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
@@ -889,13 +879,6 @@ export function TaskPage() {
         ) : null}
       </AnimatePresence>
 
-      <DashboardMockToggle
-        enabled={dataMode === "mock"}
-        onToggle={() => {
-          setFeedback(null);
-          setDataMode((current) => (current === "rpc" ? "mock" : "rpc"));
-        }}
-      />
     </main>
   );
 }
