@@ -15,10 +15,7 @@ import {
   submitRecommendationFeedback,
 } from "@/rpc/methods";
 import {
-  dashboardHomeStateGroups,
   dashboardHomeStates,
-  dashboardSummonTemplates,
-  dashboardVoiceSequences,
 } from "./dashboardHome.presets";
 import type {
   DashboardHomeContextItem,
@@ -66,6 +63,7 @@ export type DashboardHomeData = {
     headline: string;
     reason: string;
   };
+  loadWarnings: string[];
   stateGroups: DashboardHomeStateGroup[];
   stateMap: Record<DashboardHomeEventStateKey, DashboardHomeStateData>;
   summonTemplates: Array<Omit<DashboardHomeSummonEvent, "id">>;
@@ -116,36 +114,10 @@ function cloneStateData(state: DashboardHomeStateData): DashboardHomeStateData {
   };
 }
 
-function cloneVoiceSequence(sequence: DashboardVoiceSequence): DashboardVoiceSequence {
-  return {
-    ...sequence,
-    echoPool: [...sequence.echoPool],
-    executingSteps: [...sequence.executingSteps],
-    fragments: [...sequence.fragments],
-  };
-}
-
-function cloneSummonTemplate(template: Omit<DashboardHomeSummonEvent, "id">): Omit<DashboardHomeSummonEvent, "id"> {
-  return { ...template };
-}
-
 function createBaseStateMap() {
   return Object.fromEntries(
     Object.entries(dashboardHomeStates).map(([key, value]) => [key, cloneStateData(value)]),
   ) as Record<DashboardHomeEventStateKey, DashboardHomeStateData>;
-}
-
-export function getDashboardHomeFallbackData(): DashboardHomeData {
-  return {
-    focusLine: {
-      headline: "让中心球和 4 个入口球一起构成今天的任务轨道。",
-      reason: "长按中心球可以直接进入语音模式，四个入口球会始终保持最显眼的位置。",
-    },
-    stateGroups: dashboardHomeStateGroups.map((group) => ({ ...group, states: [...group.states] })),
-    stateMap: createBaseStateMap(),
-    summonTemplates: dashboardSummonTemplates.map(cloneSummonTemplate),
-    voiceSequences: dashboardVoiceSequences.map(cloneVoiceSequence),
-  };
 }
 
 function formatDashboardTime(value: string) {
@@ -765,6 +737,7 @@ function buildFocusLine(
 }
 
 function buildDashboardHomeData(input: {
+  loadWarnings: string[];
   moduleResults: Record<DashboardHomeModuleKey, AgentDashboardModuleGetResult>;
   overview: AgentDashboardOverviewGetResult;
   recommendations: AgentRecommendationGetResult;
@@ -781,6 +754,7 @@ function buildDashboardHomeData(input: {
 
   return {
     focusLine: buildFocusLine(input.overview, input.moduleResults.tasks, summonTemplates),
+    loadWarnings: [...input.loadWarnings],
     stateGroups: buildStateGroups(stateKeys),
     stateMap,
     summonTemplates,
@@ -788,8 +762,29 @@ function buildDashboardHomeData(input: {
   };
 }
 
+function createEmptyDashboardModuleResult(module: DashboardHomeModuleKey): AgentDashboardModuleGetResult {
+  return {
+    highlights: [],
+    module,
+    summary: {},
+    tab: dashboardModuleTabs[module],
+  };
+}
+
+function createEmptyRecommendationResult(): AgentRecommendationGetResult {
+  return {
+    cooldown_hit: false,
+    items: [],
+  };
+}
+
+function formatDashboardHomeLoadWarning(label: string, error: unknown) {
+  const message = error instanceof Error ? error.message : "unknown dashboard read failure";
+  return `${label}同步失败：${message}`;
+}
+
 export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
-  const [overview, tasksModule, notesModule, memoryModule, safetyModule, recommendations] = await Promise.all([
+  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult] = await Promise.allSettled([
     getDashboardOverview({
       focus_mode: false,
       include: ["focus_summary", "trust_summary", "quick_actions", "high_value_signal"],
@@ -826,14 +821,36 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
     }),
   ]);
 
+  if (overviewResult.status === "rejected") {
+    throw overviewResult.reason;
+  }
+
+  const loadWarnings: string[] = [];
+  const tasksModule = tasksResult.status === "fulfilled"
+    ? tasksResult.value
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("任务摘要", tasksResult.reason)), createEmptyDashboardModuleResult("tasks"));
+  const notesModule = notesResult.status === "fulfilled"
+    ? notesResult.value
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("便签摘要", notesResult.reason)), createEmptyDashboardModuleResult("notes"));
+  const memoryModule = memoryResult.status === "fulfilled"
+    ? memoryResult.value
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("镜子摘要", memoryResult.reason)), createEmptyDashboardModuleResult("memory"));
+  const safetyModule = safetyResult.status === "fulfilled"
+    ? safetyResult.value
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("安全摘要", safetyResult.reason)), createEmptyDashboardModuleResult("safety"));
+  const recommendations = recommendationsResult.status === "fulfilled"
+    ? recommendationsResult.value
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("建议流", recommendationsResult.reason)), createEmptyRecommendationResult());
+
   return buildDashboardHomeData({
+    loadWarnings,
     moduleResults: {
       memory: memoryModule,
       notes: notesModule,
       safety: safetyModule,
       tasks: tasksModule,
     },
-    overview,
+    overview: overviewResult.value,
     recommendations,
   });
 }

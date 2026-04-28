@@ -84,6 +84,12 @@
   padding: 0.72rem 0.95rem;
 }
 
+.dashboard-orbit-home__shortcut-pill--warn {
+  background: rgba(255, 246, 232, 0.88);
+  border-color: rgba(199, 148, 84, 0.24);
+  color: rgba(143, 92, 37, 0.78);
+}
+
 .dashboard-orbit-home__canvas {
   height: 100vh;
   position: relative;

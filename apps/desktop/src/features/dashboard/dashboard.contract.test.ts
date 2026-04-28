@@ -1205,6 +1205,28 @@ test("task page no longer exposes edit guidance and uses 安全总览 without an
   assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
+test("dashboard root no longer falls back to mock home data when the live query is unavailable", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+  const dashboardHomeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.doesNotMatch(dashboardRootSource, /getDashboardHomeFallbackData/);
+  assert.match(dashboardRootSource, /const dashboardHomeData = dashboardHomeQuery\.data \?\? null;/);
+  assert.match(dashboardRootSource, /DashboardHomeStatusShell/);
+  assert.match(dashboardRootSource, /sequences=\{dashboardHomeData\?\.voiceSequences \?\? \[\]\}/);
+  assert.doesNotMatch(dashboardHomeServiceSource, /export function getDashboardHomeFallbackData/);
+  assert.match(dashboardHomeServiceSource, /Promise\.allSettled/);
+});
+
+test("dashboard home no longer replays mock summon or voice presets when live recommendations are empty", () => {
+  const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
+  const dashboardHomeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.doesNotMatch(dashboardHomeServiceSource, /dashboardHome\.mocks/);
+  assert.doesNotMatch(dashboardHomeServiceSource, /return templates.length > 0 \? templates : dashboardSummonTemplates\.map/);
+  assert.doesNotMatch(dashboardHomeServiceSource, /return sequences.length > 0 \? sequences : dashboardVoiceSequences\.map/);
+  assert.match(dashboardHomeSource, /if \(data\.summonTemplates\.length === 0\) \{/);
+  assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
+});
 test("dashboard home entrance labels stay hidden until hover or focus", () => {
   const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
   const entranceOrbSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEntranceOrb.tsx"), "utf8");
@@ -3895,6 +3917,86 @@ test("note rpc service keeps transport failures visible instead of switching to 
       convertNotepadToTask: () => Promise.reject(transportError),
       listNotepad: () => Promise.reject(transportError),
       updateNotepad: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("dashboard home rpc service keeps transport failures visible instead of switching to mock orbit data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadDashboardHomeData(), /transport is not wired/i);
+    },
+    {
+      getDashboardModule: () => Promise.reject(transportError),
+      getDashboardOverview: () => Promise.reject(transportError),
+      getRecommendations: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("dashboard home keeps module and recommendation failures local instead of blanking the full orbit", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          focusLine: { headline: string; reason: string };
+          loadWarnings: string[];
+          stateGroups: Array<{ key: string; states: string[] }>;
+          summonTemplates: Array<unknown>;
+          voiceSequences: Array<unknown>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateGroups.length, 4);
+      assert.equal(data.loadWarnings.length, 2);
+      assert.match(data.loadWarnings[0], /便签摘要同步失败：notes module unavailable/);
+      assert.match(data.loadWarnings[1], /建议流同步失败：recommendations unavailable/);
+      assert.equal(data.focusLine.headline, "首页总览已经连接到真实任务轨道。");
+      assert.equal(data.summonTemplates.length, 0);
+      assert.equal(data.voiceSequences.length, 0);
+    },
+    {
+      getDashboardModule: async (params) => {
+        const moduleName = (params as { module?: string }).module;
+        if (moduleName === "notes") {
+          throw new Error("notes module unavailable");
+        }
+
+        return {
+          highlights: moduleName === "tasks" ? ["继续处理 task focus"] : [],
+          module: moduleName ?? "unknown",
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => {
+        throw new Error("recommendations unavailable");
+      },
     },
   );
 });

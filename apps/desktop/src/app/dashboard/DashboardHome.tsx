@@ -218,6 +218,14 @@ export function DashboardHome({
           <Keyboard className="h-3.5 w-3.5" />
           Ctrl / Cmd + 1 2 3 4 5
         </div>
+        {data.loadWarnings.length > 0 ? (
+          <div
+            className="dashboard-orbit-home__shortcut-pill dashboard-orbit-home__shortcut-pill--warn"
+            title={data.loadWarnings.join(" | ")}
+          >
+            部分模块未同步
+          </div>
+        ) : null}
         {onboardingLoading ? <div className="dashboard-orbit-home__shortcut-pill">{onboardingLoading.message}</div> : null}
       </header>
 
