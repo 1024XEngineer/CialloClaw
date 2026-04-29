@@ -612,6 +612,135 @@ func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testin
 	}
 }
 
+func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *testing.T) {
+	tests := []struct {
+		name           string
+		inputText      string
+		capabilityLine string
+		wantTool       string
+		wantOutput     string
+		playwright     stubPlaywrightClient
+		toolCalls      []model.ToolCallResult
+	}{
+		{
+			name:           "page_read",
+			inputText:      "Please inspect https://example.com and summarize the page.",
+			capabilityLine: "- page_read",
+			wantTool:       "page_read",
+			wantOutput:     "I checked the page after the retry reminder.",
+			playwright: stubPlaywrightClient{readResult: tools.BrowserPageReadResult{
+				Title:       "Example Page",
+				TextContent: "example page content",
+				Source:      "playwright_sidecar",
+			}},
+			toolCalls: []model.ToolCallResult{
+				{
+					RequestID:  "req_loop_page_read_retry_1",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I cannot browse websites from here.",
+				},
+				{
+					RequestID: "req_loop_page_read_retry_2",
+					Provider:  "openai_responses",
+					ModelID:   "gpt-5.4",
+					ToolCalls: []model.ToolInvocation{{Name: "page_read", Arguments: map[string]any{"url": "https://example.com"}}},
+				},
+				{
+					RequestID:  "req_loop_page_read_retry_3",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I checked the page after the retry reminder.",
+				},
+			},
+		},
+		{
+			name:           "page_search",
+			inputText:      "Please search https://example.com for the word example.",
+			capabilityLine: "- page_search",
+			wantTool:       "page_search",
+			wantOutput:     "I searched the page after the retry reminder.",
+			playwright: stubPlaywrightClient{searchResult: tools.BrowserPageSearchResult{
+				Matches:    []string{"example result"},
+				MatchCount: 1,
+				Source:     "playwright_sidecar",
+			}},
+			toolCalls: []model.ToolCallResult{
+				{
+					RequestID:  "req_loop_page_search_retry_1",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I cannot browse websites from here.",
+				},
+				{
+					RequestID: "req_loop_page_search_retry_2",
+					Provider:  "openai_responses",
+					ModelID:   "gpt-5.4",
+					ToolCalls: []model.ToolInvocation{{Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "example"}}},
+				},
+				{
+					RequestID:  "req_loop_page_search_retry_3",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I searched the page after the retry reminder.",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modelClient := &stubModelClient{toolCalls: append([]model.ToolCallResult(nil), test.toolCalls...)}
+			service, _ := newTestExecutionServiceWithPlaywright(t, "unused", test.playwright)
+			service = service.ReplaceModel(model.NewService(serviceconfig.ModelConfig{}, modelClient))
+
+			result, err := service.Execute(context.Background(), Request{
+				TaskID:               "task_loop_" + test.name + "_retry",
+				RunID:                "run_loop_" + test.name + "_retry",
+				Title:                "Loop " + test.name + " retry test",
+				Intent:               map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+				Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: test.inputText},
+				DeliveryType:         "bubble",
+				ResultTitle:          "Loop result",
+				ApprovalGranted:      true,
+				ApprovedOperation:    test.wantTool,
+				ApprovedTargetObject: "https://example.com",
+			})
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+
+			if result.Content != test.wantOutput {
+				t.Fatalf("unexpected loop output: %s", result.Content)
+			}
+			if modelClient.generateToolCallsCount != 3 {
+				t.Fatalf("expected three planning turns after capability retry, got %d", modelClient.generateToolCallsCount)
+			}
+			if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != test.wantTool {
+				t.Fatalf("expected one %s tool call after capability retry, got %+v", test.wantTool, result.ToolCalls)
+			}
+			if result.ToolCalls[0].Output["loop_round"] != 2 {
+				t.Fatalf("expected retry-selected tool call to run on round 2, got %+v", result.ToolCalls[0].Output)
+			}
+			if len(modelClient.plannerInputs) < 2 {
+				t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
+			}
+			if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
+				t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
+			}
+			if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
+				t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
+			}
+			if !strings.Contains(modelClient.plannerInputs[1], "The listed tools are available in this run.") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
+				t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
+			}
+			if result.ModelInvocation["request_id"] != test.toolCalls[2].RequestID {
+				t.Fatalf("expected final model invocation metadata, got %+v", result.ModelInvocation)
+			}
+		})
+	}
+}
+
 func TestCompactAgentLoopHistoryKeepsRecentObservations(t *testing.T) {
 	history := []string{
 		"Tool read_file succeeded. Summary: {\"path\":\"notes/1.md\",\"excerpt\":\"alpha alpha alpha alpha alpha\"}",
