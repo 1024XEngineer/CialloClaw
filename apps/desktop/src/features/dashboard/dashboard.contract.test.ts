@@ -3492,6 +3492,11 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /loadTaskArtifactPage/);
   assert.match(taskDeliverySource, /subscribeTaskUpdated/);
   assert.match(taskDeliverySource, /subscribeDeliveryReady/);
+  assert.match(taskDeliverySource, /TASK_DELIVERY_DETAIL_REFRESH_DEBOUNCE_MS/);
+  assert.match(taskDeliverySource, /scheduleTaskDetailRefresh/);
+  assert.match(taskDeliverySource, /invalidateCurrentTaskArtifacts/);
+  assert.match(taskDeliverySource, /subscribeTaskUpdated\(\(payload\) => \{[\s\S]*scheduleTaskDetailRefresh\(\);/);
+  assert.match(taskDeliverySource, /subscribeDeliveryReady\(\(payload\) => \{[\s\S]*invalidateCurrentTaskDelivery\(\);/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);

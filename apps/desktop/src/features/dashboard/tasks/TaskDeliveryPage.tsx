@@ -27,6 +27,7 @@ import {
 import "./taskDeliveryPage.css";
 
 type TaskDeliveryOpenResult = Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>;
+const TASK_DELIVERY_DETAIL_REFRESH_DEBOUNCE_MS = 280;
 
 /**
  * Renders the dedicated task delivery page so formal task output can be read
@@ -128,14 +129,49 @@ export function TaskDeliveryPage() {
       return;
     }
 
-    function invalidateCurrentTaskDelivery() {
+    let detailRefreshTimeoutId: number | null = null;
+
+    function invalidateCurrentTaskDetail() {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
+    }
+
+    function invalidateCurrentTaskArtifacts() {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
+    }
+
+    function flushScheduledTaskDetailRefresh() {
+      detailRefreshTimeoutId = null;
+      invalidateCurrentTaskDetail();
+    }
+
+    /**
+     * Task delivery only needs task detail progress while the run is active.
+     * Debounce task.updated so progress ticks do not refetch both delivery
+     * queries on every runtime heartbeat.
+     */
+    function scheduleTaskDetailRefresh() {
+      if (detailRefreshTimeoutId !== null) {
+        return;
+      }
+
+      detailRefreshTimeoutId = window.setTimeout(() => {
+        flushScheduledTaskDetailRefresh();
+      }, TASK_DELIVERY_DETAIL_REFRESH_DEBOUNCE_MS);
+    }
+
+    function invalidateCurrentTaskDelivery() {
+      if (detailRefreshTimeoutId !== null) {
+        window.clearTimeout(detailRefreshTimeoutId);
+        detailRefreshTimeoutId = null;
+      }
+
+      invalidateCurrentTaskDetail();
+      invalidateCurrentTaskArtifacts();
     }
 
     const clearTaskUpdatedSubscription = subscribeTaskUpdated((payload) => {
       if (payload.task_id === taskId) {
-        invalidateCurrentTaskDelivery();
+        scheduleTaskDetailRefresh();
       }
     });
 
@@ -146,6 +182,9 @@ export function TaskDeliveryPage() {
     });
 
     return () => {
+      if (detailRefreshTimeoutId !== null) {
+        window.clearTimeout(detailRefreshTimeoutId);
+      }
       clearTaskUpdatedSubscription();
       clearDeliveryReadySubscription();
     };
