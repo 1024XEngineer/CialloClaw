@@ -12527,6 +12527,30 @@ func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *tes
 	}
 }
 
+func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *testing.T) {
+	runtimeUpdatedAt := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
+	runtimeTask := runengine.TaskRecord{
+		TaskID:    "task_001",
+		UpdatedAt: runtimeUpdatedAt,
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	}
+	storageTask := runengine.TaskRecord{
+		TaskID:    "task_001",
+		UpdatedAt: runtimeUpdatedAt.Add(time.Second),
+	}
+
+	selected := fresherTaskRecord(runtimeTask, storageTask)
+	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
+		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
+		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {
+		t.Fatalf("expected runtime snapshot anchors to win over newer empty storage snapshot, got %+v", selected.Snapshot)
+	}
+}
+
 func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing.T) {
 	var activeTaskID string
 	modelCalled := false
