@@ -373,36 +373,6 @@ def verify_version_manifests() -> None:
         raise RuntimeError("Cargo.toml [package] version mismatch")
 
 
-def build_sidecar() -> None:
-    """Build the Go sidecar and expose its target filename to the workflow."""
-
-    rust_version = run_command(["rustc", "-vV"]).stdout
-    host_line = next((line for line in rust_version.splitlines() if line.startswith("host:")), None)
-    if not host_line:
-        raise RuntimeError("Failed to detect Rust host triple.")
-
-    triple = host_line.split(":", 1)[1].strip()
-    extension = ".exe" if os.name == "nt" else ""
-    name = f"local-service-{triple}{extension}"
-    binaries_dir = REPO_ROOT / "apps/desktop/src-tauri/binaries"
-    binaries_dir.mkdir(parents=True, exist_ok=True)
-
-    subprocess.run(
-        [
-            "go",
-            "build",
-            "-trimpath",
-            "-o",
-            str(binaries_dir / name),
-            "./services/local-service/cmd/server",
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-    )
-
-    write_workflow_output("sidecar_file_name", name)
-
-
 def repoint_release_tag() -> None:
     """Force the rolling release tag to reference the commit that was just published."""
 
@@ -442,7 +412,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "resolve-metadata",
             "rewrite-version-manifests",
             "verify-version-manifests",
-            "build-sidecar",
             "repoint-release-tag",
         ),
     )
@@ -457,7 +426,6 @@ def main() -> int:
         "resolve-metadata": resolve_metadata,
         "rewrite-version-manifests": rewrite_version_manifests,
         "verify-version-manifests": verify_version_manifests,
-        "build-sidecar": build_sidecar,
         "repoint-release-tag": repoint_release_tag,
     }
     actions[args.action]()

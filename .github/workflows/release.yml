@@ -99,11 +99,6 @@ jobs:
           pnpm --dir apps/desktop test:dashboard
           pnpm --dir apps/desktop test:memory
 
-      - name: Build sidecar
-        id: sidecar
-        shell: bash
-        run: python ./.github/scripts/desktop_release.py build-sidecar
-
       - name: Publish release (tag)
         if: steps.meta.outputs.release_mode == 'tag'
         uses: tauri-apps/tauri-action@v0
