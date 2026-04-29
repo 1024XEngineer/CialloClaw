@@ -18,7 +18,9 @@ type DashboardOpeningTransitionEnvironment = {
 export function createDashboardOpeningTransitionController(environment: DashboardOpeningTransitionEnvironment) {
   let frame = 0;
   let timeout = 0;
-  let hidden = false;
+  // Seed the hidden flag from the mount-time visibility so windows restored
+  // off-screen still replay the opening mask on their first real reveal.
+  let hidden = environment.getVisibilityState() === "hidden";
 
   const clearPendingRelease = () => {
     environment.cancelAnimationFrame(frame);

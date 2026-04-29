@@ -3698,6 +3698,50 @@ test("dashboard opening transition controller replays focus and visibility recov
   assert.equal(clearedTimeouts.length, 3);
 });
 
+test("dashboard opening transition controller replays the opening mask for windows mounted while hidden", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  const frameCallbacks = new Map<number, FrameRequestCallback>();
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "hidden";
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: (handle) => {
+      frameCallbacks.delete(handle);
+    },
+    clearTimeout: () => {},
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: (callback) => {
+      const handle = nextHandle++;
+      frameCallbacks.set(handle, callback);
+      return handle;
+    },
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (_callback, timeoutMs) => {
+      timeoutDurations.push(timeoutMs);
+      return nextHandle++;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  visibilityState = "visible";
+  assert.equal(controller.handleVisibilityChange(), true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+});
+
 test("dashboard entry keeps a window-level error boundary so runtime faults do not collapse into a blank shell", () => {
   const dashboardMainSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/main.tsx"), "utf8");
   const dashboardErrorBoundarySource = readFileSync(
