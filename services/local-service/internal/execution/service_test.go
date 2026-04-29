@@ -541,6 +541,77 @@ func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID:  "req_loop_capability_retry_1",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I cannot access workspace files in this environment.",
+			},
+			{
+				RequestID: "req_loop_capability_retry_2",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+			},
+			{
+				RequestID:  "req_loop_capability_retry_3",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I checked the file after the retry reminder.",
+			},
+		},
+	}
+	service, workspaceRoot := newTestExecutionServiceWithModelClient(t, modelClient)
+	sourcePath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("Important retry note"), 0o644); err != nil {
+		t.Fatalf("seed source file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_capability_retry",
+		RunID:        "run_loop_capability_retry",
+		Title:        "Loop capability retry test",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please inspect the note and tell me the takeaway."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if result.Content != "I checked the file after the retry reminder." {
+		t.Fatalf("unexpected loop output: %s", result.Content)
+	}
+	if modelClient.generateToolCallsCount != 3 {
+		t.Fatalf("expected three planning turns after capability retry, got %d", modelClient.generateToolCallsCount)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "read_file" {
+		t.Fatalf("expected one read_file tool call after capability retry, got %+v", result.ToolCalls)
+	}
+	if len(modelClient.plannerInputs) < 2 {
+		t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
+		t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
+	}
+	if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
+		t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
+	}
+	if !strings.Contains(modelClient.plannerInputs[1], "The listed tools are available in this run.") {
+		t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
+	}
+	if result.ModelInvocation["request_id"] != "req_loop_capability_retry_3" {
+		t.Fatalf("expected final model invocation metadata, got %+v", result.ModelInvocation)
+	}
+}
+
 func TestCompactAgentLoopHistoryKeepsRecentObservations(t *testing.T) {
 	history := []string{
 		"Tool read_file succeeded. Summary: {\"path\":\"notes/1.md\",\"excerpt\":\"alpha alpha alpha alpha alpha\"}",
