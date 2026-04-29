@@ -2583,77 +2583,6 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 	return effectiveIntentName(taskIntent) == defaultAgentLoopIntentName
 }
 
-// agentLoopToolDefinitions exposes the minimal safe tool set that the model can
-// use inside the current loop. The allowlist is intentionally narrow so the
-// first integrated flow stays bounded and auditable.
-func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
-	if s.tools == nil {
-		return nil
-	}
-
-	definitions := make([]model.ToolDefinition, 0, 4)
-	for _, metadata := range s.tools.List() {
-		switch metadata.Name {
-		case "read_file":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"path": map[string]any{"type": "string", "description": "Workspace-relative path to a file."},
-					},
-					"required":             []string{"path"},
-					"additionalProperties": false,
-				},
-			})
-		case "list_dir":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"path":  map[string]any{"type": "string", "description": "Workspace-relative path to a directory."},
-						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
-					},
-					"required":             []string{"path"},
-					"additionalProperties": false,
-				},
-			})
-		case "page_read":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"url": map[string]any{"type": "string", "description": "Absolute URL to read."},
-					},
-					"required":             []string{"url"},
-					"additionalProperties": false,
-				},
-			})
-		case "page_search":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"url":   map[string]any{"type": "string", "description": "Absolute URL to search."},
-						"query": map[string]any{"type": "string", "description": "Query to search within the page."},
-						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
-					},
-					"required":             []string{"url", "query"},
-					"additionalProperties": false,
-				},
-			})
-		}
-	}
-	return definitions
-}
-
 // buildAgentLoopPlannerInput assembles the textual context seen by the planner
 // turn. Previous tool observations are compacted when they exceed the configured
 // budget so the loop remains bounded even after several tool iterations.
@@ -2980,17 +2909,6 @@ func marshalEventPayload(value map[string]any) string {
 		return "{}"
 	}
 	return string(payload)
-}
-
-// isAllowedAgentLoopTool guards the first loop implementation so only
-// read-oriented tools participate in the autonomous planning cycle.
-func (s *Service) isAllowedAgentLoopTool(name string) bool {
-	switch name {
-	case "read_file", "list_dir", "page_read", "page_search":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Service) availableToolNames() []string {
