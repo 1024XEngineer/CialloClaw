@@ -112,7 +112,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           prerelease: ${{ steps.meta.outputs.release_is_prerelease == 'true' }}
-          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
+          assetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
           generateReleaseNotes: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
@@ -135,7 +135,7 @@ jobs:
           tauriScript: pnpm exec tauri
           tagName: tip
           releaseName: tip
-          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
+          assetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
           prerelease: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
