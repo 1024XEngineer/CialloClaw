@@ -324,9 +324,12 @@ async function enrichTextInputSubmitParams(
   const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
+  const clientContext = options.includeForegroundBrowserPageContext
+    ? createSubmitTextInputClientContext(ambientWindowContext)
+    : undefined;
 
   return {
-    clientContext: createSubmitTextInputClientContext(ambientWindowContext),
+    clientContext,
     params: {
       ...params,
       context: {

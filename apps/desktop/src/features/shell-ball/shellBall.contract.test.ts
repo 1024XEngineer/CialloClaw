@@ -3144,6 +3144,7 @@ test("submitTextInput can force foreground window snapshots for dashboard voice 
   let windowContextCallCount = 0;
   const originalDateNow = Date.now;
   Date.now = () => 1_713_864_005_000;
+  let submitResult: unknown;
 
   try {
     await withSourceModuleRuntime(
@@ -3213,7 +3214,7 @@ test("submitTextInput can force foreground window snapshots for dashboard voice 
           }) => Promise<unknown>;
         };
 
-        await service.submitTextInput({
+        submitResult = await service.submitTextInput({
           text: "打开当前网站",
           source: "dashboard",
           trigger: "voice_commit",
@@ -3247,6 +3248,7 @@ test("submitTextInput can force foreground window snapshots for dashboard voice 
       page_switch_count: 1,
     },
   });
+  assert.equal((submitResult as { clientContext?: unknown } | undefined)?.clientContext, undefined);
   assert.equal(windowContextCallCount, 1);
 });
 
@@ -3255,6 +3257,7 @@ test("submitTextInput can restrict ambient foreground snapshots to browser pages
   let windowContextCallCount = 0;
   const originalDateNow = Date.now;
   Date.now = () => 1_713_864_005_000;
+  let submitResult: unknown;
 
   try {
     await withSourceModuleRuntime(
@@ -3324,7 +3327,7 @@ test("submitTextInput can restrict ambient foreground snapshots to browser pages
           }) => Promise<unknown>;
         };
 
-        await service.submitTextInput({
+        submitResult = await service.submitTextInput({
           text: "Summarize this page",
           source: "floating_ball",
           trigger: "hover_text_input",
@@ -3356,6 +3359,13 @@ test("submitTextInput can restrict ambient foreground snapshots to browser pages
       dwell_millis: 5000,
       window_switch_count: 2,
       page_switch_count: 1,
+    },
+  });
+  assert.deepEqual((submitResult as { clientContext?: unknown } | undefined)?.clientContext, {
+    detectedPage: {
+      appName: "Chrome",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
     },
   });
   assert.equal(windowContextCallCount, 1);
