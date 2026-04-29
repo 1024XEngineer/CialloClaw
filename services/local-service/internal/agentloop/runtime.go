@@ -305,6 +305,17 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			outputText := strings.TrimSpace(plan.OutputText)
 			if !capabilityReminderUsed && shouldRetryForCapabilityReminder(outputText, request.ToolDefinitions) {
 				capabilityReminderUsed = true
+				round.Status = "completed"
+				round.CompletedAt = request.Now()
+				round.StopReason = StopReasonCompleted
+				round.OutputSummary = truncateText(singleLineSummary(outputText), 160)
+				rounds = append(rounds, round)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
 				activeInputText = appendCapabilityReminderInput(activeInputText, request.ToolDefinitions)
 				// Retry this heuristic only once. Repeated denials after an explicit
 				// reminder should return to the caller so the loop stays observable.

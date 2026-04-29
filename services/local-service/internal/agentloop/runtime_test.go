@@ -294,11 +294,20 @@ func TestRunRetriesWhenPlannerClaimsCapabilitiesAreUnavailable(t *testing.T) {
 	if executeCalls != 1 {
 		t.Fatalf("expected one tool execution after capability reminder, got %d", executeCalls)
 	}
+	if len(result.Rounds) != 3 {
+		t.Fatalf("expected all planner rounds to be persisted, got %+v", result.Rounds)
+	}
+	if result.Rounds[0].PlannerOutput != "I cannot access workspace files in this environment." || result.Rounds[0].OutputSummary != "I cannot access workspace files in this environment." {
+		t.Fatalf("expected first persisted round to capture the denial output, got %+v", result.Rounds[0])
+	}
 	if len(plannerInputs) != 3 {
 		t.Fatalf("expected three planner rounds, got %+v", plannerInputs)
 	}
 	if !strings.Contains(plannerInputs[1], "能力提醒：") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
+	}
+	if countEventType(result.Events, "loop.round.completed") != 3 {
+		t.Fatalf("expected one completed event per persisted planner round, got %+v", result.Events)
 	}
 	if !strings.Contains(plannerInputs[1], "当前这轮已经开放下列工具能力。") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", plannerInputs[1])
@@ -358,11 +367,17 @@ func TestRunDoesNotRepeatCapabilityReminderAfterSecondDenial(t *testing.T) {
 	if executeCalls != 0 {
 		t.Fatalf("expected no tool execution after repeated denial, got %d", executeCalls)
 	}
+	if len(result.Rounds) != 2 {
+		t.Fatalf("expected both denial rounds to be persisted, got %+v", result.Rounds)
+	}
 	if len(plannerInputs) != 2 {
 		t.Fatalf("expected capability reminder flow to stop after one retry, got %+v", plannerInputs)
 	}
 	if !strings.Contains(plannerInputs[1], "能力提醒：") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
+	}
+	if countEventType(result.Events, "loop.round.completed") != 2 {
+		t.Fatalf("expected one completed event per denial round, got %+v", result.Events)
 	}
 	if countRetryReason(result.Events, "capability_reminder") != 1 {
 		t.Fatalf("expected exactly one capability reminder retry event, got %+v", result.Events)
