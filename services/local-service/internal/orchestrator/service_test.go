@@ -12913,6 +12913,81 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 	}
 }
 
+func TestServiceStartTaskStructuredSupplementContinuesPendingTaskWithoutAutoExecution(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_structured_pending_supplement",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"text":"model should not execute a structured pending-task supplement"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_structured_waiting_input",
+		Title:       "Waiting for build dashboard evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "Use this log as supporting evidence.",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "Chrome",
+				"title":    "Build Dashboard",
+				"url":      "https://example.com/build",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("continue structured supplement failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected structured pending supplement to wait for confirmation instead of executing")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected structured supplement to remain on waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected structured supplement to stay behind confirmation, got %+v", task)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected structured supplement to defer delivery_result, got %+v", startResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected structured supplement task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected structured supplement to retain file evidence, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceStartTaskConfirmRequiredFileContinuesUniquePendingTaskAmongCandidates(t *testing.T) {
 	var modelCalled bool
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{

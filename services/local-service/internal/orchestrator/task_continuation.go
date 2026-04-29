@@ -683,8 +683,9 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 		}, nil
 	}
 
-	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, options.ConfirmRequired)
-	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, options.ConfirmRequired)
+	confirmRequired := pendingContinuationRequiresConfirm(continuationSnapshot, options)
+	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, confirmRequired)
+	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, confirmRequired)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      continuationSnapshot,
@@ -721,6 +722,15 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 		"bubble_message":  resultBubble,
 		"delivery_result": deliveryResult,
 	}, nil
+}
+
+func pendingContinuationRequiresConfirm(snapshot contextsvc.TaskContextSnapshot, options taskContinuationOptions) bool {
+	if options.ConfirmRequired {
+		return true
+	}
+	// Structured supplements can prove ownership of a pending task, but evidence
+	// attachment is still separate from permission to execute that pending task.
+	return isStructuredSupplementInput(snapshot)
 }
 
 func (s *Service) loadTaskForContinuation(taskID string) (runengine.TaskRecord, bool) {

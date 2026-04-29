@@ -761,7 +761,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `source`                   | 来源位置，取值来自 `request_source` |
 | `trigger`                  | 触发动作，取值来自 `request_trigger` |
 | `input.type`               | 输入对象类型，取值来自 `input_type` |
-| `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
+| `input.text`               | 当 `input.type = text_selection` 时表示选中文本内容；当 `input.type = file` 时可表示用户对附件的明确说明 |
 | `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
 | `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
 | `input.page_context.title` | 当前页面标题，可用于页面级任务标题与上下文冻结 |
