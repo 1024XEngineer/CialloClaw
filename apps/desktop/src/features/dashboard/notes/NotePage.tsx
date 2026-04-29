@@ -112,6 +112,32 @@ function normalizeSourceNoteTitleKey(value: string) {
   return value.trim().toLowerCase();
 }
 
+function resolveKnownSourceNotePath(
+  rawPath: string,
+  sourceNotesByPath: Map<string, SourceNoteDocument>,
+) {
+  const normalizedPath = normalizeSourceNoteKey(rawPath);
+  const directMatch = sourceNotesByPath.get(normalizedPath);
+  if (directMatch) {
+    return directMatch.path;
+  }
+
+  const workspaceRelativePath = normalizedPath.startsWith("workspace/") ? normalizedPath.slice("workspace/".length) : null;
+  if (!workspaceRelativePath) {
+    return null;
+  }
+
+  // Inspector items can still point at workspace-relative source paths while
+  // the desktop bridge exposes absolute file paths for the same note file.
+  const suffix = `/${workspaceRelativePath}`;
+  const matchedNotes = [...sourceNotesByPath.values()].filter((note) => {
+    const normalizedNotePath = normalizeSourceNoteKey(note.path);
+    return normalizedNotePath === workspaceRelativePath || normalizedNotePath.endsWith(suffix);
+  });
+
+  return matchedNotes.length === 1 ? matchedNotes[0]?.path ?? null : null;
+}
+
 function buildSourceNoteBlockKey(path: string, title: string, sourceLine?: number | null) {
   return typeof sourceLine === "number" && sourceLine > 0
     ? `${normalizeSourceNoteKey(path)}::line:${sourceLine}`
@@ -171,15 +197,21 @@ function resolveNoteItemSourceNotePath(
 ) {
   const sourcePath = readTodoSourcePath(item.item);
   if (sourcePath) {
-    return sourcePath;
+    const matchedPath = resolveKnownSourceNotePath(sourcePath, sourceNotesByPath);
+    if (matchedPath) {
+      return matchedPath;
+    }
   }
 
   if (item.sourceNote?.path) {
-    return item.sourceNote.path;
+    const matchedPath = resolveKnownSourceNotePath(item.sourceNote.path, sourceNotesByPath);
+    return matchedPath ?? item.sourceNote.path;
   }
 
   const resourceMatch = item.experience.relatedResources
-    .map((resource) => sourceNotesByPath.get(normalizeSourceNoteKey(resource.path)))
+    .map((resource) => resolveKnownSourceNotePath(resource.path, sourceNotesByPath))
+    .filter((path): path is string => path !== null)
+    .map((path) => sourceNotesByPath.get(normalizeSourceNoteKey(path)))
     .find((note) => note !== undefined);
   if (resourceMatch) {
     return resourceMatch.path;

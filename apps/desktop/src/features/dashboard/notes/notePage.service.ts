@@ -581,12 +581,56 @@ function deriveSourceRecurringNextOccurrence(dueAt: string | null, repeatRule: s
   return parsedDueAt.toISOString();
 }
 
+function normalizeFallbackMetadataTime(value: string | null, now = new Date()) {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") {
+    return null;
+  }
+
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+
+  const dateTimeMatch = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(trimmed);
+  if (dateTimeMatch) {
+    const [, year, month, day, hour, minute] = dateTimeMatch;
+    const normalized = new Date(now);
+    normalized.setFullYear(Number(year), Number(month) - 1, Number(day));
+    normalized.setHours(Number(hour), Number(minute), 0, 0);
+    return normalized.toISOString();
+  }
+
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateMatch) {
+    const [, year, month, day] = dateMatch;
+    const normalized = new Date(now);
+    normalized.setFullYear(Number(year), Number(month) - 1, Number(day));
+    normalized.setSeconds(0, 0);
+    return normalized.toISOString();
+  }
+
+  return trimmed;
+}
+
+function extractSourceNaturalHintScopeText(text: string) {
+  for (const line of text.split("\n")) {
+    const normalized = normalizeSourceNaturalNoteLine(line).trim();
+    if (normalized !== "") {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
 // Renderer fallback cards are local state, but they must infer the same natural
 // scheduling hints as the backend inspector to avoid visible pre-sync drift.
 function inferSourceNaturalFallbackFields(text: string, sourcePath: string | null, now = new Date()): SourceNaturalFallbackFields {
-  const lowerText = text.toLowerCase();
+  const hintScopeText = extractSourceNaturalHintScopeText(text);
+  const lowerText = hintScopeText.toLowerCase();
   const dueAt = inferSourceNaturalDueTime(lowerText, now);
-  const repeatRule = extractSourceNaturalRepeatRuleText(text);
+  const repeatRule = extractSourceNaturalRepeatRuleText(hintScopeText);
 
   if (repeatRule) {
     return {
@@ -623,6 +667,14 @@ function normalizeFallbackBucket(value: string | null, checked: boolean, sourceP
   }
 
   return getDefaultBucketForSourcePath(sourcePath, checked, false);
+}
+
+function normalizeFallbackCheckedState(bucket: string | null, checked: boolean) {
+  return checked || valueIsClosedBucket(bucket);
+}
+
+function valueIsClosedBucket(bucket: string | null) {
+  return bucket?.trim().toLowerCase() === "closed";
 }
 
 function inferFallbackStatus(dueAt: string | null, checked: boolean): TodoItem["status"] {
@@ -803,18 +855,21 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     const itemId = createSourceNoteFallbackId(`${note.path}:${current.sourceLine}:${current.title}`);
     const bodyText = trimSourceBoundaryBlankLines(current.bodyLines).join("\n");
     const noteText = joinSourceNoteText(current.noteMetadataText, bodyText) || current.title;
-    const bucket = normalizeFallbackBucket(current.bucket, current.checked, note.path);
-    const dueAt = current.dueAt;
+    const checked = normalizeFallbackCheckedState(current.bucket, current.checked);
+    const bucket = normalizeFallbackBucket(current.bucket, checked, note.path);
+    const dueAt = normalizeFallbackMetadataTime(current.dueAt);
+    const endedAt = normalizeFallbackMetadataTime(current.endedAt) ?? (checked ? dueAt : null);
+    const nextOccurrenceAt = normalizeFallbackMetadataTime(current.nextOccurrenceAt);
     const item = {
       agent_suggestion: current.agentSuggestion ?? "等待巡检把这张便签同步成正式事项。",
       bucket,
       created_at: current.createdAt,
       due_at: dueAt,
       effective_scope: current.effectiveScope ?? note.sourceRoot,
-      ended_at: current.endedAt ?? (current.checked ? dueAt : null),
+      ended_at: endedAt,
       item_id: itemId,
       linked_task_id: null,
-      next_occurrence_at: current.nextOccurrenceAt,
+      next_occurrence_at: nextOccurrenceAt,
       note_text: noteText,
       prerequisite: current.prerequisite,
       recent_instance_status: current.recentInstanceStatus,
@@ -823,7 +878,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
       repeat_rule: current.repeatRule,
       source_line: current.sourceLine,
       source_path: note.path,
-      status: inferFallbackStatus(dueAt, current.checked),
+      status: inferFallbackStatus(dueAt, checked),
       title: current.title,
       type: bucket === "recurring_rule" ? "recurring" : "note",
       updated_at: current.updatedAt,
@@ -958,16 +1013,16 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         current.bucket = metadata.value;
         return;
       case "created_at":
-        current.createdAt = metadata.value;
+        current.createdAt = normalizeFallbackMetadataTime(metadata.value) ?? metadata.value;
         return;
       case "due":
-        current.dueAt = metadata.value;
+        current.dueAt = normalizeFallbackMetadataTime(metadata.value) ?? metadata.value;
         return;
       case "ended_at":
-        current.endedAt = metadata.value;
+        current.endedAt = normalizeFallbackMetadataTime(metadata.value) ?? metadata.value;
         return;
       case "next":
-        current.nextOccurrenceAt = metadata.value;
+        current.nextOccurrenceAt = normalizeFallbackMetadataTime(metadata.value) ?? metadata.value;
         return;
       case "note":
         current.noteMetadataText = metadata.value;
@@ -986,7 +1041,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         current.recentInstanceStatus = metadata.value;
         return;
       case "updated_at":
-        current.updatedAt = metadata.value;
+        current.updatedAt = normalizeFallbackMetadataTime(metadata.value) ?? metadata.value;
         return;
       default:
         current.bodyLines.push(normalizeSourceChecklistBodyLine(line));

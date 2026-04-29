@@ -684,11 +684,12 @@ func trimNaturalNotepadBlankLines(lines []string) []string {
 // users to learn the markdown metadata keys maintained by the compatibility
 // layer.
 func applyNaturalNotepadHints(item map[string]any, text string, now time.Time) {
-	lower := strings.ToLower(text)
+	hintScope := naturalNotepadHintScopeText(text)
+	lower := strings.ToLower(hintScope)
 	if hasNaturalRepeatHint(lower) {
 		item["bucket"] = notepadBucketRecurringRule
 		item["type"] = "recurring"
-		if repeatRuleText := extractNaturalRepeatRuleText(text); repeatRuleText != "" {
+		if repeatRuleText := extractNaturalRepeatRuleText(hintScope); repeatRuleText != "" {
 			item["repeat_rule_text"] = repeatRuleText
 		}
 	}
@@ -702,6 +703,18 @@ func applyNaturalNotepadHints(item map[string]any, text string, now time.Time) {
 			item["bucket"] = notepadBucketUpcoming
 		}
 	}
+}
+
+func naturalNotepadHintScopeText(text string) string {
+	// Natural scheduling hints should come from the note headline itself so
+	// explanatory body prose does not silently change formal bucket semantics.
+	for _, line := range strings.Split(text, "\n") {
+		normalized := strings.TrimSpace(normalizeNaturalNotepadLine(line))
+		if normalized != "" {
+			return normalized
+		}
+	}
+	return ""
 }
 
 func hasNaturalRepeatHint(lowerText string) bool {

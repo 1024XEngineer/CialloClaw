@@ -1873,6 +1873,26 @@ test("source note fallback keeps natural repeat rules on the hint line", () => {
   assert.equal(items[0]?.item.note_text, "Discuss blockers before launch.\nKeep the agenda in the note body.");
 });
 
+test("source note fallback ignores scheduling hints that only appear in natural note body text", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# Release prep\nRepeat the rollout steps tomorrow.\nKeep the checklist nearby.\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.bucket, "upcoming");
+  assert.equal(items[0]?.item.repeat_rule, null);
+  assert.equal(items[0]?.item.due_at, null);
+  assert.equal(items[0]?.item.note_text, "Repeat the rollout steps tomorrow.\nKeep the checklist nearby.");
+});
+
 test("source note fallback partitions local cards by inferred bucket", () => {
   const { buildSourceNoteFallbackItems, partitionNoteItemsByBucket } = loadNotePageServiceModule();
   const note = {
@@ -1954,7 +1974,7 @@ test("source note fallback keeps checklist metadata after spacer lines", () => {
 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Release prep");
-  assert.equal(items[0]?.item.due_at, "2026-04-18");
+  assert.equal(items[0]?.item.due_at, "2026-04-18T00:00:00.000Z");
   assert.equal(items[0]?.item.bucket, "later");
   assert.equal(items[0]?.item.note_text, "Release prep");
 });
@@ -2107,6 +2127,24 @@ test("source note fallback consumes managed timestamp metadata without rendering
   assert.equal(items[0]?.item.ended_at, "2026-04-11T10:00:00.000Z");
 });
 
+test("source note fallback normalizes shorthand due and next timestamps", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "- [ ] Release prep\ndue: 2026-04-18 18:30\nnext: 2026-04-19\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.due_at, "2026-04-18T18:30:00.000Z");
+  assert.equal(items[0]?.item.next_occurrence_at, "2026-04-19T00:00:00.000Z");
+});
+
 test("source note fallback derives generic natural source items as upcoming", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
@@ -2243,7 +2281,7 @@ test("source note editor normalizes completed buckets to closed before persisten
   assert.doesNotMatch(updated.content, /^bucket: recurring_rule$/m);
 });
 
-test("source note editor preserves an explicit closed bucket even when unchecked", () => {
+test("source note editor normalizes an explicit closed bucket into a completed checklist block", () => {
   const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
 
   const serialized = serializeSourceNoteEditorDraft({
@@ -2266,8 +2304,11 @@ test("source note editor preserves an explicit closed bucket even when unchecked
     updatedAt: "",
   }, new Date("2026-04-10T09:30:00.000Z"));
 
+  assert.equal(serialized.normalizedDraft.checked, true);
+  assert.match(serialized.blockContent, /^- \[x\] Archived note$/m);
   assert.equal(serialized.normalizedDraft.bucket, "closed");
   assert.match(serialized.blockContent, /^bucket: closed$/m);
+  assert.match(serialized.blockContent, /^ended_at: 2026-04-10T09:30:00.000Z$/m);
 });
 
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {

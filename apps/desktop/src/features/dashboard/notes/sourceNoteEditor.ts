@@ -272,6 +272,13 @@ function normalizeSourceNoteBucket(
   return getDefaultBucketForSourcePath(sourcePath, checked, recurring);
 }
 
+function normalizeSourceNoteCheckedState(
+  bucket: SourceNoteEditorDraft["bucket"],
+  checked: boolean,
+) {
+  return checked || bucket === "closed";
+}
+
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
   const fallbackDraft = fallbackItem ? buildSourceNoteEditorDraftFromItem(fallbackItem, block.sourcePath) : null;
 
@@ -346,7 +353,7 @@ export function buildSourceNoteEditorDraftFromItem(
   return {
     agentSuggestion: item.item.agent_suggestion?.trim() ?? "",
     bucket: item.item.bucket,
-    checked: item.item.status === "completed",
+    checked: item.item.status === "completed" || item.item.bucket === "closed",
     createdAt: formatTimestampForEditor(readTodoCreatedAt(item.item)),
     dueAt: formatTimestampForEditor(item.item.due_at),
     effectiveScope: item.item.effective_scope?.trim() ?? "",
@@ -628,17 +635,19 @@ export function createSourceNoteEditorDraftSignature(draft: SourceNoteEditorDraf
 export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now = new Date()) {
   const normalizedNow = toIsoTimestamp(now);
   const derivedContent = deriveDraftTitleAndBody(draft);
+  const normalizedChecked = normalizeSourceNoteCheckedState(draft.bucket, derivedContent.checked);
   const normalizedBucket = normalizeSourceNoteBucket(
     draft.bucket,
-    derivedContent.checked,
+    normalizedChecked,
     draft.sourcePath,
     draft.repeatRule.trim() !== "",
   );
   const normalizedDraft = createDraftSignaturePayload({
     ...draft,
     bucket: normalizedBucket,
-    checked: derivedContent.checked,
+    checked: normalizedChecked,
     createdAt: draft.createdAt.trim() || normalizedNow,
+    endedAt: draft.endedAt.trim() || (normalizedChecked ? normalizedNow : ""),
     noteText: derivedContent.noteText,
     title: derivedContent.title,
     updatedAt: normalizedNow,
