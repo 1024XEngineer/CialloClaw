@@ -12515,6 +12515,92 @@ func TestServiceStartTaskDescribedFileStartsNewTaskWithoutPendingEvidence(t *tes
 	}
 }
 
+func TestServiceStartTaskShellBallAnchorDoesNotContinuePendingFileTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
+
+	waitingTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_shell_ball_pending_file",
+		Title:       "Waiting for additional intake details",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": waitingTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "summarize this attachment",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name":     "desktop",
+				"title":        "Quick Intake",
+				"url":          "local://shell-ball",
+				"window_title": "Shell Ball",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start shell-ball described file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == waitingTask.TaskID {
+		t.Fatalf("expected shell-ball intake anchor not to continue pending task, got %+v", task)
+	}
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected shell-ball described file task to execute as fresh work, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(waitingTask.TaskID)
+	if !ok {
+		t.Fatal("expected original waiting task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original waiting task not to receive shell-ball file intake, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestTaskContinuationEvidenceIgnoresShellBallAnchorMatches(t *testing.T) {
+	evidence := buildTaskContinuationEvidence(
+		contextsvc.TaskContextSnapshot{
+			InputType:   "file",
+			Files:       []string{"logs/network.log"},
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+		contextsvc.TaskContextSnapshot{
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+	)
+
+	if !evidence.StructuredSupplement {
+		t.Fatal("expected file input to remain structured evidence")
+	}
+	if evidence.HasStrongAnchor || hasTaskSpecificContinuationEvidence(evidence) {
+		t.Fatalf("expected shell-ball default context not to count as task-specific anchor, got %+v", evidence)
+	}
+	if evidence.HasConflictingAnchor {
+		t.Fatalf("expected shell-ball default context not to conflict with itself, got %+v", evidence)
+	}
+}
+
 func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *testing.T) {
 	var activeTaskID string
 	modelCalled := false

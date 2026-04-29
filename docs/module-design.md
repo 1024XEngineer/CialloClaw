@@ -1355,7 +1355,7 @@ flowchart TB
 - **确定性规则**：空输入直接进入 `waiting_input`；显式 `intent` 优先。
 - **轻量建议**：`intent.Suggest()` 输出 `Suggestion`，包含 `IntentConfirmed / RequiresConfirm / TaskTitle / DirectDeliveryType` 等字段。
 - **确认策略**：`options.confirm_required` 只负责阻止当前输入直接执行；附件等对象型入口若已经带有明确用户说明，应直接进入 Agent Loop / 治理 / 执行链路，裸对象或低置信度输入才停在确认或澄清。
-- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification；不论 `confirm_required` 是否为 `true`，文件、选区、错误等结构化补充证据若要续接到 `waiting_input / confirming_intent` 这类待用户补充的任务，都必须带有任务特定证据（如 lineage、共享文件、同一页面 / 窗口 / 对象锚点），不能只因为输入是结构化对象就续接，不能续接正在执行的任务，也不能自动执行；悬浮球默认入口锚点（如 `desktop / local://shell-ball`）只表示补充证据从哪里进入系统，不应覆盖或冲突于原 task 的真实页面 / 应用锚点。
+- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification；不论 `confirm_required` 是否为 `true`，文件、选区、错误等结构化补充证据若要续接到 `waiting_input / confirming_intent` 这类待用户补充的任务，都必须带有任务特定证据（如 lineage、共享文件、同一页面 / 窗口 / 对象锚点），不能只因为输入是结构化对象就续接，不能续接正在执行的任务，也不能自动执行；悬浮球默认入口锚点（如 `desktop / local://shell-ball`）只表示补充证据从哪里进入系统，不应作为正向续接证据，也不应覆盖或冲突于原 task 的真实页面 / 应用锚点。
 - **执行阶段分工**：入口规划只决定“以什么意图、什么交付类型、是否要确认进入主链”；真正的 ReAct/Agent Loop 计划在执行阶段发生。
 
 #### 关键中间产物

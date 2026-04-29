@@ -431,22 +431,24 @@ type taskContinuationEvidence struct {
 }
 
 func buildTaskContinuationEvidence(current, previous contextsvc.TaskContextSnapshot) taskContinuationEvidence {
-	samePageURL := sameNonEmpty(current.PageURL, previous.PageURL)
-	sameHoverTarget := sameNonEmpty(current.HoverTarget, previous.HoverTarget)
+	structuredSupplement := isStructuredSupplementInput(current)
+	currentAnchor := taskSpecificAnchorSnapshot(current)
+	previousAnchor := taskSpecificAnchorSnapshot(previous)
+	samePageURL := sameNonEmpty(currentAnchor.PageURL, previousAnchor.PageURL)
+	sameHoverTarget := sameNonEmpty(currentAnchor.HoverTarget, previousAnchor.HoverTarget)
 	sameSelectionText := sameNonEmpty(current.SelectionText, previous.SelectionText)
 	sameErrorText := sameNonEmpty(current.ErrorText, previous.ErrorText)
 	sharedFiles := sharedContinuationFiles(current.Files, previous.Files)
-	sameWindowAnchor := sameNonEmpty(current.WindowTitle, previous.WindowTitle) && sameNonEmpty(current.AppName, previous.AppName)
-	samePageAnchor := sameNonEmpty(current.PageTitle, previous.PageTitle) && sameNonEmpty(current.AppName, previous.AppName)
-	structuredSupplement := isStructuredSupplementInput(current)
+	sameWindowAnchor := sameNonEmpty(currentAnchor.WindowTitle, previousAnchor.WindowTitle) && sameNonEmpty(currentAnchor.AppName, previousAnchor.AppName)
+	samePageAnchor := sameNonEmpty(currentAnchor.PageTitle, previousAnchor.PageTitle) && sameNonEmpty(currentAnchor.AppName, previousAnchor.AppName)
 
 	return taskContinuationEvidence{
 		HasStrongAnchor:          samePageURL || sameHoverTarget || sameWindowAnchor || samePageAnchor || sameSelectionText || sameErrorText || sharedFiles,
 		HasLineageMatch:          sameSelectionText || sameErrorText || sharedFiles,
-		HasConflictingAnchor:     hasConflictingContextAnchor(current, previous, structuredSupplement),
+		HasConflictingAnchor:     hasConflictingContextAnchor(currentAnchor, previousAnchor),
 		StructuredSupplement:     structuredSupplement,
-		CurrentHasContextAnchor:  hasSnapshotContextAnchor(current),
-		PreviousHasContextAnchor: hasSnapshotContextAnchor(previous),
+		CurrentHasContextAnchor:  hasSnapshotContextAnchor(currentAnchor),
+		PreviousHasContextAnchor: hasSnapshotContextAnchor(previousAnchor),
 	}
 }
 
@@ -484,10 +486,7 @@ func hasSnapshotContextAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
 		strings.TrimSpace(snapshot.HoverTarget) != ""
 }
 
-func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapshot, structuredSupplement bool) bool {
-	if structuredSupplement && isShellBallIntakeAnchor(current) {
-		current = withoutShellBallIntakeAnchor(current)
-	}
+func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapshot) bool {
 	if nonEmptyAndDifferent(current.PageURL, previous.PageURL) {
 		return true
 	}
@@ -500,6 +499,16 @@ func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapsho
 		return true
 	}
 	return false
+}
+
+// taskSpecificAnchorSnapshot removes intake-only shell-ball context before
+// comparing continuation anchors. The shell-ball page identifies where input
+// entered the system, not which user task the input belongs to.
+func taskSpecificAnchorSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	if isShellBallIntakeAnchor(snapshot) {
+		return withoutShellBallIntakeAnchor(snapshot)
+	}
+	return snapshot
 }
 
 // isShellBallIntakeAnchor identifies the frontend's default shell-ball wrapper
