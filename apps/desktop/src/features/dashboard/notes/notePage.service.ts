@@ -382,11 +382,11 @@ export function partitionNoteItemsByBucket(items: NoteListItem[]): Record<TodoBu
 
 function parseSourceChecklistLine(line: string) {
   const trimmed = line.trimEnd();
-  if (/^\s/.test(trimmed)) {
+  if (/^\t/.test(trimmed) || /^ {4,}/.test(trimmed)) {
     return null;
   }
 
-  const match = /^[-*]\s+\[( |x|X)\]\s+(.+)$/.exec(trimmed);
+  const match = /^(?: {0,3})[-*]\s+\[( |x|X)\]\s+(.+)$/.exec(trimmed);
   if (!match) {
     return null;
   }
@@ -587,11 +587,6 @@ function normalizeFallbackMetadataTime(value: string | null, now = new Date()) {
     return null;
   }
 
-  const parsed = new Date(trimmed);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString();
-  }
-
   const dateTimeMatch = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(trimmed);
   if (dateTimeMatch) {
     const [, year, month, day, hour, minute] = dateTimeMatch;
@@ -608,6 +603,11 @@ function normalizeFallbackMetadataTime(value: string | null, now = new Date()) {
     normalized.setFullYear(Number(year), Number(month) - 1, Number(day));
     normalized.setSeconds(0, 0);
     return normalized.toISOString();
+  }
+
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
   }
 
   return trimmed;
@@ -928,7 +928,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   };
 
   lines.forEach((line, index) => {
-    const checklist = parseSourceChecklistLine(line);
+    const checklist = current && isIndentedSourceLine(line) ? null : parseSourceChecklistLine(line);
     // Only top-level checklist rows start fallback cards; indented rows stay in
     // the current card body to match editor serialization and backend parsing.
     if (checklist) {

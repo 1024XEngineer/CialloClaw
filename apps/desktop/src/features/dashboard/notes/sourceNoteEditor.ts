@@ -1,6 +1,6 @@
 import type { NoteListItem, SourceNoteDocument, SourceNoteEditorBlock, SourceNoteEditorDraft, SourceNoteMetadataEntry } from "./notePage.types";
 
-const SOURCE_NOTE_CHECKLIST_PATTERN = /^[-*]\s+\[( |x|X)\]\s+(.+)$/;
+const SOURCE_NOTE_CHECKLIST_PATTERN = /^(?: {0,3})[-*]\s+\[( |x|X)\]\s+(.+)$/;
 const SOURCE_NOTE_RESERVED_METADATA_KEYS = new Set([
   "agent",
   "bucket",
@@ -27,7 +27,7 @@ function normalizeLineEndings(value: string) {
 
 function parseChecklistLine(line: string) {
   const candidate = line.trimEnd();
-  if (/^\s/.test(candidate)) {
+  if (/^\t/.test(candidate) || /^ {4,}/.test(candidate)) {
     return null;
   }
 
@@ -197,7 +197,10 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
   const remainingLines = normalizeEditorNoteText(bodyLines.slice(firstContentLineIndex + 1).join("\n"));
 
   return {
-    checked: checklist?.checked ?? draft.checked,
+    // Blank-title drafts derive their task state from the synthesized first
+    // line only. Reusing a stale checked flag here would silently re-close a
+    // note that the user already moved back to an active bucket.
+    checked: checklist?.checked ?? false,
     noteText: remainingLines,
     title: (checklist?.title ?? firstContentLine).trim() || "New note",
   };
@@ -445,7 +448,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   };
 
   normalizedLines.forEach((line, index) => {
-    const checklist = parseChecklistLine(line);
+    const checklist = current && isIndentedSourceNoteLine(line) ? null : parseChecklistLine(line);
     // Only top-level checklist rows start structured blocks; indented rows are
     // body content written by the editor for round-trip-safe natural notes.
     if (checklist) {

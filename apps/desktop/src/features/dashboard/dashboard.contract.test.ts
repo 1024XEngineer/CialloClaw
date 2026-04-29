@@ -1505,6 +1505,24 @@ test("source note editor keeps note metadata and checklist body together", () =>
   assert.equal(blocks[0]?.noteText, "collect rollout context\n\nkeep the rollback checklist nearby");
 });
 
+test("source note editor accepts top-level checklist rows with up to three leading spaces", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "   - [ ] Release prep\n    - [ ] nested body line\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "Release prep");
+  assert.equal(blocks[0]?.noteText, "  - [ ] nested body line");
+});
+
 test("source note editor splits top-level checklist items away from natural notes", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
@@ -1871,6 +1889,50 @@ test("source note fallback keeps natural repeat rules on the hint line", () => {
   assert.equal(items[0]?.item.bucket, "recurring_rule");
   assert.equal(items[0]?.item.repeat_rule, "Every Monday sync");
   assert.equal(items[0]?.item.note_text, "Discuss blockers before launch.\nKeep the agenda in the note body.");
+});
+
+test("source note fallback keeps date-only metadata aligned with inspector-local time semantics", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const now = new Date();
+  const expectedDueAt = new Date(now);
+  expectedDueAt.setFullYear(2026, 3, 18);
+  expectedDueAt.setSeconds(0, 0);
+  const expectedNextAt = new Date(now);
+  expectedNextAt.setFullYear(2026, 3, 25);
+  expectedNextAt.setSeconds(0, 0);
+
+  const note = {
+    content: "- [ ] Release prep\ndue: 2026-04-18\nnext: 2026-04-25\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.due_at, expectedDueAt.toISOString());
+  assert.equal(items[0]?.item.next_occurrence_at, expectedNextAt.toISOString());
+});
+
+test("source note fallback accepts top-level checklist rows with up to three leading spaces", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "  - [ ] Release prep\n    - [ ] nested body line\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Release prep");
+  assert.equal(items[0]?.item.note_text, "  - [ ] nested body line");
 });
 
 test("source note fallback ignores scheduling hints that only appear in natural note body text", () => {
@@ -2361,6 +2423,37 @@ test("source note editor clears ended metadata when a closed note is moved back 
   assert.equal(serialized.normalizedDraft.checked, false);
   assert.equal(serialized.normalizedDraft.bucket, "later");
   assert.equal(serialized.normalizedDraft.endedAt, "");
+  assert.match(serialized.blockContent, /^- \[ \] Reopen note$/m);
+  assert.doesNotMatch(serialized.blockContent, /^bucket: closed$/m);
+  assert.doesNotMatch(serialized.blockContent, /^ended_at:/m);
+});
+
+test("source note editor clears stale closed state when the title is derived from body text", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "later",
+    checked: true,
+    createdAt: "2026-04-09T08:00:00.000Z",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "2026-04-10T09:00:00.000Z",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "Reopen note\n\nKeep the old context nearby.",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: 1,
+    sourcePath: "D:/workspace/todos/later.md",
+    title: "",
+    updatedAt: "2026-04-10T09:00:00.000Z",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.equal(serialized.normalizedDraft.checked, false);
+  assert.equal(serialized.normalizedDraft.bucket, "later");
+  assert.equal(serialized.normalizedDraft.title, "Reopen note");
   assert.match(serialized.blockContent, /^- \[ \] Reopen note$/m);
   assert.doesNotMatch(serialized.blockContent, /^bucket: closed$/m);
   assert.doesNotMatch(serialized.blockContent, /^ended_at:/m);
