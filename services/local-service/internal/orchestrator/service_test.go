@@ -3348,6 +3348,62 @@ func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *test
 	}
 }
 
+func TestServiceStartTaskFileWithLowInformationTextStillRequiresConfirmation(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_file_vague_text",
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "help",
+			"files": []any{"workspace/network.log"},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start vague file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected vague file task to wait for intent confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected vague file task to defer delivery_result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestTaskStartConfirmRequiredRequiresClearFileInstruction(t *testing.T) {
+	tests := []struct {
+		name        string
+		text        string
+		wantConfirm bool
+	}{
+		{name: "empty", text: "", wantConfirm: true},
+		{name: "english help", text: "help", wantConfirm: true},
+		{name: "chinese look", text: "\u770b\u770b", wantConfirm: true},
+		{name: "clear summary", text: "summarize the attached network log", wantConfirm: false},
+		{name: "clear question", text: "what is inside this file", wantConfirm: false},
+		{name: "clear chinese question", text: "\u5e2e\u6211\u770b\u770b\u8fd9\u91cc\u9762\u6709\u4ec0\u4e48", wantConfirm: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := taskStartConfirmRequired(contextsvc.TaskContextSnapshot{
+				InputType: "file",
+				Text:      tt.text,
+			}, nil, false)
+			if got != tt.wantConfirm {
+				t.Fatalf("expected confirm=%t for %q, got %t", tt.wantConfirm, tt.text, got)
+			}
+		})
+	}
+}
+
 func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
 	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
@@ -12530,8 +12586,10 @@ func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *tes
 func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *testing.T) {
 	runtimeUpdatedAt := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
 	runtimeTask := runengine.TaskRecord{
-		TaskID:    "task_001",
-		UpdatedAt: runtimeUpdatedAt,
+		TaskID:      "task_001",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		UpdatedAt:   runtimeUpdatedAt,
 		Snapshot: contextsvc.TaskContextSnapshot{
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -12539,11 +12597,18 @@ func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *te
 		},
 	}
 	storageTask := runengine.TaskRecord{
-		TaskID:    "task_001",
-		UpdatedAt: runtimeUpdatedAt.Add(time.Second),
+		TaskID:      "task_001",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		UpdatedAt:   runtimeUpdatedAt.Add(time.Second),
 	}
 
 	selected := fresherTaskRecord(runtimeTask, storageTask)
+	if selected.Status != storageTask.Status ||
+		selected.CurrentStep != storageTask.CurrentStep ||
+		!selected.UpdatedAt.Equal(storageTask.UpdatedAt) {
+		t.Fatalf("expected newer storage task state to remain selected, got %+v", selected)
+	}
 	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
 		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
 		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {

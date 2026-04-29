@@ -534,10 +534,66 @@ func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitI
 func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
 	switch snapshot.InputType {
 	case "file":
-		return strings.TrimSpace(snapshot.Text) != ""
+		return taskStartHasClearFileInstruction(snapshot.Text)
 	default:
 		return false
 	}
+}
+
+// taskStartHasClearFileInstruction is the deterministic guard before a file
+// task may skip intent confirmation. It accepts clear actions or questions,
+// while short filler text remains behind the confirmation gate.
+func taskStartHasClearFileInstruction(text string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	if normalized == "" || isLowInformationFileInstruction(normalized) {
+		return false
+	}
+	if containsAny(normalized, clearFileInstructionSignals) {
+		return true
+	}
+	if containsAny(normalized, weakFileInstructionSignals) {
+		return fileInstructionHasDetail(normalized)
+	}
+	return false
+}
+
+func isLowInformationFileInstruction(text string) bool {
+	switch text {
+	case "help", "help me", "please", "please help", "look", "look at this", "check", "check this",
+		"review", "review this", "inspect", "inspect this", "handle", "handle this", "process", "process this",
+		"\u770b\u770b", "\u770b\u4e0b", "\u770b\u4e00\u4e0b", "\u770b\u770b\u8fd9\u4e2a", "\u770b\u4e0b\u8fd9\u4e2a", "\u770b\u4e00\u4e0b\u8fd9\u4e2a",
+		"\u5e2e\u6211\u770b\u770b", "\u5e2e\u6211\u770b\u4e0b", "\u5e2e\u5fd9\u770b\u770b", "\u5904\u7406", "\u5e2e\u6211\u5904\u7406", "\u968f\u4fbf\u770b\u770b":
+		return true
+	default:
+		return false
+	}
+}
+
+func fileInstructionHasDetail(text string) bool {
+	return len(strings.Fields(text)) >= 3 || len([]rune(text)) >= 12
+}
+
+func containsAny(text string, signals []string) bool {
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+var clearFileInstructionSignals = []string{
+	"summar", "analy", "debug", "diagnos", "explain", "translate", "extract", "compare",
+	"list", "find", "fix", "repair", "rewrite", "write", "draft", "create", "generate",
+	"convert", "parse", "classify", "review for", "check why", "what", "why", "how", "?",
+	"\u603b\u7ed3", "\u5206\u6790", "\u8c03\u8bd5", "\u8bca\u65ad", "\u89e3\u91ca", "\u7ffb\u8bd1", "\u63d0\u53d6", "\u5bf9\u6bd4", "\u6bd4\u8f83", "\u5217\u51fa",
+	"\u6574\u7406", "\u627e\u51fa", "\u4fee\u590d", "\u6539\u5199", "\u751f\u6210", "\u8f6c\u6362", "\u89e3\u6790", "\u5f52\u7c7b", "\u539f\u56e0", "\u4e3a\u4ec0\u4e48",
+	"\u600e\u4e48", "\u5982\u4f55", "\u4ec0\u4e48", "\u6709\u54ea\u4e9b", "\u91cc\u9762\u6709\u4ec0\u4e48",
+}
+
+var weakFileInstructionSignals = []string{
+	"check", "review", "inspect", "look", "handle", "process",
+	"\u770b", "\u770b\u770b", "\u770b\u4e0b", "\u770b\u4e00\u4e0b", "\u5e2e\u6211\u770b", "\u5904\u7406",
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
@@ -3510,25 +3566,33 @@ func mergeTaskLists(runtimeTasks, storageTasks []runengine.TaskRecord) []runengi
 }
 
 func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
-	if !isEmptySnapshot(runtimeTask.Snapshot) && isEmptySnapshot(storageTask.Snapshot) {
-		// Runtime snapshots keep the near-field context needed by continuation
-		// classification; a storage projection without snapshot anchors must not
-		// erase those anchors before the pending-task decision runs.
-		return runtimeTask
-	}
+	selected := storageTask
 	if runtimeTask.UpdatedAt.After(storageTask.UpdatedAt) {
-		return runtimeTask
+		selected = runtimeTask
+	} else if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
+		selected = storageTask
+	} else if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
+		selected = runtimeTask
+	} else if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
+		selected = storageTask
 	}
-	if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
-		return storageTask
+	return taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask)
+}
+
+func taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	if !isEmptySnapshot(selected.Snapshot) {
+		return selected
 	}
-	if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
-		return runtimeTask
+	// Snapshot anchors are continuation evidence, not freshness state; keep the
+	// fresher task fields and only fill missing anchors from the alternate copy.
+	if !isEmptySnapshot(runtimeTask.Snapshot) {
+		selected.Snapshot = cloneTaskSnapshot(runtimeTask.Snapshot)
+		return selected
 	}
-	if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
-		return storageTask
+	if !isEmptySnapshot(storageTask.Snapshot) {
+		selected.Snapshot = cloneTaskSnapshot(storageTask.Snapshot)
 	}
-	return storageTask
+	return selected
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
