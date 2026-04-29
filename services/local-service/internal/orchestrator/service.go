@@ -304,6 +304,7 @@ func (s *Service) RunEngine() *runengine.Engine {
 // waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
+	options := mapValue(params, "options")
 	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
 		return nil, err
 	} else if handled {
@@ -311,7 +312,6 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	} else if strings.TrimSpace(resolvedSessionID) != "" {
 		params = withResolvedSessionID(params, resolvedSessionID)
 	}
-	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)

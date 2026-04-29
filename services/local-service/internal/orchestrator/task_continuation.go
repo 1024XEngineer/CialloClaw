@@ -31,6 +31,8 @@ type taskContinuationContext struct {
 
 func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, string, error) {
 	explicitSessionID := strings.TrimSpace(stringValue(params, "session_id", ""))
+	allowAsyncBubble := strings.TrimSpace(stringValue(params, "source", "")) == "floating_ball" &&
+		strings.TrimSpace(stringValue(mapValue(params, "options"), "preferred_delivery", "")) == "bubble"
 	continuationContext := s.resolveTaskContinuationContext(explicitSessionID)
 	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext)
 	if decision.Decision == "continue" && strings.TrimSpace(decision.TaskID) != "" {
@@ -38,7 +40,7 @@ func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot cont
 		if !ok {
 			return nil, false, explicitSessionID, nil
 		}
-		response, err := s.continueTask(task, snapshot, explicitIntent, decision)
+		response, err := s.continueTask(task, snapshot, explicitIntent, decision, allowAsyncBubble)
 		if err != nil {
 			return nil, false, explicitSessionID, err
 		}
@@ -472,9 +474,9 @@ func nonEmptyAndDifferent(left, right string) bool {
 	return left != "" && right != "" && left != right
 }
 
-func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision) (map[string]any, error) {
+func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision, allowAsyncBubble bool) (map[string]any, error) {
 	if task.Status == "waiting_input" || task.Status == "confirming_intent" {
-		return s.continuePendingTask(task, snapshot, explicitIntent)
+		return s.continuePendingTask(task, snapshot, explicitIntent, allowAsyncBubble)
 	}
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", buildTaskContinuationBubbleText(snapshot, decision), time.Now().Format(dateTimeLayout))
@@ -493,7 +495,7 @@ func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.Ta
 	}, nil
 }
 
-func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, error) {
+func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, allowAsyncBubble bool) (map[string]any, error) {
 	mergedSnapshot := mergeContinuationSnapshots(snapshotFromTask(task), snapshot)
 	if s.intent.AnalyzeSnapshot(mergedSnapshot) == "waiting_input" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已把补充内容挂回当前任务，请继续补充剩余信息。", time.Now().Format(dateTimeLayout))
@@ -541,6 +543,17 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}
 	if handled {
 		return governedResponse, nil
+	}
+	if allowAsyncBubble && shouldRunAsyncBubbleDelivery(governedTask) {
+		asyncTask, asyncBubble, asyncErr := s.beginAsyncTaskExecution(governedTask, mergedSnapshot, suggestion.Intent)
+		if asyncErr != nil {
+			return nil, asyncErr
+		}
+		return map[string]any{
+			"task":            taskMap(asyncTask),
+			"bubble_message":  asyncBubble,
+			"delivery_result": nil,
+		}, nil
 	}
 	executedTask, resultBubble, deliveryResult, _, execErr := s.executeTask(governedTask, mergedSnapshot, suggestion.Intent)
 	if execErr != nil {

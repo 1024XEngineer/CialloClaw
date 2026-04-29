@@ -1204,6 +1204,131 @@ func TestServiceSubmitInputReturnsImmediatelyForExplicitBubbleDelivery(t *testin
 	}
 }
 
+func TestServiceSubmitInputReturnsImmediatelyWhenContinuingWaitingInputTask(t *testing.T) {
+	blockingClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	modelService := model.NewService(modelConfig(), blockingClient)
+	service, _, _ := newTestServiceWithModelService(t, modelService)
+	service.executionTimeout = 50 * time.Millisecond
+
+	seedTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_waiting_input_async",
+		RequestSource:     "floating_ball",
+		RequestTrigger:    "hover_text_input",
+		Title:             "等待补充输入",
+		SourceType:        "hover_input",
+		Status:            "waiting_input",
+		Intent:            nil,
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "task_detail",
+		CurrentStep:       "collect_input",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("waiting_input", "collect_input"),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:    "floating_ball",
+			Trigger:   "hover_text_input",
+			InputType: "text",
+			Text:      "Please tell me what to do",
+		},
+	})
+
+	start := time.Now()
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": seedTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+		"options": map[string]any{
+			"preferred_delivery": "bubble",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected continued waiting_input submit to return quickly, took %s", time.Since(start))
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] != seedTask.TaskID {
+		t.Fatalf("expected waiting_input continuation to reuse task %s, got %+v", seedTask.TaskID, task)
+	}
+	if task["status"] != "processing" {
+		t.Fatalf("expected continued waiting_input task to return processing, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" || bubble["text"] != "已收到，正在处理。" {
+		t.Fatalf("expected continued waiting_input submit to expose processing bubble, got %+v", bubble)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected continued waiting_input submit not to return delivery result yet, got %+v", result["delivery_result"])
+	}
+
+	select {
+	case <-blockingClient.released:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected continued waiting_input background execution to finish after timeout")
+	}
+}
+
+func TestServiceSubmitInputKeepsSynchronousContinuationForNonBubbleCallers(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Translated note.")
+
+	seedTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_waiting_input_dashboard",
+		RequestSource:     "dashboard",
+		RequestTrigger:    "voice_commit",
+		Title:             "等待补充输入",
+		SourceType:        "dashboard_voice",
+		Status:            "waiting_input",
+		Intent:            nil,
+		PreferredDelivery: "result_page",
+		FallbackDelivery:  "task_detail",
+		CurrentStep:       "collect_input",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("waiting_input", "collect_input"),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:    "dashboard",
+			Trigger:   "voice_commit",
+			InputType: "text",
+			Text:      "Translate this note.",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": seedTask.SessionID,
+		"source":     "dashboard",
+		"trigger":    "voice_commit",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] != seedTask.TaskID {
+		t.Fatalf("expected waiting_input continuation to reuse task %s, got %+v", seedTask.TaskID, task)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected non-bubble continuation to stay synchronous and complete, got %+v", task)
+	}
+	if result["delivery_result"] == nil {
+		t.Fatalf("expected non-bubble continuation to return delivery result, got %+v", result)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "result" {
+		t.Fatalf("expected completed continuation to expose result bubble, got %+v", bubble)
+	}
+}
+
 func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued task output.")
 

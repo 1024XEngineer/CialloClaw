@@ -265,6 +265,10 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn normalize_windows_verbatim_prefix(path: PathBuf) -> String {
+        path.to_string_lossy().replace(r"\\?\", "")
+    }
+
     #[test]
     fn resolve_path_candidate_rejects_empty_input() {
         assert!(resolve_path_candidate("   ", &LocalPathRoots::new(None, None)).is_err());
@@ -281,8 +285,10 @@ mod tests {
             .expect("resolve workspace-relative path");
 
         assert_eq!(
-            resolved,
-            fixture.workspace_root.join("artifacts").join("result.docx")
+            normalize_windows_verbatim_prefix(resolved),
+            normalize_windows_verbatim_prefix(
+                fixture.workspace_root.join("artifacts").join("result.docx")
+            )
         );
     }
 
@@ -297,13 +303,15 @@ mod tests {
             .expect("resolve repo-relative path");
 
         assert_eq!(
-            resolved,
-            fixture
-                .repo_root
-                .join("apps")
-                .join("desktop")
-                .join("src")
-                .join("main.ts")
+            normalize_windows_verbatim_prefix(resolved),
+            normalize_windows_verbatim_prefix(
+                fixture
+                    .repo_root
+                    .join("apps")
+                    .join("desktop")
+                    .join("src")
+                    .join("main.ts")
+            )
         );
     }
 

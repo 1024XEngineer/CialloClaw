@@ -69,6 +69,7 @@ const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const LOCAL_SERVICE_REQUEST_TIMEOUT: Duration = Duration::from_secs(100);
 const LOCAL_SERVICE_PIPE_BUSY_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
 const LOCAL_SERVICE_PIPE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(40);
+const LOCAL_SERVICE_LOG_MAX_BYTES: u64 = 256 * 1024;
 static LOCAL_SERVICE_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static DESKTOP_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -224,8 +225,7 @@ impl NamedPipeBridgeState {
         payload: Value,
         timeout: Option<Duration>,
     ) -> Result<Value, String> {
-        let method = extract_request_method(&payload)?;
-        if should_use_isolated_named_pipe_request(&method) {
+        if should_use_isolated_named_pipe_payload(&payload) {
             return self.request_via_isolated_connection(payload, timeout);
         }
 
@@ -515,11 +515,14 @@ fn append_local_service_log(app: &tauri::AppHandle, message: &str) {
         return;
     };
 
-    let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join(LOCAL_SERVICE_LOG_FILE_NAME))
-    else {
+    let log_path = log_dir.join(LOCAL_SERVICE_LOG_FILE_NAME);
+    if let Ok(metadata) = std::fs::metadata(&log_path) {
+        if metadata.len() > LOCAL_SERVICE_LOG_MAX_BYTES {
+            let _ = std::fs::remove_file(&log_path);
+        }
+    }
+
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) else {
         return;
     };
 
@@ -527,7 +530,12 @@ fn append_local_service_log(app: &tauri::AppHandle, message: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
-    let _ = writeln!(file, "[{timestamp}] {message}");
+    let sanitized_message = if message.len() > 1_024 {
+        format!("{}…", &message[..1_024])
+    } else {
+        message.to_string()
+    };
+    let _ = writeln!(file, "[{timestamp}] {sanitized_message}");
 }
 
 /// start_local_service_sidecar boots the bundled Go service before the desktop
@@ -653,7 +661,7 @@ async fn named_pipe_request(
 ) -> Result<Value, String> {
     let request_method = extract_request_method(&payload).unwrap_or_else(|_| "unknown".to_string());
     let request_id = extract_request_id(&payload).unwrap_or_else(|_| "unknown".to_string());
-    let request_mode = if should_use_isolated_named_pipe_request(&request_method) {
+    let request_mode = if should_use_isolated_named_pipe_payload(&payload) {
         "isolated"
     } else {
         "shared"
@@ -1308,6 +1316,51 @@ mod desktop_settings_snapshot_tests {
     }
 }
 
+#[cfg(test)]
+mod named_pipe_routing_tests {
+    use super::{requires_shared_named_pipe_request, should_use_isolated_named_pipe_payload};
+    use serde_json::json;
+
+    #[test]
+    fn isolated_payload_routing_keeps_floating_ball_bubble_submit_isolated() {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_submit",
+            "method": "agent.input.submit",
+            "params": {
+                "source": "floating_ball",
+                "options": {
+                    "preferred_delivery": "bubble"
+                }
+            }
+        });
+
+        assert!(should_use_isolated_named_pipe_payload(&payload));
+    }
+
+    #[test]
+    fn isolated_payload_routing_keeps_non_bubble_submit_shared() {
+        let dashboard_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_submit_dashboard",
+            "method": "agent.input.submit",
+            "params": {
+                "source": "dashboard"
+            }
+        });
+        let task_start_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_task_start",
+            "method": "agent.task.start",
+            "params": {}
+        });
+
+        assert!(!should_use_isolated_named_pipe_payload(&dashboard_payload));
+        assert!(!should_use_isolated_named_pipe_payload(&task_start_payload));
+        assert!(requires_shared_named_pipe_request("agent.task.start"));
+    }
+}
+
 fn writer_loop(
     writer: std::fs::File,
     receiver: mpsc::Receiver<BridgeCommand>,
@@ -1364,6 +1417,28 @@ fn should_use_isolated_named_pipe_request(method: &str) -> bool {
     !requires_shared_named_pipe_request(method)
 }
 
+fn should_use_isolated_named_pipe_payload(payload: &Value) -> bool {
+    let Ok(method) = extract_request_method(payload) else {
+        return false;
+    };
+
+    if method == "agent.input.submit" {
+        let params = payload.get("params").and_then(Value::as_object);
+        let source = params
+            .and_then(|params| params.get("source"))
+            .and_then(Value::as_str);
+        let preferred_delivery = params
+            .and_then(|params| params.get("options"))
+            .and_then(Value::as_object)
+            .and_then(|options| options.get("preferred_delivery"))
+            .and_then(Value::as_str);
+
+        return source == Some("floating_ball") && preferred_delivery == Some("bubble");
+    }
+
+    should_use_isolated_named_pipe_request(&method)
+}
+
 /// requires_shared_named_pipe_request keeps task-mutating calls on the shared
 /// session because those methods may emit request-scoped runtime notifications
 /// that shell-ball and dashboard flows consume through the bridge subscription
@@ -1371,8 +1446,7 @@ fn should_use_isolated_named_pipe_request(method: &str) -> bool {
 fn requires_shared_named_pipe_request(method: &str) -> bool {
     matches!(
         method,
-        "agent.input.submit"
-            | "agent.task.start"
+        "agent.task.start"
             | "agent.task.confirm"
             | "agent.task.control"
             | "agent.task.steer"

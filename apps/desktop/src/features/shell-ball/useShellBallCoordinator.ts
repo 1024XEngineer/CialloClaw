@@ -1,7 +1,7 @@
 import type { ApprovalDecision, ApprovalRequest, BubbleMessage, DeliveryResult, InputContext, TaskUpdatedNotification } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { respondSecurityDetailed } from "@/rpc/methods";
+import { getTaskDetail, respondSecurityDetailed } from "@/rpc/methods";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
 import {
@@ -41,6 +41,11 @@ import {
 import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
 import { getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
 import { useShellBallStore } from "../../stores/shellBallStore";
+import {
+  getShellBallTaskTerminalStatusText,
+  isTerminalShellBallTaskStatus,
+  resolveShellBallTaskPollingFailure,
+} from "./shellBallTaskPolling";
 
 type ShellBallCoordinatorInput = {
   visualState: ShellBallVisualState;
@@ -139,6 +144,7 @@ const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
 const SHELL_BALL_SUBMIT_STALL_NOTICE_MS = 15_000;
+const SHELL_BALL_TASK_POLL_INTERVAL_MS = 1_500;
 const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";
 const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";
 const SHELL_BALL_WINDOW_COMMAND = "窗口";
@@ -743,6 +749,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   // the formal task id locally. Buffer them with the same task-scoped replay
   // path so shell-ball still shows the result bubble and open flow.
   const queuedDeliveryReadyNotificationsRef = useRef(new Map<string, QueuedDeliveryReadyNotification[]>());
+  const pollingTaskIdsRef = useRef(new Set<string>());
+  const pollingTaskFailureCountRef = useRef(new Map<string, number>());
+  const terminalTaskBubbleKeysRef = useRef(new Set<string>());
   // Only shell-ball submissions that are still waiting for their formal task id
   // are allowed to buffer approval notifications. This keeps unrelated desktop
   // approvals from lingering in shell-ball memory forever.
@@ -1906,6 +1915,108 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       });
     });
   }, [appendDeliveryReadyBubble]);
+
+  useEffect(() => {
+    let disposed = false;
+    const pollingTaskIds = pollingTaskIdsRef.current;
+    const pollingTaskFailureCount = pollingTaskFailureCountRef.current;
+
+    const pollShellBallTasks = () => {
+      for (const taskId of shellBallTaskIdsRef.current) {
+        if (pollingTaskIds.has(taskId)) {
+          continue;
+        }
+
+        pollingTaskIds.add(taskId);
+        void getTaskDetail({
+          request_meta: createShellBallRequestMeta(),
+          task_id: taskId,
+        })
+          .then((detail) => {
+            if (disposed) {
+              return;
+            }
+
+            syncShellBallVisualStateFromTaskStatus(detail.task.status);
+
+            if (detail.approval_request) {
+              appendApprovalPendingBubble({
+                approvalRequest: detail.approval_request,
+                taskId: detail.task.task_id,
+              });
+            }
+
+            pollingTaskFailureCount.delete(detail.task.task_id);
+
+            if (detail.delivery_result) {
+              appendDeliveryReadyBubble({
+                deliveryResult: detail.delivery_result,
+                taskId: detail.task.task_id,
+              });
+            }
+
+            if (isTerminalShellBallTaskStatus(detail.task.status)) {
+              if (detail.delivery_result == null) {
+                const bubbleKey = `${detail.task.task_id}:${detail.task.status}`;
+                if (!terminalTaskBubbleKeysRef.current.has(bubbleKey)) {
+                  terminalTaskBubbleKeysRef.current.add(bubbleKey);
+                  const turnIndex = getTaskBubbleTurnIndex(detail.task.task_id) ?? allocateBubbleTurnIndex();
+                  bindTaskToBubbleTurn(detail.task.task_id, turnIndex);
+                  setBubbleItems((currentItems) =>
+                    sortShellBallBubbleItemsByTimestamp([
+                      ...currentItems,
+                      createShellBallTextBubbleItem({
+                        role: "agent",
+                        text: getShellBallTaskTerminalStatusText({
+                          status: detail.task.status,
+                          failureSummary: detail.runtime_summary.latest_failure_summary,
+                        }),
+                        bubbleType: "status",
+                        createdAt: new Date().toISOString(),
+                        taskId: detail.task.task_id,
+                        turnIndex,
+                        turnPhase: 2,
+                      }),
+                    ]),
+                  );
+                  revealBubbleRegionRef.current();
+                }
+              }
+
+              shellBallTaskIdsRef.current.delete(detail.task.task_id);
+              pollingTaskFailureCount.delete(detail.task.task_id);
+            }
+          })
+          .catch((error) => {
+            if (!disposed) {
+              console.warn("shell-ball task polling failed", error);
+
+              const { nextCount: nextFailureCount, shouldStopPolling } = resolveShellBallTaskPollingFailure(
+                pollingTaskFailureCount.get(taskId) ?? 0,
+              );
+              pollingTaskFailureCount.set(taskId, nextFailureCount);
+              if (shouldStopPolling) {
+                shellBallTaskIdsRef.current.delete(taskId);
+                pollingTaskFailureCount.delete(taskId);
+              }
+            }
+          })
+          .finally(() => {
+            pollingTaskIds.delete(taskId);
+          });
+      }
+    };
+
+    const intervalId = window.setInterval(pollShellBallTasks, SHELL_BALL_TASK_POLL_INTERVAL_MS);
+    pollShellBallTasks();
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+      pollingTaskIds.clear();
+      pollingTaskFailureCount.clear();
+    };
+  }, [allocateBubbleTurnIndex, appendApprovalPendingBubble, appendDeliveryReadyBubble, bindTaskToBubbleTurn, getTaskBubbleTurnIndex]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
