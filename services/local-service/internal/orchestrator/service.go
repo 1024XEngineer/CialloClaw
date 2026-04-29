@@ -304,7 +304,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
-		ConfirmRequired: confirmRequired,
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: confirmRequired,
 	}); err != nil {
 		return nil, err
 	} else if handled {
@@ -420,7 +421,8 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	forceConfirmRequired := boolValue(options, "confirm_required", false)
 	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
 	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent, taskContinuationOptions{
-		ConfirmRequired: confirmRequired,
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: forceConfirmRequired,
 	}); err != nil {
 		return nil, err
 	} else if handled {

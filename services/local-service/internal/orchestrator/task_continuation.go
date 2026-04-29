@@ -28,7 +28,13 @@ type taskContinuationContext struct {
 }
 
 type taskContinuationOptions struct {
+	// ConfirmRequired is the effective pre-execution gate after default task-start
+	// policy has been applied.
 	ConfirmRequired bool
+	// ForceConfirmRequired records the caller's explicit option; inferred
+	// confirmation is not enough to prove implicit plain-text ownership or block
+	// already-confirmed pending evidence from resuming.
+	ForceConfirmRequired bool
 }
 
 func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
@@ -305,7 +311,7 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 		}
 		// Confirmation gates execution, not ownership of a plain text follow-up
 		// for a task that is already waiting on the user.
-		if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+		if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName, options); ok {
 			return decision, true
 		}
 		return taskContinuationDecision{
@@ -313,7 +319,7 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 			Reason:   "confirmation-required input lacks pending-task continuation evidence",
 		}, true
 	}
-	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName, options); ok {
 		return decision, true
 	}
 
@@ -334,7 +340,7 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 // follow-up in the active session while requiring structured objects to prove
 // task-specific lineage or context anchors before they can attach to the
 // pending task.
-func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext, explicitIntentName string) (taskContinuationDecision, bool) {
+func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext, explicitIntentName string, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	if candidate.Status != "waiting_input" && candidate.Status != "confirming_intent" {
 		return taskContinuationDecision{}, false
 	}
@@ -351,28 +357,48 @@ func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence ta
 			Reason:   "structured follow-up evidence belongs to the pending task",
 		}, true
 	}
-	if plainTextCanUseActivePendingSession(continuationContext, explicitIntentName) {
-		return taskContinuationDecision{
-			Decision: "continue",
-			TaskID:   candidate.TaskID,
-			Reason:   "active session task is already waiting for plain-text follow-up input",
-		}, true
-	}
-	if evidence.HasStrongAnchor || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor && explicitIntentName == "") {
+	if evidence.HasStrongAnchor {
 		return taskContinuationDecision{
 			Decision: "continue",
 			TaskID:   candidate.TaskID,
 			Reason:   "unfinished task is explicitly waiting for follow-up input",
 		}, true
 	}
+	if plainTextCanUseActivePendingSession(continuationContext, explicitIntentName, options) {
+		return taskContinuationDecision{
+			Decision: "continue",
+			TaskID:   candidate.TaskID,
+			Reason:   "active session task is already waiting for plain-text follow-up input",
+		}, true
+	}
+	if !evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor && explicitIntentName == "" && plainTextCanUseAnchorlessPendingSession(continuationContext, options) {
+		return taskContinuationDecision{
+			Decision: "continue",
+			TaskID:   candidate.TaskID,
+			Reason:   "unfinished task is explicitly waiting for follow-up input",
+		}, true
+	}
+	if continuationContext.SessionMode == "implicit_active" && !options.ForceConfirmRequired && explicitIntentName == "" {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "implicit pending plain-text input lacks explicit session, confirmation gate, or shared anchors",
+		}, true
+	}
 	return taskContinuationDecision{}, false
 }
 
-func plainTextCanUseActivePendingSession(continuationContext taskContinuationContext, explicitIntentName string) bool {
+func plainTextCanUseActivePendingSession(continuationContext taskContinuationContext, explicitIntentName string, options taskContinuationOptions) bool {
 	if explicitIntentName != "" || len(continuationContext.Candidates) != 1 {
 		return false
 	}
-	return continuationContext.SessionMode == "explicit_active" || continuationContext.SessionMode == "implicit_active"
+	if continuationContext.SessionMode == "explicit_active" {
+		return true
+	}
+	return continuationContext.SessionMode == "implicit_active" && options.ForceConfirmRequired
+}
+
+func plainTextCanUseAnchorlessPendingSession(continuationContext taskContinuationContext, options taskContinuationOptions) bool {
+	return continuationContext.SessionMode == "explicit_active" || options.ForceConfirmRequired
 }
 
 // uniqueTaskSpecificContinuationDecision preserves structured follow-up routing
@@ -419,7 +445,7 @@ func taskSpecificContinuationDecision(candidate runengine.TaskRecord, evidence t
 		if evidence.StructuredSupplement {
 			return confirmationRequiredStructuredContinuationDecision(candidate, evidence)
 		}
-		if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+		if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName, options); ok {
 			return decision, true
 		}
 		return taskContinuationDecision{
@@ -427,7 +453,7 @@ func taskSpecificContinuationDecision(candidate runengine.TaskRecord, evidence t
 			Reason:   "confirmation-required input lacks pending-task continuation evidence",
 		}, true
 	}
-	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName, options); ok {
 		return decision, ok
 	}
 	if candidate.Status == "processing" && (evidence.HasLineageMatch || (evidence.HasStrongAnchor && evidence.StructuredSupplement)) {
@@ -688,7 +714,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 		}, nil
 	}
 
-	confirmRequired := pendingContinuationRequiresConfirm(continuationSnapshot, options)
+	confirmRequired := pendingContinuationRequiresConfirm(task, continuationSnapshot, options)
 	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, confirmRequired)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
@@ -729,13 +755,21 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}, nil
 }
 
-func pendingContinuationRequiresConfirm(snapshot contextsvc.TaskContextSnapshot, options taskContinuationOptions) bool {
-	if options.ConfirmRequired {
+func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, options taskContinuationOptions) bool {
+	if options.ForceConfirmRequired {
 		return true
 	}
-	// Structured supplements can prove ownership of a pending task, but evidence
-	// attachment is still separate from permission to execute that pending task.
-	return isStructuredSupplementInput(snapshot)
+	if !isStructuredSupplementInput(snapshot) {
+		return false
+	}
+	// Structured evidence may resume a waiting task only after intent ownership
+	// is already known; otherwise attaching evidence is still separate from
+	// permission to execute a newly inferred task.
+	return task.Status == "confirming_intent" || !taskHasConfirmedIntent(task)
+}
+
+func taskHasConfirmedIntent(task runengine.TaskRecord) bool {
+	return strings.TrimSpace(stringValue(task.Intent, "name", "")) != ""
 }
 
 func (s *Service) loadTaskForContinuation(taskID string) (runengine.TaskRecord, bool) {

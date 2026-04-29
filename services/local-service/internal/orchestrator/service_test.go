@@ -12800,6 +12800,75 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *te
 	}
 }
 
+func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitConfirmation(t *testing.T) {
+	var activeTaskID string
+	var classifierCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_continuation_classifier" {
+				classifierCalled = true
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_implicit_plain_text_should_not_continue",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"model must not choose unanchored implicit pending text"}`, activeTaskID),
+					Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+					LatencyMS:  25,
+				}, nil
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_implicit_plain_text_new_task",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Translated email ready.",
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_plain_text_implicit_waiting",
+		Title:       "Waiting for build clarification",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	activeTaskID = activeTask.TaskID
+
+	result, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this email.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start implicit plain text new task failed: %v", err)
+	}
+	if classifierCalled {
+		t.Fatal("expected implicit plain text without explicit confirmation or anchors to bypass model continuation")
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected unrelated implicit plain text to open a new task, got %+v", task)
+	}
+	if task["session_id"] == activeTask.SessionID {
+		t.Fatalf("expected unrelated implicit plain text to use a fresh session, got %+v", task)
+	}
+}
+
 func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *testing.T) {
 	runtimeUpdatedAt := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
 	runtimeTask := runengine.TaskRecord{
@@ -12985,6 +13054,64 @@ func TestServiceStartTaskStructuredSupplementContinuesPendingTaskWithoutAutoExec
 	}
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
 		t.Fatalf("expected structured supplement to retain file evidence, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceStartTaskStructuredSupplementResumesWaitingTaskWithConfirmedIntent(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Log analysis ready.")
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_structured_waiting_confirmed_intent",
+		Title:       "Analyze the build failure after the log is attached",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:        "Analyze the build failure after the log is attached.",
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "Chrome",
+				"title":    "Build Dashboard",
+				"url":      "https://example.com/build",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume structured supplement failed: %v", err)
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected structured evidence to resume waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected structured evidence to resume execution, got %+v", task)
+	}
+	if startResult["delivery_result"] == nil {
+		t.Fatalf("expected resumed structured evidence to return delivery_result, got %+v", startResult)
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected resumed structured task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected resumed task to retain file evidence, got %+v", record.Snapshot.Files)
 	}
 }
 
