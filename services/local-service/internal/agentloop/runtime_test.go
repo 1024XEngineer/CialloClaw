@@ -11,6 +11,29 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
+type recordingHook struct {
+	afterRounds []PersistedRound
+	afterTools  []tools.ToolCallRecord
+}
+
+func (h *recordingHook) BeforeRound(_ context.Context, _ PersistedRound, plannerInput string) (string, error) {
+	return plannerInput, nil
+}
+
+func (h *recordingHook) AfterRound(_ context.Context, round PersistedRound) error {
+	h.afterRounds = append(h.afterRounds, round)
+	return nil
+}
+
+func (h *recordingHook) BeforeTool(_ context.Context, _ PersistedRound, call model.ToolInvocation) (model.ToolInvocation, error) {
+	return call, nil
+}
+
+func (h *recordingHook) AfterTool(_ context.Context, _ PersistedRound, record tools.ToolCallRecord, _ string) error {
+	h.afterTools = append(h.afterTools, record)
+	return nil
+}
+
 func TestRunMergesSteeringMessagesIntoLaterPlannerRounds(t *testing.T) {
 	runtime := NewRuntime()
 	plannerInputs := []string{}
@@ -189,6 +212,80 @@ func TestBuildPlannerInputOmitsToolSectionWithoutTools(t *testing.T) {
 	}
 }
 
+func TestAppendCapabilityReminderInputPreservesLanguageContract(t *testing.T) {
+	reminderInput := appendCapabilityReminderInput("Please answer in English.", []model.ToolDefinition{{Name: "read_file"}})
+
+	if !strings.Contains(reminderInput, "按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。") {
+		t.Fatalf("expected reminder input to preserve the user language contract, got %q", reminderInput)
+	}
+	if strings.Contains(reminderInput, "简洁中文答复") {
+		t.Fatalf("expected reminder input to avoid forcing Chinese replies, got %q", reminderInput)
+	}
+}
+
+func TestShouldRetryForCapabilityReminderRequiresExplicitUnquotedDenial(t *testing.T) {
+	fileToolDefinitions := []model.ToolDefinition{{Name: "read_file"}}
+	pageToolDefinitions := []model.ToolDefinition{{Name: "page_read"}}
+	customFileToolDefinitions := []model.ToolDefinition{{Name: "workspace_reader", Description: "Read files from the workspace."}}
+	customPageToolDefinitions := []model.ToolDefinition{{Name: "browser_fetch", Description: "Read web pages by URL."}}
+	tests := []struct {
+		name      string
+		output    string
+		tools     []model.ToolDefinition
+		wantRetry bool
+	}{
+		{name: "explicit_english_denial", output: "I cannot access workspace files in this environment.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "apology_prefix", output: "Sorry, I can't browse websites from here.", tools: pageToolDefinitions, wantRetry: true},
+		{name: "apology_but_prefix", output: "Sorry, but I can't browse websites from here.", tools: pageToolDefinitions, wantRetry: true},
+		{name: "context_prefixed_english_denial", output: "Unfortunately, in this environment I cannot access workspace files.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "role_prefixed_english_denial", output: "As an AI, I can't access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_prefixed_english_denial", output: "As an AI assistant, I can't access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_label_english_denial", output: "Assistant: I can't access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_newline_english_denial", output: "As an AI assistant\nI can't access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_dash_english_denial", output: "Assistant - I can't access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_period_english_denial", output: "As an AI assistant. I can't access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "currently_prefixed_english_denial", output: "I cannot currently access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "currently_access_denial", output: "I do not currently have access to workspace files.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "direct_access_denial", output: "I don't have direct access to workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "directly_prefixed_english_denial", output: "I cannot directly access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "softened_prefix", output: "I still cannot access workspace files in this environment.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "bare_english_denial", output: "Cannot access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "bare_english_unable", output: "Unable to access workspace files from here.", tools: fileToolDefinitions, wantRetry: true},
+		{name: "bare_chinese_denial", output: "无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "role_prefixed_chinese_denial", output: "作为 AI，我无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_prefixed_chinese_denial", output: "作为 AI 助手，我无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_label_chinese_denial", output: "助手：我无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_newline_chinese_denial", output: "作为 AI 助手\n我无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_dash_chinese_denial", output: "助手 - 我无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "assistant_period_chinese_denial", output: "助手。 我无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "softened_chinese_denial", output: "我现在无法访问当前工作区文件。", tools: fileToolDefinitions, wantRetry: true},
+		{name: "denial_with_answer", output: "I cannot access workspace files directly, but based on the text you provided, the error means the file path is missing.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "denial_with_workaround", output: "I cannot access the file directly; please paste it here and I can help analyze it.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "denial_with_question_workaround", output: "I can't access the file directly. Can you paste it here so I can help analyze it?", tools: fileToolDefinitions, wantRetry: false},
+		{name: "denial_with_check_if", output: "I can't access the repo directly. Check whether foo is nil before use.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "denial_with_likely_fix", output: "I can't access the repo directly, but the likely fix is to nil-check the pointer before use.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "denial_with_root_cause", output: "I can't access the repo directly. The root cause is likely a missing nil check before use.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "denial_with_so_heres", output: "I can't access the repo directly, so here's the likely fix: nil-check the pointer before use.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "non_capability_chinese_limit_with_answer", output: "我不能查看图片，但可以帮你分析你贴出来的内容。", tools: fileToolDefinitions, wantRetry: false},
+		{name: "quoted_error_text", output: "\"I cannot access workspace files in this environment\" usually means the runtime did not expose file tools.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "analysis_prefix", output: "The error \"I cannot access workspace files in this environment\" usually means the runtime did not expose file tools.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "page_denial_without_page_tools", output: "I can't browse websites from here.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "page_denial_with_custom_page_tools", output: "I can't browse websites from here.", tools: customPageToolDefinitions, wantRetry: true},
+		{name: "file_denial_with_custom_file_tools", output: "I cannot access workspace files in this environment.", tools: customFileToolDefinitions, wantRetry: true},
+		{name: "generic_denial_without_capability_match", output: "I can't do that here.", tools: fileToolDefinitions, wantRetry: false},
+		{name: "no_tools", output: "I cannot access workspace files in this environment.", tools: nil, wantRetry: false},
+		{name: "empty_output", output: "   ", tools: fileToolDefinitions, wantRetry: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := shouldRetryForCapabilityReminder(test.output, test.tools); got != test.wantRetry {
+				t.Fatalf("shouldRetryForCapabilityReminder(%q) = %v, want %v", test.output, got, test.wantRetry)
+			}
+		})
+	}
+}
+
 func TestRunDoesNotRetryOrdinaryDirectAnswers(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
@@ -234,6 +331,1023 @@ func TestRunDoesNotRetryOrdinaryDirectAnswers(t *testing.T) {
 	}
 	if countRetryReason(result.Events, "capability_reminder") != 0 {
 		t.Fatalf("expected no capability reminder retry for direct answer, got %+v", result.Events)
+	}
+}
+
+func TestRunDirectAnswerCallsHookAfterRound(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	hook := &recordingHook{}
+	request.Hook = hook
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID:  "req_direct_answer_hook",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Direct answer with hook.",
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_direct_answer_hook",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_direct_answer_hook",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "Direct answer with hook." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if len(hook.afterRounds) != 1 {
+		t.Fatalf("expected hook.AfterRound to observe the final direct-answer round, got %+v", hook.afterRounds)
+	}
+	if hook.afterRounds[0].StopReason != StopReasonCompleted {
+		t.Fatalf("expected hook.AfterRound to receive completed stop reason, got %+v", hook.afterRounds[0])
+	}
+}
+
+func TestRunPlannerFailureCallsHookAfterRound(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	hook := &recordingHook{}
+	request.Hook = hook
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unused", tools.ToolCallRecord{
+			ToolCallID: "tool_call_planner_failure_hook",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_planner_failure_hook",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{}, model.ErrOpenAIRequestTimeout
+	}
+
+	_, handled, err := runtime.Run(context.Background(), request)
+	if err == nil {
+		t.Fatal("expected planner error")
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if len(hook.afterRounds) != 1 {
+		t.Fatalf("expected hook.AfterRound on planner failure, got %+v", hook.afterRounds)
+	}
+	if hook.afterRounds[0].StopReason != StopReasonPlannerError {
+		t.Fatalf("expected planner_error stop reason in hook, got %+v", hook.afterRounds[0])
+	}
+}
+
+func TestRunDoesNotRetryCapabilityReminderWithoutRemainingTurns(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 1
+	plannerInputs := []string{}
+	executeCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		return model.ToolCallResult{
+			RequestID:  "req_capability_last_turn",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "I cannot access workspace files in this environment.",
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		executeCalls++
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_capability_last_turn",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_last_turn",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "I cannot access workspace files in this environment." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason on final denial turn, got %s", result.StopReason)
+	}
+	if executeCalls != 0 {
+		t.Fatalf("expected no tool execution when reminder retry is unavailable, got %d", executeCalls)
+	}
+	if len(plannerInputs) != 1 {
+		t.Fatalf("expected a single planner round without remaining turns, got %+v", plannerInputs)
+	}
+	if countRetryReason(result.Events, "capability_reminder") != 0 {
+		t.Fatalf("expected no capability reminder retry without remaining turns, got %+v", result.Events)
+	}
+	if len(result.Rounds) != 1 || result.Rounds[0].StopReason != StopReasonCompleted {
+		t.Fatalf("expected the denial round to be persisted as completed, got %+v", result.Rounds)
+	}
+}
+
+func TestRunAllowsDirectAnswersWhenAllToolsAreDisallowed(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.AllowedTool = func(string) bool { return false }
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_disallowed_tools_direct_answer",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_disallowed_tools_direct_answer",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+	plannerInputs := []string{}
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		if len(req.Tools) != 0 {
+			t.Fatalf("expected no planner-visible tools when all tools are disallowed, got %+v", req.Tools)
+		}
+		return model.ToolCallResult{
+			RequestID:  "req_disallowed_tools_direct_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Direct answer without tools.",
+		}, nil
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if len(plannerInputs) != 1 {
+		t.Fatalf("expected one planner round when all tools are disallowed, got %+v", plannerInputs)
+	}
+	if strings.Contains(plannerInputs[0], "当前可用能力：") {
+		t.Fatalf("expected planner input to omit unavailable capabilities, got %q", plannerInputs[0])
+	}
+	if result.OutputText != "Direct answer without tools." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason for direct answer without tools, got %s", result.StopReason)
+	}
+	if countRetryReason(result.Events, "capability_reminder") != 0 {
+		t.Fatalf("expected no capability reminder retry without any allowed tools, got %+v", result.Events)
+	}
+}
+
+func TestRunAllowsDirectAnswersWithoutPlannerTools(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ToolDefinitions = nil
+	request.ExecuteTool = nil
+	plannerInputs := []string{}
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		if len(req.Tools) != 0 {
+			t.Fatalf("expected planner request without tools, got %+v", req.Tools)
+		}
+		return model.ToolCallResult{
+			RequestID:  "req_no_tools_direct_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Direct answer with no planner tools.",
+		}, nil
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if len(plannerInputs) != 1 {
+		t.Fatalf("expected one planner round without tools, got %+v", plannerInputs)
+	}
+	if strings.Contains(plannerInputs[0], "当前可用能力：") {
+		t.Fatalf("expected planner input without tools to omit capability section, got %q", plannerInputs[0])
+	}
+	if result.OutputText != "Direct answer with no planner tools." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason for no-tool direct answer, got %s", result.StopReason)
+	}
+}
+
+func TestRunAllowsDirectAnswersWithoutAuditBuilder(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.BuildAuditRecord = nil
+	request.ToolDefinitions = nil
+	request.ExecuteTool = nil
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID:  "req_no_audit_builder",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Direct answer without audit builder.",
+		}, nil
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "Direct answer without audit builder." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason without audit builder, got %s", result.StopReason)
+	}
+}
+
+func TestRunAllowsDirectAnswersWhenExecutorIsMissing(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ExecuteTool = nil
+	plannerInputs := []string{}
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		if len(req.Tools) != 0 {
+			t.Fatalf("expected planner-visible tools to be suppressed when executor is missing, got %+v", req.Tools)
+		}
+		return model.ToolCallResult{
+			RequestID:  "req_missing_executor_direct_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Direct answer without executor.",
+		}, nil
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if len(plannerInputs) != 1 {
+		t.Fatalf("expected one planner round without executor, got %+v", plannerInputs)
+	}
+	if strings.Contains(plannerInputs[0], "当前可用能力：") {
+		t.Fatalf("expected planner input to omit tools when executor is missing, got %q", plannerInputs[0])
+	}
+	if result.OutputText != "Direct answer without executor." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason without executor, got %s", result.StopReason)
+	}
+}
+
+func TestRunStopsWithNoSupportedToolsWhenPlannerCallsToolWithoutExecutor(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ExecuteTool = nil
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		if len(req.Tools) != 0 {
+			t.Fatalf("expected planner-visible tools to be suppressed when executor is missing, got %+v", req.Tools)
+		}
+		return model.ToolCallResult{
+			RequestID: "req_missing_executor_tool_call",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+		}, nil
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when planner calls tools without executor, got %+v", result)
+	}
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected no_supported_tools stop reason, got %s", result.StopReason)
+	}
+	if len(result.Rounds) != 1 || result.Rounds[0].StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected persisted no_supported_tools round, got %+v", result.Rounds)
+	}
+}
+
+func TestRunReturnsPlannerAnswerWhenExecutorMissingAndPlannerAlsoAnswers(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ExecuteTool = nil
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		if len(req.Tools) != 0 {
+			t.Fatalf("expected planner-visible tools to be suppressed when executor is missing, got %+v", req.Tools)
+		}
+		return model.ToolCallResult{
+			RequestID:  "req_missing_executor_mixed_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "You should nil-check the pointer before use.",
+			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+		}, nil
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "You should nil-check the pointer before use." {
+		t.Fatalf("expected planner direct answer to win when executor is missing, got %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason when planner already answered, got %s", result.StopReason)
+	}
+}
+
+func TestRunStopsWithNoSupportedToolsOnLastDisallowedToolRound(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 1
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
+	request.AllowedTool = func(name string) bool { return name == "read_file" }
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID: "req_last_turn_disallowed_tool",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_last_turn_disallowed_tool",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_last_turn_disallowed_tool",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected no_supported_tools stop reason on final disallowed-tool round, got %s", result.StopReason)
+	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output on final disallowed-tool round, got %+v", result)
+	}
+}
+
+func TestRunReturnsPlannerAnswerWhenAllChosenToolsAreDisallowed(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
+	request.AllowedTool = func(name string) bool { return name == "read_file" }
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID:  "req_disallowed_tools_with_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Here is what to change: nil-check the pointer before use.",
+			ToolCalls:  []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_disallowed_tools_with_answer",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_disallowed_tools_with_answer",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "Here is what to change: nil-check the pointer before use." {
+		t.Fatalf("expected planner answer to be preserved when all chosen tools are disallowed, got %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason when planner already answered, got %s", result.StopReason)
+	}
+}
+
+func TestRunPreservesPlannerAnswerAcrossToolRoundFallback(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 1
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID:  "req_tool_round_with_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Here is what to change: nil-check the pointer before use.",
+			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_round_with_answer",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_tool_round_with_answer",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason when last tool round already includes a usable answer, got %s", result.StopReason)
+	}
+	if result.OutputText != "Here is what to change: nil-check the pointer before use." {
+		t.Fatalf("expected best-effort planner answer to survive fallback, got %+v", result)
+	}
+}
+
+func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		switch plannerCalls {
+		case 1:
+			return model.ToolCallResult{
+				RequestID:  "req_tool_round_answer_then_empty_1",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Here is the likely fix: nil-check the pointer before use.",
+				ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+			}, nil
+		default:
+			return model.ToolCallResult{
+				RequestID:  "req_tool_round_answer_then_empty_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "",
+			}, nil
+		}
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_round_answer_then_empty",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_tool_round_answer_then_empty",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "Here is the likely fix: nil-check the pointer before use." {
+		t.Fatalf("expected prior planner answer to survive empty final round, got %+v", result)
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected completed stop reason when prior planner answer is preserved, got %s", result.StopReason)
+	}
+}
+
+func TestRunDoesNotPromoteMixedDenialTextToFallbackOutput(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 1
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID:  "req_mixed_denial_tool_round",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "I cannot access workspace files from here.",
+			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_mixed_denial_tool_round",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_mixed_denial_tool_round",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonMaxIterations {
+		t.Fatalf("expected max_iterations_reached stop reason after single mixed tool round, got %s", result.StopReason)
+	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected plain denial text not to replace fallback output, got %+v", result)
+	}
+}
+
+func TestRunRetriesCapabilityReminderForDenialPlusDisallowedToolPlan(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
+	request.AllowedTool = func(name string) bool { return name == "read_file" }
+	plannerInputs := []string{}
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		switch len(plannerInputs) {
+		case 1:
+			return model.ToolCallResult{
+				RequestID:  "req_denial_disallowed_tool_1",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I cannot access workspace files from here.",
+				ToolCalls:  []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			}, nil
+		default:
+			return model.ToolCallResult{
+				RequestID:  "req_denial_disallowed_tool_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Recovered after reminder.",
+			}, nil
+		}
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_denial_disallowed_tool",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_denial_disallowed_tool",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "Recovered after reminder." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if len(plannerInputs) != 2 {
+		t.Fatalf("expected denial+disallowed tool plan to retry once, got %+v", plannerInputs)
+	}
+	if countRetryReason(result.Events, "capability_reminder") != 1 {
+		t.Fatalf("expected exactly one capability reminder retry event, got %+v", result.Events)
+	}
+}
+
+func TestRunTimedOutToolCallsHooksBeforeReturning(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	hook := &recordingHook{}
+	request.Hook = hook
+	request.MaxTurns = 1
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID: "req_tool_timeout_hook",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/retry.txt"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "tool timeout", tools.ToolCallRecord{
+			ToolCallID: "tool_call_timeout_hook",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_timeout_hook",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusTimeout,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonToolRetryExhausted {
+		t.Fatalf("expected tool_retry_exhausted stop reason, got %s", result.StopReason)
+	}
+	if len(hook.afterTools) != 1 {
+		t.Fatalf("expected hook.AfterTool on timeout path, got %+v", hook.afterTools)
+	}
+	if len(hook.afterRounds) != 1 || hook.afterRounds[0].StopReason != StopReasonToolRetryExhausted {
+		t.Fatalf("expected hook.AfterRound on timeout path, got %+v", hook.afterRounds)
+	}
+}
+
+func TestRunRepeatedToolExitCallsHookAfterRound(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	hook := &recordingHook{}
+	request.Hook = hook
+	request.RepeatedToolBudget = 1
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID: "req_repeated_tool_hook",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed the same directory again.", tools.ToolCallRecord{
+			ToolCallID: "tool_call_repeated_tool_hook",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_repeated_tool_hook",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonRepeatedToolChoice {
+		t.Fatalf("expected dead_loop_detected stop reason, got %s", result.StopReason)
+	}
+	if len(hook.afterRounds) != 2 {
+		t.Fatalf("expected hook.AfterRound for both persisted rounds, got %+v", hook.afterRounds)
+	}
+	if hook.afterRounds[1].StopReason != StopReasonRepeatedToolChoice {
+		t.Fatalf("expected final hook round to capture repeated-tool stop reason, got %+v", hook.afterRounds[1])
+	}
+}
+
+func TestRunDoesNotTreatDifferentMultiToolRoundsAsRepeatedSingleToolLoops(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.RepeatedToolBudget = 1
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		switch plannerCalls {
+		case 1:
+			return model.ToolCallResult{
+				RequestID: "req_multi_round_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{
+					{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}},
+					{Name: "list_dir", Arguments: map[string]any{"path": "notes"}},
+				},
+			}, nil
+		case 2:
+			return model.ToolCallResult{
+				RequestID: "req_multi_round_2",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{
+					{Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "notes"}},
+					{Name: "list_dir", Arguments: map[string]any{"path": "notes"}},
+				},
+			}, nil
+		default:
+			return model.ToolCallResult{
+				RequestID:  "req_multi_round_final",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Finished after distinct multi-tool rounds.",
+			}, nil
+		}
+	}
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}, {Name: "list_dir"}, {Name: "page_search"}}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_multi_round",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_multi_round",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected distinct multi-tool rounds to avoid repeated-tool stop reason, got %s", result.StopReason)
+	}
+	if result.OutputText != "Finished after distinct multi-tool rounds." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+}
+
+func TestRunDoesNotTreatSameToolWithDifferentArgumentsAsRepeatedLoop(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.RepeatedToolBudget = 1
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		switch plannerCalls {
+		case 1:
+			return model.ToolCallResult{
+				RequestID: "req_same_tool_args_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}},
+			}, nil
+		case 2:
+			return model.ToolCallResult{
+				RequestID: "req_same_tool_args_2",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/b.txt"}}},
+			}, nil
+		default:
+			return model.ToolCallResult{
+				RequestID:  "req_same_tool_args_final",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Finished after different file reads.",
+			}, nil
+		}
+	}
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_same_tool_args",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_same_tool_args",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonCompleted {
+		t.Fatalf("expected different file arguments to avoid repeated-tool stop reason, got %s", result.StopReason)
+	}
+}
+
+func TestRunStopsImmediatelyForDisallowedToolChoicesWithoutAnswer(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.RepeatedToolBudget = 1
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
+	request.AllowedTool = func(name string) bool { return name == "read_file" }
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		return model.ToolCallResult{
+			RequestID: "req_disallowed_tool_repeat",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_disallowed_tool_repeat",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_disallowed_tool_repeat",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected disallowed tool choices without answer to stop as no_supported_tools, got %s", result.StopReason)
+	}
+}
+
+func TestRunDetectsOscillatingToolLoops(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 4
+	request.RepeatedToolBudget = 1
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}, {Name: "list_dir"}}
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		signatures := [][]model.ToolInvocation{
+			{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}},
+			{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}},
+			{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+		}
+		return model.ToolCallResult{
+			RequestID: "req_oscillating_loop",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: signatures[plannerCalls-1],
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_oscillating_loop",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_oscillating_loop",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonRepeatedToolChoice {
+		t.Fatalf("expected oscillating A-B-A-B loop to trigger dead-loop detection, got %s", result.StopReason)
+	}
+}
+
+func TestRunDetectsOscillatingAllowedToolsDespiteDisallowedNoise(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 4
+	request.RepeatedToolBudget = 1
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}, {Name: "list_dir"}}
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		plans := [][]model.ToolInvocation{
+			{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}, {Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "a"}}},
+			{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}, {Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "b"}}},
+			{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}, {Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "c"}}},
+			{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}, {Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "d"}}},
+		}
+		return model.ToolCallResult{
+			RequestID: "req_oscillating_loop_with_noise",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: plans[plannerCalls-1],
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_oscillating_loop_with_noise",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_oscillating_loop_with_noise",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonRepeatedToolChoice {
+		t.Fatalf("expected disallowed noise to avoid masking oscillating allowed-tool loop, got %s", result.StopReason)
+	}
+}
+
+func TestRunDetectsReorderedEquivalentMultiToolLoops(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 4
+	request.RepeatedToolBudget = 1
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}, {Name: "list_dir"}}
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		plans := [][]model.ToolInvocation{
+			{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}, {Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}, {Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}},
+			{{Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}, {Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}, {Name: "read_file", Arguments: map[string]any{"path": "notes/a.txt"}}},
+		}
+		return model.ToolCallResult{
+			RequestID: "req_reordered_equivalent_loop",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: plans[plannerCalls-1],
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_reordered_equivalent_loop",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_reordered_equivalent_loop",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonRepeatedToolChoice {
+		t.Fatalf("expected reordered equivalent multi-tool rounds to trigger dead-loop detection, got %s", result.StopReason)
 	}
 }
 
@@ -311,6 +1425,12 @@ func TestRunRetriesWhenPlannerClaimsCapabilitiesAreUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(plannerInputs[1], "当前这轮已经开放下列工具能力。") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", plannerInputs[1])
+	}
+	if !strings.Contains(plannerInputs[1], "按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。") {
+		t.Fatalf("expected second planner input to preserve language contract, got %q", plannerInputs[1])
+	}
+	if strings.Contains(plannerInputs[1], "简洁中文答复") {
+		t.Fatalf("expected second planner input to avoid forcing Chinese replies, got %q", plannerInputs[1])
 	}
 	if countRetryReason(result.Events, "capability_reminder") != 1 {
 		t.Fatalf("expected exactly one capability reminder retry event, got %+v", result.Events)
