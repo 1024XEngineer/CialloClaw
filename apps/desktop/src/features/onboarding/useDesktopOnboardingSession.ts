@@ -36,6 +36,7 @@ export function useDesktopOnboardingSession() {
         }
 
         disposeWindowListener = unlisten;
+        setSession(loadDesktopOnboardingSession());
       });
 
     return () => {

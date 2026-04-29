@@ -1,21 +1,23 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=LXGW+WenKai+TC&family=Nunito:wght@400;500;600;700;800&display=swap");
+@import "./desktopTheme.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
-  --font-sans: "Space Grotesk", "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", Consolas, monospace;
-  --bg-0: #030712;
-  --bg-1: #09111f;
-  --bg-2: #0f172a;
-  --ink-0: #eff6ff;
-  --ink-1: #cbd5e1;
-  --line: rgba(148, 163, 184, 0.2);
-  --aqua: #22d3ee;
-  --orange: #fb923c;
+  color-scheme: light;
+  --font-sans: var(--cc-font-ui);
+  --font-display: var(--cc-font-display);
+  --font-mono: var(--cc-font-mono);
+  --bg-0: var(--cc-cream-2);
+  --bg-1: var(--cc-cream-1);
+  --bg-2: var(--cc-paper-soft);
+  --ink-0: var(--cc-ink);
+  --ink-1: var(--cc-ink-soft);
+  --line: var(--cc-line);
+  --aqua: var(--cc-sky);
+  --orange: var(--cc-honey);
 }
 
 * {
@@ -28,9 +30,7 @@ body {
   font-family: var(--font-sans);
   color: var(--ink-0);
   background:
-    radial-gradient(circle at top left, rgba(34, 211, 238, 0.16), transparent 32%),
-    radial-gradient(circle at top right, rgba(251, 146, 60, 0.18), transparent 28%),
-    linear-gradient(180deg, var(--bg-1), var(--bg-0));
+    var(--cc-page-bg);
 }
 
 #root {

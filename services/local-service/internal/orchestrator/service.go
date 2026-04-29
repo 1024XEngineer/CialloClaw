@@ -1874,12 +1874,16 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 
 // TaskInspectorConfigGet handles agent.task_inspector.config.get.
 func (s *Service) TaskInspectorConfigGet() (map[string]any, error) {
-	return s.runEngine.InspectorConfig(), nil
+	return inspectorConfigFromSettings(s.runEngine.Settings()), nil
 }
 
 // TaskInspectorConfigUpdate handles agent.task_inspector.config.update.
 func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]any, error) {
-	effective := s.runEngine.UpdateInspectorConfig(params)
+	settingsPatch := taskAutomationSettingsPatchFromInspectorConfig(params)
+	if _, _, _, _, err := s.runEngine.UpdateSettings(settingsPatch); err != nil {
+		return nil, err
+	}
+	effective := inspectorConfigFromSettings(s.runEngine.Settings())
 	return map[string]any{
 		"updated":          true,
 		"effective_config": effective,
@@ -1889,13 +1893,13 @@ func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]a
 // TaskInspectorRun handles agent.task_inspector.run and returns the inspection
 // summary plus suggestions.
 func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error) {
-	config := s.runEngine.InspectorConfig()
+	config := inspectorConfigFromSettings(s.runEngine.Settings())
 	targetSources := stringSliceValue(params["target_sources"])
 	notepadItems, _ := s.runEngine.NotepadItems("", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 
-	result := s.inspector.Run(taskinspector.RunInput{
+	result, err := s.inspector.Run(taskinspector.RunInput{
 		Reason:          stringValue(params, "reason", ""),
 		TargetSources:   targetSources,
 		Config:          config,
@@ -1903,6 +1907,9 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		FinishedTasks:   finishedTasks,
 		NotepadItems:    notepadItems,
 	})
+	if err != nil {
+		return nil, err
+	}
 	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
 			return nil, err
@@ -3898,16 +3905,28 @@ func mergeSettingsPreview(target map[string]any, patch map[string]any) {
 
 func previewNeedsRestart(currentSettings, patch map[string]any) bool {
 	generalPatch := cloneMap(mapValue(patch, "general"))
-	if len(generalPatch) == 0 {
-		return false
+	if len(generalPatch) > 0 {
+		nextLanguage, ok := generalPatch["language"]
+		if ok {
+			currentGeneral := cloneMap(mapValue(currentSettings, "general"))
+			currentLanguage, hasCurrentLanguage := currentGeneral["language"]
+			if !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage) {
+				return true
+			}
+		}
+		downloadPatch := cloneMap(mapValue(generalPatch, "download"))
+		if len(downloadPatch) > 0 {
+			nextWorkspacePath, ok := downloadPatch["workspace_path"]
+			if ok {
+				currentDownload := cloneMap(mapValue(mapValue(currentSettings, "general"), "download"))
+				currentWorkspacePath, hasCurrentWorkspacePath := currentDownload["workspace_path"]
+				if !hasCurrentWorkspacePath || !reflect.DeepEqual(currentWorkspacePath, nextWorkspacePath) {
+					return true
+				}
+			}
+		}
 	}
-	nextLanguage, ok := generalPatch["language"]
-	if !ok {
-		return false
-	}
-	currentGeneral := cloneMap(mapValue(currentSettings, "general"))
-	currentLanguage, hasCurrentLanguage := currentGeneral["language"]
-	return !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage)
+	return false
 }
 
 func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []string) string {
@@ -3918,6 +3937,71 @@ func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []strin
 		return "next_task_effective"
 	}
 	return "immediate"
+}
+
+func inspectorConfigFromSettings(settings map[string]any) map[string]any {
+	taskAutomation := cloneMap(mapValue(normalizeSettingsSnapshot(settings), "task_automation"))
+	if taskAutomation == nil {
+		taskAutomation = map[string]any{}
+	}
+	return map[string]any{
+		"task_sources":           stringSliceValue(taskAutomation["task_sources"]),
+		"inspection_interval":    cloneMap(mapValue(taskAutomation, "inspection_interval")),
+		"inspect_on_file_change": boolValue(taskAutomation, "inspect_on_file_change", true),
+		"inspect_on_startup":     boolValue(taskAutomation, "inspect_on_startup", true),
+		"remind_before_deadline": boolValue(taskAutomation, "remind_before_deadline", true),
+		"remind_when_stale":      boolValue(taskAutomation, "remind_when_stale", false),
+	}
+}
+
+func taskAutomationSettingsPatchFromInspectorConfig(params map[string]any) map[string]any {
+	patch := map[string]any{}
+	if rawSources, ok := params["task_sources"]; ok {
+		if sources, recognized := optionalStringSliceValue(rawSources); recognized {
+			patch["task_sources"] = sources
+		}
+	}
+	if interval := cloneMap(mapValue(params, "inspection_interval")); len(interval) > 0 {
+		patch["inspection_interval"] = interval
+	}
+	for _, key := range []string{"inspect_on_file_change", "inspect_on_startup", "remind_before_deadline", "remind_when_stale"} {
+		if value, ok := params[key].(bool); ok {
+			patch[key] = value
+		}
+	}
+	if len(patch) == 0 {
+		return map[string]any{}
+	}
+	return map[string]any{"task_automation": patch}
+}
+
+// optionalStringSliceValue preserves the difference between an omitted field and
+// an explicitly empty list so compatibility RPCs can clear task sources without
+// leaving stale workspace scan roots behind.
+func optionalStringSliceValue(rawValue any) ([]string, bool) {
+	switch values := rawValue.(type) {
+	case []string:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			result = append(result, value)
+		}
+		return result, true
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, rawItem := range values {
+			item, ok := rawItem.(string)
+			if !ok || strings.TrimSpace(item) == "" {
+				continue
+			}
+			result = append(result, item)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func strongholdStatusFromStorage(store *storage.Service) map[string]any {
