@@ -90,17 +90,16 @@ def compare_semver(version_a: str, version_b: str) -> int:
 
 
 def github_api_headers() -> dict[str, str]:
-    """Build authenticated GitHub REST headers for mutating release state."""
+    """Build GitHub REST headers for authenticated or anonymous requests."""
 
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN is required.")
-
-    return {
-        "Authorization": f"Bearer {token}",
+    headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def github_api_request(method: str, url: str, payload: Any | None = None) -> Any | None:
@@ -223,7 +222,7 @@ def run_command(command: list[str], cwd: Path = REPO_ROOT) -> subprocess.Complet
     )
 
 
-def get_latest_release_base_version() -> str:
+def get_latest_tag_base_version() -> str:
     """Return the highest stable SemVer tag version, or the highest SemVer tag as fallback."""
 
     tag_lines = run_command(["git", "tag", "--list", "v*"]).stdout.splitlines()
@@ -236,6 +235,57 @@ def get_latest_release_base_version() -> str:
     ]
     candidates = stable_versions or versions
     return max(candidates, key=functools.cmp_to_key(compare_semver))
+
+
+def list_published_releases() -> list[dict[str, Any]]:
+    """Fetch every published GitHub release so tip versioning follows formal releases first."""
+
+    github_api_url = os.environ.get("GITHUB_API_URL", "").strip()
+    github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not github_api_url or not github_repository:
+        raise RuntimeError("GITHUB_API_URL and GITHUB_REPOSITORY are required.")
+
+    releases: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        response = github_api_request(
+            "GET",
+            f"{github_api_url}/repos/{github_repository}/releases?per_page=100&page={page}",
+        )
+        if not response:
+            break
+
+        releases.extend(response)
+        if len(response) < 100:
+            break
+        page += 1
+
+    return releases
+
+
+def get_latest_published_release_base_version() -> str | None:
+    """Return the highest stable SemVer version among published non-prerelease releases."""
+
+    versions: list[str] = []
+    for release in list_published_releases():
+        if release.get("draft") or release.get("prerelease"):
+            continue
+
+        tag_name = str(release.get("tag_name", "")).strip()
+        if not tag_name.startswith("v"):
+            continue
+
+        version = tag_name[1:]
+        match = SEMVER_PATTERN.fullmatch(version)
+        if not match or match.group("prerelease") is not None:
+            continue
+
+        versions.append(version)
+
+    if not versions:
+        return None
+
+    return max(versions, key=functools.cmp_to_key(compare_semver))
 
 
 def resolve_metadata() -> None:
@@ -270,7 +320,11 @@ def resolve_metadata() -> None:
         return
 
     if github_ref == "refs/heads/main":
-        latest_release_version = get_latest_release_base_version()
+        latest_release_version = get_latest_published_release_base_version()
+        if latest_release_version is None:
+            # Bootstrap tip builds from repository tags only until the first formal release exists.
+            latest_release_version = get_latest_tag_base_version()
+
         latest_release_match = SEMVER_PATTERN.fullmatch(latest_release_version)
         if latest_release_match is None:
             raise RuntimeError(f"Invalid latest SemVer tag version: {latest_release_version}")
