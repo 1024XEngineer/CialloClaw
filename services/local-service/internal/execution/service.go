@@ -213,6 +213,16 @@ func NewService(
 	}
 }
 
+// WorkspaceRoot exposes the runtime workspace currently bound at bootstrap so
+// governance and desktop-facing summaries do not drift when settings updates are
+// pending a restart.
+func (s *Service) WorkspaceRoot() string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.workspace)
+}
+
 // ScreenCapabilitySnapshot exposes the owner-5 screen capability wiring state
 // without freezing any protocol or task-facing object shape.
 type ScreenCapabilitySnapshot struct {

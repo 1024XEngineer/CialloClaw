@@ -3647,7 +3647,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
 - `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
+- 打包版默认 `general.download.workspace_path` 会解析为用户本机的 `AppLocalData/CialloClaw/workspace`，历史 `workspace` 相对占位值会在 settings snapshot 读取时迁移到该绝对目录。
+- 打包版默认 `task_automation.task_sources` 会解析为 `${workspace_path}/todos`；settings snapshot 读取时仅会把历史默认占位值（`workspace/todos` 或旧的 `D:/workspace/todos`）迁移到该绝对目录，用户自定义的 `workspace/...` 多根来源会保持原样。
 - `general.download.workspace_path` 当前不会热重建 bootstrap 时已经绑定的 workspace runtime（例如文件系统、执行后端与 execution workspace）；更新该字段会写入正式 settings snapshot，并返回 `apply_mode = restart_required` 与 `need_restart = true`，用于显式提示“重启后端后生效”。
+- 桌面宿主侧 `desktop_open_local_path`、`desktop_reveal_local_path` 只允许使用当前 bootstrap 生效的 `workspace root` 或宿主明确白名单的 runtime 子目录（当前仅接受 `temp/...` 前缀，并解析到 runtime temp 目录）；source-note 路径解析允许使用当前 `workspace root` 或宿主 `runtime root`。这些路径解析都不再回退到编译时 repo root，也不会因为待重启的 `workspace_path` 草稿而漂移本地打开范围。
+- 仪表盘 `trust_summary.workspace_path` 与 `out_of_workspace` 判断展示的是当前运行时真实生效的 workspace 根目录，而不是待重启后才会生效的 settings 草稿值。
 
 ### agent.settings.update 入参说明
 

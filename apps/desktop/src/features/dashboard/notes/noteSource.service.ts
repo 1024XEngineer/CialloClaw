@@ -16,7 +16,7 @@ import {
 } from "@/platform/desktopSourceNotes";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
-import { loadSettings } from "@/services/settingsService";
+import { hydrateDesktopRuntimeDefaults, loadSettings } from "@/services/settingsService";
 import type {
   SourceNoteDocument,
   SourceNoteIndexEntry,
@@ -85,8 +85,9 @@ function loadCachedTaskSources() {
     .filter(Boolean);
 }
 
-function isAbsoluteWindowsPath(value: string) {
-  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+function isAbsoluteHostPath(value: string) {
+  const trimmed = value.trim();
+  return /^[a-zA-Z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed) || trimmed.startsWith("/");
 }
 
 function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSources: string[]) {
@@ -99,7 +100,7 @@ function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSo
   }
 
   const remoteRequiresWorkspaceRoot = remoteTaskSources.every((source) => /^workspace(?:[\\/]|$)/i.test(source.trim()));
-  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteWindowsPath(source));
+  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteHostPath(source));
 
   return remoteRequiresWorkspaceRoot && cachedUsesAbsolutePaths;
 }
@@ -115,6 +116,7 @@ export function areDesktopSourceNotesAvailable() {
  * Loads the current task-source configuration used by the note inspector.
  */
 export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGetResult> {
+  await hydrateDesktopRuntimeDefaults();
   try {
     const remoteConfig = await withTimeout(
       getTaskInspectorConfig({ request_meta: createRequestMeta("note_source_config") }),
@@ -123,8 +125,8 @@ export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGe
     const cachedTaskSources = loadCachedTaskSources();
 
     // The notes page should honor the persisted task-source list shown in the
-    // desktop settings snapshot when the backend still falls back to the
-    // workspace-relative default.
+    // desktop settings snapshot when the backend still replays a legacy
+    // workspace-relative source list from older snapshots.
     if (shouldPreferCachedTaskSources(remoteConfig.task_sources, cachedTaskSources)) {
       return {
         ...remoteConfig,
