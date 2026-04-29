@@ -12777,6 +12777,93 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 	}
 }
 
+func TestServiceStartTaskConfirmRequiredFileContinuesUniquePendingTaskAmongCandidates(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_multi_candidate",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"model should not decide anchored confirmation routing"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	targetTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_multi_waiting",
+		Title:       "Waiting for build dashboard evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	otherTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   targetTask.SessionID,
+		Title:       "Waiting for issue tracker evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Issue Tracker",
+			PageURL:     "https://example.com/issues",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Issue Tracker",
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": targetTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name":     "Chrome",
+				"title":        "Build Dashboard",
+				"url":          "https://example.com/build",
+				"window_title": "Browser - Build Dashboard",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("continue unique multi-candidate file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected unique anchored confirmation routing to avoid model continuation")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != targetTask.TaskID {
+		t.Fatalf("expected file evidence to continue target task %s, got %+v", targetTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected continued file evidence to stay behind confirmation, got %+v", task)
+	}
+	unchangedOther, ok := service.runEngine.GetTask(otherTask.TaskID)
+	if !ok {
+		t.Fatal("expected other candidate to remain in runtime")
+	}
+	if len(unchangedOther.Snapshot.Files) != 0 {
+		t.Fatalf("expected non-matching candidate not to receive file evidence, got %+v", unchangedOther.Snapshot.Files)
+	}
+}
+
 func TestServiceStartTaskConfirmRequiredFileStartsNewTaskWithoutPendingEvidence(t *testing.T) {
 	var activeTaskID string
 	modelCalled := false

@@ -147,6 +147,9 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext, options); ok {
 		return decision
 	}
+	if decision, ok := uniqueTaskSpecificContinuationDecision(snapshot, explicitIntent, continuationContext, options); ok {
+		return decision
+	}
 	if options.ConfirmRequired {
 		return taskContinuationDecision{Decision: "new_task", Reason: "confirmation gate requires a new task without structured pending-task evidence"}
 	}
@@ -348,6 +351,57 @@ func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence ta
 			Decision: "continue",
 			TaskID:   candidate.TaskID,
 			Reason:   "unfinished task is explicitly waiting for follow-up input",
+		}, true
+	}
+	return taskContinuationDecision{}, false
+}
+
+// uniqueTaskSpecificContinuationDecision preserves structured follow-up routing
+// when a multi-candidate session still has exactly one task-specific match.
+// Confirmation only gates execution after that ownership decision is made.
+func uniqueTaskSpecificContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
+	if len(continuationContext.Candidates) < 2 || !isStructuredSupplementInput(snapshot) {
+		return taskContinuationDecision{}, false
+	}
+	explicitIntentName := strings.TrimSpace(stringValue(explicitIntent, "name", ""))
+	matches := make([]taskContinuationDecision, 0, 1)
+	for _, candidate := range continuationContext.Candidates {
+		evidence := buildTaskContinuationEvidence(snapshot, snapshotFromTask(candidate))
+		if evidence.HasConflictingAnchor || !hasTaskSpecificContinuationEvidence(evidence) {
+			continue
+		}
+		if explicitIntentRequiresFreshTask(explicitIntentName, candidate, evidence, continuationContext) {
+			continue
+		}
+		if decision, ok := taskSpecificContinuationDecision(candidate, evidence, continuationContext, explicitIntentName, options); ok && decision.Decision == "continue" {
+			matches = append(matches, decision)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return taskContinuationDecision{}, false
+	case 1:
+		return matches[0], true
+	default:
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "structured input matches multiple candidate tasks",
+		}, true
+	}
+}
+
+func taskSpecificContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext, explicitIntentName string, options taskContinuationOptions) (taskContinuationDecision, bool) {
+	if options.ConfirmRequired {
+		return confirmationRequiredContinuationDecision(candidate, evidence)
+	}
+	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+		return decision, ok
+	}
+	if candidate.Status == "processing" && (evidence.HasLineageMatch || (evidence.HasStrongAnchor && evidence.StructuredSupplement)) {
+		return taskContinuationDecision{
+			Decision: "continue",
+			TaskID:   candidate.TaskID,
+			Reason:   "strong continuation anchors match the active processing task",
 		}, true
 	}
 	return taskContinuationDecision{}, false
