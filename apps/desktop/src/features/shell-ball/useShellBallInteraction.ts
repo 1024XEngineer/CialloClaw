@@ -207,7 +207,9 @@ export function createShellBallTaskStartParams(input: {
       preferred: "bubble",
     },
     options: {
-      confirm_required: normalizedText === "",
+      // File drops only carry a caller preference here. The backend owns the
+      // effective confirmation decision for bare files versus pending evidence.
+      confirm_required: false,
     },
   };
 }

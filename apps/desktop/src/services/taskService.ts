@@ -110,7 +110,9 @@ export async function startTaskFromFiles(files: string[], context: StartTaskCont
       fallback: "task_detail",
     },
     options: {
-      confirm_required: normalizedText === undefined,
+      // File drops do not force the confirmation gate; the backend decides
+      // whether this is a new bare-file task or evidence for a pending task.
+      confirm_required: false,
     },
   });
   rememberConversationSessionFromTask(result.task);

@@ -2305,7 +2305,7 @@ test("shell-ball file task params preserve attachment descriptions for agent.tas
   });
   assert.ok(fileParamsWithoutDescription);
   assert.deepEqual(fileParamsWithoutDescription.options, {
-    confirm_required: true,
+    confirm_required: false,
   });
   assert.equal(fileParamsWithoutDescription.input.text, undefined);
   assert.equal(createShellBallTaskStartParams({ text: "   ", files: [] }), null);
@@ -2333,6 +2333,12 @@ test("task-entry services keep rpc transport failures visible and forward file d
         recordMirrorConversationSuccess() {
           mirrorCalls.push("success");
         },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
       },
     },
     async (moduleExports) => {
@@ -2416,6 +2422,12 @@ test("task-entry services keep rpc transport failures visible and forward file d
           return Promise.resolve(taskResult);
         },
       },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
+      },
     },
     async (moduleExports) => {
       const service = moduleExports as {
@@ -2450,6 +2462,20 @@ test("task-entry services keep rpc transport failures visible and forward file d
         confirm_required: false,
       });
 
+      await service.startTaskFromFiles(["C:\\workspace\\logs.txt"]);
+      assert.deepEqual(startTaskCalls[1]?.options, {
+        confirm_required: false,
+      });
+      assert.deepEqual(startTaskCalls[1]?.input, {
+        type: "file",
+        files: ["C:\\workspace\\logs.txt"],
+        page_context: {
+          app_name: "desktop",
+          title: "Quick Intake",
+          url: "local://shell-ball",
+        },
+      });
+
       await service.startTaskFromSelectedText("  selected text  ", {
         pageContext: {
           app_name: "notepad",
@@ -2460,9 +2486,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
         source: "floating_ball",
       });
 
-      assert.equal(startTaskCalls[1]?.session_id, "sess_shell_ball_selection");
-      assert.equal(startTaskCalls[1]?.trigger, "text_selected_click");
-      assert.deepEqual(startTaskCalls[1]?.input, {
+      assert.equal(startTaskCalls[2]?.session_id, "sess_shell_ball_selection");
+      assert.equal(startTaskCalls[2]?.trigger, "text_selected_click");
+      assert.deepEqual(startTaskCalls[2]?.input, {
         type: "text_selection",
         text: "selected text",
         page_context: {
@@ -2476,7 +2502,7 @@ test("task-entry services keep rpc transport failures visible and forward file d
     },
   );
 
-  assert.equal(startTaskCalls.length, 2);
+  assert.equal(startTaskCalls.length, 3);
   assert.equal(bootstrapSubmitCalls.length, 1);
   assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
 
@@ -2499,6 +2525,12 @@ test("task-entry services keep rpc transport failures visible and forward file d
         submitTextInput() {
           return Promise.reject(transportError);
         },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
       },
     },
     async (moduleExports) => {
