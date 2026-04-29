@@ -1610,6 +1610,51 @@ mod named_pipe_routing_tests {
     }
 }
 
+#[cfg(test)]
+mod named_pipe_routing_tests {
+    use super::{requires_shared_named_pipe_request, should_use_isolated_named_pipe_payload};
+    use serde_json::json;
+
+    #[test]
+    fn isolated_payload_routing_keeps_floating_ball_bubble_submit_isolated() {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_submit",
+            "method": "agent.input.submit",
+            "params": {
+                "source": "floating_ball",
+                "options": {
+                    "preferred_delivery": "bubble"
+                }
+            }
+        });
+
+        assert!(should_use_isolated_named_pipe_payload(&payload));
+    }
+
+    #[test]
+    fn isolated_payload_routing_keeps_non_bubble_submit_shared() {
+        let dashboard_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_submit_dashboard",
+            "method": "agent.input.submit",
+            "params": {
+                "source": "dashboard"
+            }
+        });
+        let task_start_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_task_start",
+            "method": "agent.task.start",
+            "params": {}
+        });
+
+        assert!(!should_use_isolated_named_pipe_payload(&dashboard_payload));
+        assert!(!should_use_isolated_named_pipe_payload(&task_start_payload));
+        assert!(requires_shared_named_pipe_request("agent.task.start"));
+    }
+}
+
 fn writer_loop(
     writer: std::fs::File,
     receiver: mpsc::Receiver<BridgeCommand>,
