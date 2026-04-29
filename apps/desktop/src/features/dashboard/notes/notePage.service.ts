@@ -516,6 +516,19 @@ function hasSourceNaturalLaterHint(lowerText: string) {
   return ["later", "someday", "backlog", "以后", "稍后", "有空", "之后"].some((hint) => lowerText.includes(hint));
 }
 
+function extractSourceNaturalRepeatRuleText(text: string) {
+  for (const line of text.split("\n")) {
+    const normalized = normalizeSourceNaturalNoteLine(line).trim();
+    if (normalized === "") {
+      continue;
+    }
+    if (hasSourceNaturalRepeatHint(normalized.toLowerCase())) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
 function formatSourceNaturalDateTime(now: Date, years: number, months: number, days: number) {
   const target = new Date(now);
   target.setFullYear(target.getFullYear() + years);
@@ -573,7 +586,7 @@ function deriveSourceRecurringNextOccurrence(dueAt: string | null, repeatRule: s
 function inferSourceNaturalFallbackFields(text: string, sourcePath: string | null, now = new Date()): SourceNaturalFallbackFields {
   const lowerText = text.toLowerCase();
   const dueAt = inferSourceNaturalDueTime(lowerText, now);
-  const repeatRule = hasSourceNaturalRepeatHint(lowerText) ? text.trim() : null;
+  const repeatRule = extractSourceNaturalRepeatRuleText(text);
 
   if (repeatRule) {
     return {

@@ -1854,6 +1854,25 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
   assert.ok(items[2]?.item.due_at);
 });
 
+test("source note fallback keeps natural repeat rules on the hint line", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# Every Monday sync\nDiscuss blockers before launch.\nKeep the agenda in the note body.\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.bucket, "recurring_rule");
+  assert.equal(items[0]?.item.repeat_rule, "Every Monday sync");
+  assert.equal(items[0]?.item.note_text, "Discuss blockers before launch.\nKeep the agenda in the note body.");
+});
+
 test("source note fallback partitions local cards by inferred bucket", () => {
   const { buildSourceNoteFallbackItems, partitionNoteItemsByBucket } = loadNotePageServiceModule();
   const note = {
