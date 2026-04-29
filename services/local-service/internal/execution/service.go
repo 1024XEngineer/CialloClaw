@@ -2727,7 +2727,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		UpdatedAt:  updatedAt,
 		StopReason: string(result.StopReason),
 	}
-	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice || result.StopReason == agentloop.StopReasonToolRetryExhausted || result.StopReason == agentloop.StopReasonPlannerError {
+	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice || result.StopReason == agentloop.StopReasonToolRetryExhausted || result.StopReason == agentloop.StopReasonPlannerError || result.StopReason == agentloop.StopReasonNoSupportedTools {
 		runRecord.FinishedAt = updatedAt
 	}
 	if s.loopStore != nil {
@@ -2809,7 +2809,7 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 		return "waiting_auth"
 	case agentloop.StopReasonNeedUserInput:
 		return "waiting_input"
-	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted:
+	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted, agentloop.StopReasonNoSupportedTools:
 		return "failed"
 	default:
 		return "processing"

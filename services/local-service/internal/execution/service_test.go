@@ -1530,6 +1530,51 @@ func TestRunStatusFromStopReasonTreatsNeedUserInputAsWaitingInput(t *testing.T) 
 	}
 }
 
+func TestRunStatusFromStopReasonTreatsNoSupportedToolsAsFailed(t *testing.T) {
+	if status := runStatusFromStopReason(agentloop.StopReasonNoSupportedTools); status != "failed" {
+		t.Fatalf("expected no_supported_tools to map to failed, got %q", status)
+	}
+}
+
+func TestPersistAgentLoopRuntimeTreatsNoSupportedToolsAsFailed(t *testing.T) {
+	service, _ := newTestExecutionService(t, "test output")
+	store := &recordingLoopRuntimeStore{}
+	service = service.WithLoopRuntimeStore(store)
+	request := Request{
+		TaskID:     "task_no_supported_tools",
+		RunID:      "run_no_supported_tools",
+		Intent:     map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		SourceType: "text",
+	}
+	now := time.Now()
+	service.persistAgentLoopRuntime(request, agentloop.Result{
+		StopReason: agentloop.StopReasonNoSupportedTools,
+		Rounds: []agentloop.PersistedRound{{
+			StepID:       "step_no_tools",
+			RunID:        request.RunID,
+			TaskID:       request.TaskID,
+			AttemptIndex: 1,
+			SegmentKind:  "initial",
+			LoopRound:    1,
+			Name:         "agent_loop_round",
+			Status:       "failed",
+			StartedAt:    now,
+			CompletedAt:  now.Add(5 * time.Second),
+			StopReason:   agentloop.StopReasonNoSupportedTools,
+		}},
+	})
+	if len(store.runs) != 1 {
+		t.Fatalf("expected one run record, got %d", len(store.runs))
+	}
+	run := store.runs[0]
+	if run.Status != "failed" {
+		t.Fatalf("expected run status failed, got %q", run.Status)
+	}
+	if run.FinishedAt == "" {
+		t.Fatal("expected non-empty FinishedAt for no_supported_tools stop reason")
+	}
+}
+
 func newTestExecutionServiceWithModelClientAndConfig(t *testing.T, cfg serviceconfig.ModelConfig, client model.Client) (*Service, string) {
 	t.Helper()
 
