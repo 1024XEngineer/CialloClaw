@@ -12464,7 +12464,7 @@ func TestServiceStartTaskRoutesDescribedFileAttachmentIntoExistingTask(t *testin
 	}
 }
 
-func TestServiceStartTaskConfirmRequiredFileDoesNotContinueExistingTask(t *testing.T) {
+func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *testing.T) {
 	var activeTaskID string
 	modelCalled := false
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -12523,6 +12523,71 @@ func TestServiceStartTaskConfirmRequiredFileDoesNotContinueExistingTask(t *testi
 	}
 	if startResult["delivery_result"] != nil {
 		t.Fatalf("expected confirm-required file task to defer delivery_result, got %+v", startResult["delivery_result"])
+	}
+}
+
+func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing.T) {
+	var activeTaskID string
+	modelCalled := false
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_waiting_input",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_waiting_input",
+		Title:       "等待补充分析文件",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+	})
+	activeTaskID = activeTask.TaskID
+
+	startResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("continue waiting-input file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required structured follow-up to use deterministic continuation")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != activeTaskID {
+		t.Fatalf("expected structured file follow-up to remain on waiting task %s, got %+v", activeTaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected continued file follow-up to stay behind confirmation, got %+v", task)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected continued file follow-up to defer delivery_result, got %+v", startResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected continued waiting-input task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected continued waiting-input task to retain file evidence, got %+v", record.Snapshot.Files)
 	}
 }
 

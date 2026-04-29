@@ -33,11 +33,6 @@ type taskContinuationOptions struct {
 
 func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
 	explicitSessionID := strings.TrimSpace(stringValue(params, "session_id", ""))
-	if options.ConfirmRequired {
-		// Confirmation-required starts must create their own task so the
-		// pre-execution gate cannot be bypassed by continuation inference.
-		return nil, false, explicitSessionID, nil
-	}
 	continuationContext := s.resolveTaskContinuationContext(explicitSessionID)
 	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext, options)
 	if decision.Decision == "continue" && strings.TrimSpace(decision.TaskID) != "" {
@@ -45,7 +40,7 @@ func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot cont
 		if !ok {
 			return nil, false, explicitSessionID, nil
 		}
-		response, err := s.continueTask(task, snapshot, explicitIntent, decision)
+		response, err := s.continueTask(task, snapshot, explicitIntent, decision, options)
 		if err != nil {
 			return nil, false, explicitSessionID, err
 		}
@@ -149,8 +144,11 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 	if len(continuationContext.Candidates) == 0 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "no unfinished candidate task"}
 	}
-	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
+	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext, options); ok {
 		return decision
+	}
+	if options.ConfirmRequired {
+		return taskContinuationDecision{Decision: "new_task", Reason: "confirmation gate requires a new task without structured pending-task evidence"}
 	}
 	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext, options); ok {
 		return decision
@@ -279,7 +277,7 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 // strong context anchors over brittle free-text cue matching while preventing
 // agent.task.start explicit intents from being silently grafted onto another
 // task unless there is concrete continuation evidence.
-func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
+func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{}, false
 	}
@@ -297,6 +295,9 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 			Decision: "new_task",
 			Reason:   "explicit start intent lacks continuation anchors for the unfinished task",
 		}, true
+	}
+	if options.ConfirmRequired {
+		return confirmationRequiredContinuationDecision(candidate, evidence)
 	}
 
 	switch candidate.Status {
@@ -327,6 +328,26 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 	return taskContinuationDecision{}, false
 }
 
+func confirmationRequiredContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence) (taskContinuationDecision, bool) {
+	if candidate.Status != "waiting_input" && candidate.Status != "confirming_intent" {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "confirmation-required input cannot attach to an active execution task",
+		}, true
+	}
+	if !evidence.StructuredSupplement {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "confirmation-required input lacks structured follow-up evidence for the pending task",
+		}, true
+	}
+	return taskContinuationDecision{
+		Decision: "continue",
+		TaskID:   candidate.TaskID,
+		Reason:   "structured follow-up evidence belongs to the pending task",
+	}, true
+}
+
 // explicitIntentRequiresFreshTask treats agent.task.start explicit intents as a
 // fresh top-level request unless the backend can prove they belong to the same
 // task through lineage, structured evidence, or explicit-session anchors.
@@ -352,7 +373,7 @@ func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, 
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "multiple unfinished candidates"}
 	}
-	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
+	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext, taskContinuationOptions{}); ok {
 		return decision
 	}
 	return taskContinuationDecision{
@@ -474,9 +495,9 @@ func nonEmptyAndDifferent(left, right string) bool {
 	return left != "" && right != "" && left != right
 }
 
-func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision) (map[string]any, error) {
+func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision, options taskContinuationOptions) (map[string]any, error) {
 	if task.Status == "waiting_input" || task.Status == "confirming_intent" {
-		return s.continuePendingTask(task, snapshot, explicitIntent)
+		return s.continuePendingTask(task, snapshot, explicitIntent, options)
 	}
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", buildTaskContinuationBubbleText(snapshot, decision), time.Now().Format(dateTimeLayout))
@@ -495,7 +516,7 @@ func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.Ta
 	}, nil
 }
 
-func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, error) {
+func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, error) {
 	mergedSnapshot := mergeContinuationSnapshots(snapshotFromTask(task), snapshot)
 	if s.intent.AnalyzeSnapshot(mergedSnapshot) == "waiting_input" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已把补充内容挂回当前任务，请继续补充剩余信息。", time.Now().Format(dateTimeLayout))
@@ -515,8 +536,8 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 		}, nil
 	}
 
-	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, false)
-	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, false)
+	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, options.ConfirmRequired)
+	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, options.ConfirmRequired)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      snapshot,
