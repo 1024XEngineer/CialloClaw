@@ -4159,6 +4159,7 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.match(notePageSource, /getDashboardNoteRefreshPlan/);
   assert.doesNotMatch(notePageSource, /\["dashboard", "notes", "bucket", dataMode/);
   assert.match(noteServiceSource, /isAllowedNoteOpenUrl/);
+  assert.match(noteServiceSource, /if \(payload\?\.url\) \{/);
   assert.match(noteServiceSource, /mode === "open_url"/);
 });
 

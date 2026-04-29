@@ -240,6 +240,10 @@ function normalizeResourceOpenAction(action: DeliveryType | null, payload: Deliv
     return "result_page";
   }
 
+  if (payload?.url) {
+    return "open_url";
+  }
+
   if (action === "reveal_in_folder" && payload?.path) {
     return "reveal_in_folder";
   }
