@@ -804,7 +804,7 @@ export function TaskDetailPanel({
                         </button>
                       </article>
                     ))
-                  ) : !artifactLoading ? (
+                  ) : !artifactLoading && !artifactErrorMessage ? (
                     <p className="task-detail-card__empty">无</p>
                   ) : null}
                 </div>

@@ -832,7 +832,7 @@ export function TaskPage() {
               >
                 <TaskDetailPanel
                   artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
-                  artifactErrorMessage={detailData && artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
+                  artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
                   artifactItems={artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? []}
                   artifactLoading={artifactListQuery.isPending}
                   detailData={detailData}
