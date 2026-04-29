@@ -34,10 +34,15 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Resolve release metadata
         id: meta
-        shell: pwsh
-        run: ./.github/scripts/desktop-release.ps1 -Action resolve-metadata
+        shell: bash
+        run: python ./.github/scripts/desktop_release.py resolve-metadata
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -66,23 +71,25 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install workspace dependencies
+        shell: bash
         run: pnpm install --frozen-lockfile
 
       - name: Rewrite version manifests (tag)
         if: steps.meta.outputs.release_mode == 'tag'
-        shell: pwsh
+        shell: bash
         env:
           MANIFEST_VERSION: ${{ steps.meta.outputs.manifest_version }}
-        run: ./.github/scripts/desktop-release.ps1 -Action rewrite-version-manifests
+        run: python ./.github/scripts/desktop_release.py rewrite-version-manifests
 
       - name: Verify version rewrite (tag)
         if: steps.meta.outputs.release_mode == 'tag'
-        shell: pwsh
+        shell: bash
         env:
           MANIFEST_VERSION: ${{ steps.meta.outputs.manifest_version }}
-        run: ./.github/scripts/desktop-release.ps1 -Action verify-version-manifests
+        run: python ./.github/scripts/desktop_release.py verify-version-manifests
 
       - name: Run release checks
+        shell: bash
         run: |
           pnpm --dir apps/desktop lint
           pnpm --dir apps/desktop typecheck
@@ -91,8 +98,8 @@ jobs:
 
       - name: Build sidecar
         id: sidecar
-        shell: pwsh
-        run: ./.github/scripts/desktop-release.ps1 -Action build-sidecar
+        shell: bash
+        run: python ./.github/scripts/desktop_release.py build-sidecar
 
       - name: Publish release (tag)
         if: steps.meta.outputs.release_mode == 'tag'
@@ -105,17 +112,18 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           prerelease: ${{ steps.meta.outputs.release_is_prerelease == 'true' }}
+          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
           generateReleaseNotes: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
 
       - name: Replace previous tip release/tag
         if: steps.meta.outputs.release_mode == 'tip'
-        shell: pwsh
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG_NAME: tip
-        run: ./.github/scripts/desktop-release.ps1 -Action remove-release-by-tag
+        run: python ./.github/scripts/desktop_release.py remove-release-by-tag
 
       - name: Publish release (tip)
         if: steps.meta.outputs.release_mode == 'tip'
@@ -127,6 +135,7 @@ jobs:
           tauriScript: pnpm exec tauri
           tagName: tip
           releaseName: tip
+          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
           prerelease: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
