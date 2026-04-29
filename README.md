@@ -107,10 +107,6 @@ go run ./services/local-service/cmd/server
 pnpm --dir apps/desktop dev
 ```
 
-# 快速安装
-
-从 Release 下载安装后，打开 `setup.exe` 完成安装即可。
-
 ## 说明
 
 - 当前阶段仍以 `task-centric` 主链路、正式协议边界和治理闭环为最高优先级。
