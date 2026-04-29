@@ -831,6 +831,8 @@ export function useShellBallInteraction() {
   /**
    * Restores an optimistically-cleared shell-ball draft only when the field is
    * still untouched and no newer draft has started after the failed submit.
+   * Failed submits must also restore the interactive hover state immediately so
+   * the inline bar does not stay readonly during the controller cooldown.
    */
   function restorePreparedTextSubmitDraft(preparedDraft: ShellBallPreparedTextSubmitDraft) {
     if (shouldRestoreShellBallSubmitFailureDraft({
@@ -844,6 +846,11 @@ export function useShellBallInteraction() {
     }
     inputFocusedRef.current = true;
     setInputFocused(true);
+    controllerRef.current?.forceState("hover_input", {
+      regionActive: regionActiveRef.current,
+      hoverRetained: true,
+    });
+    syncVisualState();
   }
 
   async function handleSubmitText() {

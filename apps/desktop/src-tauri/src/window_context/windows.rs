@@ -33,6 +33,7 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
+const INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS: u64 = 10_000;
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_FOREGROUND_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
@@ -47,6 +48,7 @@ static WINDOW_CONTEXT_ACTIVITY_STATE: Lazy<Mutex<WindowContextActivityState>> =
 struct CachedWindowContext {
     hwnd: isize,
     context: ActiveWindowContextPayload,
+    cached_at: Instant,
 }
 
 #[derive(Default)]
@@ -294,23 +296,35 @@ fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
         *cached_context = Some(CachedWindowContext {
             hwnd: hwnd.0 as isize,
             context: context.clone(),
+            cached_at: Instant::now(),
         });
     }
 }
 
+// Internal desktop windows should only reuse the last external foreground
+// snapshot for a short time. Otherwise a dashboard or shell-ball submit can
+// incorrectly report a long-stale browser tab as the current webpage.
+fn read_fresh_cached_window_context() -> Option<CachedWindowContext> {
+    let mut cached_context = LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok()?;
+    let cached = cached_context.clone()?;
+
+    if cached.cached_at.elapsed()
+        > Duration::from_millis(INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS)
+    {
+        *cached_context = None;
+        return None;
+    }
+
+    Some(cached)
+}
+
 fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
-    LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok().and_then(|cached| {
-        cached
-            .as_ref()
-            .map(|value| with_window_context_activity_counts(value.context.clone()))
-    })
+    read_fresh_cached_window_context()
+        .map(|cached| with_window_context_activity_counts(cached.context))
 }
 
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
-    let cached = LAST_EXTERNAL_WINDOW_CONTEXT
-        .lock()
-        .ok()
-        .and_then(|cached| cached.clone())?;
+    let cached = read_fresh_cached_window_context()?;
 
     let hwnd = HWND(cached.hwnd as *mut core::ffi::c_void);
     if hwnd.0.is_null() {

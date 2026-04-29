@@ -934,6 +934,10 @@ test("desktop internal window classifiers share the same native allowlist", () =
   assert.match(internalWindowsSource, /"control-panel"/);
   assert.match(internalWindowsSource, /pub const INTERNAL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";/);
   assert.match(windowContextSource, /use crate::internal_windows::\{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS\};/);
+  assert.match(windowContextSource, /const INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS: u64 = 10_000;/);
+  assert.match(windowContextSource, /fn read_fresh_cached_window_context\(\) -> Option<CachedWindowContext> \{/);
+  assert.match(windowContextSource, /cached\.cached_at\.elapsed\(\)\s*>\s*Duration::from_millis\(INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS\)/);
+  assert.match(windowContextSource, /\*cached_context = None;/);
   assert.match(selectionWindowsSource, /use crate::internal_windows::\{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS\};/);
   assert.match(selectionWindowsSource, /for label in INTERNAL_WINDOW_LABELS/);
   assert.doesNotMatch(selectionWindowsSource, /const SHELL_BALL_WINDOW_LABELS/);
@@ -8494,7 +8498,7 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
 });
 
-test("shell-ball text submit clears drafts before RPC completion and gates failure restore", () => {
+test("shell-ball text submit clears drafts before RPC completion and fully restores failed optimistic submits", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 
   assert.match(interactionSource, /function prepareTextSubmitDraft\(\): ShellBallPreparedTextSubmitDraft \| null \{/);
@@ -8505,6 +8509,10 @@ test("shell-ball text submit clears drafts before RPC completion and gates failu
   assert.match(interactionSource, /function restorePreparedTextSubmitDraft\(preparedDraft: ShellBallPreparedTextSubmitDraft\) \{/);
   assert.match(interactionSource, /if \(shouldRestoreShellBallSubmitFailureDraft\(\{/);
   assert.match(interactionSource, /setInputValueState\(preparedDraft\.currentInputValue\);\s*setPendingFilesState\(preparedDraft\.currentPendingFiles\);/);
+  assert.match(
+    interactionSource,
+    /function restorePreparedTextSubmitDraft\(preparedDraft: ShellBallPreparedTextSubmitDraft\) \{[\s\S]*controllerRef\.current\?\.forceState\("hover_input", \{[\s\S]*regionActive: regionActiveRef\.current,[\s\S]*hoverRetained: true,[\s\S]*\}\);[\s\S]*syncVisualState\(\);[\s\S]*\}/,
+  );
   assert.match(interactionSource, /const preparedDraft = prepareTextSubmitDraft\(\);\s*if \(preparedDraft === null\) \{\s*return null;\s*\}/);
   assert.match(interactionSource, /restorePreparedTextSubmitDraft\(preparedDraft\);/);
 });
