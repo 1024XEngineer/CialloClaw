@@ -356,7 +356,10 @@ export function buildSourceNoteEditorDraftFromItem(
   return {
     agentSuggestion: item.item.agent_suggestion?.trim() ?? "",
     bucket: item.item.bucket,
-    checked: item.item.status === "completed" || item.item.bucket === "closed",
+    // Closed remains a bucket-level concept in the editor. Keeping `checked`
+    // tied to the formal completion state avoids stale local flags when a
+    // closed source note is reopened into an active bucket.
+    checked: item.item.status === "completed",
     createdAt: formatTimestampForEditor(readTodoCreatedAt(item.item)),
     dueAt: formatTimestampForEditor(item.item.due_at),
     effectiveScope: item.item.effective_scope?.trim() ?? "",

@@ -273,6 +273,48 @@ function loadSourceNoteEditorModule() {
         title: string;
         updatedAt: string;
       };
+      buildSourceNoteEditorDraftFromItem: (item: {
+        item: {
+          agent_suggestion?: string | null;
+          bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+          due_at?: string | null;
+          effective_scope?: string | null;
+          next_occurrence_at?: string | null;
+          note_text?: string | null;
+          prerequisite?: string | null;
+          recent_instance_status?: string | null;
+          repeat_rule?: string | null;
+          status: string;
+          title: string;
+        };
+        experience: {
+          endedAt: string | null;
+        };
+        sourceNote?: {
+          localOnly: boolean;
+          path: string;
+          sourceLine?: number | null;
+          title?: string | null;
+        } | null;
+      }, sourcePath?: string | null) => {
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      };
       upsertSourceNoteEditorBlock: (note: {
         content: string;
         fileName: string;
@@ -2423,6 +2465,43 @@ test("source note editor clears ended metadata when a closed note is moved back 
   assert.equal(serialized.normalizedDraft.checked, false);
   assert.equal(serialized.normalizedDraft.bucket, "later");
   assert.equal(serialized.normalizedDraft.endedAt, "");
+  assert.match(serialized.blockContent, /^- \[ \] Reopen note$/m);
+  assert.doesNotMatch(serialized.blockContent, /^bucket: closed$/m);
+  assert.doesNotMatch(serialized.blockContent, /^ended_at:/m);
+});
+
+test("source note editor can reopen a local-only closed card without keeping a stale checked flag", () => {
+  const { buildSourceNoteEditorDraftFromItem, serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const draft = buildSourceNoteEditorDraftFromItem({
+    item: {
+      bucket: "closed",
+      note_text: "Keep the old context nearby.",
+      status: "normal",
+      title: "Reopen note",
+    },
+    experience: {
+      endedAt: "2026-04-10T09:00:00.000Z",
+    },
+    sourceNote: {
+      localOnly: true,
+      path: "D:/workspace/todos/tasks.md",
+      sourceLine: 1,
+      title: "Reopen note",
+    },
+  });
+
+  const serialized = serializeSourceNoteEditorDraft(
+    {
+      ...draft,
+      bucket: "later",
+    },
+    new Date("2026-04-10T09:30:00.000Z"),
+  );
+
+  assert.equal(draft.checked, false);
+  assert.equal(serialized.normalizedDraft.checked, false);
+  assert.equal(serialized.normalizedDraft.bucket, "later");
   assert.match(serialized.blockContent, /^- \[ \] Reopen note$/m);
   assert.doesNotMatch(serialized.blockContent, /^bucket: closed$/m);
   assert.doesNotMatch(serialized.blockContent, /^ended_at:/m);
