@@ -2243,6 +2243,33 @@ test("source note editor normalizes completed buckets to closed before persisten
   assert.doesNotMatch(updated.content, /^bucket: recurring_rule$/m);
 });
 
+test("source note editor preserves an explicit closed bucket even when unchecked", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "closed",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: 1,
+    sourcePath: "D:/workspace/todos/tasks.md",
+    title: "Archived note",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.equal(serialized.normalizedDraft.bucket, "closed");
+  assert.match(serialized.blockContent, /^bucket: closed$/m);
+});
+
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");

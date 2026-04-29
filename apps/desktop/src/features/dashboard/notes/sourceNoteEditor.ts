@@ -260,6 +260,9 @@ function normalizeSourceNoteBucket(
   if (checked) {
     return "closed";
   }
+  if (bucket === "closed") {
+    return "closed";
+  }
   if (recurring || bucket === "recurring_rule") {
     return "recurring_rule";
   }

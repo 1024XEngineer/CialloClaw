@@ -760,13 +760,10 @@ func naturalDateTime(now time.Time, years, months, days int) string {
 func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
-		if stringValue(item, "repeat_rule_text") == "" {
-			item["repeat_rule_text"] = "每周重复一次"
-		}
 		if _, ok := item["recurring_enabled"]; !ok {
 			item["recurring_enabled"] = true
 		}
-		if stringValue(item, "next_occurrence_at") == "" {
+		if stringValue(item, "repeat_rule_text") != "" && stringValue(item, "next_occurrence_at") == "" {
 			if nextOccurrence := deriveParsedRecurringNextOccurrence(item); nextOccurrence != "" {
 				item["next_occurrence_at"] = nextOccurrence
 			}
