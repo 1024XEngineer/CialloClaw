@@ -90,6 +90,7 @@ function loadDashboardOpeningTransitionModule() {
       createDashboardOpeningTransitionController: (environment: {
         cancelAnimationFrame: (handle: number) => void;
         clearTimeout: (handle: number) => void;
+        hasFocus: () => boolean;
         getVisibilityState: () => DocumentVisibilityState;
         requestAnimationFrame: (callback: FrameRequestCallback) => number;
         setIsOpening: (value: boolean) => void;
@@ -3628,6 +3629,7 @@ test("dashboard opening transition controller replays focus and visibility recov
   const timeoutCallbacks = new Map<number, () => void>();
   let nextHandle = 1;
   let visibilityState: DocumentVisibilityState = "visible";
+  let hasFocus = true;
 
   const controller = createDashboardOpeningTransitionController({
     cancelAnimationFrame: (handle) => {
@@ -3642,6 +3644,7 @@ test("dashboard opening transition controller replays focus and visibility recov
         timeoutCallbacks.delete(handle);
       }
     },
+    hasFocus: () => hasFocus,
     getVisibilityState: () => visibilityState,
     requestAnimationFrame: (callback) => {
       const handle = nextHandle++;
@@ -3708,12 +3711,14 @@ test("dashboard opening transition controller replays the opening mask for windo
   const frameCallbacks = new Map<number, FrameRequestCallback>();
   let nextHandle = 1;
   let visibilityState: DocumentVisibilityState = "hidden";
+  let hasFocus = false;
 
   const controller = createDashboardOpeningTransitionController({
     cancelAnimationFrame: (handle) => {
       frameCallbacks.delete(handle);
     },
     clearTimeout: () => {},
+    hasFocus: () => hasFocus,
     getVisibilityState: () => visibilityState,
     requestAnimationFrame: (callback) => {
       const handle = nextHandle++;
@@ -3735,6 +3740,45 @@ test("dashboard opening transition controller replays the opening mask for windo
 
   visibilityState = "visible";
   assert.equal(controller.handleVisibilityChange(), true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+});
+
+test("dashboard opening transition controller replays the opening mask for windows mounted while unfocused", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "visible";
+  let hasFocus = false;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: () => {},
+    clearTimeout: () => {},
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: () => nextHandle++,
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (_callback, timeoutMs) => {
+      timeoutDurations.push(timeoutMs);
+      return nextHandle++;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  hasFocus = true;
+  assert.equal(controller.handleWindowFocusChanged(true), true);
   assert.deepEqual(openingStates, [true, true]);
   assert.deepEqual(timeoutDurations, [
     DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,

@@ -43,6 +43,7 @@ function useDashboardOpeningTransitionState() {
     const openingTransitionController = createDashboardOpeningTransitionController({
       cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
       clearTimeout: (handle) => window.clearTimeout(handle),
+      hasFocus: () => document.hasFocus(),
       getVisibilityState: () => document.visibilityState,
       requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
       setIsOpening,

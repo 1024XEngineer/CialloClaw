@@ -3,6 +3,7 @@ export const DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS = 720;
 type DashboardOpeningTransitionEnvironment = {
   cancelAnimationFrame: (handle: number) => void;
   clearTimeout: (handle: number) => void;
+  hasFocus: () => boolean;
   getVisibilityState: () => DocumentVisibilityState;
   requestAnimationFrame: (callback: FrameRequestCallback) => number;
   setIsOpening: (value: boolean) => void;
@@ -18,9 +19,10 @@ type DashboardOpeningTransitionEnvironment = {
 export function createDashboardOpeningTransitionController(environment: DashboardOpeningTransitionEnvironment) {
   let frame = 0;
   let timeout = 0;
-  // Seed the hidden flag from the mount-time visibility so windows restored
-  // off-screen still replay the opening mask on their first real reveal.
-  let hidden = environment.getVisibilityState() === "hidden";
+  // Seed the hidden flag from mount-time visibility and focus so windows that
+  // start hidden or backgrounded can still replay the opening mask when they
+  // first become meaningfully visible to the user.
+  let hidden = environment.getVisibilityState() === "hidden" || !environment.hasFocus();
 
   const clearPendingRelease = () => {
     environment.cancelAnimationFrame(frame);
