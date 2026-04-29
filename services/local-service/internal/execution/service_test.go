@@ -741,6 +741,55 @@ func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *te
 	}
 }
 
+func TestExecuteAgentLoopDirectAnswerKeepsBoundedCapabilityCatalog(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID:  "req_loop_direct_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "这是直接答复，不需要调用工具。",
+		}},
+	}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_direct_answer",
+		RunID:        "run_loop_direct_answer",
+		Title:        "Loop direct answer",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请直接回答这个简单问题。"},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "这是直接答复，不需要调用工具。" {
+		t.Fatalf("unexpected loop output: %s", result.Content)
+	}
+	if modelClient.generateToolCallsCount != 1 {
+		t.Fatalf("expected a single planning turn for direct answer, got %d", modelClient.generateToolCallsCount)
+	}
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("expected no executed tool calls for direct answer, got %+v", result.ToolCalls)
+	}
+	if len(modelClient.plannerInputs) != 1 {
+		t.Fatalf("expected one planner input, got %+v", modelClient.plannerInputs)
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") || !strings.Contains(modelClient.plannerInputs[0], "- list_dir") {
+		t.Fatalf("expected builtin capability catalog in planner input, got %q", modelClient.plannerInputs[0])
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "适用场景：") {
+		t.Fatalf("expected planner input to include capability guidance labels, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "page_read") || strings.Contains(modelClient.plannerInputs[0], "page_search") {
+		t.Fatalf("expected planner input without playwright tools to stay bounded to builtin tools, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "能力提醒：") {
+		t.Fatalf("expected direct answer path to avoid capability reminder, got %q", modelClient.plannerInputs[0])
+	}
+}
+
 func TestCompactAgentLoopHistoryKeepsRecentObservations(t *testing.T) {
 	history := []string{
 		"Tool read_file succeeded. Summary: {\"path\":\"notes/1.md\",\"excerpt\":\"alpha alpha alpha alpha alpha\"}",
@@ -1118,6 +1167,59 @@ func TestExecuteBudgetDowngradeAllowsReadOnlyAgentLoopTools(t *testing.T) {
 	}
 	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
 		t.Fatalf("expected read-only loop to avoid hard fallback when cheap tools are allowed, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestExecuteBudgetDowngradeRetainsReadOnlyWebToolsInPlannerCatalog(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID:  "req_loop_budget_web_catalog",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "只读网页能力仍然可见。",
+		}},
+	}
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	service = service.ReplaceModel(model.NewService(serviceconfig.ModelConfig{}, modelClient))
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_web_catalog",
+		RunID:        "run_budget_web_catalog",
+		Title:        "Budget web catalog",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请检查网页读取能力。"},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "failure_pressure",
+			"degrade_actions": []string{"skip_expensive_tools", "lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+			"trace": map[string]any{
+				"expensive_tool_categories": []string{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.Content != "只读网页能力仍然可见。" {
+		t.Fatalf("unexpected result content: %q", result.Content)
+	}
+	if len(modelClient.plannerInputs) != 1 {
+		t.Fatalf("expected one planner input, got %+v", modelClient.plannerInputs)
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "- page_read") || !strings.Contains(modelClient.plannerInputs[0], "- page_search") {
+		t.Fatalf("expected read-only web tools to remain visible under budget downgrade, got %q", modelClient.plannerInputs[0])
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "网页读取可能触发审批") {
+		t.Fatalf("expected planner input to preserve approval boundary for web tools, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "page_interact") || strings.Contains(modelClient.plannerInputs[0], "structured_dom") {
+		t.Fatalf("expected planner input to stay bounded to the frozen agent loop catalog, got %q", modelClient.plannerInputs[0])
+	}
+	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
+		t.Fatalf("expected read-only web catalog path to avoid hard fallback, got %+v", result.ModelInvocation)
 	}
 }
 
