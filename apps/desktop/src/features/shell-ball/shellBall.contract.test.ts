@@ -8431,18 +8431,25 @@ test("shell-ball app injects the demo switcher only in dev mode", () => {
   assert.match(markup, /shell-ball-surface__switcher-shell/);
 });
 
-test("shell-ball inline input stays interactive whenever the bottom input is rendered", () => {
+test("shell-ball inline input preserves readonly snapshots and only upgrades hidden idle input", () => {
   assert.equal(
     resolveShellBallInlineInputMode({
       shouldRenderInlineInput: true,
       snapshotInputBarMode: "readonly",
+    }),
+    "readonly",
+  );
+  assert.equal(
+    resolveShellBallInlineInputMode({
+      shouldRenderInlineInput: true,
+      snapshotInputBarMode: "interactive",
     }),
     "interactive",
   );
   assert.equal(
     resolveShellBallInlineInputMode({
       shouldRenderInlineInput: true,
-      snapshotInputBarMode: "interactive",
+      snapshotInputBarMode: "hidden",
     }),
     "interactive",
   );

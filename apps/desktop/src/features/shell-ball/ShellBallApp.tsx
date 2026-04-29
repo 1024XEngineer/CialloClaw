@@ -154,6 +154,10 @@ export function resolveShellBallInlineInputMode(input: {
     return "hidden";
   }
 
+  if (input.snapshotInputBarMode === "readonly") {
+    return "readonly";
+  }
+
   return "interactive";
 }
 
