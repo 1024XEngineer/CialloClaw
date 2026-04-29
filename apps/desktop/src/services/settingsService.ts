@@ -10,6 +10,11 @@ import { loadStoredValue, saveStoredValue } from "../platform/storage";
 // SETTINGS_KEY is the single storage key for the desktop snapshot.
 const SETTINGS_KEY = "cialloclaw.settings";
 const RUNTIME_DEFAULTS_KEY = "cialloclaw.runtime-defaults";
+const DEFAULT_WORKSPACE_PLACEHOLDER = "workspace";
+const DEFAULT_TASK_SOURCE_PLACEHOLDER = ["workspace/todos"];
+// These legacy defaults remain as migration sentinels only so packaged startup
+// can recognize and rewrite historical snapshots created before runtime-managed
+// host defaults were available.
 const LEGACY_DEFAULT_WORKSPACE_PATH = "D:/CialloClawWorkspace";
 const LEGACY_DEFAULT_TASK_SOURCES = ["D:/workspace/todos"];
 
@@ -81,7 +86,7 @@ function createDefaultSettings(): DesktopSettings {
         voice_notification_enabled: true,
         voice_type: "default_female",
         download: {
-          workspace_path: runtimeDefaults?.workspace_path ?? LEGACY_DEFAULT_WORKSPACE_PATH,
+          workspace_path: runtimeDefaults?.workspace_path ?? DEFAULT_WORKSPACE_PLACEHOLDER,
           ask_before_save_each_file: true,
         },
       },
@@ -110,7 +115,7 @@ function createDefaultSettings(): DesktopSettings {
           unit: "minute",
           value: 15,
         },
-        task_sources: runtimeDefaults?.task_sources.length ? runtimeDefaults.task_sources : LEGACY_DEFAULT_TASK_SOURCES,
+        task_sources: runtimeDefaults?.task_sources.length ? runtimeDefaults.task_sources : DEFAULT_TASK_SOURCE_PLACEHOLDER,
         remind_before_deadline: true,
         remind_when_stale: false,
       },
@@ -219,7 +224,7 @@ function usesLegacyTaskSourceDefaults(taskSources: string[]) {
   // runtime-default hydration. User-owned workspace-relative source layouts
   // must stay intact even when they happen to live under `workspace/...`.
   const normalized = taskSources[0]?.trim().replaceAll("\\", "/").toLowerCase() ?? "";
-  return normalized === LEGACY_DEFAULT_TASK_SOURCES[0].toLowerCase() || normalized === "workspace/todos";
+  return normalized === LEGACY_DEFAULT_TASK_SOURCES[0].toLowerCase() || normalized === DEFAULT_TASK_SOURCE_PLACEHOLDER[0];
 }
 
 /**

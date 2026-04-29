@@ -279,6 +279,9 @@ function loadSettingsServiceModule(desktopHost?: DashboardContractDesktopHostOve
               value: number;
             };
           };
+          task_automation: {
+            task_sources: string[];
+          };
         };
       };
       saveSettings: (settings: unknown) => void;
@@ -1595,6 +1598,41 @@ test("settings service ignores stale legacy settings aliases when models are alr
     assert.equal(Reflect.has(persisted.settings, legacyModelsAlias), false);
     assert.equal(persisted.settings.models.provider, "openai");
     assert.equal(persisted.settings.models.provider_api_key_configured, false);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service falls back to neutral placeholders before runtime hydration", () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const loaded = loadSettings();
+    assert.equal(loaded.settings.general.download.workspace_path, "workspace");
+    assert.deepEqual(loaded.settings.task_automation.task_sources, ["workspace/todos"]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
