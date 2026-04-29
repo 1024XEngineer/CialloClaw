@@ -128,6 +128,50 @@ func TestRunCompactsHistoryBeforeLaterPlannerRounds(t *testing.T) {
 	}
 }
 
+func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
+	plannerInput, compactedHistory := buildPlannerInput(
+		"Inspect workspace notes and answer.",
+		nil,
+		[]model.ToolDefinition{
+			{
+				Name:        "read_file",
+				Description: "Read a file from the workspace.",
+				InputSchema: map[string]any{
+					"required": []string{"path"},
+				},
+			},
+			{
+				Name:        "page_search",
+				Description: "Search for text on a page.",
+				InputSchema: map[string]any{
+					"required": []any{"url", "query"},
+				},
+			},
+		},
+		0,
+		0,
+	)
+
+	if len(compactedHistory) != 0 {
+		t.Fatalf("expected no compacted history, got %+v", compactedHistory)
+	}
+	if !strings.Contains(plannerInput, "Always respond in Chinese unless the user explicitly asks for another language.") {
+		t.Fatalf("expected planner input to pin the default response language, got %q", plannerInput)
+	}
+	if !strings.Contains(plannerInput, "Keep final answers concise, lead with the result, and avoid filler.") {
+		t.Fatalf("expected planner input to pin the concise response policy, got %q", plannerInput)
+	}
+	if !strings.Contains(plannerInput, "Available tools:") {
+		t.Fatalf("expected planner input to include available tools, got %q", plannerInput)
+	}
+	if !strings.Contains(plannerInput, "- read_file: Read a file from the workspace. Required inputs: path") {
+		t.Fatalf("expected planner input to include read_file capability, got %q", plannerInput)
+	}
+	if !strings.Contains(plannerInput, "- page_search: Search for text on a page. Required inputs: url, query") {
+		t.Fatalf("expected planner input to include page_search capability, got %q", plannerInput)
+	}
+}
+
 func TestRunRetriesPlannerUpToConfiguredBudget(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()

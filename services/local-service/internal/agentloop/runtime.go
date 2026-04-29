@@ -200,7 +200,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				}))
 			}
 		}
-		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, request.CompressChars, request.KeepRecent)
+		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, request.ToolDefinitions, request.CompressChars, request.KeepRecent)
 		round := PersistedRound{
 			StepID:        fmt.Sprintf("step_loop_%02d", turn+1),
 			RunID:         request.RunID,
@@ -465,23 +465,86 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 	return strings.TrimSpace(stringValue(taskIntent, "name", "")) == defaultIntentName
 }
 
-func buildPlannerInput(inputText string, history []string, compressChars, keepRecent int) (string, []string) {
+func buildPlannerInput(inputText string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
 	sections := []string{
 		"You are the planning step of a desktop agent loop.",
+		"Always respond in Chinese unless the user explicitly asks for another language.",
 		"Decide whether to answer directly or call one of the provided tools.",
+		"If one of the listed tools can help, prefer using it instead of saying the task cannot be done.",
+		"Keep final answers concise, lead with the result, and avoid filler.",
 		"Use tools only when they materially improve the answer.",
 		"Never invent file contents, directory entries, or page contents.",
 		"If the task is already clear and no tool is required, return the final answer directly.",
-		"",
-		"User context:",
-		strings.TrimSpace(inputText),
 	}
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+		sections = append(sections, "", "Available tools:")
+		sections = append(sections, capabilityLines...)
+	}
+	sections = append(sections, "", "User context:", strings.TrimSpace(inputText))
 	if len(compressedHistory) > 0 {
 		sections = append(sections, "", "Observed tool results:")
 		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n"), compressedHistory
+}
+
+func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
+	lines := make([]string, 0, len(toolDefinitions))
+	for _, definition := range toolDefinitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			continue
+		}
+
+		line := "- " + name
+		if description := strings.TrimSpace(definition.Description); description != "" {
+			line += ": " + description
+		}
+		if requiredFields := toolRequiredFields(definition.InputSchema); len(requiredFields) > 0 {
+			separator := ". "
+			if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "!") || strings.HasSuffix(line, "?") {
+				separator = " "
+			}
+			line += separator + "Required inputs: " + strings.Join(requiredFields, ", ")
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func toolRequiredFields(schema map[string]any) []string {
+	requiredValue, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+
+	switch typed := requiredValue.(type) {
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				continue
+			}
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
 }
 
 func appendSteeringInput(inputText string, steeringMessages []string) string {
