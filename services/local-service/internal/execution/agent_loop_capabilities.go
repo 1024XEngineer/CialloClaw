@@ -13,7 +13,14 @@ import (
 // the executor silently accepts another.
 var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	{
-		Name: "read_file",
+		Name:      "read_file",
+		UseWhen:   "you need exact text from a known workspace file path.",
+		AvoidWhen: "the user only needs a directory overview or the target path is still unknown.",
+		Constraints: []string{
+			"workspace files only",
+			"cannot infer missing paths",
+			"prefer list_dir first when the path is uncertain",
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -24,7 +31,14 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
-		Name: "list_dir",
+		Name:      "list_dir",
+		UseWhen:   "you need to inspect which files or folders exist under a known workspace directory.",
+		AvoidWhen: "the user already gave an exact file path and needs file content instead of a listing.",
+		Constraints: []string{
+			"workspace directories only",
+			"returns a bounded entry list",
+			"use read_file after locating the target file",
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -36,7 +50,14 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
-		Name: "page_read",
+		Name:      "page_read",
+		UseWhen:   "you need the title or visible text from a specific webpage.",
+		AvoidWhen: "the user only needs keyword hits from a page without reading the full content.",
+		Constraints: []string{
+			"webpage read access may require approval",
+			"reads a single absolute URL",
+			"does not interact with the page",
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -47,7 +68,14 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
-		Name: "page_search",
+		Name:      "page_search",
+		UseWhen:   "you need to confirm whether a keyword or phrase appears on a specific webpage.",
+		AvoidWhen: "the user needs the full page content or broader page navigation.",
+		Constraints: []string{
+			"webpage read access may require approval",
+			"searches a single absolute URL",
+			"returns bounded keyword matches",
+		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -63,6 +91,9 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 
 type agentLoopCapabilitySpec struct {
 	Name        string
+	UseWhen     string
+	AvoidWhen   string
+	Constraints []string
 	InputSchema map[string]any
 }
 
@@ -123,7 +154,36 @@ func agentLoopCapabilityByName(name string) (agentLoopCapabilitySpec, bool) {
 func (c agentLoopCapabilitySpec) toolDefinition(metadata tools.ToolMetadata) model.ToolDefinition {
 	return model.ToolDefinition{
 		Name:        metadata.Name,
-		Description: metadata.Description,
+		Description: c.plannerDescription(metadata.Description),
 		InputSchema: cloneMap(c.InputSchema),
 	}
+}
+
+func (c agentLoopCapabilitySpec) plannerDescription(baseDescription string) string {
+	parts := make([]string, 0, 4)
+	if description := strings.TrimSpace(baseDescription); description != "" {
+		parts = append(parts, description)
+	}
+	if useWhen := strings.TrimSpace(c.UseWhen); useWhen != "" {
+		parts = append(parts, "Use when: "+useWhen)
+	}
+	if avoidWhen := strings.TrimSpace(c.AvoidWhen); avoidWhen != "" {
+		parts = append(parts, "Avoid when: "+avoidWhen)
+	}
+	if constraints := joinCapabilityConstraints(c.Constraints); constraints != "" {
+		parts = append(parts, "Constraints: "+constraints)
+	}
+	return strings.Join(parts, " ")
+}
+
+func joinCapabilityConstraints(values []string) string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		cleaned = append(cleaned, trimmed)
+	}
+	return strings.Join(cleaned, ", ")
 }
