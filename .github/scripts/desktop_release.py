@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -37,6 +38,57 @@ def write_workflow_output(name: str, value: str) -> None:
         handle.write(f"{name}={value}\n")
 
 
+def semver_sort_key(version: str) -> Any:
+    """Convert a SemVer string into a comparable precedence key."""
+
+    match = SEMVER_PATTERN.fullmatch(version)
+    if not match:
+        raise RuntimeError(f"Invalid SemVer version: {version}")
+
+    prerelease = match.group("prerelease")
+    identifiers: list[tuple[int, int | str]] = []
+    if prerelease:
+        for identifier in prerelease.split("."):
+            if identifier.isdigit():
+                identifiers.append((0, int(identifier)))
+            else:
+                identifiers.append((1, identifier))
+
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+        prerelease is None,
+        tuple(identifiers),
+    )
+
+
+def compare_semver(version_a: str, version_b: str) -> int:
+    """Compare two SemVer strings using SemVer precedence rules."""
+
+    key_a = semver_sort_key(version_a)
+    key_b = semver_sort_key(version_b)
+
+    if key_a[:3] != key_b[:3]:
+        return -1 if key_a[:3] < key_b[:3] else 1
+
+    if key_a[3] != key_b[3]:
+        return -1 if not key_a[3] else 1
+
+    prerelease_a = key_a[4]
+    prerelease_b = key_b[4]
+    for identifier_a, identifier_b in zip(prerelease_a, prerelease_b):
+        if identifier_a == identifier_b:
+            continue
+        if identifier_a[0] != identifier_b[0]:
+            return -1 if identifier_a[0] < identifier_b[0] else 1
+        return -1 if identifier_a[1] < identifier_b[1] else 1
+
+    if len(prerelease_a) == len(prerelease_b):
+        return 0
+    return -1 if len(prerelease_a) < len(prerelease_b) else 1
+
+
 def github_api_headers() -> dict[str, str]:
     """Build authenticated GitHub REST headers for mutating release state."""
 
@@ -51,23 +103,29 @@ def github_api_headers() -> dict[str, str]:
     }
 
 
-def github_api_request(method: str, url: str) -> Any | None:
+def github_api_request(method: str, url: str, payload: Any | None = None) -> Any | None:
     """Issue a GitHub REST request and return decoded JSON when present."""
 
-    request = urllib_request.Request(url, method=method, headers=github_api_headers())
+    headers = github_api_headers()
+    data = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+
+    request = urllib_request.Request(url, method=method, headers=headers, data=data)
     try:
         with urllib_request.urlopen(request) as response:
-            payload = response.read()
+            response_payload = response.read()
     except urllib_error.HTTPError as exc:
         if exc.code == 404:
             return None
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API {method} {url} failed with {exc.code}: {body}") from exc
 
-    if not payload:
+    if not response_payload:
         return None
 
-    return json.loads(payload.decode("utf-8"))
+    return json.loads(response_payload.decode("utf-8"))
 
 
 def assert_windows_installer_version_bounds(version: str, major: int, minor: int, patch: int) -> None:
@@ -165,6 +223,21 @@ def run_command(command: list[str], cwd: Path = REPO_ROOT) -> subprocess.Complet
     )
 
 
+def get_latest_release_base_version() -> str:
+    """Return the highest stable SemVer tag version, or the highest SemVer tag as fallback."""
+
+    tag_lines = run_command(["git", "tag", "--list", "v*"]).stdout.splitlines()
+    versions = [tag[1:] for tag in tag_lines if SEMVER_PATTERN.fullmatch(tag[1:])]
+    if not versions:
+        raise RuntimeError("Could not determine the latest SemVer tag version.")
+
+    stable_versions = [
+        version for version in versions if SEMVER_PATTERN.fullmatch(version).group("prerelease") is None
+    ]
+    candidates = stable_versions or versions
+    return max(candidates, key=functools.cmp_to_key(compare_semver))
+
+
 def resolve_metadata() -> None:
     """Emit release-mode-specific metadata for the workflow."""
 
@@ -197,7 +270,25 @@ def resolve_metadata() -> None:
         return
 
     if github_ref == "refs/heads/main":
+        latest_release_version = get_latest_release_base_version()
+        latest_release_match = SEMVER_PATTERN.fullmatch(latest_release_version)
+        if latest_release_match is None:
+            raise RuntimeError(f"Invalid latest SemVer tag version: {latest_release_version}")
+
+        assert_windows_installer_version_bounds(
+            latest_release_version,
+            int(latest_release_match.group("major")),
+            int(latest_release_match.group("minor")),
+            int(latest_release_match.group("patch")),
+        )
+
+        run_number = os.environ.get("GITHUB_RUN_NUMBER", "").strip()
+        if not run_number:
+            raise RuntimeError("GITHUB_RUN_NUMBER is required for tip builds.")
+
+        manifest_version = f"{latest_release_version}-tip.{run_number}"
         write_workflow_output("release_mode", "tip")
+        write_workflow_output("manifest_version", manifest_version)
         write_workflow_output("release_is_prerelease", "true")
         write_workflow_output("release_bundles", "nsis")
         write_workflow_output("release_asset_name_pattern", "[name]_tip_[arch][setup][ext]")
@@ -207,7 +298,7 @@ def resolve_metadata() -> None:
 
 
 def rewrite_version_manifests() -> None:
-    """Apply a CI-only manifest version rewrite for semver tag builds."""
+    """Apply a CI-only manifest version rewrite for the current release build."""
 
     version = os.environ.get("MANIFEST_VERSION", "").strip()
     if not version:
@@ -277,28 +368,33 @@ def build_sidecar() -> None:
     write_workflow_output("sidecar_file_name", name)
 
 
-def remove_release_by_tag() -> None:
-    """Delete an existing GitHub release and tag ref before replacing tip."""
+def repoint_release_tag() -> None:
+    """Force the rolling release tag to reference the commit that was just published."""
 
     tag_name = os.environ.get("RELEASE_TAG_NAME", "").strip()
     if not tag_name:
         raise RuntimeError("RELEASE_TAG_NAME is required.")
+
+    target_sha = os.environ.get("RELEASE_TARGET_SHA", "").strip()
+    if not target_sha:
+        raise RuntimeError("RELEASE_TARGET_SHA is required.")
 
     github_api_url = os.environ.get("GITHUB_API_URL", "").strip()
     github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if not github_api_url or not github_repository:
         raise RuntimeError("GITHUB_API_URL and GITHUB_REPOSITORY are required.")
 
-    release = github_api_request(
-        "GET", f"{github_api_url}/repos/{github_repository}/releases/tags/{tag_name}"
-    )
-    if release is not None:
-        github_api_request("DELETE", f"{github_api_url}/repos/{github_repository}/releases/{release['id']}")
-
     tag_ref_url = f"{github_api_url}/repos/{github_repository}/git/refs/tags/{tag_name}"
     tag_ref = github_api_request("GET", tag_ref_url)
     if tag_ref is not None:
-        github_api_request("DELETE", tag_ref_url)
+        github_api_request("PATCH", tag_ref_url, {"sha": target_sha, "force": True})
+        return
+
+    github_api_request(
+        "POST",
+        f"{github_api_url}/repos/{github_repository}/git/refs",
+        {"ref": f"refs/tags/{tag_name}", "sha": target_sha},
+    )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -312,7 +408,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "rewrite-version-manifests",
             "verify-version-manifests",
             "build-sidecar",
-            "remove-release-by-tag",
+            "repoint-release-tag",
         ),
     )
     return parser
@@ -327,7 +423,7 @@ def main() -> int:
         "rewrite-version-manifests": rewrite_version_manifests,
         "verify-version-manifests": verify_version_manifests,
         "build-sidecar": build_sidecar,
-        "remove-release-by-tag": remove_release_by_tag,
+        "repoint-release-tag": repoint_release_tag,
     }
     actions[args.action]()
     return 0
