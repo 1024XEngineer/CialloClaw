@@ -1822,6 +1822,9 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
   assert.equal(items[0]?.item.note_text, "补充影响范围和回滚说明");
   assert.equal(items[1]?.item.title, "每周一同步巡检报告");
   assert.equal(items[1]?.item.bucket, "recurring_rule");
+  assert.ok(items[1]?.item.due_at);
+  assert.ok(items[1]?.item.next_occurrence_at);
+  assert.notEqual(items[1]?.item.due_at, items[1]?.item.next_occurrence_at);
   assert.equal(items[1]?.item.repeat_rule, "每周一同步巡检报告");
   assert.equal(items[2]?.item.title, "后天检查巡检结果");
   assert.equal(items[2]?.item.bucket, "upcoming");

@@ -544,6 +544,30 @@ function inferSourceNaturalDueTime(lowerText: string, now: Date) {
   return null;
 }
 
+function deriveSourceRecurringNextOccurrence(dueAt: string | null, repeatRule: string | null) {
+  if (!dueAt) {
+    return null;
+  }
+
+  const parsedDueAt = new Date(dueAt);
+  if (Number.isNaN(parsedDueAt.getTime())) {
+    return dueAt;
+  }
+
+  const normalizedRule = repeatRule?.toLowerCase() ?? "";
+  if (normalizedRule.includes("2 week") || normalizedRule.includes("两周")) {
+    parsedDueAt.setDate(parsedDueAt.getDate() + 14);
+  } else if (normalizedRule.includes("month") || normalizedRule.includes("每月")) {
+    parsedDueAt.setMonth(parsedDueAt.getMonth() + 1);
+  } else if (normalizedRule.includes("day") || normalizedRule.includes("每天")) {
+    parsedDueAt.setDate(parsedDueAt.getDate() + 1);
+  } else {
+    parsedDueAt.setDate(parsedDueAt.getDate() + 7);
+  }
+
+  return parsedDueAt.toISOString();
+}
+
 // Renderer fallback cards are local state, but they must infer the same natural
 // scheduling hints as the backend inspector to avoid visible pre-sync drift.
 function inferSourceNaturalFallbackFields(text: string, sourcePath: string | null, now = new Date()): SourceNaturalFallbackFields {
@@ -555,7 +579,7 @@ function inferSourceNaturalFallbackFields(text: string, sourcePath: string | nul
     return {
       bucket: "recurring_rule",
       dueAt,
-      nextOccurrenceAt: null,
+      nextOccurrenceAt: deriveSourceRecurringNextOccurrence(dueAt, repeatRule),
       repeatRule,
     };
   }
@@ -764,7 +788,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     const bodyText = trimSourceBoundaryBlankLines(current.bodyLines).join("\n");
     const noteText = joinSourceNoteText(current.noteMetadataText, bodyText) || current.title;
     const bucket = normalizeFallbackBucket(current.bucket, current.checked, note.path);
-    const dueAt = current.nextOccurrenceAt ?? current.dueAt;
+    const dueAt = current.dueAt;
     const item = {
       agent_suggestion: current.agentSuggestion ?? "等待巡检把这张便签同步成正式事项。",
       bucket,
