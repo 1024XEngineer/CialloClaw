@@ -65,7 +65,7 @@ func TestRunMergesSteeringMessagesIntoLaterPlannerRounds(t *testing.T) {
 	if len(plannerInputs) != 2 {
 		t.Fatalf("expected two planner rounds, got %d", len(plannerInputs))
 	}
-	if !strings.Contains(plannerInputs[1], "Follow-up steering:") {
+	if !strings.Contains(plannerInputs[1], "补充要求：") {
 		t.Fatalf("expected second planner input to include steering section, got %q", plannerInputs[1])
 	}
 	if !strings.Contains(plannerInputs[1], "Also include the latest summary.") || !strings.Contains(plannerInputs[1], "Keep the answer concise.") {
@@ -155,19 +155,19 @@ func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
 	if len(compactedHistory) != 0 {
 		t.Fatalf("expected no compacted history, got %+v", compactedHistory)
 	}
-	if !strings.Contains(plannerInput, "Always respond in Chinese unless the user explicitly asks for another language.") {
+	if !strings.Contains(plannerInput, "默认使用中文回答；只有在用户明确要求其他语言时才切换。") {
 		t.Fatalf("expected planner input to pin the default response language, got %q", plannerInput)
 	}
-	if !strings.Contains(plannerInput, "Keep final answers concise, lead with the result, and avoid filler.") {
+	if !strings.Contains(plannerInput, "最终答复先给结论，保持精简，不要堆砌客套话。") {
 		t.Fatalf("expected planner input to pin the concise response policy, got %q", plannerInput)
 	}
-	if !strings.Contains(plannerInput, "Available tools:") {
+	if !strings.Contains(plannerInput, "当前可用能力：") {
 		t.Fatalf("expected planner input to include available tools, got %q", plannerInput)
 	}
-	if !strings.Contains(plannerInput, "- read_file: Read a file from the workspace. Required inputs: path") {
+	if !strings.Contains(plannerInput, "- read_file: Read a file from the workspace. 必填参数：path") {
 		t.Fatalf("expected planner input to include read_file capability, got %q", plannerInput)
 	}
-	if !strings.Contains(plannerInput, "- page_search: Search for text on a page. Required inputs: url, query") {
+	if !strings.Contains(plannerInput, "- page_search: Search for text on a page. 必填参数：url, query") {
 		t.Fatalf("expected planner input to include page_search capability, got %q", plannerInput)
 	}
 }
@@ -232,10 +232,10 @@ func TestRunRetriesWhenPlannerClaimsCapabilitiesAreUnavailable(t *testing.T) {
 	if len(plannerInputs) != 3 {
 		t.Fatalf("expected three planner rounds, got %+v", plannerInputs)
 	}
-	if !strings.Contains(plannerInputs[1], "Capability reminder:") {
+	if !strings.Contains(plannerInputs[1], "能力提醒：") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
 	}
-	if !strings.Contains(plannerInputs[1], "The listed tools are available in this run.") {
+	if !strings.Contains(plannerInputs[1], "当前这轮已经开放下列工具能力。") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", plannerInputs[1])
 	}
 	if countRetryReason(result.Events, "capability_reminder") != 1 {
@@ -296,7 +296,7 @@ func TestRunDoesNotRepeatCapabilityReminderAfterSecondDenial(t *testing.T) {
 	if len(plannerInputs) != 2 {
 		t.Fatalf("expected capability reminder flow to stop after one retry, got %+v", plannerInputs)
 	}
-	if !strings.Contains(plannerInputs[1], "Capability reminder:") {
+	if !strings.Contains(plannerInputs[1], "能力提醒：") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
 	}
 	if countRetryReason(result.Events, "capability_reminder") != 1 {

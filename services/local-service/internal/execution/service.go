@@ -2574,7 +2574,7 @@ func agentloopAppendSteeringInput(inputText string, steeringMessages []string) s
 	if len(steeringLines) == 0 {
 		return inputText
 	}
-	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
+	return strings.TrimSpace(inputText) + "\n\n补充要求：\n" + strings.Join(steeringLines, "\n")
 }
 
 // isAgentLoopIntent reports whether the current task should execute through the
@@ -2589,17 +2589,17 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 func buildAgentLoopPlannerInput(inputText string, history []string, compressChars, keepRecent int) string {
 	compressedHistory := compactAgentLoopHistory(history, compressChars, keepRecent)
 	sections := []string{
-		"You are the planning step of a desktop agent loop.",
-		"Decide whether to answer directly or call one of the provided tools.",
-		"Use tools only when they materially improve the answer.",
-		"Never invent file contents, directory entries, or page contents.",
-		"If the task is already clear and no tool is required, return the final answer directly.",
+		"你是桌面 Agent 的规划轮次。",
+		"先判断能否直接回答；只有在工具能明显提升结果时才调用工具。",
+		"最终答复先给结论，保持精简，不要堆砌客套话。",
+		"不要编造文件内容、目录项或网页内容。",
+		"如果任务已经足够清晰且不需要工具，直接给最终答复。",
 		"",
-		"User context:",
+		"用户上下文：",
 		strings.TrimSpace(inputText),
 	}
 	if len(compressedHistory) > 0 {
-		sections = append(sections, "", "Observed tool results:")
+		sections = append(sections, "", "已观察到的工具结果：")
 		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n")

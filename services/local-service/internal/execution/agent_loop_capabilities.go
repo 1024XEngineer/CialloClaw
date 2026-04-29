@@ -14,12 +14,12 @@ import (
 var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	{
 		Name:      "read_file",
-		UseWhen:   "you need exact text from a known workspace file path.",
-		AvoidWhen: "the user only needs a directory overview or the target path is still unknown.",
+		UseWhen:   "需要读取工作区内某个已知文件的精确内容",
+		AvoidWhen: "用户只需要目录概览，或还不知道具体文件路径",
 		Constraints: []string{
-			"workspace files only",
-			"cannot infer missing paths",
-			"prefer list_dir first when the path is uncertain",
+			"仅限工作区文件",
+			"不会推断缺失路径",
+			"路径不确定时先用 list_dir",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
@@ -32,12 +32,12 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	},
 	{
 		Name:      "list_dir",
-		UseWhen:   "you need to inspect which files or folders exist under a known workspace directory.",
-		AvoidWhen: "the user already gave an exact file path and needs file content instead of a listing.",
+		UseWhen:   "需要查看某个已知工作区目录下有哪些文件或子目录",
+		AvoidWhen: "用户已经给出明确文件路径，并且真正需要的是文件内容而不是目录列表",
 		Constraints: []string{
-			"workspace directories only",
-			"returns a bounded entry list",
-			"use read_file after locating the target file",
+			"仅限工作区目录",
+			"返回受限数量的目录项",
+			"定位到目标文件后再用 read_file",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
@@ -51,12 +51,12 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	},
 	{
 		Name:      "page_read",
-		UseWhen:   "you need the title or visible text from a specific webpage.",
-		AvoidWhen: "the user only needs keyword hits from a page without reading the full content.",
+		UseWhen:   "需要读取某个网页的标题或主要可见文本",
+		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
 		Constraints: []string{
-			"webpage read access may require approval",
-			"reads a single absolute URL",
-			"does not interact with the page",
+			"网页读取可能触发审批",
+			"一次只读取一个绝对 URL",
+			"不会执行页面交互",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
@@ -69,12 +69,12 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	},
 	{
 		Name:      "page_search",
-		UseWhen:   "you need to confirm whether a keyword or phrase appears on a specific webpage.",
-		AvoidWhen: "the user needs the full page content or broader page navigation.",
+		UseWhen:   "需要确认某个网页里是否出现某个关键词或短语",
+		AvoidWhen: "用户需要完整页面内容，或需要进一步浏览页面结构",
 		Constraints: []string{
-			"webpage read access may require approval",
-			"searches a single absolute URL",
-			"returns bounded keyword matches",
+			"网页读取可能触发审批",
+			"一次只搜索一个绝对 URL",
+			"返回受限数量的关键词命中",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
@@ -165,13 +165,13 @@ func (c agentLoopCapabilitySpec) plannerDescription(baseDescription string) stri
 		parts = append(parts, description)
 	}
 	if useWhen := strings.TrimSpace(c.UseWhen); useWhen != "" {
-		parts = append(parts, "Use when: "+useWhen)
+		parts = append(parts, "适用场景："+useWhen)
 	}
 	if avoidWhen := strings.TrimSpace(c.AvoidWhen); avoidWhen != "" {
-		parts = append(parts, "Avoid when: "+avoidWhen)
+		parts = append(parts, "不适用场景："+avoidWhen)
 	}
 	if constraints := joinCapabilityConstraints(c.Constraints); constraints != "" {
-		parts = append(parts, "Constraints: "+constraints)
+		parts = append(parts, "约束："+constraints)
 	}
 	return strings.Join(parts, " ")
 }

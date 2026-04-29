@@ -29,14 +29,14 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 		if !service.isAllowedAgentLoopTool(definitions[index].Name) {
 			t.Fatalf("expected planner-visible tool %q to stay executable", definitions[index].Name)
 		}
-		if !strings.Contains(definitions[index].Description, "Use when:") || !strings.Contains(definitions[index].Description, "Avoid when:") || !strings.Contains(definitions[index].Description, "Constraints:") {
+		if !strings.Contains(definitions[index].Description, "适用场景：") || !strings.Contains(definitions[index].Description, "不适用场景：") || !strings.Contains(definitions[index].Description, "约束：") {
 			t.Fatalf("expected planner-visible tool %q to include guidance text, got %q", definitions[index].Name, definitions[index].Description)
 		}
 	}
-	if !strings.Contains(definitions[2].Description, "webpage read access may require approval") {
+	if !strings.Contains(definitions[2].Description, "网页读取可能触发审批") {
 		t.Fatalf("expected page_read description to preserve approval boundary, got %q", definitions[2].Description)
 	}
-	if !strings.Contains(definitions[3].Description, "returns bounded keyword matches") {
+	if !strings.Contains(definitions[3].Description, "返回受限数量的关键词命中") {
 		t.Fatalf("expected page_search description to include search constraint, got %q", definitions[3].Description)
 	}
 
@@ -55,8 +55,8 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 }
 
 func TestJoinCapabilityConstraintsSkipsBlankEntries(t *testing.T) {
-	joined := joinCapabilityConstraints([]string{" workspace files only ", "", "prefer list_dir first"})
-	if joined != "workspace files only, prefer list_dir first" {
+	joined := joinCapabilityConstraints([]string{" 仅限工作区文件 ", "", "路径不确定时先用 list_dir"})
+	if joined != "仅限工作区文件, 路径不确定时先用 list_dir" {
 		t.Fatalf("unexpected joined constraints: %q", joined)
 	}
 	if joined := joinCapabilityConstraints(nil); joined != "" {

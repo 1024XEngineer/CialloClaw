@@ -488,22 +488,21 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 func buildPlannerInput(inputText string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
 	sections := []string{
-		"You are the planning step of a desktop agent loop.",
-		"Always respond in Chinese unless the user explicitly asks for another language.",
-		"Decide whether to answer directly or call one of the provided tools.",
-		"If one of the listed tools can help, prefer using it instead of saying the task cannot be done.",
-		"Keep final answers concise, lead with the result, and avoid filler.",
-		"Use tools only when they materially improve the answer.",
-		"Never invent file contents, directory entries, or page contents.",
-		"If the task is already clear and no tool is required, return the final answer directly.",
+		"你是桌面 Agent 的规划轮次。",
+		"默认使用中文回答；只有在用户明确要求其他语言时才切换。",
+		"先判断能否直接回答；只有在工具能明显提升结果时才调用工具。",
+		"如果当前已开放的工具能帮助完成任务，优先调用工具，不要先说自己做不到。",
+		"最终答复先给结论，保持精简，不要堆砌客套话。",
+		"不要编造文件内容、目录项或网页内容。",
+		"如果任务已经足够清晰且不需要工具，直接给最终答复。",
 	}
 	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
-		sections = append(sections, "", "Available tools:")
+		sections = append(sections, "", "当前可用能力：")
 		sections = append(sections, capabilityLines...)
 	}
-	sections = append(sections, "", "User context:", strings.TrimSpace(inputText))
+	sections = append(sections, "", "用户上下文：", strings.TrimSpace(inputText))
 	if len(compressedHistory) > 0 {
-		sections = append(sections, "", "Observed tool results:")
+		sections = append(sections, "", "已观察到的工具结果：")
 		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n"), compressedHistory
@@ -522,11 +521,11 @@ func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
 			line += ": " + description
 		}
 		if requiredFields := toolRequiredFields(definition.InputSchema); len(requiredFields) > 0 {
-			separator := ". "
-			if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "!") || strings.HasSuffix(line, "?") {
+			separator := "。"
+			if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "!") || strings.HasSuffix(line, "?") || strings.HasSuffix(line, "。") || strings.HasSuffix(line, "！") || strings.HasSuffix(line, "？") {
 				separator = " "
 			}
-			line += separator + "Required inputs: " + strings.Join(requiredFields, ", ")
+			line += separator + "必填参数：" + strings.Join(requiredFields, ", ")
 		}
 		lines = append(lines, line)
 	}
@@ -618,12 +617,13 @@ func appendCapabilityReminderInput(inputText string, toolDefinitions []model.Too
 	sections := []string{
 		strings.TrimSpace(inputText),
 		"",
-		"Capability reminder:",
-		"- The listed tools are available in this run.",
-		"- Before saying the task cannot be done, check whether one of the listed tools applies.",
-		"- If a listed tool is relevant, call it; otherwise answer directly in concise Chinese.",
+		"能力提醒：",
+		"- 当前这轮已经开放下列工具能力。",
+		"- 在回答“做不到”或“无法访问”之前，先判断这些工具是否适用。",
+		"- 如果工具能帮助完成任务，就调用工具；否则直接给出简洁中文答复。",
 	}
 	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+		sections = append(sections, "当前可用能力：")
 		sections = append(sections, capabilityLines...)
 	}
 	return strings.TrimSpace(strings.Join(sections, "\n"))
@@ -644,7 +644,7 @@ func appendSteeringInput(inputText string, steeringMessages []string) string {
 	if len(steeringLines) == 0 {
 		return inputText
 	}
-	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
+	return strings.TrimSpace(inputText) + "\n\n补充要求：\n" + strings.Join(steeringLines, "\n")
 }
 
 func compactHistory(history []string, compressChars, keepRecent int) []string {

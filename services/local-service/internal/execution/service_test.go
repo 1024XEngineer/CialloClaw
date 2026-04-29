@@ -598,13 +598,13 @@ func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testin
 	if len(modelClient.plannerInputs) < 2 {
 		t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 	}
-	if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
+	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
 		t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
+	if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "The listed tools are available in this run.") {
+	if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 	}
 	if result.ModelInvocation["request_id"] != "req_loop_capability_retry_3" {
@@ -725,13 +725,13 @@ func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *te
 			if len(modelClient.plannerInputs) < 2 {
 				t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 			}
-			if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
 				t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
+			if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
 				t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "The listed tools are available in this run.") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
 				t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 			}
 			if result.ModelInvocation["request_id"] != test.toolCalls[2].RequestID {
@@ -3384,7 +3384,7 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 		t.Fatal("expected agentLoopToolDefinitions to expose a bounded tool set")
 	}
 	plannerInput := buildAgentLoopPlannerInput("hello", []string{"obs-1", "obs-2", "obs-3"}, 10, 1)
-	if !strings.Contains(plannerInput, "Observed tool results") || !strings.Contains(summarizeAgentLoopHistory([]string{"obs-1", "obs-2"}, 20), "Compressed earlier observations") || singleLineSummary("a\n b") != "a b" {
+	if !strings.Contains(plannerInput, "已观察到的工具结果：") || !strings.Contains(summarizeAgentLoopHistory([]string{"obs-1", "obs-2"}, 20), "Compressed earlier observations") || singleLineSummary("a\n b") != "a b" {
 		t.Fatal("expected planner input helpers to compact history")
 	}
 	annotated := annotateLoopRound(tools.ToolCallRecord{}, 2)
