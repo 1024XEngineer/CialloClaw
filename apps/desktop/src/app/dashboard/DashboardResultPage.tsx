@@ -21,7 +21,11 @@ function isAllowedDashboardResultPageUrl(url: string) {
 function isEmbeddableDashboardResultPageUrl(url: string) {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "https:" || (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname));
+    if (!isLoopbackHost(parsed.hostname)) {
+      return false;
+    }
+
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
   } catch {
     return false;
   }
@@ -91,7 +95,7 @@ export function DashboardResultPage() {
           </div>
           <p className="dashboard-page__description">
             {showBrowserOnlyFallback
-              ? "当前结果页地址不满足站内嵌入条件，已切换为浏览器承接模式；你仍然可以回到任务详情继续查看正式上下文。"
+              ? "当前结果页地址不在站内可信嵌入白名单内，已切换为浏览器承接模式；你仍然可以回到任务详情继续查看正式上下文。"
               : "当前交付使用正式 `result_page` 入口承接，优先留在 dashboard 内查看；需要时也可以切回任务详情或外部浏览器。"}
           </p>
         </div>

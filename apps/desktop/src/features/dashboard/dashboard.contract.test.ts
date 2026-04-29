@@ -1440,14 +1440,16 @@ test("dashboard result-page navigation helper keeps recoverable route data in bo
   );
 });
 
-test("dashboard result page keeps raw delivery URLs out of the visible query and embeds only sandboxed allowlisted pages", () => {
+test("dashboard result page keeps raw delivery URLs out of the visible query and embeds only trusted loopback pages", () => {
   const resultPageSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardResultPage.tsx"), "utf8");
   const navigationSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardResultPageNavigation.ts"), "utf8");
 
   assert.match(resultPageSource, /function isEmbeddableDashboardResultPageUrl/);
-  assert.match(resultPageSource, /parsed\.protocol === "https:" \|\| \(parsed\.protocol === "http:" && isLoopbackHost\(parsed\.hostname\)\)/);
+  assert.match(resultPageSource, /if \(!isLoopbackHost\(parsed\.hostname\)\) \{/);
+  assert.match(resultPageSource, /return parsed\.protocol === "https:" \|\| parsed\.protocol === "http:"/);
   assert.match(resultPageSource, /sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"/);
   assert.match(resultPageSource, /referrerPolicy="no-referrer"/);
+  assert.match(resultPageSource, /不在站内可信嵌入白名单内/);
   assert.doesNotMatch(navigationSource, /sessionStorage/);
   assert.doesNotMatch(navigationSource, /params\.get\("result_id"\)/);
   assert.doesNotMatch(navigationSource, /result_id=/);
