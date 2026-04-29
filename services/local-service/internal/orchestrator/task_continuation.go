@@ -27,10 +27,19 @@ type taskContinuationContext struct {
 	SessionMode string
 }
 
-func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, string, error) {
+type taskContinuationOptions struct {
+	ConfirmRequired bool
+}
+
+func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
 	explicitSessionID := strings.TrimSpace(stringValue(params, "session_id", ""))
+	if options.ConfirmRequired {
+		// Confirmation-required starts must create their own task so the
+		// pre-execution gate cannot be bypassed by continuation inference.
+		return nil, false, explicitSessionID, nil
+	}
 	continuationContext := s.resolveTaskContinuationContext(explicitSessionID)
-	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext)
+	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext, options)
 	if decision.Decision == "continue" && strings.TrimSpace(decision.TaskID) != "" {
 		task, ok := s.loadTaskForContinuation(decision.TaskID)
 		if !ok {
@@ -136,20 +145,20 @@ func canContinueTask(task runengine.TaskRecord) bool {
 	}
 }
 
-func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
+func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) taskContinuationDecision {
 	if len(continuationContext.Candidates) == 0 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "no unfinished candidate task"}
 	}
 	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
-	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
+	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext, options); ok {
 		return decision
 	}
 	return heuristicTaskContinuationDecision(snapshot, explicitIntent, continuationContext)
 }
 
-func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
+func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	modelService := s.currentModel()
 	if s == nil || modelService == nil {
 		return taskContinuationDecision{}, false
@@ -157,7 +166,7 @@ func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextS
 	response, err := modelService.GenerateText(context.Background(), model.GenerateTextRequest{
 		TaskID: "task_continuation_classifier",
 		RunID:  "run_continuation_classifier",
-		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, continuationContext),
+		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, continuationContext, options),
 	})
 	if err != nil {
 		return taskContinuationDecision{}, false
@@ -169,7 +178,7 @@ func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextS
 // buildTaskContinuationPrompt intentionally sends only coarse task/session
 // signals to the model so remote classification does not leak raw text, file
 // names, or other cross-task payload details.
-func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) string {
+func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) string {
 	lines := []string{
 		"You decide whether one new desktop input should continue an existing task or start a new task.",
 		"Return JSON only.",
@@ -179,7 +188,7 @@ func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explic
 		"Only decide among the candidate tasks from the current hidden desktop session. Do not infer anything outside the provided candidates.",
 		"",
 		"New input signals:",
-		taskContinuationInputSummary(snapshot, explicitIntent),
+		taskContinuationInputSummary(snapshot, explicitIntent, options),
 		"",
 		fmt.Sprintf("Candidate unfinished tasks in session (%s):", continuationContext.SessionMode),
 	}
@@ -189,8 +198,8 @@ func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explic
 	return strings.Join(lines, "\n")
 }
 
-func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) string {
-	suggestion := intentsvc.NewService().Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
+func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) string {
+	suggestion := intentsvc.NewService().Suggest(snapshot, explicitIntent, options.ConfirmRequired)
 	resolvedIntentName := stringValue(suggestion.Intent, "name", "")
 	resolvedDeliveryType := deliveryTypeFromIntent(suggestion.Intent)
 	parts := []string{

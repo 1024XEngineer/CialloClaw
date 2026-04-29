@@ -101,7 +101,7 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	}, taskContinuationContext{
 		SessionMode: "implicit_active",
 		Candidates:  []runengine.TaskRecord{candidate},
-	})
+	}, taskContinuationOptions{})
 
 	for _, sensitive := range []string{
 		snapshot.Text,
@@ -133,6 +133,25 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	}
 	if strings.Contains(prompt, "continuation_markers=") {
 		t.Fatalf("expected prompt to stop relying on continuation markers, got %s", prompt)
+	}
+}
+
+func TestTaskContinuationInputSummaryUsesConfirmationPolicy(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{
+		Trigger:   "file_drop",
+		InputType: "file",
+		Text:      "Summarize the attachment.",
+		Files:     []string{"notes/source.md"},
+	}
+
+	directSummary := taskContinuationInputSummary(snapshot, nil, taskContinuationOptions{})
+	if !strings.Contains(directSummary, "requires_confirmation=false") {
+		t.Fatalf("expected described file input to keep direct-start confirmation semantics, got %s", directSummary)
+	}
+
+	forcedSummary := taskContinuationInputSummary(snapshot, nil, taskContinuationOptions{ConfirmRequired: true})
+	if !strings.Contains(forcedSummary, "requires_confirmation=true") {
+		t.Fatalf("expected explicit confirmation policy to reach continuation summary, got %s", forcedSummary)
 	}
 }
 
@@ -171,6 +190,7 @@ func TestClassifyTaskContinuationContinuesExplicitWaitingTaskWithoutSignalWords(
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "continue" || decision.TaskID != "task_001" {
@@ -203,6 +223,7 @@ func TestClassifyTaskContinuationStartsNewTaskForExplicitIntentWithoutAnchors(t 
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
@@ -236,6 +257,7 @@ func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testin
 				},
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
@@ -269,6 +291,7 @@ func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEviden
 				},
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "continue" || decision.TaskID != "task_001" {
@@ -327,6 +350,7 @@ func TestClassifyTaskContinuationDoesNotAutoMergeSameExplicitIntentName(t *testi
 				Intent:      map[string]any{"name": "write_file"},
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
@@ -354,6 +378,7 @@ func TestClassifyTaskContinuationDoesNotAutoMergeGenericFocusCueWithoutContext(t
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {

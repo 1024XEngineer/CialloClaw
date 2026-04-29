@@ -301,15 +301,17 @@ func (s *Service) RunEngine() *runengine.Engine {
 // waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
+	options := mapValue(params, "options")
+	confirmRequired := boolValue(options, "confirm_required", false)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
+		ConfirmRequired: confirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
 	} else if strings.TrimSpace(resolvedSessionID) != "" {
 		params = withResolvedSessionID(params, resolvedSessionID)
 	}
-	options := mapValue(params, "options")
-	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
@@ -414,7 +416,12 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+	options := mapValue(params, "options")
+	forceConfirmRequired := boolValue(options, "confirm_required", false)
+	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent, taskContinuationOptions{
+		ConfirmRequired: confirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
@@ -426,9 +433,6 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
-	options := mapValue(params, "options")
-	forceConfirmRequired := boolValue(options, "confirm_required", false)
-	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, confirmRequired)
 	fallbackConfirmRequired := confirmRequired
 	// Screen inference already carries its own authorization boundary; only an
