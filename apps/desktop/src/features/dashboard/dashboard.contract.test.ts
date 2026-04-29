@@ -1813,6 +1813,48 @@ test("source note editor keeps synced natural note bucket ahead of path defaults
   assert.match(serialized.blockContent, /^bucket: later$/m);
 });
 
+test("source note editor treats an explicit closed bucket as completed when reopening a source block", () => {
+  const { buildSourceNoteEditorDraftFromNote } = loadSourceNoteEditorModule();
+  const note = {
+    content: [
+      "- [ ] Archive release note",
+      "bucket: closed",
+      "",
+      "Keep the final context nearby.",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const draft = buildSourceNoteEditorDraftFromNote(note, {
+    item: {
+      bucket: "closed",
+      ended_at: "2026-04-10T09:00:00.000Z",
+      note_text: "Keep the final context nearby.",
+      source_line: 1,
+      source_path: note.path,
+      status: "completed",
+      title: "Archive release note",
+    },
+    experience: {
+      endedAt: "2026-04-10T09:00:00.000Z",
+    },
+    sourceNote: {
+      localOnly: false,
+      path: note.path,
+      sourceLine: 1,
+      title: "Archive release note",
+    },
+  });
+
+  assert.equal(draft.bucket, "closed");
+  assert.equal(draft.checked, true);
+  assert.equal(draft.endedAt, "2026-04-10 09:00");
+});
+
 test("source note editor keeps indented first and last body lines during round-trip", () => {
   const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
   const note = {

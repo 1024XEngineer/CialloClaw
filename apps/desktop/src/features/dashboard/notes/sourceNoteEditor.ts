@@ -284,16 +284,18 @@ function normalizeSourceNoteCheckedState(
 
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
   const fallbackDraft = fallbackItem ? buildSourceNoteEditorDraftFromItem(fallbackItem, block.sourcePath) : null;
+  const normalizedBucket = normalizeSourceNoteBucket(
+    block.bucketIsExplicit ? block.bucket : (fallbackDraft?.bucket ?? block.bucket),
+    block.checked,
+    block.sourcePath,
+    block.repeatRule !== "",
+  );
+  const normalizedChecked = normalizeSourceNoteCheckedState(normalizedBucket, block.checked);
 
   return {
     agentSuggestion: block.agentSuggestion || fallbackDraft?.agentSuggestion || "",
-    bucket: normalizeSourceNoteBucket(
-      block.bucketIsExplicit ? block.bucket : (fallbackDraft?.bucket ?? block.bucket),
-      block.checked,
-      block.sourcePath,
-      block.repeatRule !== "",
-    ),
-    checked: block.checked,
+    bucket: normalizedBucket,
+    checked: normalizedChecked,
     createdAt: block.createdAt || fallbackDraft?.createdAt || "",
     dueAt: block.dueAt || fallbackDraft?.dueAt || "",
     effectiveScope: block.effectiveScope || fallbackDraft?.effectiveScope || "",
