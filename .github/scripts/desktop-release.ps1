@@ -155,15 +155,9 @@ switch ($Action) {
     }
 
     if ($env:GITHUB_REF -eq "refs/heads/main") {
-      $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA"
-      if ($env:PREVIOUS_SHA -and $env:PREVIOUS_SHA -ne "0000000000000000000000000000000000000000") {
-        $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/compare/$env:PREVIOUS_SHA...$env:GITHUB_SHA"
-      }
-
       Write-WorkflowOutput -Name "release_mode" -Value "tip"
       Write-WorkflowOutput -Name "release_is_prerelease" -Value "true"
       Write-WorkflowOutput -Name "release_bundles" -Value "nsis"
-      Write-WorkflowOutput -Name "release_compare_url" -Value $compareUrl
       return
     }
 

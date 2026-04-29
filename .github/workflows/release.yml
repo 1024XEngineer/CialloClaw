@@ -37,9 +37,6 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PREVIOUS_SHA: ${{ github.event.before }}
         run: ./.github/scripts/desktop-release.ps1 -Action resolve-metadata
 
       - name: Set up pnpm
@@ -130,10 +127,6 @@ jobs:
           tauriScript: pnpm exec tauri
           tagName: tip
           releaseName: tip
-          releaseBody: |
-            ## Tip Build
-            - Channel: `tip`
-            - Compare: ${{ steps.meta.outputs.release_compare_url }}
           prerelease: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
