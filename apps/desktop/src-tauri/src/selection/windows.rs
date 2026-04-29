@@ -1,4 +1,5 @@
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
+use crate::internal_windows::{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::thread;
@@ -29,14 +30,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WINDOWS_UIA_SELECTION_SOURCE: &str = "windows_uia";
 const WINDOWS_UIA_SELECTION_URL: &str = "native://windows-uia-selection";
 const SHELL_BALL_SELECTION_SNAPSHOT_EVENT: &str = "desktop-shell-ball:selection-snapshot";
-const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
-    "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
-    "onboarding",
-];
-const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_SELECTION_MOUSE_DELAY_MS: u64 = 100;
 const SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS: u64 = 80;
 
@@ -342,7 +335,7 @@ fn read_text_selection(element: &IUIAutomationElement) -> Result<String, String>
 fn is_shell_ball_cluster_window(app: &AppHandle, hwnd: HWND) -> bool {
     let root_window = get_root_window(hwnd);
 
-    for label in SHELL_BALL_WINDOW_LABELS {
+    for label in INTERNAL_WINDOW_LABELS {
         let Some(window) = app.get_webview_window(label) else {
             continue;
         };
@@ -357,7 +350,7 @@ fn is_shell_ball_cluster_window(app: &AppHandle, hwnd: HWND) -> bool {
     }
 
     for window in app.webview_windows().values() {
-        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+        if !window.label().starts_with(INTERNAL_PINNED_WINDOW_PREFIX) {
             continue;
         }
 

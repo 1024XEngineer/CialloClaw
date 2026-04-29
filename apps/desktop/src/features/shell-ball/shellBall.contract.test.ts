@@ -922,6 +922,24 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-unminimize"), true);
 });
 
+test("desktop internal window classifiers share the same native allowlist", () => {
+  const mainSource = readFileSync(resolve(desktopRoot, "src-tauri/src/main.rs"), "utf8");
+  const internalWindowsSource = readFileSync(resolve(desktopRoot, "src-tauri/src/internal_windows.rs"), "utf8");
+  const windowContextSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
+  const selectionWindowsSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/windows.rs"), "utf8");
+
+  assert.match(mainSource, /mod internal_windows;/);
+  assert.match(internalWindowsSource, /pub const INTERNAL_WINDOW_LABELS: \[&str; 7\] = \[/);
+  assert.match(internalWindowsSource, /"dashboard"/);
+  assert.match(internalWindowsSource, /"control-panel"/);
+  assert.match(internalWindowsSource, /pub const INTERNAL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";/);
+  assert.match(windowContextSource, /use crate::internal_windows::\{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS\};/);
+  assert.match(selectionWindowsSource, /use crate::internal_windows::\{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS\};/);
+  assert.match(selectionWindowsSource, /for label in INTERNAL_WINDOW_LABELS/);
+  assert.doesNotMatch(selectionWindowsSource, /const SHELL_BALL_WINDOW_LABELS/);
+  assert.doesNotMatch(selectionWindowsSource, /const SHELL_BALL_PINNED_WINDOW_PREFIX/);
+});
+
 test("shell-ball tray hide and show paths target the merged shell-ball host", () => {
   const mainSource = readFileSync(
     resolve(desktopRoot, "src-tauri/src/main.rs"),
@@ -3339,11 +3357,12 @@ test("submitTextInput can restrict ambient foreground snapshots to browser pages
   assert.equal(windowContextCallCount, 1);
 });
 
-test("submitTextInput skips browser-page ambient snapshots when the foreground browser has no resolved url", async () => {
+test("submitTextInput keeps behavior counters when browser-only ambient snapshots are suppressed", async () => {
   const submitCalls: Array<Record<string, unknown>> = [];
   let windowContextCallCount = 0;
   const originalDateNow = Date.now;
   Date.now = () => 1_713_864_005_000;
+  let submitResult: unknown;
 
   try {
     await withSourceModuleRuntime(
@@ -3391,11 +3410,11 @@ test("submitTextInput skips browser-page ambient snapshots when the foreground b
           getActiveWindowContext() {
             windowContextCallCount += 1;
             return Promise.resolve({
-              app_name: "Chrome",
-              browser_kind: "chrome",
+              app_name: "Windows Terminal",
+              browser_kind: "non_browser",
               page_switch_count: 1,
               process_path: null,
-              title: "New Tab",
+              title: "agent-log.txt",
               url: null,
               window_switch_count: 2,
             });
@@ -3413,7 +3432,7 @@ test("submitTextInput skips browser-page ambient snapshots when the foreground b
           }) => Promise<unknown>;
         };
 
-        await service.submitTextInput({
+        submitResult = await service.submitTextInput({
           text: "Summarize this page",
           source: "floating_ball",
           trigger: "hover_text_input",
@@ -3432,8 +3451,11 @@ test("submitTextInput skips browser-page ambient snapshots when the foreground b
     behavior: {
       last_action: "hover_text_input",
       dwell_millis: 5000,
+      window_switch_count: 2,
+      page_switch_count: 1,
     },
   });
+  assert.equal((submitResult as { clientContext?: unknown } | undefined)?.clientContext, undefined);
   assert.equal(windowContextCallCount, 1);
 });
 

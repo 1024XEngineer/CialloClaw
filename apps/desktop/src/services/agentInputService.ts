@@ -318,7 +318,9 @@ async function enrichTextInputSubmitParams(
     : windowContext;
   const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(ambientWindowContext) : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(ambientWindowContext) : undefined;
-  const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, ambientWindowContext);
+  // Browser-only visual gating should not erase switch counters for ordinary
+  // desktop submits when the foreground window is not a browser page.
+  const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
   const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);

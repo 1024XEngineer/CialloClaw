@@ -1,4 +1,5 @@
 use super::types::ActiveWindowContextPayload;
+use crate::internal_windows::{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS};
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Mutex;
@@ -32,16 +33,6 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
-const INTERNAL_WINDOW_LABELS: [&str; 7] = [
-    "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
-    "onboarding",
-    "dashboard",
-    "control-panel",
-];
-const INTERNAL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_FOREGROUND_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
