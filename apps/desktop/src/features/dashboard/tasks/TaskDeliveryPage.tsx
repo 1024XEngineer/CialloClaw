@@ -10,7 +10,7 @@ import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboa
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { buildDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
-import { subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
+import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
 import { getTaskPreviewStatusLabel, getTaskStatusBadgeClass } from "./taskPage.mapper";
@@ -181,12 +181,17 @@ export function TaskDeliveryPage() {
       }
     });
 
+    const clearRuntimeSubscription = subscribeTaskRuntime(taskId, () => {
+      scheduleTaskDetailRefresh();
+    });
+
     return () => {
       if (detailRefreshTimeoutId !== null) {
         window.clearTimeout(detailRefreshTimeoutId);
       }
       clearTaskUpdatedSubscription();
       clearDeliveryReadySubscription();
+      clearRuntimeSubscription();
     };
   }, [dataMode, queryClient, taskId]);
 
