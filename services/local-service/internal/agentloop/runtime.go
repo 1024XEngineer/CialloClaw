@@ -186,6 +186,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	var latestInvocation *model.InvocationRecord
 	repeatedToolName := ""
 	repeatedToolCount := 0
+	capabilityReminderUsed := false
 
 	for turn := 0; turn < request.MaxTurns; turn++ {
 		if request.PollSteering != nil {
@@ -299,6 +300,20 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 
 		if len(plan.ToolCalls) == 0 {
 			outputText := strings.TrimSpace(plan.OutputText)
+			if !capabilityReminderUsed && shouldRetryForCapabilityReminder(outputText, request.ToolDefinitions) {
+				capabilityReminderUsed = true
+				activeInputText = appendCapabilityReminderInput(activeInputText, request.ToolDefinitions)
+				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
+					"attempt_index": round.AttemptIndex,
+					"segment_kind":  round.SegmentKind,
+					"loop_round":    round.LoopRound,
+					"phase":         "planner",
+					"attempt":       1,
+					"reason":        "capability_reminder",
+					"output_text":   truncateText(singleLineSummary(outputText), 160),
+				}))
+				continue
+			}
 			stopReason := StopReasonCompleted
 			if outputText == "" {
 				outputText = request.FallbackOutput
@@ -545,6 +560,63 @@ func toolRequiredFields(schema map[string]any) []string {
 	default:
 		return nil
 	}
+}
+
+func shouldRetryForCapabilityReminder(outputText string, toolDefinitions []model.ToolDefinition) bool {
+	if len(toolDefinitions) == 0 {
+		return false
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(outputText))
+	if normalized == "" {
+		return false
+	}
+
+	denialSignals := []string{
+		"cannot access",
+		"can't access",
+		"unable to access",
+		"do not have access",
+		"don't have access",
+		"cannot read files",
+		"can't read files",
+		"cannot browse",
+		"can't browse",
+		"do not have the ability",
+		"don't have the ability",
+		"lack the ability",
+		"没有这个能力",
+		"没有这些能力",
+		"没有能力",
+		"无法访问",
+		"不能访问",
+		"无法读取",
+		"不能读取",
+		"无法查看",
+		"不能查看",
+		"做不到",
+	}
+	for _, signal := range denialSignals {
+		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendCapabilityReminderInput(inputText string, toolDefinitions []model.ToolDefinition) string {
+	sections := []string{
+		strings.TrimSpace(inputText),
+		"",
+		"Capability reminder:",
+		"- The listed tools are available in this run.",
+		"- Before saying the task cannot be done, check whether one of the listed tools applies.",
+		"- If a listed tool is relevant, call it; otherwise answer directly in concise Chinese.",
+	}
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+		sections = append(sections, capabilityLines...)
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n"))
 }
 
 func appendSteeringInput(inputText string, steeringMessages []string) string {
