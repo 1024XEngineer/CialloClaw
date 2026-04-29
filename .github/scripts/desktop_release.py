@@ -222,21 +222,6 @@ def run_command(command: list[str], cwd: Path = REPO_ROOT) -> subprocess.Complet
     )
 
 
-def get_latest_tag_base_version() -> str:
-    """Return the highest stable SemVer tag version, or the highest SemVer tag as fallback."""
-
-    tag_lines = run_command(["git", "tag", "--list", "v*"]).stdout.splitlines()
-    versions = [tag[1:] for tag in tag_lines if SEMVER_PATTERN.fullmatch(tag[1:])]
-    if not versions:
-        raise RuntimeError("Could not determine the latest SemVer tag version.")
-
-    stable_versions = [
-        version for version in versions if SEMVER_PATTERN.fullmatch(version).group("prerelease") is None
-    ]
-    candidates = stable_versions or versions
-    return max(candidates, key=functools.cmp_to_key(compare_semver))
-
-
 def list_published_releases() -> list[dict[str, Any]]:
     """Fetch every published GitHub release so tip versioning follows formal releases first."""
 
@@ -263,7 +248,7 @@ def list_published_releases() -> list[dict[str, Any]]:
     return releases
 
 
-def get_latest_published_release_base_version() -> str | None:
+def get_latest_published_release_base_version() -> str:
     """Return the highest stable SemVer version among published non-prerelease releases."""
 
     versions: list[str] = []
@@ -283,7 +268,7 @@ def get_latest_published_release_base_version() -> str | None:
         versions.append(version)
 
     if not versions:
-        return None
+        raise RuntimeError("Could not determine the latest published SemVer release version.")
 
     return max(versions, key=functools.cmp_to_key(compare_semver))
 
@@ -321,10 +306,6 @@ def resolve_metadata() -> None:
 
     if github_ref == "refs/heads/main":
         latest_release_version = get_latest_published_release_base_version()
-        if latest_release_version is None:
-            # Bootstrap tip builds from repository tags only until the first formal release exists.
-            latest_release_version = get_latest_tag_base_version()
-
         latest_release_match = SEMVER_PATTERN.fullmatch(latest_release_version)
         if latest_release_match is None:
             raise RuntimeError(f"Invalid latest SemVer tag version: {latest_release_version}")
