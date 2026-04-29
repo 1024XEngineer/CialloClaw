@@ -186,6 +186,9 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	var latestInvocation *model.InvocationRecord
 	repeatedToolName := ""
 	repeatedToolCount := 0
+	// capabilityReminderUsed keeps the recovery heuristic bounded. Once the
+	// planner has been reminded about the exposed tool surface, later denials
+	// should surface normally instead of spinning the planner forever.
 	capabilityReminderUsed := false
 
 	for turn := 0; turn < request.MaxTurns; turn++ {
@@ -303,6 +306,8 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			if !capabilityReminderUsed && shouldRetryForCapabilityReminder(outputText, request.ToolDefinitions) {
 				capabilityReminderUsed = true
 				activeInputText = appendCapabilityReminderInput(activeInputText, request.ToolDefinitions)
+				// Retry this heuristic only once. Repeated denials after an explicit
+				// reminder should return to the caller so the loop stays observable.
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 					"attempt_index": round.AttemptIndex,
 					"segment_kind":  round.SegmentKind,
@@ -563,6 +568,9 @@ func toolRequiredFields(schema map[string]any) []string {
 }
 
 func shouldRetryForCapabilityReminder(outputText string, toolDefinitions []model.ToolDefinition) bool {
+	// Only plain-text capability denials should trigger the reminder retry. This
+	// keeps the recovery path narrow so a genuine refusal does not become an
+	// unbounded planner loop just because tools were available in the run.
 	if len(toolDefinitions) == 0 {
 		return false
 	}
@@ -605,6 +613,8 @@ func shouldRetryForCapabilityReminder(outputText string, toolDefinitions []model
 }
 
 func appendCapabilityReminderInput(inputText string, toolDefinitions []model.ToolDefinition) string {
+	// Append the reminder to the original user input so the next planner round
+	// keeps the task context while restating the bounded tool surface.
 	sections := []string{
 		strings.TrimSpace(inputText),
 		"",

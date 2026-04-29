@@ -243,6 +243,67 @@ func TestRunRetriesWhenPlannerClaimsCapabilitiesAreUnavailable(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotRepeatCapabilityReminderAfterSecondDenial(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	plannerInputs := []string{}
+	executeCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		switch len(plannerInputs) {
+		case 1:
+			return model.ToolCallResult{
+				RequestID:  "req_capability_retry_stop_1",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I cannot access workspace files in this environment.",
+			}, nil
+		default:
+			return model.ToolCallResult{
+				RequestID:  "req_capability_retry_stop_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I still cannot access workspace files in this environment.",
+			}, nil
+		}
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		executeCalls++
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_capability_retry_stop",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_02",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "I still cannot access workspace files in this environment." {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if executeCalls != 0 {
+		t.Fatalf("expected no tool execution after repeated denial, got %d", executeCalls)
+	}
+	if len(plannerInputs) != 2 {
+		t.Fatalf("expected capability reminder flow to stop after one retry, got %+v", plannerInputs)
+	}
+	if !strings.Contains(plannerInputs[1], "Capability reminder:") {
+		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
+	}
+	if countRetryReason(result.Events, "capability_reminder") != 1 {
+		t.Fatalf("expected exactly one capability reminder retry event, got %+v", result.Events)
+	}
+}
+
 func TestRunRetriesPlannerUpToConfiguredBudget(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
