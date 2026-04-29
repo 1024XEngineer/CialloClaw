@@ -172,6 +172,71 @@ func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
 	}
 }
 
+func TestBuildPlannerInputOmitsToolSectionWithoutTools(t *testing.T) {
+	plannerInput, compactedHistory := buildPlannerInput(
+		"Just answer directly.",
+		nil,
+		nil,
+		0,
+		0,
+	)
+
+	if len(compactedHistory) != 0 {
+		t.Fatalf("expected no compacted history, got %+v", compactedHistory)
+	}
+	if strings.Contains(plannerInput, "当前可用能力：") {
+		t.Fatalf("expected planner input without tools to omit capability section, got %q", plannerInput)
+	}
+}
+
+func TestRunDoesNotRetryOrdinaryDirectAnswers(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	plannerInputs := []string{}
+	executeCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, req model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerInputs = append(plannerInputs, req.Input)
+		return model.ToolCallResult{
+			RequestID:  "req_direct_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "这是直接回答，不需要调用工具。",
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		executeCalls++
+		return "unexpected tool execution", tools.ToolCallRecord{
+			ToolCallID: "tool_call_direct_answer",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_direct_answer",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != "这是直接回答，不需要调用工具。" {
+		t.Fatalf("unexpected output text: %+v", result)
+	}
+	if executeCalls != 0 {
+		t.Fatalf("expected no tool execution for direct answer, got %d", executeCalls)
+	}
+	if len(plannerInputs) != 1 {
+		t.Fatalf("expected a single planner round for direct answer, got %+v", plannerInputs)
+	}
+	if countRetryReason(result.Events, "capability_reminder") != 0 {
+		t.Fatalf("expected no capability reminder retry for direct answer, got %+v", result.Events)
+	}
+}
+
 func TestRunRetriesWhenPlannerClaimsCapabilitiesAreUnavailable(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
