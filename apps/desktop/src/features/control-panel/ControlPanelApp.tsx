@@ -375,7 +375,7 @@ function HelpTooltip({ content }: { content: string }) {
   return (
     <Tooltip>
       <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
-        <CircleHelp size={15} strokeWidth={2.35} />
+        <CircleHelp size={14} strokeWidth={1.75} />
       </TooltipTrigger>
       <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
     </Tooltip>

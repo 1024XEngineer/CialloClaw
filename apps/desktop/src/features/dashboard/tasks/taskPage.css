@@ -1,19 +1,15 @@
 .task-tower-page {
-  --task-font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --task-font-body: "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+  --task-font-display: var(--cc-font-display);
+  --task-font-body: var(--cc-font-ui);
   --task-font-mono: var(--font-mono, "Consolas", "SFMono-Regular", monospace);
   --task-shell-inset: clamp(1rem, 2vw, 1.45rem);
-  --task-surface: rgba(252, 248, 242, 0.9);
-  --task-surface-strong: rgba(255, 253, 249, 0.97);
-  --task-shadow: rgba(100, 81, 59, 0.16);
-  --task-shadow-strong: rgba(72, 92, 112, 0.24);
-  --task-wave: rgba(146, 171, 193, 0.2);
+  --task-surface: var(--cc-paper);
+  --task-surface-strong: var(--cc-paper-strong);
+  --task-shadow: rgba(91, 66, 42, 0.16);
+  --task-shadow-strong: rgba(96, 119, 148, 0.24);
+  --task-wave: rgba(159, 183, 216, 0.2);
   background:
-    radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.94), transparent 22%),
-    radial-gradient(circle at 84% 11%, rgba(248, 224, 197, 0.7), transparent 22%),
-    radial-gradient(circle at 78% 72%, rgba(201, 220, 205, 0.54), transparent 18%),
-    radial-gradient(circle at 26% 82%, rgba(221, 232, 242, 0.46), transparent 22%),
-    linear-gradient(180deg, #f9f4ec 0%, #f2e8db 46%, #ece0d3 100%);
+    var(--cc-page-bg);
   color: var(--task-ink);
   color-scheme: light;
   font-family: var(--task-font-body);

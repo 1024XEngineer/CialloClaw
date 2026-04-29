@@ -1,17 +1,16 @@
-// 该文件定义用于展示统计摘要卡片。 
 type MetricCardProps = {
   label: string;
   value: string;
   detail: string;
 };
 
-// MetricCard 处理当前模块的相关逻辑。
+// MetricCard renders compact dashboard summary metrics on the shared light desktop theme.
 export function MetricCard({ label, value, detail }: MetricCardProps) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{label}</p>
-      <p className="mt-3 text-3xl font-semibold text-white">{value}</p>
-      <p className="mt-2 text-sm text-slate-300">{detail}</p>
+    <div className="rounded-2xl border border-[color:var(--cc-line)] bg-[color:var(--cc-glass)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.62)]">
+      <p className="text-xs uppercase tracking-[0.24em] text-[color:var(--cc-ink-muted)]">{label}</p>
+      <p className="mt-3 text-3xl font-semibold text-[color:var(--cc-ink)]">{value}</p>
+      <p className="mt-2 text-sm text-[color:var(--cc-ink-soft)]">{detail}</p>
     </div>
   );
 }

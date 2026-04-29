@@ -490,13 +490,13 @@ export function NotePage() {
   const sourceNotesLoading = sourceConfigQuery.isFetching || sourceNotesQuery.isFetching;
 
   const pageStyle = {
-    "--note-accent": "#d88e63",
-    "--note-accent-strong": "#86573b",
-    "--note-paper": "rgba(255, 250, 243, 0.9)",
-    "--note-paper-strong": "rgba(255, 252, 247, 0.96)",
-    "--note-line": "rgba(122, 92, 65, 0.18)",
-    "--note-ink": "#35271b",
-    "--note-copy": "rgba(72, 56, 44, 0.72)",
+    "--note-accent": "var(--cc-module-notes)",
+    "--note-accent-strong": "var(--cc-module-notes-strong)",
+    "--note-paper": "var(--cc-paper)",
+    "--note-paper-strong": "var(--cc-paper-strong)",
+    "--note-line": "var(--cc-line)",
+    "--note-ink": "var(--cc-ink)",
+    "--note-copy": "var(--cc-ink-muted)",
   } as CSSProperties;
 
   /**
