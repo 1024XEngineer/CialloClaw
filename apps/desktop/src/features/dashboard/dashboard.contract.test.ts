@@ -108,8 +108,27 @@ function loadDashboardOpeningTransitionModule() {
 function loadDashboardWindowErrorBoundaryModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/app/dashboard/DashboardWindowErrorBoundary.js")) as {
-      DashboardWindowErrorBoundary: {
-        new (props: { children: unknown }): {
+      DashboardWindowErrorBoundary: (props: { children: unknown }) => {
+        props: { children: unknown };
+        type: {
+          new (props: { children: unknown }): {
+            componentDidCatch: (error: Error, errorInfo: { componentStack: string }) => void;
+            props: { children: unknown };
+            render: () => unknown;
+            state: { hasError: boolean };
+          };
+          getDerivedStateFromError: () => { hasError: boolean };
+        };
+      };
+    },
+  );
+}
+
+function instantiateDashboardWindowErrorBoundary(
+  DashboardWindowErrorBoundary: (props: { children: unknown }) => {
+    props: { children: unknown };
+    type: {
+      new (props: { children: unknown }): {
           componentDidCatch: (error: Error, errorInfo: { componentStack: string }) => void;
           props: { children: unknown };
           render: () => unknown;
@@ -117,8 +136,18 @@ function loadDashboardWindowErrorBoundaryModule() {
         };
         getDerivedStateFromError: () => { hasError: boolean };
       };
+  },
+) {
+  const renderedBoundary = DashboardWindowErrorBoundary({ children: null });
+  const BoundaryImplementation = renderedBoundary.type;
+
+  return {
+    BoundaryImplementation,
+    create(props: { children: unknown }) {
+      const element = DashboardWindowErrorBoundary(props);
+      return new BoundaryImplementation(element.props);
     },
-  );
+  };
 }
 
 function loadConversationSessionServiceModule() {
@@ -3583,7 +3612,7 @@ test("dashboard opening mask replays after Tauri window focus returns from hidde
   assert.match(dashboardRootSource, /createDashboardOpeningTransitionController/);
   assert.match(dashboardRootSource, /const handleVisibilityChange = \(\) => \{/);
   assert.match(dashboardRootSource, /\.onFocusChanged\(\(\{ payload: focused \}\) => \{/);
-  assert.match(dashboardRootSource, /controller\.handleWindowFocusChanged\(focused\);/);
+  assert.match(dashboardRootSource, /openingTransitionController\.handleWindowFocusChanged\(focused\);/);
 });
 
 test("dashboard opening transition controller replays focus and visibility recovery at runtime", () => {
@@ -3681,6 +3710,8 @@ test("dashboard entry keeps a window-level error boundary so runtime faults do n
     dashboardMainSource,
     /<DashboardWindowErrorBoundary>[\s\S]*<AppProviders>[\s\S]*<DashboardRoot \/>[\s\S]*<\/AppProviders>[\s\S]*<\/DashboardWindowErrorBoundary>/,
   );
+  assert.match(dashboardErrorBoundarySource, /export function DashboardWindowErrorBoundary/);
+  assert.match(dashboardErrorBoundarySource, /class DashboardWindowErrorBoundaryImpl extends Component/);
   assert.match(dashboardErrorBoundarySource, /static getDerivedStateFromError/);
   assert.match(dashboardErrorBoundarySource, /window\.location\.reload\(\)/);
   assert.match(dashboardErrorBoundarySource, /dashboard window render failed/);
@@ -3689,7 +3720,8 @@ test("dashboard entry keeps a window-level error boundary so runtime faults do n
 test("dashboard window error boundary renders a recovery fallback and reload action after runtime faults", () => {
   const { DashboardWindowErrorBoundary } = loadDashboardWindowErrorBoundaryModule();
   const child = { props: { id: "child" }, type: "mock-child" };
-  const boundary = new DashboardWindowErrorBoundary({ children: child });
+  const { BoundaryImplementation, create } = instantiateDashboardWindowErrorBoundary(DashboardWindowErrorBoundary);
+  const boundary = create({ children: child });
   const originalConsoleError = console.error;
   const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
   const consoleMessages: unknown[][] = [];
@@ -3721,7 +3753,7 @@ test("dashboard window error boundary renders a recovery fallback and reload act
 
     boundary.state = {
       ...boundary.state,
-      ...DashboardWindowErrorBoundary.getDerivedStateFromError(),
+      ...BoundaryImplementation.getDerivedStateFromError(),
     };
 
     const fallbackTree = boundary.render();

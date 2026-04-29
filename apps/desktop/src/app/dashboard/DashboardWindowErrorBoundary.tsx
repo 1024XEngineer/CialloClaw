@@ -11,11 +11,20 @@ type DashboardWindowErrorBoundaryState = {
 };
 
 /**
+ * React 18 still requires a class component to catch render-phase errors.
+ * Keep that legacy API isolated behind a small wrapper so the rest of the
+ * dashboard tree can stay on hooks and function components.
+ */
+export function DashboardWindowErrorBoundary(props: DashboardWindowErrorBoundaryProps) {
+  return <DashboardWindowErrorBoundaryImpl {...props} />;
+}
+
+/**
  * Keeps the dashboard window recoverable when long-lived desktop sessions hit
  * an unexpected render-time exception. Without a window-level boundary the
  * whole React tree disappears and the user only sees the background shell.
  */
-export class DashboardWindowErrorBoundary extends Component<
+class DashboardWindowErrorBoundaryImpl extends Component<
   DashboardWindowErrorBoundaryProps,
   DashboardWindowErrorBoundaryState
 > {

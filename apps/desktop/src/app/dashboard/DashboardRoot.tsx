@@ -28,13 +28,19 @@ import "./dashboard.css";
 
 const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
 
-function useDashboardDomainExpansion() {
+/**
+ * Replays the dashboard opening mask after a hidden desktop window becomes
+ * visible again so long-idle sessions do not stay visually clipped.
+ */
+function useDashboardOpeningTransitionState() {
   const [isOpening, setIsOpening] = useState(true);
 
   useEffect(() => {
     let disposed = false;
     let clearWindowFocusListener: (() => void) | null = null;
-    const controller = createDashboardOpeningTransitionController({
+    // Keep the visibility/focus recovery state machine outside the hook so the
+    // long-idle window path stays contract-testable without mounting Tauri.
+    const openingTransitionController = createDashboardOpeningTransitionController({
       cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
       clearTimeout: (handle) => window.clearTimeout(handle),
       getVisibilityState: () => document.visibilityState,
@@ -44,14 +50,14 @@ function useDashboardDomainExpansion() {
     });
 
     const handleVisibilityChange = () => {
-      controller.handleVisibilityChange();
+      openingTransitionController.handleVisibilityChange();
     };
 
-    controller.trigger();
+    openingTransitionController.trigger();
     document.addEventListener("visibilitychange", handleVisibilityChange);
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
-        controller.handleWindowFocusChanged(focused);
+        openingTransitionController.handleWindowFocusChanged(focused);
       })
       .then((unlisten) => {
         if (disposed) {
@@ -67,7 +73,7 @@ function useDashboardDomainExpansion() {
 
     return () => {
       disposed = true;
-      controller.dispose();
+      openingTransitionController.dispose();
       clearWindowFocusListener?.();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
@@ -80,7 +86,7 @@ function DashboardRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const isOpening = useDashboardDomainExpansion();
+  const isOpening = useDashboardOpeningTransitionState();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
   const dashboardHomeQuery = useQuery({
@@ -283,6 +289,9 @@ function DashboardRoutes() {
   );
 }
 
+/**
+ * Mounts the dashboard router tree for the dedicated desktop window.
+ */
 export function DashboardRoot() {
   return (
     <HashRouter>

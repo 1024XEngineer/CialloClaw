@@ -41,6 +41,8 @@ void installHideOnCloseRequest();
 installDashboardEscapeClose();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
+  // Keep the recovery boundary above AppProviders so provider init failures
+  // still land on the dashboard fallback instead of collapsing the window.
   <DashboardWindowErrorBoundary>
     <AppProviders>
       <DashboardRoot />

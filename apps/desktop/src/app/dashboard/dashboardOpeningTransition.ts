@@ -10,8 +10,10 @@ type DashboardOpeningTransitionEnvironment = {
 };
 
 /**
- * Coordinates the dashboard opening mask so hidden or unfocused desktop
- * windows can replay their reveal transition once they become visible again.
+ * Isolates the dashboard opening-mask recovery state machine from the React
+ * hook that wires it to Tauri window events. Keeping this in a small
+ * controller makes the long-idle recovery path readable in the app code and
+ * directly testable without mounting a desktop window.
  */
 export function createDashboardOpeningTransitionController(environment: DashboardOpeningTransitionEnvironment) {
   let frame = 0;
