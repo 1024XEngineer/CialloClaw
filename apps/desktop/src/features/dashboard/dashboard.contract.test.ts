@@ -3499,6 +3499,11 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /subscribeTaskUpdated\(\(payload\) => \{[\s\S]*scheduleTaskDetailRefresh\(\);/);
   assert.match(taskDeliverySource, /subscribeDeliveryReady\(\(payload\) => \{[\s\S]*invalidateCurrentTaskDelivery\(\);/);
   assert.match(taskDeliverySource, /subscribeTaskRuntime\(taskId, \(\) => \{[\s\S]*scheduleTaskDetailRefresh\(\);/);
+  assert.match(taskDeliverySource, /const taskDetailArtifacts = useMemo\(\(\) => detailData\?\.detail\.artifacts \?\? \[\], \[detailData\?\.detail\.artifacts\]\);/);
+  assert.match(taskDeliverySource, /const artifactItems = useMemo\(\(\) => \{/);
+  assert.match(taskDeliverySource, /const listedArtifacts = artifactListQuery\.data\?\.items \?\? \[\];/);
+  assert.match(taskDeliverySource, /mergedArtifacts\.push\(artifact\);/);
+  assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);

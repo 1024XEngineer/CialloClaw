@@ -91,7 +91,29 @@ export function TaskDeliveryPage() {
   const detailData = taskDetailQuery.data ?? null;
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "交付详情请求失败") : null;
-  const artifactItems = artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? [];
+  const taskDetailArtifacts = useMemo(() => detailData?.detail.artifacts ?? [], [detailData?.detail.artifacts]);
+  const artifactItems = useMemo(() => {
+    const listedArtifacts = artifactListQuery.data?.items ?? [];
+    const mergedArtifacts = [...listedArtifacts];
+    const artifactKeys = new Set(
+      listedArtifacts.map((artifact) => `${artifact.artifact_id}::${artifact.path}`),
+    );
+
+    // Task detail can outpace the dedicated artifact query while a run is
+    // active, so keep newer detail-only artifacts visible until the list query
+    // catches up.
+    for (const artifact of taskDetailArtifacts) {
+      const artifactKey = `${artifact.artifact_id}::${artifact.path}`;
+      if (artifactKeys.has(artifactKey)) {
+        continue;
+      }
+
+      artifactKeys.add(artifactKey);
+      mergedArtifacts.push(artifact);
+    }
+
+    return mergedArtifacts;
+  }, [artifactListQuery.data?.items, taskDetailArtifacts]);
   const formalDeliveryResult = detailData?.detail.delivery_result ?? null;
   const formalDeliveryUrl = formalDeliveryResult?.payload.url ?? null;
   const formalDeliveryUrlIsAllowed = formalDeliveryUrl !== null && isAllowedTaskOpenUrl(formalDeliveryUrl);
