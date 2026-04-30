@@ -40,6 +40,7 @@ import {
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
+import { FloatingPet } from "./components/floating-pet/FloatingPet";
 import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
 import { getShellBallMascotPointerPhaseAction } from "./components/ShellBallMascot";
 import { shouldSuppressShellBallMascotHotspotGestures } from "./components/ShellBallMascot";
@@ -3183,6 +3184,21 @@ test("shell-ball mascot shows a selection marker above the ball when text select
 
   assert.match(markup, /shell-ball-mascot__selection-marker/);
   assert.match(markup, /shell-ball-mascot__selection-marker-glyph/);
+});
+
+test("floating pet renders the open-face layer by default", () => {
+  const markup = renderToStaticMarkup(createElement(FloatingPet, { size: 128 }));
+
+  assert.equal(markup.match(/<img/g)?.length ?? 0, 6);
+  assert.match(markup, /face_open\.png/);
+  assert.doesNotMatch(markup, /face_closed\.png/);
+});
+
+test("floating pet swaps to the closed-face layer when requested", () => {
+  const markup = renderToStaticMarkup(createElement(FloatingPet, { eyesClosed: true, size: 128 }));
+
+  assert.match(markup, /face_closed\.png/);
+  assert.doesNotMatch(markup, /face_open\.png/);
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

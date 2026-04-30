@@ -1,0 +1,20 @@
+.root {
+  display: block;
+  height: 100%;
+  max-height: 100%;
+  max-width: 100%;
+  overflow: visible;
+  position: relative;
+  width: 100%;
+}
+
+.layer {
+  display: block;
+  height: 100%;
+  inset: 0;
+  object-fit: contain;
+  pointer-events: none;
+  position: absolute;
+  user-select: none;
+  width: 100%;
+}
