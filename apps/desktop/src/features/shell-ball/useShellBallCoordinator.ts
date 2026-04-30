@@ -778,8 +778,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleHoveredRef = useRef(false);
   const inputFocusedRef = useRef(false);
   const inputHoveredRef = useRef(false);
-  const bubbleHideDelayTimeoutRef = useRef<number | null>(null);
-  const bubbleHideCompleteTimeoutRef = useRef<number | null>(null);
+  const bubbleHideDelayTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const bubbleHideCompleteTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   helperWindowsVisibleRef.current = helpersVisible;
   const handlersRef = useRef({
     setInputValue: input.setInputValue,
