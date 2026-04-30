@@ -41,12 +41,18 @@ function resolveTaskPageContext(pageContext: PageContext | undefined) {
   const normalizedAppName = pageContext?.app_name?.trim();
   const normalizedTitle = pageContext?.title?.trim();
   const normalizedUrl = pageContext?.url?.trim();
+  const normalizedWindowTitle = pageContext?.window_title?.trim();
+  const normalizedVisibleText = pageContext?.visible_text?.trim();
+  const normalizedHoverTarget = pageContext?.hover_target?.trim();
 
   if (normalizedAppName && normalizedTitle && normalizedUrl) {
     return {
       app_name: normalizedAppName,
       title: normalizedTitle,
       url: normalizedUrl,
+      ...(normalizedWindowTitle ? { window_title: normalizedWindowTitle } : {}),
+      ...(normalizedVisibleText ? { visible_text: normalizedVisibleText } : {}),
+      ...(normalizedHoverTarget ? { hover_target: normalizedHoverTarget } : {}),
     };
   }
 

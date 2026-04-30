@@ -1,4 +1,9 @@
-import type { ApprovalDecision, BubbleMessage, PageContext } from "@cialloclaw/protocol";
+import type {
+  ApprovalDecision,
+  BubbleMessage,
+  PageContext,
+  RecommendationContext,
+} from "@cialloclaw/protocol";
 
 export type ShellBallBubbleRole = "user" | "agent";
 
@@ -28,6 +33,7 @@ export type ShellBallBubbleInlineApprovalState = {
 export type ShellBallBubbleInlineRecommendationState = {
   recommendationId: string;
   pageContext: PageContext;
+  requestContext: RecommendationContext;
 };
 
 export type ShellBallBubbleDesktopState = {
@@ -59,6 +65,15 @@ function cloneShellBallBubbleInlineRecommendationState(
   return {
     recommendationId: state.recommendationId,
     pageContext: { ...state.pageContext },
+    requestContext: {
+      ...state.requestContext,
+      ...(state.requestContext.page ? { page: { ...state.requestContext.page } } : {}),
+      ...(state.requestContext.screen ? { screen: { ...state.requestContext.screen } } : {}),
+      ...(state.requestContext.behavior ? { behavior: { ...state.requestContext.behavior } } : {}),
+      ...(state.requestContext.selection ? { selection: { ...state.requestContext.selection } } : {}),
+      ...(state.requestContext.error ? { error: { ...state.requestContext.error } } : {}),
+      ...(state.requestContext.clipboard ? { clipboard: { ...state.requestContext.clipboard } } : {}),
+    },
   };
 }
 

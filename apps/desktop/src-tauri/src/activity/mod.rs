@@ -33,3 +33,17 @@ pub fn read_mouse_activity_snapshot() -> Option<MouseActivitySnapshotPayload> {
         stub::read_mouse_activity_snapshot()
     }
 }
+
+/// Returns a small history of recent native mouse positions so nearby desktop
+/// surfaces can resolve hover context without depending on a focused element.
+pub fn read_recent_mouse_points() -> Vec<(i32, i32)> {
+    #[cfg(windows)]
+    {
+        return windows::read_recent_mouse_points();
+    }
+
+    #[cfg(not(windows))]
+    {
+        stub::read_recent_mouse_points()
+    }
+}

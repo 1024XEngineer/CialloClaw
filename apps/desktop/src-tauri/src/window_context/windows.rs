@@ -1,4 +1,5 @@
 use super::types::ActiveWindowContextPayload;
+use crate::activity::read_recent_mouse_points;
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Mutex;
@@ -6,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use windows::core::{BSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
     COINIT_APARTMENTTHREADED,
@@ -204,7 +205,7 @@ fn read_lightweight_window_context_for_hwnd(
     })
 }
 
-fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
+pub(crate) fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
     let mut context =
         read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
             app_name: "unknown".to_string(),
@@ -510,7 +511,8 @@ fn read_window_automation_snapshot(
     };
     let visible_text = read_visible_text_from_root(&automation, &root_element, context.title.as_deref());
     let hover_target =
-        read_target_candidate_from_focused_element(&automation, hwnd, context.title.as_deref());
+        read_target_candidate_from_recent_points(&automation, hwnd, context.title.as_deref())
+            .or_else(|| read_target_candidate_from_focused_element(&automation, hwnd, context.title.as_deref()));
     let error_text = derive_error_text(
         visible_text.as_deref(),
         hover_target.as_deref(),
@@ -764,6 +766,37 @@ fn read_target_candidate_from_focused_element(
     }
 
     read_target_candidate(&focused, window_title)
+}
+
+fn read_target_candidate_from_recent_points(
+    automation: &IUIAutomation,
+    hwnd: HWND,
+    window_title: Option<&str>,
+) -> Option<String> {
+    let root_hwnd = get_root_window(hwnd);
+
+    for (cursor_x, cursor_y) in read_recent_mouse_points() {
+        let point = POINT {
+            x: cursor_x,
+            y: cursor_y,
+        };
+        let Some(element) = (unsafe { automation.ElementFromPoint(point).ok() }) else {
+            continue;
+        };
+        let Some(element_hwnd) = (unsafe { element.CurrentNativeWindowHandle().ok() }) else {
+            continue;
+        };
+
+        if element_hwnd.0.is_null() || get_root_window(element_hwnd) != root_hwnd {
+            continue;
+        }
+
+        if let Some(candidate) = read_target_candidate(&element, window_title) {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 fn read_target_candidate(

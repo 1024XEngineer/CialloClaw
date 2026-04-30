@@ -11,3 +11,8 @@ pub fn install_mouse_activity_listener() -> Result<(), String> {
 pub fn read_mouse_activity_snapshot() -> Option<MouseActivitySnapshotPayload> {
     None
 }
+
+/// Returns no native mouse-point history on unsupported platforms.
+pub fn read_recent_mouse_points() -> Vec<(i32, i32)> {
+    Vec::new()
+}

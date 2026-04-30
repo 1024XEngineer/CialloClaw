@@ -8,6 +8,9 @@ mod stub;
 
 pub use types::ActiveWindowContextPayload;
 
+#[cfg(windows)]
+pub(crate) use windows::read_window_context_for_hwnd;
+
 use tauri::AppHandle;
 
 /// Installs the native active-window listener for the active platform.

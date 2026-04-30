@@ -8,6 +8,9 @@ pub struct SelectionPageContextPayload {
     pub title: String,
     pub url: String,
     pub app_name: String,
+    pub window_title: Option<String>,
+    pub visible_text: Option<String>,
+    pub hover_target: Option<String>,
 }
 
 /// SelectionSnapshotPayload is the host-side selection snapshot forwarded to the

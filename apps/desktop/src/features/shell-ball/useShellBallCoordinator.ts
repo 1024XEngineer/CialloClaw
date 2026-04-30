@@ -257,11 +257,20 @@ function resolveShellBallRecommendationPageContext(
   const title = windowContext?.title?.trim() || SHELL_BALL_RECOMMENDATION_PAGE_TITLE;
   const appName = windowContext?.app_name?.trim() || SHELL_BALL_RECOMMENDATION_APP_NAME;
   const url = sanitizeShellBallRecommendationUrl(windowContext?.url);
+  const visibleText = windowContext?.visible_text?.trim() || undefined;
+  const hoverTarget = windowContext?.hover_target?.trim() || undefined;
 
   return {
     appName,
     pageTitle: title,
-    pageContext: {
+    pageContext: compactShellBallContextRecord<PageContext>({
+      app_name: appName,
+      title,
+      url,
+      window_title: title,
+      visible_text: visibleText,
+      hover_target: hoverTarget,
+    }) ?? {
       app_name: appName,
       title,
       url,
@@ -372,6 +381,53 @@ function createShellBallRecommendationRequestContext(input: {
           },
         }
       : {}),
+  };
+}
+
+function createShellBallSelectedTextRequestContext(input: {
+  selectionText: string;
+  pageContext: PageContext | undefined;
+}): InputContext {
+  const normalizedSelectionText = input.selectionText.trim();
+  const title = input.pageContext?.title?.trim() || input.pageContext?.window_title?.trim() || SHELL_BALL_RECOMMENDATION_PAGE_TITLE;
+  const appName = input.pageContext?.app_name?.trim() || SHELL_BALL_RECOMMENDATION_APP_NAME;
+  const url = sanitizeShellBallRecommendationUrl(input.pageContext?.url);
+  const hoverTarget = input.pageContext?.hover_target?.trim() || undefined;
+  const visibleText = input.pageContext?.visible_text?.trim() || undefined;
+  const pageContext = compactShellBallContextRecord<PageContext>({
+    app_name: appName,
+    title,
+    url,
+    window_title: input.pageContext?.window_title?.trim() || title,
+    visible_text: visibleText,
+    hover_target: hoverTarget,
+  });
+  const screenSummary = createShellBallRecommendationScreenSummary({
+    appName,
+    pageTitle: title,
+    pageUrl: url,
+  });
+  const screenContext = compactShellBallContextRecord({
+    summary: screenSummary,
+    screen_summary: screenSummary,
+    visible_text: visibleText,
+    window_title: pageContext?.window_title ?? title,
+    hover_target: hoverTarget,
+  });
+
+  return {
+    selection: {
+      text: normalizedSelectionText,
+    },
+    selection_text: normalizedSelectionText,
+    last_action: "text_selected_click",
+    ...(pageContext ? { page: pageContext } : {}),
+    ...(screenContext ? { screen: screenContext } : {}),
+    ...(screenSummary ? { screen_summary: screenSummary } : {}),
+    ...(hoverTarget ? { hover_target: hoverTarget } : {}),
+    behavior: {
+      last_action: "text_selected_click",
+    },
   };
 }
 
@@ -713,6 +769,7 @@ function createShellBallRecommendationBubbleItem(input: {
   recommendation: RecommendationItem;
   createdAt: string;
   pageContext: PageContext;
+  requestContext: RecommendationContext;
   turnIndex?: number;
   turnPhase?: number;
 }) {
@@ -732,6 +789,7 @@ function createShellBallRecommendationBubbleItem(input: {
       inlineRecommendation: {
         recommendationId: input.recommendation.recommendation_id,
         pageContext: input.pageContext,
+        requestContext: input.requestContext,
       },
     },
   } satisfies ShellBallBubbleItem;
@@ -1462,6 +1520,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     try {
       const result = await startTaskFromSelectedText(normalizedText, {
+        context: createShellBallSelectedTextRequestContext({
+          selectionText: normalizedText,
+          pageContext,
+        }),
         delivery: {
           preferred: "bubble",
           fallback: "task_detail",
@@ -1679,14 +1741,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       }
 
       const recommendationContext = resolveShellBallRecommendationPageContext(activeWindowContext);
+      const recommendationRequestContext = createShellBallRecommendationRequestContext({
+        windowContext: activeWindowContext,
+        mouseActivitySnapshot,
+        clipboardText,
+        copyCount: clipboardActivitySnapshot?.copy_count,
+        lastAction: "primary_click",
+      });
       const recommendationResult = await getRecommendations({
-        context: createShellBallRecommendationRequestContext({
-          windowContext: activeWindowContext,
-          mouseActivitySnapshot,
-          clipboardText,
-          copyCount: clipboardActivitySnapshot?.copy_count,
-          lastAction: "primary_click",
-        }),
+        context: recommendationRequestContext,
         request_meta: createShellBallRequestMeta(),
         scene: "idle",
         source: "floating_ball",
@@ -1712,6 +1775,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               recommendation,
               createdAt,
               pageContext: recommendationContext.pageContext,
+              requestContext: recommendationRequestContext,
               turnIndex,
               turnPhase: index,
             })),
@@ -1784,6 +1848,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     try {
       const result = await startTaskFromRecommendation(recommendationText, {
+        context: inlineRecommendation.requestContext,
         delivery: {
           preferred: "bubble",
           fallback: "task_detail",

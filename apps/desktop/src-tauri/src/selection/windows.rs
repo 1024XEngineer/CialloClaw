@@ -1,4 +1,5 @@
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
+use crate::window_context::read_window_context_for_hwnd;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::thread;
@@ -158,14 +159,36 @@ pub fn read_selection_snapshot(
 
     Ok(Some(SelectionSnapshotPayload::new(
         normalized_text,
-        SelectionPageContextPayload {
-            title: get_window_title(foreground_window),
-            url: WINDOWS_UIA_SELECTION_URL.to_string(),
-            app_name: get_window_app_name(foreground_window)
-                .unwrap_or_else(|| WINDOWS_UIA_SELECTION_SOURCE.to_string()),
-        },
+        create_selection_page_context(foreground_window),
         WINDOWS_UIA_SELECTION_SOURCE,
     )))
+}
+
+fn create_selection_page_context(foreground_window: HWND) -> SelectionPageContextPayload {
+    let window_context = read_window_context_for_hwnd(foreground_window);
+    let title = window_context
+        .title
+        .clone()
+        .unwrap_or_else(|| get_window_title(foreground_window));
+    let url = window_context
+        .url
+        .clone()
+        .unwrap_or_else(|| WINDOWS_UIA_SELECTION_URL.to_string());
+    let app_name = if window_context.app_name.trim().is_empty() {
+        get_window_app_name(foreground_window)
+            .unwrap_or_else(|| WINDOWS_UIA_SELECTION_SOURCE.to_string())
+    } else {
+        window_context.app_name.clone()
+    };
+
+    SelectionPageContextPayload {
+        title: title.clone(),
+        url,
+        app_name,
+        window_title: Some(title),
+        visible_text: window_context.visible_text.clone(),
+        hover_target: window_context.hover_target.clone(),
+    }
 }
 
 unsafe extern "system" fn shell_ball_selection_mouse_hook(

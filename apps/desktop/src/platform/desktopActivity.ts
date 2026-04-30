@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type DesktopMouseActivitySnapshotPayload = {
   updated_at: string;
+  cursor_x?: number | null;
+  cursor_y?: number | null;
 };
 
 /**

@@ -2437,10 +2437,19 @@ test("task-entry services keep rpc transport failures visible and forward file d
       });
 
       await service.startTaskFromSelectedText("  selected text  ", {
+        context: {
+          selection: {
+            text: "selected text",
+          },
+          selection_text: "selected text",
+        },
         pageContext: {
           app_name: "notepad",
           title: "Notes",
           url: "native://windows-uia-selection",
+          visible_text: "Highlighted release checklist",
+          hover_target: "Checklist item",
+          window_title: "Notes",
         },
         sessionId: "sess_shell_ball_selection",
         source: "floating_ball",
@@ -2455,7 +2464,16 @@ test("task-entry services keep rpc transport failures visible and forward file d
           app_name: "notepad",
           title: "Notes",
           url: "native://windows-uia-selection",
+          visible_text: "Highlighted release checklist",
+          hover_target: "Checklist item",
+          window_title: "Notes",
         },
+      });
+      assert.deepEqual(startTaskCalls[1]?.context, {
+        selection: {
+          text: "selected text",
+        },
+        selection_text: "selected text",
       });
 
       await service.bootstrapTask("  summarize this  ");
@@ -7176,8 +7194,11 @@ test("shell-ball single-click recommendations carry formal desktop context and r
   assert.match(coordinatorSource, /page_switch_count:/);
   assert.match(coordinatorSource, /lastAction: "primary_click"/);
   assert.match(coordinatorSource, /pageContext: recommendationContext\.pageContext/);
+  assert.match(coordinatorSource, /requestContext: recommendationRequestContext/);
+  assert.match(coordinatorSource, /context: inlineRecommendation\.requestContext/);
   assert.match(coordinatorSource, /pageContext: inlineRecommendation\.pageContext/);
   assert.match(bubbleDesktopSource, /pageContext: PageContext;/);
+  assert.match(bubbleDesktopSource, /requestContext: RecommendationContext;/);
 });
 
 test("shell-ball screenshot command routes through the formal screen task path", () => {
@@ -7294,19 +7315,27 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const providersSource = readFileSync(resolve(desktopRoot, "src/features/shared/AppProviders.tsx"), "utf8");
   const selectionProviderSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/selection/selection.provider.tsx"), "utf8");
+  const selectionTypesSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/types.rs"), "utf8");
+  const selectionHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/windows.rs"), "utf8");
 
   assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
   assert.match(appSource, /void handleCoordinatorSelectedTextPrompt\(selectionPrompt\);/);
   assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(async \(selection: ShellBallSelectionSnapshot \| string\) => \{/);
   assert.match(coordinatorSource, /createShellBallSelectedTextPreview\(text\)/);
+  assert.match(coordinatorSource, /createShellBallSelectedTextRequestContext\(/);
   assert.match(coordinatorSource, /startTaskFromSelectedText\(normalizedText, \{/);
+  assert.match(coordinatorSource, /context: createShellBallSelectedTextRequestContext\(\{/);
   assert.match(coordinatorSource, /pageContext,/);
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
   assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
   assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.doesNotMatch(selectionProviderSource, /readShellBallSelectionSnapshot/);
   assert.doesNotMatch(selectionProviderSource, /useInterval\(/);
+  assert.match(selectionTypesSource, /pub visible_text: Option<String>,/);
+  assert.match(selectionTypesSource, /pub hover_target: Option<String>,/);
+  assert.match(selectionHostSource, /visible_text: window_context\.visible_text\.clone\(\),/);
+  assert.match(selectionHostSource, /hover_target: window_context\.hover_target\.clone\(\),/);
   assert.equal(
     areShellBallSelectionSnapshotsEqual(
       {
