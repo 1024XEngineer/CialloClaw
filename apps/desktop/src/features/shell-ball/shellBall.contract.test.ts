@@ -8242,6 +8242,7 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(coordinatorSource, /submitTextInput\(\{/);
   assert.match(coordinatorSource, /trigger: "hover_text_input"/);
   assert.match(coordinatorSource, /inputMode: "text"/);
+  assert.match(coordinatorSource, /includeForegroundBrowserPageContext: true/);
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 

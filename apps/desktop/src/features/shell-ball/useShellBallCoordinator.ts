@@ -1353,6 +1353,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         source: "floating_ball",
         trigger: "hover_text_input",
         inputMode: "text",
+        includeForegroundBrowserPageContext: true,
         options: {
           confirm_required: false,
           preferred_delivery: "bubble",
