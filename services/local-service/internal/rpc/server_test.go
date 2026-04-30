@@ -691,7 +691,7 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 	close(modelClient.generateToolWait)
 }
 
-func TestDispatchTaskStartPreservesExplicitIntentField(t *testing.T) {
+func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	server := newTestServer()
 
 	response := server.dispatch(requestEnvelope{
@@ -720,12 +720,12 @@ func TestDispatchTaskStartPreservesExplicitIntentField(t *testing.T) {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
 	task := success.Result.Data.(map[string]any)["task"].(map[string]any)
-	if task["status"] != "waiting_auth" {
-		t.Fatalf("expected explicit write_file intent to keep its governed waiting_auth path, got %+v", task)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected task.start to stay in confirming_intent when intent is stripped, got %+v", task)
 	}
 	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || intentValue["name"] != "write_file" {
-		t.Fatalf("expected task.start to preserve the explicit request intent, got %+v", task["intent"])
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected task.start to rely on backend suggestion instead of request intent, got %+v", task["intent"])
 	}
 }
 

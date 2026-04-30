@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
@@ -79,7 +80,7 @@ func (s *Server) handleAgentInputSubmit(params map[string]any) (any, *rpcError) 
 
 // handleAgentTaskStart handles agent.task.start.
 func (s *Server) handleAgentTaskStart(params map[string]any) (any, *rpcError) {
-	data, err := s.orchestrator.StartTask(params)
+	data, err := s.orchestrator.StartTask(sanitizeTaskStartParams(params))
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -266,6 +267,23 @@ func (s *Server) handleAgentPluginList(params map[string]any) (any, *rpcError) {
 func (s *Server) handleAgentPluginDetailGet(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.PluginDetailGet(params)
 	return wrapOrchestratorResult(data, err)
+}
+
+// sanitizeTaskStartParams strips any client-supplied intent payload so
+// agent.task.start continues to flow through the authoritative suggestion path.
+func sanitizeTaskStartParams(params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+
+	sanitized := make(map[string]any, len(params))
+	for key, value := range params {
+		if strings.TrimSpace(key) == "intent" {
+			continue
+		}
+		sanitized[key] = value
+	}
+	return sanitized
 }
 
 // wrapOrchestratorResult maps orchestrator return values into the shared RPC
