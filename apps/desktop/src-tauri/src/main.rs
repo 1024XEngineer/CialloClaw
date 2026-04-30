@@ -498,6 +498,22 @@ fn derive_local_service_pipe_name(app_data_dir: &str) -> String {
     format!(r"\\.\pipe\cialloclaw-rpc-{hash:016x}")
 }
 
+/// configure_sidecar_named_pipe keeps the bridge on the default pipe unless the
+/// bundled sidecar actually started. Dev sessions may rely on a manually started
+/// local-service that still listens on the default global pipe name.
+fn configure_sidecar_named_pipe(
+    bridge_state: &NamedPipeBridgeState,
+    named_pipe_path: &str,
+    sidecar_started: bool,
+) -> Result<bool, String> {
+    if !sidecar_started {
+        return Ok(false);
+    }
+
+    bridge_state.configure_pipe_name(named_pipe_path.to_string())?;
+    Ok(true)
+}
+
 /// append_local_service_log writes lightweight startup diagnostics into the
 /// user data directory so packaged failures can be investigated without a console.
 fn append_local_service_log(app: &tauri::AppHandle, message: &str) {
@@ -1418,7 +1434,10 @@ mod desktop_settings_snapshot_tests {
 
 #[cfg(test)]
 mod named_pipe_routing_tests {
-    use super::{requires_shared_named_pipe_request, should_use_isolated_named_pipe_payload};
+    use super::{
+        configure_sidecar_named_pipe, requires_shared_named_pipe_request,
+        should_use_isolated_named_pipe_payload, NamedPipeBridgeState, DEFAULT_NAMED_PIPE_PATH,
+    };
     use serde_json::json;
 
     #[test]
@@ -1458,6 +1477,39 @@ mod named_pipe_routing_tests {
         assert!(!should_use_isolated_named_pipe_payload(&dashboard_payload));
         assert!(!should_use_isolated_named_pipe_payload(&task_start_payload));
         assert!(requires_shared_named_pipe_request("agent.task.start"));
+    }
+
+    #[test]
+    fn configure_sidecar_named_pipe_keeps_default_pipe_when_sidecar_is_unavailable() {
+        let bridge_state = NamedPipeBridgeState::default();
+
+        let configured = configure_sidecar_named_pipe(
+            &bridge_state,
+            r"\\.\pipe\cialloclaw-rpc-user-test",
+            false,
+        )
+        .expect("keep default pipe when sidecar is unavailable");
+
+        assert!(!configured);
+        assert_eq!(
+            bridge_state.pipe_name().expect("read configured pipe name"),
+            DEFAULT_NAMED_PIPE_PATH
+        );
+    }
+
+    #[test]
+    fn configure_sidecar_named_pipe_switches_to_user_scoped_pipe_after_start() {
+        let bridge_state = NamedPipeBridgeState::default();
+        let scoped_pipe = r"\\.\pipe\cialloclaw-rpc-user-test";
+
+        let configured = configure_sidecar_named_pipe(&bridge_state, scoped_pipe, true)
+            .expect("configure user-scoped pipe");
+
+        assert!(configured);
+        assert_eq!(
+            bridge_state.pipe_name().expect("read configured pipe name"),
+            scoped_pipe
+        );
     }
 }
 
@@ -2786,17 +2838,16 @@ fn main() {
             let app_data_dir = resolve_required_path(app_data_dir, "app data dir")
                 .map_err(std::io::Error::other)?;
             let named_pipe_path = derive_local_service_pipe_name(&app_data_dir);
-            bridge_state
-                .configure_pipe_name(named_pipe_path.clone())
-                .map_err(std::io::Error::other)?;
-            append_local_service_log(
-                app.handle(),
-                &format!("configured local service named pipe: {named_pipe_path}"),
-            );
             let sidecar_started =
                 start_local_service_sidecar(app.handle(), sidecar_state.inner(), &named_pipe_path)
                     .map_err(std::io::Error::other)?;
-            if sidecar_started {
+            if configure_sidecar_named_pipe(bridge_state.inner(), &named_pipe_path, sidecar_started)
+                .map_err(std::io::Error::other)?
+            {
+                append_local_service_log(
+                    app.handle(),
+                    &format!("configured local service named pipe: {named_pipe_path}"),
+                );
                 wait_for_local_service_ready(app.handle(), bridge_state.inner())
                     .map_err(std::io::Error::other)?;
             }

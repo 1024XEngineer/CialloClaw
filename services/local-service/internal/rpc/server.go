@@ -278,6 +278,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
 	var writeMu sync.Mutex
+	var taskStartRequestMu sync.Mutex
 
 	for {
 		var request requestEnvelope
@@ -300,7 +301,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		// Each request is handled in its own goroutine so a long-running task
 		// confirmation or input-submit flow cannot block unrelated control-panel or
 		// dashboard reads that share the same desktop pipe connection.
-		go s.handleStreamRequest(request, encoder, &writeMu)
+		go s.handleStreamRequest(request, encoder, &writeMu, &taskStartRequestMu)
 	}
 
 }
@@ -312,7 +313,17 @@ func (s *Server) handleStreamRequest(
 	request requestEnvelope,
 	encoder *json.Encoder,
 	writeMu *sync.Mutex,
+	taskStartMu *sync.Mutex,
 ) {
+	if shouldTrackStartedTask(request.Method) {
+		// Task-starting requests on one shared desktop stream must stay serialized.
+		// Their runtime-notification correlation temporarily learns task ids from
+		// task-start events, and parallel submits on the same connection can
+		// otherwise cross-wire notifications before that mapping is established.
+		taskStartMu.Lock()
+		defer taskStartMu.Unlock()
+	}
+
 	streamedRuntimeCounts := map[string]int{}
 	var streamedRuntimeCountsMu sync.Mutex
 	requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
