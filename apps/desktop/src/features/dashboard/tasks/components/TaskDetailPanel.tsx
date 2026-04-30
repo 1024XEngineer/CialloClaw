@@ -38,6 +38,7 @@ type TaskDetailPanelProps = {
   onRetryDetail: (() => void) | null;
   onSteerTask: (message: string) => void;
   steeringPending: boolean;
+  steeringSuccessVersion: number;
 };
 
 /**
@@ -68,6 +69,7 @@ export function TaskDetailPanel({
   onRetryDetail,
   onSteerTask,
   steeringPending,
+  steeringSuccessVersion,
 }: TaskDetailPanelProps) {
   const { detail, experience, task } = detailData;
   const [steeringMessage, setSteeringMessage] = useState("");
@@ -103,16 +105,14 @@ export function TaskDetailPanel({
   const isScreenTask = task.source_type === "screen_capture" || detail.task.intent?.name === "screen_analyze";
 
   useEffect(() => {
-    if (steeringPending) {
+    if (steeringPending || steeringSuccessVersion === 0) {
       return;
     }
 
-    if (!feedback || !/已记录新的补充要求/.test(feedback)) {
-      return;
-    }
-
+    // Clear the local follow-up draft only after the parent mutation confirms a
+    // successful steer, so backend wording changes cannot leave stale input behind.
     setSteeringMessage("");
-  }, [feedback, steeringPending]);
+  }, [steeringPending, steeringSuccessVersion]);
 
   useEffect(() => {
     // Keep runtime event filters as local draft state so typing does not trigger

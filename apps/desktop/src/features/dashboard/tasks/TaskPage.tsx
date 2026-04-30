@@ -109,6 +109,7 @@ export function TaskPage() {
   const [showMoreFinished, setShowMoreFinished] = useState(false);
   const [expandedClusterKey, setExpandedClusterKey] = useState<TaskClusterKey | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [steeringSuccessVersion, setSteeringSuccessVersion] = useState(0);
   const [dataMode, setDataMode] = useState<TaskPageDataMode>(() => loadDashboardDataMode("tasks") as TaskPageDataMode);
   const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
   const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
@@ -516,6 +517,7 @@ export function TaskPage() {
   const taskSteerMutation = useMutation({
     mutationFn: ({ message, taskId }: { message: string; taskId: string }) => steerTaskByMessage(taskId, message, dataMode),
     onSuccess: (result, variables) => {
+      setSteeringSuccessVersion((current) => current + 1);
       showFeedback(result.bubble_message?.text ?? "已记录新的补充要求。");
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
@@ -865,6 +867,7 @@ export function TaskPage() {
                   onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
                   onSteerTask={handleSteerTask}
                   steeringPending={taskSteerMutation.isPending}
+                  steeringSuccessVersion={steeringSuccessVersion}
                 />
               </motion.div>
             </div>

@@ -3991,14 +3991,18 @@ test("TaskDetailPanel renders a formal screen governance section only for screen
   assert.doesNotMatch(panelSource, /evidenceItems\.length \+ evidenceArtifacts\.length/);
 });
 
-test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserves steering draft until success", () => {
+test("TaskDetailPanel keeps runtime sections visible for ended tasks and clears steering draft from explicit success state", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
 
-  assert.match(panelSource, /if \(!feedback \|\| !\/已记录新的补充要求\/\.test\(feedback\)\)/);
+  assert.match(panelSource, /steeringSuccessVersion: number/);
+  assert.match(panelSource, /if \(steeringPending \|\| steeringSuccessVersion === 0\)/);
   assert.doesNotMatch(panelSource, /handleSubmitSteering\(\)[\s\S]*setSteeringMessage\(""\)/);
   assert.match(panelSource, /\{renderRuntimeSummarySection\(\)\}/);
   assert.match(panelSource, /\{renderRuntimeEventsSection\(\)\}/);
+  assert.match(taskPageSource, /const \[steeringSuccessVersion, setSteeringSuccessVersion\] = useState\(0\);/);
+  assert.match(taskPageSource, /setSteeringSuccessVersion\(\(current\) => current \+ 1\);/);
+  assert.match(taskPageSource, /steeringSuccessVersion=\{steeringSuccessVersion\}/);
   assert.match(taskPageSource, /invalidateTaskRuntimeQueries\(selectedTaskId\)/);
 });
 
