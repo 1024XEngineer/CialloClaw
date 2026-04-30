@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,8 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 type stubModelClient struct {
@@ -2491,6 +2494,31 @@ func TestExecuteScreenCleanupPlanDeletesExistingWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestServiceWorkspaceRootAndArtifactPromotionNoops(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	if got := service.WorkspaceRoot(); got != workspaceRoot {
+		t.Fatalf("expected workspace root %q, got %q", workspaceRoot, got)
+	}
+	var nilService *Service
+	if got := nilService.WorkspaceRoot(); got != "" {
+		t.Fatalf("expected nil service workspace root to be empty, got %q", got)
+	}
+
+	nonTempArtifact := map[string]any{"path": "workspace/report.md", "artifact_id": "art_report"}
+	promoted, cleanup := service.promoteScreenArtifactForPersistence(context.Background(), "task_workspace", nonTempArtifact)
+	if cleanup != nil {
+		t.Fatalf("expected non-temp artifact promotion to skip cleanup, got %+v", cleanup)
+	}
+	if !reflect.DeepEqual(promoted, nonTempArtifact) {
+		t.Fatalf("expected non-temp artifact promotion to leave artifact unchanged, got %+v", promoted)
+	}
+
+	promoted, cleanup = nilService.promoteScreenArtifactForPersistence(context.Background(), "task_nil", map[string]any{"path": "temp/screen/frame.png"})
+	if cleanup != nil || promoted["path"] != "temp/screen/frame.png" {
+		t.Fatalf("expected nil service promotion to noop, promoted=%+v cleanup=%+v", promoted, cleanup)
+	}
+}
+
 func TestExecuteScreenCleanupPlanRemovesClipFrameDirectories(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 	frameDir := filepath.Join(workspaceRoot, "temp", "screen_sess_031", "clip_frames")
@@ -2877,9 +2905,20 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "demo.txt"), []byte("worker file content"), 0o644); err != nil {
 		t.Fatalf("write demo file: %v", err)
 	}
+	gb18030Content, _, err := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte("修复执行输入乱码"))
+	if err != nil {
+		t.Fatalf("GB18030 encode failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "legacy.txt"), gb18030Content, 0o644); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
 	section := service.fileSection("notes/demo.txt")
 	if !strings.Contains(section, "worker file content") {
 		t.Fatalf("expected file content section, got %s", section)
+	}
+	legacySection := service.fileSection("notes/legacy.txt")
+	if !strings.Contains(legacySection, "修复执行输入乱码") || strings.ContainsRune(legacySection, '\uFFFD') {
+		t.Fatalf("expected decoded legacy file section, got %s", legacySection)
 	}
 	missingSection := service.fileSection("notes/missing.txt")
 	if !strings.Contains(missingSection, "读取失败") {

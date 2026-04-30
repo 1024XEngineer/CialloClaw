@@ -462,6 +462,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1007003` `DOCKER_BACKEND_UNAVAILABLE`
 - `1007004` `SANDBOX_PROFILE_INVALID`
 - `1007005` `PATH_POLICY_VIOLATION`
+- `1007006` `INSPECTION_FILESYSTEM_UNAVAILABLE`
+- `1007007` `INSPECTION_SOURCE_NOT_FOUND`
+- `1007008` `INSPECTION_SOURCE_UNREADABLE`
 
 ##### 模型与前馈配置
 
@@ -2105,7 +2108,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入巡检配置页时
-- **系统处理**：返回当前巡检配置
+- **系统处理**：返回当前巡检配置；当前实现从 `settings.task_automation` 读取正式真源，`agent.task_inspector.config.*` 作为巡检配置兼容入口存在，不再维护独立于 settings snapshot 的第二份正式配置
 - **入参**：无业务入参
 - **出参**：巡检配置快照
 
@@ -2168,7 +2171,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改巡检配置并保存时
-- **系统处理**：写入巡检配置，返回生效结果
+- **系统处理**：写入巡检配置，返回生效结果；当前实现把该更新收口到 `settings.task_automation`，避免巡检配置与正式 settings snapshot 分裂
 - **入参**：巡检来源、巡检频率、触发开关
 - **出参**：已生效配置
 
@@ -2250,9 +2253,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户手动点击“立即巡检”时
-- **系统处理**：执行一次任务巡检并返回摘要
+- **系统处理**：执行一次任务巡检并返回摘要；当 `target_sources` 未提供时，服务端回退到 `settings.task_automation.task_sources`。若来源目录不存在、越界或不可访问，接口返回正式错误而不是成功的 `0/0/0` 摘要
 - **入参**：触发原因、目标来源
 - **出参**：巡检摘要、建议
+- **常见错误**：`1004003 WORKSPACE_BOUNDARY_DENIED`、`1007006 INSPECTION_FILESYSTEM_UNAVAILABLE`、`1007007 INSPECTION_SOURCE_NOT_FOUND`、`1007008 INSPECTION_SOURCE_UNREADABLE`
 
 ### agent.task_inspector.run 入参说明
 
@@ -3643,6 +3647,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
 - `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
+- 打包版默认 `general.download.workspace_path` 会解析为用户本机的 `AppLocalData/CialloClaw/workspace`，历史 `workspace` 相对占位值会在 settings snapshot 读取时迁移到该绝对目录。
+- 打包版默认 `task_automation.task_sources` 会解析为 `${workspace_path}/todos`；settings snapshot 读取时仅会把历史默认占位值（`workspace/todos` 或旧的 `D:/workspace/todos`）迁移到该绝对目录，用户自定义的 `workspace/...` 多根来源会保持原样。
+- `general.download.workspace_path` 当前不会热重建 bootstrap 时已经绑定的 workspace runtime（例如文件系统、执行后端与 execution workspace）；更新该字段会写入正式 settings snapshot，并返回 `apply_mode = restart_required` 与 `need_restart = true`，用于显式提示“重启后端后生效”。
+- 桌面宿主侧 `desktop_open_local_path`、`desktop_reveal_local_path` 只允许使用当前 bootstrap 生效的 `workspace root` 或宿主明确白名单的 runtime 子目录（当前仅接受 `temp/...` 前缀，并解析到 runtime temp 目录）；source-note 路径解析允许使用当前 `workspace root` 或宿主 `runtime root`。这些路径解析都不再回退到编译时 repo root，也不会因为待重启的 `workspace_path` 草稿而漂移本地打开范围。
+- 仪表盘 `trust_summary.workspace_path` 与 `out_of_workspace` 判断展示的是当前运行时真实生效的 workspace 根目录，而不是待重启后才会生效的 settings 草稿值。
 
 ### agent.settings.update 入参说明
 

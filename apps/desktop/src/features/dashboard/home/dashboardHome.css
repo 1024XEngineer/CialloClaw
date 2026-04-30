@@ -1,10 +1,6 @@
 .dashboard-orbit-home {
-  background:
-    radial-gradient(circle at 50% 14%, rgba(255, 255, 255, 0.92), transparent 30%),
-    radial-gradient(circle at 16% 22%, rgba(246, 220, 211, 0.46), transparent 22%),
-    radial-gradient(circle at 82% 22%, rgba(255, 236, 203, 0.5), transparent 22%),
-    linear-gradient(180deg, #fbf6ef 0%, #f3eadf 100%);
-  color: #5f544b;
+  background: var(--cc-page-bg);
+  color: var(--cc-ink-soft);
   min-height: 100vh;
   overflow: hidden;
   position: relative;
@@ -24,8 +20,7 @@
 
 .dashboard-orbit-home::after {
   background-image:
-    radial-gradient(rgba(151, 126, 102, 0.08) 0.7px, transparent 0.7px),
-    radial-gradient(rgba(255, 255, 255, 0.68) 1px, transparent 1px);
+    var(--cc-dot-pattern);
   background-position: 0 0, 16px 20px;
   background-size: 24px 24px, 144px 144px;
   mask-image: radial-gradient(ellipse 88% 88% at 50% 50%, black 0%, transparent 100%);

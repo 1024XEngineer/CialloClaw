@@ -1,15 +1,44 @@
 package taskinspector
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
+
+type readFileErrorAdapter struct {
+	platform.FileSystemAdapter
+	failPath string
+}
+
+func (a readFileErrorAdapter) ReadFile(name string) ([]byte, error) {
+	if filepath.ToSlash(name) == filepath.ToSlash(a.failPath) {
+		return nil, fs.ErrPermission
+	}
+	return a.FileSystemAdapter.ReadFile(name)
+}
+
+type relErrorAdapter struct {
+	platform.FileSystemAdapter
+	failEnsureRoot bool
+}
+
+func (a relErrorAdapter) EnsureWithinWorkspace(path string) (string, error) {
+	if a.failEnsureRoot && path == "." {
+		return "", errors.New("workspace root unavailable")
+	}
+	return a.FileSystemAdapter.EnsureWithinWorkspace(path)
+}
 
 func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -31,7 +60,7 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 
-	result := service.Run(RunInput{
+	result, err := service.Run(RunInput{
 		Config: map[string]any{
 			"task_sources":           []string{"workspace/todos"},
 			"inspection_interval":    map[string]any{"unit": "minute", "value": 15},
@@ -53,6 +82,9 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 			{"item_id": "todo_004", "title": "done item", "status": "completed"},
 		},
 	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 
 	summary := result.Summary
 	if summary["parsed_files"] != 2 {
@@ -106,7 +138,10 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 	if len(result.NotepadItems) != 2 {
 		t.Fatalf("expected parsed notes from markdown, got %+v", result.NotepadItems)
 	}
@@ -130,6 +165,162 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	}
 }
 
+func TestServiceRunDecodesLegacyMarkdownSources(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content, _, err := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte("- [ ] 修复巡检乱码\n"))
+	if err != nil {
+		t.Fatalf("GB18030 encode failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "legacy.md"), content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if result.Summary["parsed_files"] != 1 || len(result.NotepadItems) != 1 {
+		t.Fatalf("expected legacy markdown source to be parsed, got summary=%+v items=%+v", result.Summary, result.NotepadItems)
+	}
+	if result.NotepadItems[0]["title"] != "修复巡检乱码" {
+		t.Fatalf("expected decoded notepad title, got %+v", result.NotepadItems[0])
+	}
+}
+
+func TestServiceRunReturnsErrorWhenSourceDecodeFails(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] source item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "bad.md"), []byte{0x00, 0x01, 0x02, 0xff}, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	_, err = service.Run(RunInput{
+		Config: map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: []map[string]any{
+			{"item_id": "todo_existing", "title": "preserve me", "status": "normal"},
+		},
+	})
+	if !errors.Is(err, ErrInspectionSourceUnreadable) {
+		t.Fatalf("expected failed task-source decode to map to unreadable source error, got %v", err)
+	}
+}
+
+func TestServiceRunSkipsBinaryAttachmentsAndKeepsTextSources(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] source item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.txt"), []byte("- [ ] txt item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "checklist"), []byte("- [ ] extensionless item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "attachment.bin"), []byte{0x00, 0x01, 0x02, 0xff}, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{
+		Config: map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: []map[string]any{
+			{"item_id": "todo_existing", "title": "old snapshot", "status": "normal"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if !result.SourceSynced {
+		t.Fatalf("expected binary attachments to be skipped without blocking source sync")
+	}
+	if result.Summary["parsed_files"] != 3 {
+		t.Fatalf("expected text source files to be counted, got %+v", result.Summary)
+	}
+	if len(result.NotepadItems) != 3 {
+		t.Fatalf("expected readable text sources to replace old snapshot, got %+v", result.NotepadItems)
+	}
+	titles := map[string]bool{}
+	for _, item := range result.NotepadItems {
+		titles[stringValue(item, "title")] = true
+	}
+	for _, title := range []string{"source item", "txt item", "extensionless item"} {
+		if !titles[title] {
+			t.Fatalf("expected parsed title %q in %+v", title, result.NotepadItems)
+		}
+	}
+}
+
+func TestServiceRunIgnoresUnsupportedTextTaskSourceFiles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "good.md"), []byte("- [ ] markdown item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.txt"), []byte("- [ ] text item\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "config.json"), []byte("{\n  \"checklist\": [\"- [ ] should stay ignored\"]\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if !result.SourceSynced {
+		t.Fatalf("expected supported task source files to sync cleanly, got %+v", result)
+	}
+	if result.Summary["parsed_files"] != 2 {
+		t.Fatalf("expected only markdown and txt task sources to be counted, got %+v", result.Summary)
+	}
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected unsupported text files to stay ignored, got %+v", result.NotepadItems)
+	}
+}
+
 func TestTaskInspectorHelperFunctions(t *testing.T) {
 	if countChecklistItems("- [ ] one\n* [x] two\nplain text") != 2 {
 		t.Fatal("expected checklist counter to include open and closed items")
@@ -138,11 +329,47 @@ func TestTaskInspectorHelperFunctions(t *testing.T) {
 	if len(resolved) != 2 || resolved[0] != "workspace/todos" {
 		t.Fatalf("expected resolveSources to dedupe non-empty values, got %+v", resolved)
 	}
-	if sourceToFSPath("/workspace/notes") != "workspace/notes" {
+	resolvedStrings := resolveSources(nil, map[string]any{"task_sources": []string{"workspace/todos", " ", "workspace/todos"}})
+	if len(resolvedStrings) != 1 || resolvedStrings[0] != "workspace/todos" {
+		t.Fatalf("expected resolveSources to accept []string settings payloads, got %+v", resolvedStrings)
+	}
+	emptyPath, err := sourceToFSPath(nil, " ")
+	if err != nil || emptyPath != "" {
+		t.Fatalf("expected blank source to normalize to empty path, got path=%q err=%v", emptyPath, err)
+	}
+	fsPath, err := sourceToFSPath(nil, "/workspace/notes")
+	if err != nil || fsPath != "notes" {
 		t.Fatalf("expected sourceToFSPath to normalize workspace prefix")
 	}
-	if sourceToFSPath("../../etc") != "" {
-		t.Fatalf("expected sourceToFSPath to reject outside-workspace paths")
+	rootPath, err := sourceToFSPath(nil, "/")
+	if err != nil || rootPath != "." {
+		t.Fatalf("expected root slash to normalize to dot, got path=%q err=%v", rootPath, err)
+	}
+	drivePath, err := sourceToFSPath(nil, `D:/workspace/notes`)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected drive-letter source without file system to require workspace binding, got path=%q err=%v", drivePath, err)
+	}
+	driveBackslashPath, err := sourceToFSPath(nil, `D:\workspace\notes`)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected backslash drive-letter source without file system to require workspace binding, got path=%q err=%v", driveBackslashPath, err)
+	}
+	_, err = sourceToFSPath(nil, "../../etc")
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected sourceToFSPath to reject outside-workspace paths, got %v", err)
+	}
+	for _, path := range []string{"todos/inbox.md", "todos/inbox.markdown", "todos/notes.txt", "todos/checklist"} {
+		if shouldSkipTaskSourceAttachment(path) || shouldSkipUnreadableTaskSourceFile(path) {
+			t.Fatalf("expected text task source file %q to be accepted", path)
+		}
+	}
+	if !shouldSkipTaskSourceAttachment("todos/attachment.bin") {
+		t.Fatal("expected binary attachment to be skipped")
+	}
+	if !isSupportedTextTaskSourceFile("todos/notes.txt") || !isSupportedTextTaskSourceFile("todos/checklist") {
+		t.Fatal("expected supported text source helper to preserve text compatibility")
+	}
+	if isSupportedTextTaskSourceFile("todos/config.json") {
+		t.Fatal("expected unsupported text source helper to reject non-task file types")
 	}
 	tags := splitTagList("urgent, weekly, notes")
 	if len(tags) != 3 || tags[1] != "weekly" {
@@ -164,21 +391,145 @@ func TestServiceRunHonorsTargetSourcesAndHandlesMissingFiles(t *testing.T) {
 	service := NewService(nil)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC) }
 
-	result := service.Run(RunInput{
+	_, err := service.Run(RunInput{
 		TargetSources: []string{"workspace/missing"},
 		Config: map[string]any{
 			"task_sources":        []string{"workspace/todos"},
 			"inspection_interval": map[string]any{"unit": "hour", "value": 1},
 		},
 	})
-
-	if result.Summary["parsed_files"] != 0 {
-		t.Fatalf("expected no parsed files without file system, got %+v", result.Summary)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected missing filesystem error, got %v", err)
 	}
-	if len(result.Suggestions) == 0 || result.Suggestions[0] == "" {
-		t.Fatalf("expected fallback suggestion, got %+v", result.Suggestions)
-	}
-	if sourceToFSPath("workspace/missing") != "missing" {
+	fsPath, err := sourceToFSPath(nil, "workspace/missing")
+	if err != nil || fsPath != "missing" {
 		t.Fatalf("expected target source to use workspace-relative fs path")
+	}
+}
+
+func TestServiceRunWithoutSourcesKeepsRuntimeNotepadItems(t *testing.T) {
+	service := NewService(nil)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC) }
+
+	result, err := service.Run(RunInput{
+		NotepadItems: []map[string]any{{
+			"item_id": "todo_runtime_only",
+			"title":   "keep runtime notes",
+			"status":  "normal",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected no-source run to succeed, got %v", err)
+	}
+	if result.SourceSynced {
+		t.Fatal("expected no-source run to avoid source sync")
+	}
+	if len(result.NotepadItems) != 1 || result.NotepadItems[0]["item_id"] != "todo_runtime_only" {
+		t.Fatalf("expected runtime items to survive without sources, got %+v", result.NotepadItems)
+	}
+}
+
+func TestServiceRunReturnsExplicitErrorForMissingSource(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	service := NewService(platform.NewLocalFileSystemAdapter(pathPolicy))
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC) }
+
+	_, err = service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/missing"}}})
+	if !errors.Is(err, ErrInspectionSourceNotFound) {
+		t.Fatalf("expected source not found error, got %v", err)
+	}
+}
+
+func TestServiceRunReturnsExplicitErrorForUnreadableSource(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	baseFileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "blocked.md"), []byte("- [ ] blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	service := NewService(readFileErrorAdapter{FileSystemAdapter: baseFileSystem, failPath: "todos/blocked.md"})
+
+	_, err = service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if !errors.Is(err, ErrInspectionSourceUnreadable) {
+		t.Fatalf("expected source unreadable error, got %v", err)
+	}
+}
+
+func TestSourceToFSPathAcceptsWorkspaceAbsolutePaths(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	absoluteSource := filepath.Join(workspaceRoot, "todos")
+
+	fsPath, err := sourceToFSPath(fileSystem, absoluteSource)
+	if err != nil {
+		t.Fatalf("expected absolute workspace source to be accepted, got %v", err)
+	}
+	if fsPath != "todos" {
+		t.Fatalf("expected absolute workspace source to stay addressable, got %q", fsPath)
+	}
+
+	rootPath, err := sourceToFSPath(fileSystem, workspaceRoot)
+	if err != nil || rootPath != "." {
+		t.Fatalf("expected workspace root path to normalize to dot, got path=%q err=%v", rootPath, err)
+	}
+
+	absWithoutFileSystem, err := sourceToFSPath(nil, absoluteSource)
+	if runtime.GOOS == "windows" {
+		if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+			t.Fatalf("expected absolute source without file system to require workspace binding on windows, path=%q err=%v", absWithoutFileSystem, err)
+		}
+	} else {
+		if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+			t.Fatalf("expected absolute source without file system to stay outside workspace on non-windows hosts, path=%q err=%v", absWithoutFileSystem, err)
+		}
+	}
+
+	_, err = sourceToFSPath(fileSystem, `D:/workspace/notes`)
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected foreign drive source to stay outside the workspace boundary, got %v", err)
+	}
+
+	_, err = sourceToFSPath(nil, "/workspace/../outside")
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected workspace-relative escape path to be rejected, got %v", err)
+	}
+
+	_, err = sourceToFSPath(nil, "/tmp/workspace/notes")
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected legacy unix-style absolute path without filesystem binding to be rejected, got %v", err)
+	}
+
+	_, err = sourceToFSPath(relErrorAdapter{FileSystemAdapter: fileSystem, failEnsureRoot: true}, absoluteSource)
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected workspace-root resolution failure to map to boundary error, got %v", err)
+	}
+
+	_, err = sourceToFSPath(fileSystem, filepath.Join(t.TempDir(), "outside"))
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected outside absolute source to be rejected, got %v", err)
+	}
+
+	_, err = sourceToFSPath(fileSystem, `..\evil`)
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected backslash parent traversal to be rejected, got %v", err)
+	}
+
+	unsafePath, err := sourceToFSPath(fileSystem, `sub\a.md`)
+	if err != nil || unsafePath != "sub/a.md" {
+		t.Fatalf("expected relative windows path to normalize to slash form, path=%q err=%v", unsafePath, err)
 	}
 }

@@ -193,6 +193,17 @@ export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotific
 // loop.* notifications without promoting these runtime payloads into formal
 // frontend state. Callers still re-read the task-centric queries after each hit.
 export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSteeredNotification | TaskRuntimeNotification) => void) {
+  return subscribeAllTaskRuntime((payload) => {
+    if (payload.task_id === taskId) {
+      onMessage(payload);
+    }
+  });
+}
+
+// subscribeAllTaskRuntime is the global runtime-notification stream for
+// frontend surfaces that must buffer task-scoped observations before the
+// formal task id is locally registered.
+export function subscribeAllTaskRuntime(onMessage: (payload: TaskSteeredNotification | TaskRuntimeNotification) => void) {
   const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
   if (!bridge?.subscribe) {
@@ -221,7 +232,7 @@ export function subscribeTaskRuntime(taskId: string, onMessage: (payload: TaskSt
         }
 
         const message = payload as { params?: TaskSteeredNotification | TaskRuntimeNotification };
-        if (message.params?.task_id === taskId) {
+        if (message.params) {
           onMessage(message.params);
         }
       })

@@ -1,6 +1,6 @@
 .security-page {
-  --security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --security-font-body: "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+  --security-font-display: var(--cc-font-display);
+  --security-font-body: var(--cc-font-ui);
   --security-space-1: 0.5rem;
   --security-space-2: 0.8rem;
   --security-space-3: 1.05rem;
@@ -10,20 +10,18 @@
   --security-radius-sm: 1rem;
   --security-radius-md: 1.45rem;
   --security-radius-lg: 2rem;
-  --security-paper: rgba(255, 250, 243, 0.94);
-  --security-paper-strong: rgba(255, 253, 249, 0.97);
-  --security-paper-soft: rgba(249, 244, 236, 0.92);
-  --security-line: rgba(126, 104, 74, 0.18);
-  --security-line-strong: rgba(126, 104, 74, 0.34);
-  --security-accent: #7b4b1f;
-  --security-accent-soft: rgba(123, 75, 31, 0.72);
-  --security-ink: #23190f;
-  --security-copy: #5c4937;
-  --security-muted: #866a50;
+  --security-paper: var(--cc-paper);
+  --security-paper-strong: var(--cc-paper-strong);
+  --security-paper-soft: var(--cc-paper-soft);
+  --security-line: var(--cc-line);
+  --security-line-strong: var(--cc-line-strong);
+  --security-accent: var(--cc-module-safety-strong);
+  --security-accent-soft: color-mix(in srgb, var(--cc-module-safety-strong) 72%, var(--cc-ink) 28%);
+  --security-ink: var(--cc-ink);
+  --security-copy: var(--cc-ink-soft);
+  --security-muted: var(--cc-ink-muted);
   background:
-    radial-gradient(circle at 12% 10%, rgba(255, 255, 255, 0.9), transparent 24%),
-    radial-gradient(circle at 88% 12%, rgba(245, 222, 190, 0.46), transparent 22%),
-    linear-gradient(180deg, #f7f2ea 0%, #f2eadf 54%, #ebdfd2 100%);
+    var(--cc-page-bg);
   color: var(--security-ink);
   font-family: var(--security-font-body);
   height: 100vh;

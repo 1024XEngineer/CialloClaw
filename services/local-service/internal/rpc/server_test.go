@@ -27,6 +27,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -1475,6 +1476,71 @@ func TestDispatchMapsToolOutputInvalidExplicitly(t *testing.T) {
 	}
 	if rpcErr.Code != 1003004 || rpcErr.Message != "TOOL_OUTPUT_INVALID" {
 		t.Fatalf("expected TOOL_OUTPUT_INVALID mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestDispatchMapsTaskInspectorSourceErrorsExplicitly(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		code    int
+		message string
+	}{
+		{name: "outside workspace", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionSourceOutsideWorkspace), code: 1004003, message: "WORKSPACE_BOUNDARY_DENIED"},
+		{name: "filesystem unavailable", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionFileSystemUnavailable), code: 1007006, message: "INSPECTION_FILESYSTEM_UNAVAILABLE"},
+		{name: "source not found", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionSourceNotFound), code: 1007007, message: "INSPECTION_SOURCE_NOT_FOUND"},
+		{name: "source unreadable", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionSourceUnreadable), code: 1007008, message: "INSPECTION_SOURCE_UNREADABLE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := wrapOrchestratorResult(nil, test.err)
+			if rpcErr == nil {
+				t.Fatal("expected rpc error")
+			}
+			if rpcErr.Code != test.code || rpcErr.Message != test.message {
+				t.Fatalf("expected %s mapping, got code=%d message=%s", test.message, rpcErr.Code, rpcErr.Message)
+			}
+		})
+	}
+}
+
+func TestDispatchReturnsFormalTaskInspectorRunSourceErrors(t *testing.T) {
+	server := newTestServer()
+	pathPolicy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "rpc-task-inspector"))
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	server.orchestrator.WithTaskInspector(taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy)))
+	tests := []struct {
+		name          string
+		requestID     string
+		targetSources []any
+		expectCode    int
+		expectMessage string
+	}{
+		{name: "missing source", requestID: "req-task-inspector-missing", targetSources: []any{"workspace/missing"}, expectCode: 1007007, expectMessage: "INSPECTION_SOURCE_NOT_FOUND"},
+		{name: "outside workspace", requestID: "req-task-inspector-outside", targetSources: []any{"../outside"}, expectCode: 1004003, expectMessage: "WORKSPACE_BOUNDARY_DENIED"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := server.dispatch(requestEnvelope{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(fmt.Sprintf(`"%s"`, test.requestID)),
+				Method:  "agent.task_inspector.run",
+				Params: mustMarshal(t, map[string]any{
+					"target_sources": test.targetSources,
+				}),
+			})
+			errEnvelope, ok := response.(errorEnvelope)
+			if !ok {
+				t.Fatalf("expected error response envelope, got %#v", response)
+			}
+			if errEnvelope.Error.Code != test.expectCode || errEnvelope.Error.Message != test.expectMessage {
+				t.Fatalf("expected %s to map to formal rpc error, got %+v", test.expectMessage, errEnvelope.Error)
+			}
+		})
 	}
 }
 

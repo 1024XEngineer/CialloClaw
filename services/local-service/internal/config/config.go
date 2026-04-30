@@ -1,11 +1,21 @@
+// Package config defines local-service configuration defaults and runtime path
+// resolution.
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-// ModelConfig describes the model-side runtime settings used by the local service.
+const (
+	defaultRuntimeDirectoryName = "CialloClaw"
+	defaultWorkspaceDirName     = "workspace"
+	defaultDatabaseFileName     = "cialloclaw.db"
+)
+
+// ModelConfig describes the runtime model configuration.
 type ModelConfig struct {
 	Provider             string
 	ModelID              string
@@ -20,21 +30,21 @@ type ModelConfig struct {
 	ContextKeepRecent    int
 }
 
-// RPCConfig describes the local transport endpoints exposed by the service.
+// RPCConfig describes the JSON-RPC transport configuration.
 type RPCConfig struct {
 	Transport        string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// LoadOptions captures runtime path overrides coming from the desktop host.
+// LoadOptions captures runtime overrides provided by the desktop host.
 type LoadOptions struct {
 	DataDir          string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// Config describes the resolved local-service runtime configuration.
+// Config contains the assembled local-service runtime configuration.
 type Config struct {
 	RPC           RPCConfig
 	DataDir       string
@@ -43,22 +53,92 @@ type Config struct {
 	Model         ModelConfig
 }
 
-// Load resolves the configuration snapshot for the current process.
-func Load(options LoadOptions) Config {
-	dataDir := resolveOptionalPath(options.DataDir)
-	namedPipeName := resolveOptionalPipeName(options.NamedPipeName)
+// DefaultRuntimeRoot resolves the canonical local runtime root. The resolver
+// prefers explicit environment overrides, then platform user-scoped app-data
+// locations, and falls back to a relative directory only when no profile root
+// is available.
+func DefaultRuntimeRoot() string {
+	return defaultRuntimeRootFromValues(
+		runtime.GOOS,
+		cleanPathEnv("CIALLOCLAW_RUNTIME_ROOT"),
+		cleanPathEnv("LOCALAPPDATA"),
+		cleanPathEnv("HOME"),
+		cleanPathEnv("XDG_DATA_HOME"),
+	)
+}
+
+// DefaultWorkspaceRoot resolves the canonical workspace root used by the local
+// service runtime.
+func DefaultWorkspaceRoot() string {
+	if value := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT"); value != "" {
+		return value
+	}
+	return filepath.Join(DefaultRuntimeRoot(), defaultWorkspaceDirName)
+}
+
+// DefaultDatabasePath resolves the canonical SQLite database path used by the
+// local service runtime.
+func DefaultDatabasePath() string {
+	if value := cleanPathEnv("CIALLOCLAW_DATABASE_PATH"); value != "" {
+		return value
+	}
+	return filepath.Join(DefaultRuntimeRoot(), "data", defaultDatabaseFileName)
+}
+
+func cleanPathEnv(key string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
+}
+
+func defaultRuntimeRootFromValues(goos, runtimeOverride, localAppData, homeDir, xdgDataHome string) string {
+	if strings.TrimSpace(runtimeOverride) != "" {
+		return filepath.Clean(runtimeOverride)
+	}
+	if goos == "windows" && strings.TrimSpace(localAppData) != "" {
+		return filepath.Join(filepath.Clean(localAppData), defaultRuntimeDirectoryName)
+	}
+	if goos == "darwin" && strings.TrimSpace(homeDir) != "" {
+		return filepath.Join(filepath.Clean(homeDir), "Library", "Application Support", defaultRuntimeDirectoryName)
+	}
+	if strings.TrimSpace(xdgDataHome) != "" {
+		return filepath.Join(filepath.Clean(xdgDataHome), defaultRuntimeDirectoryName)
+	}
+	if strings.TrimSpace(homeDir) != "" {
+		return filepath.Join(filepath.Clean(homeDir), ".local", "share", defaultRuntimeDirectoryName)
+	}
+	return filepath.Join(defaultRuntimeDirectoryName)
+}
+
+// Load returns the assembled local-service configuration.
+func Load(options ...LoadOptions) Config {
+	loadOptions := LoadOptions{}
+	if len(options) > 0 {
+		loadOptions = options[0]
+	}
+
+	dataDir := resolveOptionalPath(loadOptions.DataDir)
+	if dataDir == "" {
+		dataDir = DefaultRuntimeRoot()
+	}
+
+	namedPipeName := resolveOptionalPipeName(loadOptions.NamedPipeName)
 	if namedPipeName == "" {
 		namedPipeName = `\\.\pipe\cialloclaw-rpc`
 	}
-	debugHTTPAddress := resolveOptionalDebugHTTPAddress(options.DebugHTTPAddress)
+
+	debugHTTPAddress := resolveOptionalDebugHTTPAddress(loadOptions.DebugHTTPAddress)
 	if debugHTTPAddress == "" {
 		debugHTTPAddress = ":4317"
 	}
-	workspaceRoot := "workspace"
-	databasePath := filepath.Join("data", "cialloclaw.db")
-	if dataDir != "" {
-		workspaceRoot = filepath.Join(dataDir, "workspace")
-		databasePath = filepath.Join(dataDir, "data", "cialloclaw.db")
+
+	workspaceRoot := DefaultWorkspaceRoot()
+	databasePath := DefaultDatabasePath()
+	if strings.TrimSpace(loadOptions.DataDir) != "" {
+		workspaceRoot = filepath.Join(dataDir, defaultWorkspaceDirName)
+		databasePath = filepath.Join(dataDir, "data", defaultDatabaseFileName)
 	}
 
 	return Config{

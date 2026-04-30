@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
@@ -1886,12 +1888,16 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 
 // TaskInspectorConfigGet handles agent.task_inspector.config.get.
 func (s *Service) TaskInspectorConfigGet() (map[string]any, error) {
-	return s.runEngine.InspectorConfig(), nil
+	return inspectorConfigFromSettings(s.runEngine.Settings()), nil
 }
 
 // TaskInspectorConfigUpdate handles agent.task_inspector.config.update.
 func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]any, error) {
-	effective := s.runEngine.UpdateInspectorConfig(params)
+	settingsPatch := taskAutomationSettingsPatchFromInspectorConfig(params)
+	if _, _, _, _, err := s.runEngine.UpdateSettings(settingsPatch); err != nil {
+		return nil, err
+	}
+	effective := inspectorConfigFromSettings(s.runEngine.Settings())
 	return map[string]any{
 		"updated":          true,
 		"effective_config": effective,
@@ -1901,13 +1907,13 @@ func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]a
 // TaskInspectorRun handles agent.task_inspector.run and returns the inspection
 // summary plus suggestions.
 func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error) {
-	config := s.runEngine.InspectorConfig()
+	config := inspectorConfigFromSettings(s.runEngine.Settings())
 	targetSources := stringSliceValue(params["target_sources"])
 	notepadItems, _ := s.runEngine.NotepadItems("", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 
-	result := s.inspector.Run(taskinspector.RunInput{
+	result, err := s.inspector.Run(taskinspector.RunInput{
 		Reason:          stringValue(params, "reason", ""),
 		TargetSources:   targetSources,
 		Config:          config,
@@ -1915,6 +1921,9 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		FinishedTasks:   finishedTasks,
 		NotepadItems:    notepadItems,
 	})
+	if err != nil {
+		return nil, err
+	}
 	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
 			return nil, err
@@ -2100,7 +2109,7 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 			"risk_level":             aggregateRiskLevel(allTasks, pendingApprovals, s.risk.DefaultLevel()),
 			"pending_authorizations": pendingTotal,
 			"has_restore_point":      hasRestorePoint,
-			"workspace_path":         workspacePathFromSettings(s.runEngine.Settings()),
+			"workspace_path":         currentRuntimeWorkspaceRoot(s.executor),
 		}
 	}
 
@@ -3910,16 +3919,28 @@ func mergeSettingsPreview(target map[string]any, patch map[string]any) {
 
 func previewNeedsRestart(currentSettings, patch map[string]any) bool {
 	generalPatch := cloneMap(mapValue(patch, "general"))
-	if len(generalPatch) == 0 {
-		return false
+	if len(generalPatch) > 0 {
+		nextLanguage, ok := generalPatch["language"]
+		if ok {
+			currentGeneral := cloneMap(mapValue(currentSettings, "general"))
+			currentLanguage, hasCurrentLanguage := currentGeneral["language"]
+			if !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage) {
+				return true
+			}
+		}
+		downloadPatch := cloneMap(mapValue(generalPatch, "download"))
+		if len(downloadPatch) > 0 {
+			nextWorkspacePath, ok := downloadPatch["workspace_path"]
+			if ok {
+				currentDownload := cloneMap(mapValue(mapValue(currentSettings, "general"), "download"))
+				currentWorkspacePath, hasCurrentWorkspacePath := currentDownload["workspace_path"]
+				if !hasCurrentWorkspacePath || !reflect.DeepEqual(currentWorkspacePath, nextWorkspacePath) {
+					return true
+				}
+			}
+		}
 	}
-	nextLanguage, ok := generalPatch["language"]
-	if !ok {
-		return false
-	}
-	currentGeneral := cloneMap(mapValue(currentSettings, "general"))
-	currentLanguage, hasCurrentLanguage := currentGeneral["language"]
-	return !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage)
+	return false
 }
 
 func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []string) string {
@@ -3930,6 +3951,133 @@ func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []strin
 		return "next_task_effective"
 	}
 	return "immediate"
+}
+
+func inspectorConfigFromSettings(settings map[string]any) map[string]any {
+	taskAutomation := cloneMap(mapValue(normalizeSettingsSnapshot(settings), "task_automation"))
+	if taskAutomation == nil {
+		taskAutomation = map[string]any{}
+	}
+	return map[string]any{
+		"task_sources":           inspectorTaskSourcesFromSettings(taskAutomation["task_sources"]),
+		"inspection_interval":    cloneMap(mapValue(taskAutomation, "inspection_interval")),
+		"inspect_on_file_change": boolValue(taskAutomation, "inspect_on_file_change", true),
+		"inspect_on_startup":     boolValue(taskAutomation, "inspect_on_startup", true),
+		"remind_before_deadline": boolValue(taskAutomation, "remind_before_deadline", true),
+		"remind_when_stale":      boolValue(taskAutomation, "remind_when_stale", false),
+	}
+}
+
+// inspectorTaskSourcesFromSettings keeps compatibility RPCs aligned with the
+// formal task_automation snapshot shape while preserving workspace-relative
+// sources instead of eagerly migrating them to runtime absolute paths.
+func inspectorTaskSourcesFromSettings(rawValue any) []string {
+	sources, recognized := optionalStringSliceValue(rawValue)
+	if recognized {
+		result := make([]string, 0, len(sources))
+		for _, source := range sources {
+			result = append(result, presentInspectorTaskSource(source))
+		}
+		return result
+	}
+	return stringSliceValue(rawValue)
+}
+
+// presentInspectorTaskSource maps persisted runtime-absolute task sources back to
+// the compatibility RPC shape expected by desktop inspector settings so the UI
+// continues to reason about workspace-formal paths instead of host-specific
+// runtime locations.
+func presentInspectorTaskSource(source string) string {
+	trimmed := strings.TrimSpace(source)
+	if trimmed == "" {
+		return ""
+	}
+	if !filepath.IsAbs(trimmed) {
+		return trimmed
+	}
+	cleanSource := filepath.Clean(trimmed)
+	workspaceRoot := filepath.Clean(serviceconfig.DefaultWorkspaceRoot())
+	if relative, ok := relativizePathWithinRoot(cleanSource, workspaceRoot); ok {
+		if relative == "" {
+			return "workspace"
+		}
+		return filepath.ToSlash(path.Join("workspace", filepath.ToSlash(relative)))
+	}
+	runtimeRoot := filepath.Clean(serviceconfig.DefaultRuntimeRoot())
+	if relative, ok := relativizePathWithinRoot(cleanSource, runtimeRoot); ok {
+		if relative == "" {
+			return "."
+		}
+		return filepath.ToSlash(relative)
+	}
+	return filepath.ToSlash(cleanSource)
+}
+
+func relativizePathWithinRoot(candidate, root string) (string, bool) {
+	if root == "" {
+		return "", false
+	}
+	if candidate == root {
+		return "", true
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", false
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return relative, true
+}
+
+func taskAutomationSettingsPatchFromInspectorConfig(params map[string]any) map[string]any {
+	patch := map[string]any{}
+	if rawSources, ok := params["task_sources"]; ok {
+		if sources, recognized := optionalStringSliceValue(rawSources); recognized {
+			patch["task_sources"] = sources
+		}
+	}
+	if interval := cloneMap(mapValue(params, "inspection_interval")); len(interval) > 0 {
+		patch["inspection_interval"] = interval
+	}
+	for _, key := range []string{"inspect_on_file_change", "inspect_on_startup", "remind_before_deadline", "remind_when_stale"} {
+		if value, ok := params[key].(bool); ok {
+			patch[key] = value
+		}
+	}
+	if len(patch) == 0 {
+		return map[string]any{}
+	}
+	return map[string]any{"task_automation": patch}
+}
+
+// optionalStringSliceValue preserves the difference between an omitted field and
+// an explicitly empty list so compatibility RPCs can clear task sources without
+// leaving stale workspace scan roots behind.
+func optionalStringSliceValue(rawValue any) ([]string, bool) {
+	switch values := rawValue.(type) {
+	case []string:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			result = append(result, value)
+		}
+		return result, true
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, rawItem := range values {
+			item, ok := rawItem.(string)
+			if !ok || strings.TrimSpace(item) == "" {
+				continue
+			}
+			result = append(result, item)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func strongholdStatusFromStorage(store *storage.Service) map[string]any {
@@ -4817,18 +4965,17 @@ func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
 	return task.UpdatedAt.Format(dateTimeLayout)
 }
 
-// workspacePathFromSettings extracts the current workspace path from the
-// settings snapshot.
-func workspacePathFromSettings(settings map[string]any) string {
-	general, ok := settings["general"].(map[string]any)
-	if !ok {
-		return "workspace"
+// currentRuntimeWorkspaceRoot returns the workspace root that the currently
+// running local-service instance is actually using. This avoids displaying or
+// evaluating against a pending settings value before the required restart
+// rebuilds bootstrap-scoped dependencies.
+func currentRuntimeWorkspaceRoot(executorService *execution.Service) string {
+	if executorService != nil {
+		if workspaceRoot := strings.TrimSpace(executorService.WorkspaceRoot()); workspaceRoot != "" {
+			return filepath.ToSlash(filepath.Clean(workspaceRoot))
+		}
 	}
-	download, ok := general["download"].(map[string]any)
-	if !ok {
-		return "workspace"
-	}
-	return stringValue(download, "workspace_path", "workspace")
+	return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
 }
 
 // defaultIntentMap creates a minimal default intent payload for notepad
@@ -5909,12 +6056,55 @@ func targetPathFromIntent(taskIntent map[string]any) string {
 }
 
 func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
-	normalizedRoot := strings.Trim(strings.ReplaceAll(workspaceRoot, "\\", "/"), "/")
-	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
-	if normalizedRoot == "" {
-		normalizedRoot = "workspace"
+	trimmedPath := strings.TrimSpace(filePath)
+	if trimmedPath == "" {
+		return false
 	}
-	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
+	if hasWindowsDriveLetterPrefix(trimmedPath) {
+		if !isWindowsStyleAbsolutePath(trimmedPath) {
+			return false
+		}
+	}
+	if !filepath.IsAbs(trimmedPath) && !isWindowsStyleAbsolutePath(trimmedPath) {
+		if strings.HasPrefix(trimmedPath, "\\") || strings.HasPrefix(trimmedPath, "/") {
+			return false
+		}
+	}
+	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
+	if normalizedPath == "" {
+		return false
+	}
+	if normalizedPath == "workspace" || strings.HasPrefix(normalizedPath, "workspace/") {
+		return true
+	}
+	if filepath.IsAbs(trimmedPath) || isWindowsStyleAbsolutePath(trimmedPath) {
+		cleanRoot := filepath.Clean(strings.TrimSpace(workspaceRoot))
+		if cleanRoot == "" {
+			return false
+		}
+		cleanPath := filepath.Clean(trimmedPath)
+		rootWithSeparator := cleanRoot + string(filepath.Separator)
+		return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, rootWithSeparator)
+	}
+	cleanRelative := path.Clean(normalizedPath)
+	// Runtime temp artifacts remain openable from the desktop host, but governance
+	// must not classify them as workspace-contained when computing trust scope.
+	if cleanRelative == "temp" || strings.HasPrefix(cleanRelative, "temp/") {
+		return false
+	}
+	return cleanRelative != ".." && !strings.HasPrefix(cleanRelative, "../")
+}
+
+func hasWindowsDriveLetterPrefix(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	letter := value[0]
+	return ((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z')) && value[1] == ':'
+}
+
+func isWindowsStyleAbsolutePath(value string) bool {
+	return hasWindowsDriveLetterPrefix(value) && len(value) >= 3 && (value[2] == '\\' || value[2] == '/')
 }
 
 func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
@@ -6008,7 +6198,7 @@ func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution m
 		return cloneMap(impactScope)
 	}
 	files := deriveImpactScopeFiles(task, pendingExecution, s.delivery)
-	workspacePath := workspacePathFromSettings(s.runEngine.Settings())
+	workspacePath := currentRuntimeWorkspaceRoot(s.executor)
 	outOfWorkspace := false
 	for _, filePath := range files {
 		if !isWorkspaceRelativePath(filePath, workspacePath) {

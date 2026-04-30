@@ -41,6 +41,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type taskInspectorFailingSettingsStore struct{}
+
+func (taskInspectorFailingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
+	return errors.New("settings snapshot write failed")
+}
+
+func (taskInspectorFailingSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
+	return nil, nil
+}
+
 type stubModelClient struct {
 	output       string
 	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
@@ -2100,6 +2110,192 @@ func TestTaskInspectorRunClearsStaleSourceBackedNotesWhenFilesEmpty(t *testing.T
 	items, total := service.runEngine.NotepadItems("", 10, 0)
 	if total != 0 || len(items) != 0 {
 		t.Fatalf("expected source-backed sync to clear stale runtime notes when source is empty, total=%d len=%d items=%+v", total, len(items), items)
+	}
+}
+
+func TestTaskInspectorConfigUsesTaskAutomationSettingsSource(t *testing.T) {
+	service := newTestService()
+
+	updated, err := service.TaskInspectorConfigUpdate(map[string]any{
+		"task_sources":           []any{"workspace/review", "workspace/backlog"},
+		"inspection_interval":    map[string]any{"unit": "hour", "value": 2},
+		"inspect_on_file_change": false,
+		"inspect_on_startup":     false,
+		"remind_before_deadline": false,
+		"remind_when_stale":      true,
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigUpdate returned error: %v", err)
+	}
+	effectiveConfig := updated["effective_config"].(map[string]any)
+	if !reflect.DeepEqual(effectiveConfig["task_sources"], []string{"workspace/review", "workspace/backlog"}) {
+		t.Fatalf("expected effective_config task_sources to come from task_automation, got %+v", effectiveConfig)
+	}
+
+	settings := normalizeSettingsSnapshot(service.runEngine.Settings())
+	taskAutomation := settings["task_automation"].(map[string]any)
+	expectedStoredSources := []string{
+		filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "review")),
+		filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "backlog")),
+	}
+	if !reflect.DeepEqual(taskAutomation["task_sources"], expectedStoredSources) {
+		t.Fatalf("expected task_automation settings to be updated, got %+v", taskAutomation)
+	}
+	if taskAutomation["inspect_on_file_change"] != false || taskAutomation["inspect_on_startup"] != false {
+		t.Fatalf("expected inspector toggles to persist into task_automation, got %+v", taskAutomation)
+	}
+
+	config, err := service.TaskInspectorConfigGet()
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigGet returned error: %v", err)
+	}
+	if !reflect.DeepEqual(config, effectiveConfig) {
+		t.Fatalf("expected inspector config get to mirror effective config, got config=%+v effective=%+v", config, effectiveConfig)
+	}
+	if !reflect.DeepEqual(service.runEngine.InspectorConfig()["task_sources"], []string{filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "todos"))}) {
+		t.Fatalf("expected legacy in-memory inspector config to stop being the authoritative source, got %+v", service.runEngine.InspectorConfig())
+	}
+
+	cleared, err := service.TaskInspectorConfigUpdate(map[string]any{"task_sources": []any{}})
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigUpdate clear returned error: %v", err)
+	}
+	if taskSources := cleared["effective_config"].(map[string]any)["task_sources"].([]string); len(taskSources) != 0 {
+		t.Fatalf("expected explicit empty task_sources to clear settings-backed sources, got %+v", cleared)
+	}
+}
+
+func TestTaskInspectorRunReturnsExplicitErrorForMissingSource(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "inspector missing source")
+
+	_, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/missing"}})
+	if !errors.Is(err, taskinspector.ErrInspectionSourceNotFound) {
+		t.Fatalf("expected missing source error, got %v", err)
+	}
+}
+
+func TestTaskInspectorConfigUpdatePropagatesSettingsStoreErrors(t *testing.T) {
+	service := newTestService()
+	if err := service.runEngine.WithSettingsStore(taskInspectorFailingSettingsStore{}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+
+	_, err := service.TaskInspectorConfigUpdate(map[string]any{"task_sources": []any{"workspace/review"}})
+	if err == nil || !strings.Contains(err.Error(), "settings snapshot write failed") {
+		t.Fatalf("expected TaskInspectorConfigUpdate to surface settings store failure, got %v", err)
+	}
+}
+
+func TestTaskInspectorSettingsHelpersCoverDefaultsAndCompatibilityInputs(t *testing.T) {
+	config := inspectorConfigFromSettings(nil)
+	if config["inspect_on_file_change"] != true || config["inspect_on_startup"] != true {
+		t.Fatalf("expected task inspector defaults to stay enabled, got %+v", config)
+	}
+	if config["remind_before_deadline"] != true || config["remind_when_stale"] != false {
+		t.Fatalf("expected reminder defaults to match settings contract, got %+v", config)
+	}
+
+	patch := taskAutomationSettingsPatchFromInspectorConfig(map[string]any{
+		"task_sources":           []string{"workspace/review", "", "workspace/review"},
+		"inspection_interval":    map[string]any{"unit": "day", "value": 1},
+		"inspect_on_file_change": false,
+	})
+	taskAutomation := patch["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"workspace/review", "workspace/review"}) {
+		t.Fatalf("expected helper to preserve explicit compatibility sources, got %+v", taskAutomation)
+	}
+	if taskAutomation["inspect_on_file_change"] != false {
+		t.Fatalf("expected bool toggles to survive compatibility patch, got %+v", taskAutomation)
+	}
+
+	if emptyPatch := taskAutomationSettingsPatchFromInspectorConfig(map[string]any{"task_sources": "invalid"}); len(emptyPatch) != 0 {
+		t.Fatalf("expected invalid task_sources payload to produce empty patch, got %+v", emptyPatch)
+	}
+
+	stringValues, ok := optionalStringSliceValue([]string{"workspace/a", " ", "workspace/b"})
+	if !ok || !reflect.DeepEqual(stringValues, []string{"workspace/a", "workspace/b"}) {
+		t.Fatalf("expected []string compatibility inputs to be preserved, got ok=%v values=%+v", ok, stringValues)
+	}
+	anyValues, ok := optionalStringSliceValue([]any{"workspace/a", 3, "workspace/b"})
+	if !ok || !reflect.DeepEqual(anyValues, []string{"workspace/a", "workspace/b"}) {
+		t.Fatalf("expected []any compatibility inputs to keep string sources only, got ok=%v values=%+v", ok, anyValues)
+	}
+	if values, ok := optionalStringSliceValue("invalid"); ok || values != nil {
+		t.Fatalf("expected invalid task source payload to be rejected, got ok=%v values=%+v", ok, values)
+	}
+
+	workspaceRoot := filepath.Clean(serviceconfig.DefaultWorkspaceRoot())
+	runtimeRoot := filepath.Clean(serviceconfig.DefaultRuntimeRoot())
+	if presentInspectorTaskSource("") != "" {
+		t.Fatal("expected blank task source presentation to stay empty")
+	}
+	if presentInspectorTaskSource("workspace/review") != "workspace/review" {
+		t.Fatal("expected relative compatibility path to stay unchanged")
+	}
+	if presentInspectorTaskSource(workspaceRoot) != "workspace" {
+		t.Fatalf("expected workspace root to collapse to compatibility workspace token")
+	}
+	if presented := presentInspectorTaskSource(filepath.Join(workspaceRoot, "review")); presented != "workspace/review" {
+		t.Fatalf("expected workspace child to stay workspace-relative, got %q", presented)
+	}
+	if presentInspectorTaskSource(runtimeRoot) != "." {
+		t.Fatal("expected runtime root to collapse to current-directory compatibility token")
+	}
+	if presented := presentInspectorTaskSource(filepath.Join(runtimeRoot, "notes", "manual")); presented != "notes/manual" {
+		t.Fatalf("expected runtime child to stay runtime-relative, got %q", presented)
+	}
+	outsideRoot := filepath.Join(t.TempDir(), "outside-source-root", "notes")
+	if presented := presentInspectorTaskSource(outsideRoot); presented != filepath.ToSlash(filepath.Clean(outsideRoot)) {
+		t.Fatalf("expected outside source to stay absolute, got %q", presented)
+	}
+
+	if relative, ok := relativizePathWithinRoot(workspaceRoot, workspaceRoot); !ok || relative != "" {
+		t.Fatalf("expected identical root relativization to succeed, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(workspaceRoot, "notes"), workspaceRoot); !ok || relative != "notes" {
+		t.Fatalf("expected child relativization to succeed, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(t.TempDir(), "outside"), workspaceRoot); ok || relative != "" {
+		t.Fatalf("expected outside relativization to fail, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(workspaceRoot, "notes"), ""); ok || relative != "" {
+		t.Fatalf("expected empty root relativization to fail, relative=%q ok=%v", relative, ok)
+	}
+	if !hasWindowsDriveLetterPrefix(`C:/notes`) || hasWindowsDriveLetterPrefix("notes") {
+		t.Fatal("expected drive-letter helper to distinguish windows prefixes")
+	}
+	if !isWindowsStyleAbsolutePath(`C:/notes`) || isWindowsStyleAbsolutePath(`C:notes`) {
+		t.Fatal("expected windows absolute helper to reject drive-relative paths")
+	}
+
+	if currentRuntimeWorkspaceRoot(nil) != filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot())) {
+		t.Fatal("expected nil executor workspace root to fall back to default runtime workspace")
+	}
+}
+
+func TestPreviewNeedsRestartCoversWorkspaceAndNoopCases(t *testing.T) {
+	currentSettings := map[string]any{
+		"general": map[string]any{
+			"language": "zh-CN",
+			"download": map[string]any{
+				"workspace_path": "workspace",
+			},
+		},
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{}) {
+		t.Fatal("expected empty settings patch to avoid restart")
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"language": "zh-CN"}}) {
+		t.Fatal("expected unchanged language to avoid restart")
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"download": map[string]any{"workspace_path": "workspace"}}}) {
+		t.Fatal("expected unchanged workspace_path to avoid restart")
+	}
+	if !previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"download": map[string]any{"workspace_path": "workspace-next"}}}) {
+		t.Fatal("expected changed workspace_path to require restart")
+	}
+	if !previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"language": "en-US"}}) {
+		t.Fatal("expected changed language to require restart")
 	}
 }
 
@@ -5178,8 +5374,9 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	if trustSummary["has_restore_point"] != true {
 		t.Fatalf("expected completed task to provide restore point, got %v", trustSummary["has_restore_point"])
 	}
-	if trustSummary["workspace_path"] != "workspace" {
-		t.Fatalf("expected workspace-relative path in trust summary, got %v", trustSummary["workspace_path"])
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
+	if trustSummary["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected trust summary workspace path %q, got %v", expectedWorkspaceRoot, trustSummary["workspace_path"])
 	}
 
 	quickActions := overview["quick_actions"].([]string)
@@ -5213,6 +5410,87 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	completedTaskID := completedResult["task"].(map[string]any)["task_id"].(string)
 	if completedTaskID == waitingTaskID {
 		t.Fatal("expected completed and waiting tasks to be distinct runtime records")
+	}
+}
+
+func TestServiceDashboardOverviewUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingRestart(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "runtime workspace summary")
+	nextWorkspaceRoot := filepath.Join(t.TempDir(), "workspace-next")
+	if _, _, _, _, err := service.runEngine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(nextWorkspaceRoot),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	trustSummary := result["overview"].(map[string]any)["trust_summary"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Clean(workspaceRoot))
+	if trustSummary["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected trust summary to stay on current runtime workspace %q, got %v", expectedWorkspaceRoot, trustSummary["workspace_path"])
+	}
+}
+
+func TestBuildImpactScopeUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingRestart(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "runtime workspace impact scope")
+	nextWorkspaceRoot := filepath.Join(t.TempDir(), "workspace-next")
+	if _, _, _, _, err := service.runEngine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(nextWorkspaceRoot),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
+
+	impactScope := service.buildImpactScope(runengine.TaskRecord{
+		DeliveryResult: map[string]any{
+			"payload": map[string]any{
+				"path": filepath.Join(workspaceRoot, "drafts", "summary.md"),
+			},
+		},
+	}, nil)
+
+	if impactScope["out_of_workspace"] != false {
+		t.Fatalf("expected current runtime workspace path to stay trusted, got %+v", impactScope)
+	}
+}
+
+func TestBuildImpactScopeMarksRuntimeTempPathsOutOfWorkspace(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime temp impact scope")
+
+	impactScope := service.buildImpactScope(runengine.TaskRecord{
+		DeliveryResult: map[string]any{
+			"payload": map[string]any{
+				"path": "temp/screen_sess_001/frame_001.png",
+			},
+		},
+	}, nil)
+
+	if impactScope["out_of_workspace"] != true {
+		t.Fatalf("expected runtime temp path to stay out of workspace, got %+v", impactScope)
+	}
+	files, _ := impactScope["files"].([]string)
+	if len(files) != 1 || files[0] != "temp/screen_sess_001/frame_001.png" {
+		t.Fatalf("expected runtime temp path to remain listed in impact scope, got %+v", impactScope)
+	}
+}
+
+func TestIsWorkspaceRelativePathKeepsArtifactsInsideWorkspaceScope(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	if !isWorkspaceRelativePath("artifacts/screen/task_001/frame.png", workspaceRoot) {
+		t.Fatal("expected workspace artifact path to remain trusted")
+	}
+	if isWorkspaceRelativePath("temp/screen_sess_001/frame.png", workspaceRoot) {
+		t.Fatal("expected runtime temp artifact path to stay outside workspace scope")
 	}
 }
 
@@ -11514,6 +11792,59 @@ func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
 	}
 	if _, exists := effectiveSettings["models"]; exists {
 		t.Fatalf("expected unrelated settings update to avoid attaching model metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestSettingsUpdateMarksWorkspacePathAsRestartRequired(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings workspace restart")
+	nextWorkspaceRoot := filepath.ToSlash(filepath.Join(t.TempDir(), "workspace-next"))
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": nextWorkspaceRoot,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	if result["apply_mode"] != "restart_required" || result["need_restart"] != true {
+		t.Fatalf("expected workspace_path update to require restart, got %+v", result)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	general := effectiveSettings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	if download["workspace_path"] != nextWorkspaceRoot {
+		t.Fatalf("expected committed workspace_path in effective settings, got %+v", effectiveSettings)
+	}
+}
+
+func TestIsWorkspaceRelativePathAcceptsFormalAbsoluteAndRelativeWorkspaceTargets(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	absPath := filepath.Join(workspaceRoot, "drafts", "summary.md")
+	if !isWorkspaceRelativePath("workspace/drafts/summary.md", workspaceRoot) {
+		t.Fatal("expected formal workspace namespace to stay trusted")
+	}
+	if !isWorkspaceRelativePath(absPath, workspaceRoot) {
+		t.Fatal("expected absolute path inside runtime workspace to stay trusted")
+	}
+	if !isWorkspaceRelativePath("drafts/summary.md", workspaceRoot) {
+		t.Fatal("expected relative workspace path to stay trusted")
+	}
+	if isWorkspaceRelativePath(filepath.Join(t.TempDir(), "outside", "summary.md"), workspaceRoot) {
+		t.Fatal("expected absolute path outside runtime workspace to be rejected")
+	}
+	if isWorkspaceRelativePath("../outside/summary.md", workspaceRoot) {
+		t.Fatal("expected upward relative path to be rejected")
+	}
+	if isWorkspaceRelativePath(`C:temp\summary.md`, workspaceRoot) {
+		t.Fatal("expected volume-prefixed relative path to be rejected")
+	}
+	if isWorkspaceRelativePath(`\temp\summary.md`, workspaceRoot) {
+		t.Fatal("expected root-relative path to be rejected")
+	}
+	if isWorkspaceRelativePath("temp", workspaceRoot) {
+		t.Fatal("expected bare runtime temp root to stay outside workspace scope")
 	}
 }
 

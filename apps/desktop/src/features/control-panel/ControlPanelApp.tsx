@@ -37,18 +37,18 @@ import {
   type ControlPanelModelValidationOptions,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
-import { loadSettings } from "@/services/settingsService";
+import { loadHydratedSettings } from "@/services/settingsService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
   advanceDesktopOnboarding,
+  startManualDesktopOnboardingReplay,
   setDesktopOnboardingPresentation,
-  startDesktopOnboarding,
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
-import { showShellBallWindow } from "@/platform/shellBallWindowController";
+import { ensureOnboardingWindow } from "@/platform/onboardingWindowController";
 import "./controlPanel.css";
 
 type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "about";
@@ -322,8 +322,8 @@ function buildLocalInspectorFallback(settings: ControlPanelData["settings"]): Co
  * Keeps the control-panel shell renderable when the RPC bootstrap fails by
  * falling back to the last persisted local snapshot under an explicit error banner.
  */
-function buildLocalControlPanelSnapshot(): ControlPanelData {
-  const settings = loadSettings().settings;
+async function buildLocalControlPanelSnapshot(): Promise<ControlPanelData> {
+  const settings = (await loadHydratedSettings()).settings;
 
   return {
     settings,
@@ -375,7 +375,7 @@ function HelpTooltip({ content }: { content: string }) {
   return (
     <Tooltip>
       <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
-        <CircleHelp size={15} strokeWidth={2.35} />
+        <CircleHelp size={14} strokeWidth={1.75} />
       </TooltipTrigger>
       <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
     </Tooltip>
@@ -637,6 +637,7 @@ export function ControlPanelApp() {
   const [isSaving, setIsSaving] = useState(false);
   const [isValidatingModel, setIsValidatingModel] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
+  const [isReplayingOnboarding, setIsReplayingOnboarding] = useState(false);
   const [systemAppearance, setSystemAppearance] = useState<ControlPanelAppearance>(() => {
     if (typeof window === "undefined") {
       return "light";
@@ -686,12 +687,29 @@ export function ControlPanelApp() {
           return;
         }
 
-        const fallbackData = buildLocalControlPanelSnapshot();
+        const fallbackData = await buildLocalControlPanelSnapshot();
+        if (cancelled) {
+          return;
+        }
         setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
         setPanelData((current) => current ?? fallbackData);
         setDraft((current) => current ?? fallbackData);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void ensureOnboardingWindow().catch((error) => {
+      if (!cancelled) {
+        console.warn("control-panel onboarding prewarm failed", error);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -817,6 +835,7 @@ export function ControlPanelApp() {
   const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
+  const onboardingReplayDisabled = isSaving || isRunningInspection || isReplayingOnboarding;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -892,10 +911,32 @@ export function ControlPanelApp() {
   };
 
   const handleReplayOnboarding = () => {
+    if (onboardingReplayDisabled) {
+      return;
+    }
+
+    setIsReplayingOnboarding(true);
     void (async () => {
-      await showShellBallWindow("ball");
-      await startDesktopOnboarding("manual", "control-panel");
-      await requestCurrentDesktopWindowClose();
+      try {
+        setSaveFeedback(null);
+        setLoadError(null);
+        let session = await startManualDesktopOnboardingReplay("control-panel");
+
+        if (session === null) {
+          const errorMessage = "重新打开新手引导失败。";
+          setLoadError(errorMessage);
+          setSaveFeedback(errorMessage);
+          return;
+        }
+
+        await requestCurrentDesktopWindowClose();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "重新打开新手引导失败。";
+        setLoadError(errorMessage);
+        setSaveFeedback(errorMessage);
+      } finally {
+        setIsReplayingOnboarding(false);
+      }
     })();
   };
 
@@ -1711,6 +1752,11 @@ export function ControlPanelApp() {
           <div className="control-panel-shell__action-bar">
             <div className="control-panel-shell__action-statuses">
               {saveStateValue}
+              {isReplayingOnboarding ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  正在打开引导...
+                </Text>
+              ) : null}
               {draft.warnings && draft.warnings.length > 0 ? (
                 <Text as="p" size="2" color="amber" className="control-panel-shell__action-feedback" aria-live="polite">
                   {draft.warnings[0]}
@@ -1739,9 +1785,9 @@ export function ControlPanelApp() {
                 variant="soft"
                 color="gray"
                 onClick={handleReplayOnboarding}
-                disabled={isSaving || isRunningInspection}
+                disabled={onboardingReplayDisabled}
               >
-                重新查看新手引导
+                {isReplayingOnboarding ? "正在打开引导…" : "重新查看新手引导"}
               </Button>
 
               <Button
