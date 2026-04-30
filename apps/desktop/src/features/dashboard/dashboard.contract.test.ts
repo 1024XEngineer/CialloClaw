@@ -597,6 +597,7 @@ function loadMirrorServiceModule() {
 }
 
 type DashboardContractRpcMethodOverrides = {
+  applySecurityRestoreDetailed?: (params: unknown) => Promise<unknown>;
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
   getDashboardModule?: (params: unknown) => Promise<unknown>;
@@ -610,9 +611,12 @@ type DashboardContractRpcMethodOverrides = {
   getSettingsDetailed?: (params: unknown) => Promise<unknown>;
   getTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
+  listSecurityAuditDetailed?: (params: unknown) => Promise<unknown>;
   listSecurityPendingDetailed?: (params: unknown) => Promise<unknown>;
+  listSecurityRestorePointsDetailed?: (params: unknown) => Promise<unknown>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
+  respondSecurityDetailed?: (params: unknown) => Promise<unknown>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
   validateSettingsModel?: (params: unknown) => Promise<unknown>;
   updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
@@ -733,6 +737,12 @@ function withDesktopAliasRuntime<T>(
           (() => {
             throw new Error("listNotepad should not run in dashboard contract tests");
           }),
+        listSecurityAuditDetailed:
+          rpcMethods?.listSecurityAuditDetailed ??
+          (() => Promise.reject(new Error("listSecurityAuditDetailed should not run in dashboard contract tests"))),
+        listSecurityRestorePointsDetailed:
+          rpcMethods?.listSecurityRestorePointsDetailed ??
+          (() => Promise.reject(new Error("listSecurityRestorePointsDetailed should not run in dashboard contract tests"))),
         listTaskArtifacts() {
           throw new Error("listTaskArtifacts should not run in dashboard contract tests");
         },
@@ -747,6 +757,12 @@ function withDesktopAliasRuntime<T>(
         openTaskArtifact() {
           throw new Error("openTaskArtifact should not run in dashboard contract tests");
         },
+        respondSecurityDetailed:
+          rpcMethods?.respondSecurityDetailed ??
+          (() => Promise.reject(new Error("respondSecurityDetailed should not run in dashboard contract tests"))),
+        applySecurityRestoreDetailed:
+          rpcMethods?.applySecurityRestoreDetailed ??
+          (() => Promise.reject(new Error("applySecurityRestoreDetailed should not run in dashboard contract tests"))),
         updateNotepad:
           rpcMethods?.updateNotepad ??
           (() => {
@@ -1273,6 +1289,16 @@ test("mirror page stays RPC-only instead of exposing a page-level mock toggle", 
   assert.doesNotMatch(mirrorAppSource, /loadDashboardDataMode\("memory"\)/);
   assert.doesNotMatch(mirrorAppSource, /saveDashboardDataMode\("memory"\)/);
   assert.doesNotMatch(mirrorAppSource, /setDataMode\(/);
+});
+
+test("safety page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const dataMode = "rpc" as const;/);
+  assert.doesNotMatch(securityAppSource, /DashboardMockToggle/);
+  assert.doesNotMatch(securityAppSource, /loadDashboardDataMode\("safety"\)/);
+  assert.doesNotMatch(securityAppSource, /saveDashboardDataMode\("safety"\)/);
+  assert.doesNotMatch(securityAppSource, /setDataMode\(/);
 });
 test("dashboard home entrance labels stay hidden until hover or focus", () => {
   const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
@@ -4073,6 +4099,55 @@ test("note rpc service keeps transport failures visible instead of switching to 
   );
 });
 
+test("security rpc service keeps transport failures visible instead of switching to mock governance data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityModuleData: (source?: "rpc" | "mock") => Promise<unknown>;
+        loadSecurityModuleRpcData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityModuleData("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityModuleRpcData(), /transport is not wired/i);
+    },
+    {
+      getSecuritySummaryDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("security detail rpc reads keep transport failures visible instead of switching to mock detail lists", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityAuditRecords: (source: "rpc" | "mock", taskId?: string | null, options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityPendingApprovals: (source: "rpc" | "mock", options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityRestorePoints: (source: "rpc" | "mock", options?: { limit?: number; offset?: number; taskId?: string | null }) => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityPendingApprovals("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityRestorePoints("rpc", { taskId: "task_dashboard_001" }), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityAuditRecords("rpc", "task_dashboard_001"), /transport is not wired/i);
+    },
+    {
+      listSecurityAuditDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
+      listSecurityRestorePointsDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
 test("dashboard home rpc service keeps transport failures visible instead of switching to mock orbit data", async () => {
   const transportError = new Error("Named Pipe transport is not wired.");
 
@@ -4267,6 +4342,44 @@ test("dashboard home keeps module and recommendation failures local instead of b
   );
 });
 
+test("security service no longer imports governance mocks into product runtime", () => {
+  const securityServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityService.ts"), "utf8");
+
+  assert.doesNotMatch(securityServiceSource, /securitySummaryMock/);
+  assert.doesNotMatch(securityServiceSource, /securityPendingMock/);
+  assert.doesNotMatch(securityServiceSource, /securityRestorePointsMock/);
+  assert.doesNotMatch(securityServiceSource, /securityAuditMock/);
+  assert.doesNotMatch(securityServiceSource, /buildMockRespondResult/);
+  assert.doesNotMatch(securityServiceSource, /buildMockRestoreApplyResult/);
+  assert.doesNotMatch(securityServiceSource, /getInitialSecurityModuleData/);
+});
+
+test("security detail rpc reads keep transport failures visible instead of switching to mock detail lists", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityAuditRecords: (source: "rpc" | "mock", taskId?: string | null, options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityPendingApprovals: (source: "rpc" | "mock", options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityRestorePoints: (source: "rpc" | "mock", options?: { limit?: number; offset?: number; taskId?: string | null }) => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityPendingApprovals("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityRestorePoints("rpc", { taskId: "task_dashboard_001" }), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityAuditRecords("rpc", "task_dashboard_001"), /transport is not wired/i);
+    },
+    {
+      listSecurityAuditDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
+      listSecurityRestorePointsDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
 test("mirror rpc service keeps transport failures visible instead of switching to mock overview data", async () => {
   const transportError = new Error("Named Pipe transport is not wired.");
 
@@ -4317,7 +4430,7 @@ test("dashboard home rpc service keeps transport failures visible instead of swi
   );
 });
 
-test("TaskDetailPanel defers the entire fallback security summary until formal detail arrives", () => {
+test("TaskDetailPanel defers the security summary until formal detail arrives", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /detailData\.source === "fallback" \|\| detailState !== "ready"/);
