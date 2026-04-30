@@ -3,7 +3,7 @@ import { getSettingsDetailed } from "@/rpc/methods";
 import {
   hydrateDesktopRuntimeDefaults,
   hydrateDesktopSettings,
-  loadSettings,
+  loadHydratedSettings,
   toProtocolSettingsSnapshot,
 } from "@/services/settingsService";
 
@@ -69,8 +69,8 @@ function mergeDashboardSettingsSnapshot(
   );
 }
 
-function getDashboardSettingsBaseline() {
-  return toProtocolSettingsSnapshot(loadSettings().settings);
+async function getDashboardSettingsBaseline() {
+  return toProtocolSettingsSnapshot((await loadHydratedSettings()).settings);
 }
 
 /**
@@ -82,9 +82,9 @@ function getDashboardSettingsBaseline() {
  * @param warning The user-visible warning that explains why the formal read is missing.
  * @returns A snapshot based on the persisted local settings plus the warning.
  */
-export function buildDashboardSettingsWarningSnapshot(warning: string): DashboardSettingsSnapshotData {
+export async function buildDashboardSettingsWarningSnapshot(warning: string): Promise<DashboardSettingsSnapshotData> {
   return {
-    settings: getDashboardSettingsBaseline(),
+    settings: await getDashboardSettingsBaseline(),
     source: "rpc",
     rpcContext: {
       serverTime: null,
@@ -106,8 +106,8 @@ export async function loadDashboardSettingsSnapshot(
   _source: DashboardSettingsSource = "rpc",
   scope: DashboardSettingsSnapshotScope = "all",
 ): Promise<DashboardSettingsSnapshotData> {
-  const baseline = getDashboardSettingsBaseline();
   await hydrateDesktopRuntimeDefaults();
+  const baseline = await getDashboardSettingsBaseline();
   const params: AgentSettingsGetParams = {
     request_meta: createRequestMeta(),
     scope,

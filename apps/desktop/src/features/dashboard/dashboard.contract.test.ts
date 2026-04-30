@@ -2777,6 +2777,108 @@ test("dashboard settings snapshot merges scoped memory payloads onto the local b
   }
 });
 
+test("dashboard settings snapshot hydrates runtime defaults before merging scoped rpc payloads", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+
+    const snapshot = await withDesktopAliasRuntime(
+      async (requireFn) => {
+        const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
+        const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
+        delete requireFn.cache[modulePath];
+        delete requireFn.cache[runtimeDefaultsModulePath];
+
+        const moduleExports = requireFn(modulePath) as {
+          loadDashboardSettingsSnapshot: (source?: "rpc", scope?: AgentSettingsGetParams["scope"]) => Promise<{
+            settings: {
+              general: { download: { workspace_path: string } };
+              memory: { enabled: boolean; lifecycle: string };
+              task_automation: { task_sources: string[] };
+            };
+          }>;
+        };
+
+        return moduleExports.loadDashboardSettingsSnapshot("rpc", "memory");
+      },
+      {
+        getSettingsDetailed: async () => ({
+          data: {
+            settings: {
+              memory: {
+                enabled: false,
+                lifecycle: "session",
+              },
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T09:30:00Z",
+          },
+          warnings: [],
+        }),
+      },
+      undefined,
+      {
+        invoke: async () => ({
+          workspace_path: "/runtime/workspace",
+          task_sources: ["/runtime/workspace/todos"],
+        }),
+      },
+    ) as {
+      settings: {
+        general: { download: { workspace_path: string } };
+        memory: { enabled: boolean; lifecycle: string };
+        task_automation: { task_sources: string[] };
+      };
+    };
+
+    assert.equal(snapshot.settings.general.download.workspace_path, "/runtime/workspace");
+    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["/runtime/workspace/todos"]);
+    assert.equal(snapshot.settings.memory.enabled, false);
+    assert.equal(snapshot.settings.memory.lifecycle, "session");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("dashboard settings mutation reloads only the touched memory scope after rpc writes", async () => {
   const requestedScopes: string[] = [];
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
@@ -5604,22 +5706,26 @@ test("TaskDetailPanel defers the security summary until formal detail arrives", 
   assert.match(panelSource, /等待详情同步后展示风险、授权与恢复点/);
 });
 
-test("task detail fallback keeps operator controls available from the selected task preview", () => {
+test("task detail fallback keeps operator controls available from preview tasks and routed task ids", () => {
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
   const actionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskActionBar.tsx"), "utf8");
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
 
   assert.match(taskPageSource, /const selectedTask = selectedTaskPreview\?\.task \?\? null;/);
-  assert.match(taskPageSource, /taskControlMutation\.mutate\(\{ action, taskId: selectedTask\.task_id \}\)/);
-  assert.match(taskPageSource, /taskSteerMutation\.mutate\(\{ message, taskId: selectedTask\.task_id \}\)/);
-  assert.match(taskPageSource, /taskId: selectedTask\.task_id/);
+  assert.match(taskPageSource, /const selectedTaskControlTargetId = selectedTask\?\.task_id \?\? selectedTaskId;/);
+  assert.match(taskPageSource, /taskControlMutation\.mutate\(\{ action, taskId: selectedTaskControlTargetId \}\)/);
+  assert.match(taskPageSource, /taskSteerMutation\.mutate\(\{ message, taskId: selectedTaskControlTargetId \}\)/);
+  assert.match(taskPageSource, /taskId: selectedTaskControlTargetId/);
+  assert.match(taskPageSource, /fallbackDetailActions: TaskPrimaryAction\[\] \| null/);
   assert.doesNotMatch(taskPageSource, /detailData && artifactListQuery\.isError/);
   assert.match(panelSource, /task \? <TaskActionBar detail=\{detail\} onAction=\{onAction\} task=\{task\} \/> : null/);
+  assert.match(panelSource, /fallbackActions && fallbackActions.length > 0 \? <TaskActionBar actionsOverride=\{fallbackActions\} detail=\{null\} onAction=\{onAction\} task=\{null\} \/> : null/);
   assert.doesNotMatch(panelSource, /detailData \? <TaskActionBar/);
   assert.match(panelSource, /<h3 className="task-detail-card__title">已生成的结果<\/h3>/);
   assert.match(panelSource, /!artifactLoading && !artifactErrorMessage \? \(/);
-  assert.match(actionBarSource, /detail: AgentTaskDetailGetResult \| null;/);
+  assert.match(actionBarSource, /actionsOverride\?: TaskPrimaryAction\[\] \| null;/);
+  assert.match(actionBarSource, /task: Task \| null;/);
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
   assert.match(mapperSource, /const hasAnchor = detail !== null/);
   assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);

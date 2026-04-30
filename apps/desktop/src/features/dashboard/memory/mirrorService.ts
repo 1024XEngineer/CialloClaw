@@ -199,13 +199,13 @@ export async function loadMirrorOverviewData(_source: MirrorOverviewSource = "rp
     loadMirrorSupportContext(),
     loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE)
       .then((snapshot) => ({ snapshot, warning: null as string | null }))
-      .catch((error) => {
+      .catch(async (error) => {
         const warning = error instanceof Error
           ? `settings-context: ${error.message}`
           : "settings-context: load failed";
 
         return {
-          snapshot: buildDashboardSettingsWarningSnapshot(warning),
+          snapshot: await buildDashboardSettingsWarningSnapshot(warning),
           warning,
         };
       }),
