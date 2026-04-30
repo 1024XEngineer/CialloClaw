@@ -193,8 +193,9 @@ export function createShellBallWindowFrame(
 
 export function measureShellBallContentSize(element: ShellBallMeasurableElement, includeScrollBounds = true): ShellBallContentSize {
   const rect = element.getBoundingClientRect();
+  const hasHTMLElement = typeof HTMLElement !== "undefined";
 
-  if (element instanceof HTMLElement && element.classList.contains("shell-ball-surface")) {
+  if (hasHTMLElement && element instanceof HTMLElement && element.classList.contains("shell-ball-surface")) {
     // The merged ball window measures only stable anchor wrappers so visual
     // nudges inside those wrappers never feed back into the native frame.
     const measuredRegions = [
@@ -228,7 +229,7 @@ export function measureShellBallContentSize(element: ShellBallMeasurableElement,
     }
   }
 
-  if (element instanceof HTMLElement && element.dataset.shellBallInputWindow === "true") {
+  if (hasHTMLElement && element instanceof HTMLElement && element.dataset.shellBallInputWindow === "true") {
     const inputBoxes = Array.from(element.querySelectorAll<HTMLElement>(".shell-ball-uiverse-inputbox"));
     const actions = Array.from(element.querySelectorAll<HTMLElement>(".shell-ball-uiverse-actions"));
 
