@@ -1,6 +1,24 @@
-// 该文件封装前端本地持久化能力。 
+/**
+ * Provides local renderer storage helpers.
+ *
+ * These helpers must stay SSR-safe because several contract tests render desktop
+ * entry points in a Node environment without a browser `window`.
+ */
+function readLocalStorage() {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return null;
+  }
+
+  return window.localStorage;
+}
+
 export function loadStoredValue<T>(key: string): T | null {
-  const rawValue = window.localStorage.getItem(key);
+  const localStorage = readLocalStorage();
+  if (localStorage === null) {
+    return null;
+  }
+
+  const rawValue = localStorage.getItem(key);
   if (!rawValue) {
     return null;
   }
@@ -8,11 +26,23 @@ export function loadStoredValue<T>(key: string): T | null {
   return JSON.parse(rawValue) as T;
 }
 
-// saveStoredValue 处理当前模块的相关逻辑。
+/**
+ * Persists a JSON-serializable value when browser storage is available.
+ */
 export function saveStoredValue<T>(key: string, value: T) {
-  window.localStorage.setItem(key, JSON.stringify(value));
+  const localStorage = readLocalStorage();
+  if (localStorage === null) {
+    return;
+  }
+
+  localStorage.setItem(key, JSON.stringify(value));
 }
 
 export function removeStoredValue(key: string) {
-  window.localStorage.removeItem(key);
+  const localStorage = readLocalStorage();
+  if (localStorage === null) {
+    return;
+  }
+
+  localStorage.removeItem(key);
 }

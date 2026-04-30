@@ -148,6 +148,11 @@ const SHELL_BALL_TASK_POLL_INTERVAL_MS = 1_500;
 const SHELL_BALL_CLIPBOARD_COMMAND = "粘贴板";
 const SHELL_BALL_SCREENSHOT_COMMAND = "截屏";
 const SHELL_BALL_WINDOW_COMMAND = "窗口";
+
+const scheduleShellBallTimeout = globalThis.setTimeout.bind(globalThis);
+const clearShellBallTimeout = globalThis.clearTimeout.bind(globalThis);
+const scheduleShellBallInterval = globalThis.setInterval.bind(globalThis);
+const clearShellBallInterval = globalThis.clearInterval.bind(globalThis);
 const SHELL_BALL_SCREENSHOT_PROMPT_TEXT = "帮我看看当前屏幕";
 const SHELL_BALL_WINDOW_PROMPT_TEXT = "帮我看看当前窗口";
 const SHELL_BALL_SCREENSHOT_SUMMARY = "Current screen inspection requested from the shell-ball screenshot shortcut.";
@@ -955,12 +960,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
   const clearBubbleVisibilityTimers = useCallback(() => {
     if (bubbleHideDelayTimeoutRef.current !== null) {
-      window.clearTimeout(bubbleHideDelayTimeoutRef.current);
+      clearShellBallTimeout(bubbleHideDelayTimeoutRef.current);
       bubbleHideDelayTimeoutRef.current = null;
     }
 
     if (bubbleHideCompleteTimeoutRef.current !== null) {
-      window.clearTimeout(bubbleHideCompleteTimeoutRef.current);
+      clearShellBallTimeout(bubbleHideCompleteTimeoutRef.current);
       bubbleHideCompleteTimeoutRef.current = null;
     }
   }, []);
@@ -1064,7 +1069,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
-    bubbleHideDelayTimeoutRef.current = window.setTimeout(() => {
+    bubbleHideDelayTimeoutRef.current = scheduleShellBallTimeout(() => {
       if (!helperWindowsVisibleRef.current || visibleBubbleCountRef.current === 0) {
         applyBubbleVisibilityPhase("hidden");
         return;
@@ -1076,7 +1081,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       }
 
       applyBubbleVisibilityPhase("fading");
-      bubbleHideCompleteTimeoutRef.current = window.setTimeout(() => {
+      bubbleHideCompleteTimeoutRef.current = scheduleShellBallTimeout(() => {
         if (regionActiveRef.current || bubbleHoveredRef.current || inputFocusedRef.current || inputHoveredRef.current) {
           applyBubbleVisibilityPhase("visible");
           return;
@@ -1787,7 +1792,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
      */
     const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
     const pendingBubbleId = pendingAgentBubbleItem.bubble.bubble_id;
-    const stallTimeout = window.setTimeout(() => {
+    const stallTimeout = scheduleShellBallTimeout(() => {
       setBubbleItems((currentItems) => markShellBallPendingBubbleAsStalled(currentItems, pendingBubbleId));
       revealBubbleRegionRef.current();
     }, SHELL_BALL_SUBMIT_STALL_NOTICE_MS);
@@ -1844,7 +1849,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         revealBubbleRegion();
       })
       .finally(() => {
-        window.clearTimeout(stallTimeout);
+        clearShellBallTimeout(stallTimeout);
         finishPendingTaskRegistration();
         handlersRef.current.onFinalizedSpeechHandled();
       });
@@ -1917,6 +1922,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }, [appendDeliveryReadyBubble]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
     let disposed = false;
     const pollingTaskIds = pollingTaskIdsRef.current;
     const pollingTaskFailureCount = pollingTaskFailureCountRef.current;
@@ -2007,12 +2016,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       }
     };
 
-    const intervalId = window.setInterval(pollShellBallTasks, SHELL_BALL_TASK_POLL_INTERVAL_MS);
+    const intervalId = scheduleShellBallInterval(pollShellBallTasks, SHELL_BALL_TASK_POLL_INTERVAL_MS);
     pollShellBallTasks();
 
     return () => {
       disposed = true;
-      window.clearInterval(intervalId);
+      clearShellBallInterval(intervalId);
       pollingTaskIds.clear();
       pollingTaskFailureCount.clear();
     };
@@ -2295,7 +2304,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
 		const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
 		const pendingBubbleId = pendingAgentBubbleItem.bubble.bubble_id;
-		const stallTimeout = window.setTimeout(() => {
+		const stallTimeout = scheduleShellBallTimeout(() => {
 		  setBubbleItems((currentItems) => markShellBallPendingBubbleAsStalled(currentItems, pendingBubbleId));
 		  revealBubbleRegionRef.current();
 		}, SHELL_BALL_SUBMIT_STALL_NOTICE_MS);
@@ -2303,7 +2312,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 		try {
 		  result = await handlersRef.current.onSubmitText();
 		} catch (error) {
-		  window.clearTimeout(stallTimeout);
+		  clearShellBallTimeout(stallTimeout);
 		  console.warn("shell-ball text submit failed", error);
           setBubbleItems((currentItems) =>
             replaceShellBallPendingBubble(
@@ -2323,7 +2332,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         }
 
 		if (isShellBallInputSubmitResult(result)) {
-		  window.clearTimeout(stallTimeout);
+		  clearShellBallTimeout(stallTimeout);
 		  registerShellBallTask(result.task.task_id, turnIndex, result.task.status);
           setBubbleItems((currentItems) => {
             const nextItems = currentItems.map((item) =>
@@ -2356,7 +2365,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 		setBubbleItems((currentItems) =>
 		  replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
 		);
-		window.clearTimeout(stallTimeout);
+		clearShellBallTimeout(stallTimeout);
 		finishPendingTaskRegistration();
 		break;
       }
