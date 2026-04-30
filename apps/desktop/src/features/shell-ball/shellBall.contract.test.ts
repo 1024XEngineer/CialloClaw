@@ -78,6 +78,7 @@ import {
 } from "./shellBall.windowSync";
 import type { ShellBallBubbleItem } from "./shellBall.bubble";
 import { cloneShellBallBubbleItems } from "./shellBall.bubble";
+import { createTerminalTaskBubbleDeduper } from "./useShellBallCoordinator";
 import {
   SHELL_BALL_BUBBLE_GAP_PX,
   SHELL_BALL_INPUT_GAP_PX,
@@ -7240,4 +7241,22 @@ test("shell-ball security respond stub exposes the restore union branch for rest
     assert.equal(result.audit_record === null, false);
     assert.match(result.bubble_message?.text ?? "", /Restored the workspace state/);
   }
+});
+
+test("shell-ball terminal task deduper cleans task bindings and allows replay", () => {
+  const deduper = createTerminalTaskBubbleDeduper();
+
+  assert.equal(deduper.markAndCheckShouldDisplay("task-a", "completed"), true);
+  assert.equal(deduper.markAndCheckShouldDisplay("task-a", "completed"), false);
+
+  assert.equal(deduper.markAndCheckShouldDisplay("task-b", "failed"), true);
+  assert.equal(deduper.markAndCheckShouldDisplay("task-b", "failed"), false);
+
+  deduper.clearTask("task-a");
+  assert.equal(deduper.markAndCheckShouldDisplay("task-a", "completed"), true);
+  assert.equal(deduper.markAndCheckShouldDisplay("task-a", "completed"), false);
+
+  assert.equal(deduper.markAndCheckShouldDisplay("task-b", "failed"), false);
+  deduper.clearTask("task-b");
+  assert.equal(deduper.markAndCheckShouldDisplay("task-b", "failed"), true);
 });

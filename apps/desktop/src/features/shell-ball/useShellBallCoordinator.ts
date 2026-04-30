@@ -163,6 +163,38 @@ type ShellBallBubbleTurnOrder = {
   turnPhase?: number;
 };
 
+type TerminalTaskBubbleDeduper = {
+  markAndCheckShouldDisplay: (taskId: string, status: string) => boolean;
+  clearTask: (taskId: string) => void;
+};
+
+/**
+ * Creates a task-scoped terminal bubble deduper that can be cleaned up when the
+ * shell-ball task mapping is detached.
+ */
+export function createTerminalTaskBubbleDeduper(): TerminalTaskBubbleDeduper {
+  const taskStatusMap = new Map<string, Set<string>>();
+
+  return {
+    markAndCheckShouldDisplay(taskId, status) {
+      const knownStatuses = taskStatusMap.get(taskId);
+      if (knownStatuses?.has(status)) {
+        return false;
+      }
+
+      if (knownStatuses === undefined) {
+        taskStatusMap.set(taskId, new Set([status]));
+      } else {
+        knownStatuses.add(status);
+      }
+      return true;
+    },
+    clearTask(taskId) {
+      taskStatusMap.delete(taskId);
+    },
+  };
+}
+
 function createShellBallRequestMeta() {
   const now = new Date().toISOString();
   const traceId = typeof globalThis.crypto?.randomUUID === "function"
@@ -756,7 +788,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const queuedDeliveryReadyNotificationsRef = useRef(new Map<string, QueuedDeliveryReadyNotification[]>());
   const pollingTaskIdsRef = useRef(new Set<string>());
   const pollingTaskFailureCountRef = useRef(new Map<string, number>());
-  const terminalTaskBubbleKeysRef = useRef(new Set<string>());
+  const terminalTaskBubbleDeduperRef = useRef(createTerminalTaskBubbleDeduper());
   // Only shell-ball submissions that are still waiting for their formal task id
   // are allowed to buffer approval notifications. This keeps unrelated desktop
   // approvals from lingering in shell-ball memory forever.
@@ -766,9 +798,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
   const activeShellBallTaskIdRef = useRef<string | null>(null);
   const revealBubbleRegionRef = useRef<() => void>(() => {});
+  const unbindShellBallTaskRef = useRef<(taskId: string) => void>(() => {});
   const autoOpenShellBallDeliveryResultRef = useRef<(taskId: string, deliveryResult: DeliveryResult | null | undefined) => Promise<void>>(
     () => Promise.resolve(),
   );
+  unbindShellBallTaskRef.current = (taskId) => {
+    shellBallTaskIdsRef.current.delete(taskId);
+    terminalTaskBubbleDeduperRef.current.clearTask(taskId);
+    pollingTaskFailureCountRef.current.delete(taskId);
+  };
   const syncPinnedBubbleWindowAnchorRef = useRef<(bubbleId: string) => Promise<void>>(() => Promise.resolve());
   const syncAnchoredPinnedBubbleWindowsRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const handleBubbleActionRef = useRef<(payload: ShellBallBubbleActionPayload) => void>(() => {});
@@ -1966,9 +2004,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
             if (isTerminalShellBallTaskStatus(detail.task.status)) {
               if (detail.delivery_result == null) {
-                const bubbleKey = `${detail.task.task_id}:${detail.task.status}`;
-                if (!terminalTaskBubbleKeysRef.current.has(bubbleKey)) {
-                  terminalTaskBubbleKeysRef.current.add(bubbleKey);
+                if (terminalTaskBubbleDeduperRef.current.markAndCheckShouldDisplay(detail.task.task_id, detail.task.status)) {
                   const turnIndex = getTaskBubbleTurnIndex(detail.task.task_id) ?? allocateBubbleTurnIndex();
                   bindTaskToBubbleTurn(detail.task.task_id, turnIndex);
                   setBubbleItems((currentItems) =>
@@ -1992,8 +2028,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                 }
               }
 
-              shellBallTaskIdsRef.current.delete(detail.task.task_id);
-              pollingTaskFailureCount.delete(detail.task.task_id);
+              unbindShellBallTaskRef.current(detail.task.task_id);
             }
           })
           .catch((error) => {
@@ -2005,8 +2040,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               );
               pollingTaskFailureCount.set(taskId, nextFailureCount);
               if (shouldStopPolling) {
-                shellBallTaskIdsRef.current.delete(taskId);
-                pollingTaskFailureCount.delete(taskId);
+                unbindShellBallTaskRef.current(taskId);
               }
             }
           })
