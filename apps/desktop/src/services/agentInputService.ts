@@ -7,6 +7,7 @@ import type {
   PageContext,
   ScreenContext,
 } from "@cialloclaw/protocol";
+import { normalizeDesktopErrorSignalText } from "@/platform/desktopErrorSignal";
 import {
   recordMirrorConversationFailure,
   recordMirrorConversationStart,
@@ -141,8 +142,9 @@ function mapDesktopWindowErrorContext(snapshot: DesktopWindowContextSnapshot | n
     return undefined;
   }
 
+  const errorText = normalizeDesktopErrorSignalText(snapshot.error_text);
   return compactContextRecord<ErrorContext>({
-    message: snapshot.error_text ?? undefined,
+    message: errorText,
   });
 }
 

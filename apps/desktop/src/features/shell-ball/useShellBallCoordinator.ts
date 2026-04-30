@@ -19,6 +19,7 @@ import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryRea
 import { submitTextInput } from "@/services/agentInputService";
 import { getDesktopClipboardActivitySnapshot } from "@/platform/desktopClipboardActivity";
 import { getDesktopMouseActivitySnapshot } from "@/platform/desktopActivity";
+import { normalizeDesktopErrorSignalText } from "@/platform/desktopErrorSignal";
 import { getActiveWindowContext } from "@/platform/desktopWindowContext";
 import {
   SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME,
@@ -291,7 +292,8 @@ function createShellBallRecommendationRequestContext(input: {
   const recommendationPageContext = resolveShellBallRecommendationPageContext(input.windowContext);
   const visibleText = input.windowContext?.visible_text?.trim() || undefined;
   const hoverTarget = input.windowContext?.hover_target?.trim() || undefined;
-  const errorText = input.errorText?.trim() || input.windowContext?.error_text?.trim() || undefined;
+  const errorText = normalizeDesktopErrorSignalText(input.errorText)
+    ?? normalizeDesktopErrorSignalText(input.windowContext?.error_text);
   const pageContext = compactShellBallContextRecord<PageContext>({
     app_name: recommendationPageContext.pageContext.app_name,
     title: recommendationPageContext.pageContext.title,
@@ -1892,7 +1894,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       }
 
       const recommendationContext = resolveShellBallRecommendationPageContext(activeWindowContext);
-      const errorText = activeWindowContext?.error_text?.trim() || undefined;
+      const errorText = normalizeDesktopErrorSignalText(activeWindowContext?.error_text);
       const recommendationRequestContext = createShellBallRecommendationRequestContext({
         windowContext: activeWindowContext,
         mouseActivitySnapshot,

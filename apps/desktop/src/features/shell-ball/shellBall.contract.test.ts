@@ -121,6 +121,7 @@ import { useShellBallStore } from "../../stores/shellBallStore";
 import {
   areShellBallSelectionSnapshotsEqual,
 } from "./selection/selection.provider";
+import { normalizeDesktopErrorSignalText } from "../../platform/desktopErrorSignal";
 
 const desktopRoot = process.cwd();
 
@@ -2709,11 +2710,13 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
       window_switch_count: 2,
       page_switch_count: 1,
     },
-    error: {
-      message: "Warning: release notes are incomplete.",
-    },
-    error_text: "Warning: release notes are incomplete.",
   });
+});
+
+test("desktop error signal helper ignores warning-only host text while preserving explicit failures", () => {
+  assert.equal(normalizeDesktopErrorSignalText("Warning: release notes are incomplete."), undefined);
+  assert.equal(normalizeDesktopErrorSignalText("  Error: publish failed.  "), "Error: publish failed.");
+  assert.equal(normalizeDesktopErrorSignalText("Unhandled exception in worker"), "Unhandled exception in worker");
 });
 
 test("submitTextInput keeps ordinary text submissions free of ambient page and screen snapshots", async () => {
