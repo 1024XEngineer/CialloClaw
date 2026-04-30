@@ -587,7 +587,7 @@ body[data-app-window="shell-ball"],
   margin-top: 0.48rem;
 }
 
-.shell-ball-bubble-message__approval-action {
+.shell-ball-bubble-message__approval-action,
 .shell-ball-bubble-message__recommendation-action {
   align-items: center;
   appearance: none;
