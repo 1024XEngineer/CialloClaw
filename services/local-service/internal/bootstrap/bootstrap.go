@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -55,12 +58,25 @@ var (
 	registerOCRToolsForBootstrap          = sidecarclient.RegisterOCRTools
 	registerMediaToolsForBootstrap        = sidecarclient.RegisterMediaTools
 	newModelServiceFromConfigForBootstrap = model.NewServiceFromConfig
+	getExecutablePathForBootstrap         = os.Executable
 )
+
+type runtimeMigrationPlan struct {
+	legacyWorkspaceRoot string
+	targetWorkspaceRoot string
+	legacyDatabasePath  string
+	targetDatabasePath  string
+	legacySecretPath    string
+	targetSecretPath    string
+}
 
 // New assembles a fully wired local-service application.
 func New(cfg config.Config) (*App, error) {
 	if strings.ContainsRune(cfg.WorkspaceRoot, '\x00') {
 		return nil, fmt.Errorf("workspace root contains invalid null byte")
+	}
+	if err := migrateLegacyRuntimeDefaultsIfNeeded(cfg, legacyRuntimeRootsForCompatibility()); err != nil {
+		return nil, err
 	}
 
 	pathPolicy, err := newLocalPathPolicyForBootstrap(cfg.WorkspaceRoot)
@@ -189,6 +205,169 @@ func New(cfg config.Config) (*App, error) {
 		ocr:          ocrRuntime,
 		media:        mediaRuntime,
 	}, nil
+}
+
+// migrateLegacyRuntimeDefaultsIfNeeded copies data from the legacy repo-relative
+// runtime layout into the new per-user runtime root before storage opens. This
+// preserves task history and settings for upgrades that previously relied on
+// relative defaults like ./workspace and ./data/cialloclaw.db.
+func migrateLegacyRuntimeDefaultsIfNeeded(cfg config.Config, legacyRoots []string) error {
+	plan, ok := buildRuntimeMigrationPlan(cfg, legacyRoots)
+	if !ok {
+		return nil
+	}
+	if err := copyDirectoryIfMissing(plan.legacyWorkspaceRoot, plan.targetWorkspaceRoot); err != nil {
+		return err
+	}
+	if err := copyFileIfMissing(plan.legacyDatabasePath, plan.targetDatabasePath); err != nil {
+		return err
+	}
+	if err := copyFileIfMissing(plan.legacySecretPath, plan.targetSecretPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildRuntimeMigrationPlan(cfg config.Config, legacyRoots []string) (runtimeMigrationPlan, bool) {
+	targetWorkspaceRoot := filepath.Clean(cfg.WorkspaceRoot)
+	targetDatabasePath := filepath.Clean(cfg.DatabasePath)
+	if targetWorkspaceRoot != filepath.Clean(config.DefaultWorkspaceRoot()) || targetDatabasePath != filepath.Clean(config.DefaultDatabasePath()) {
+		return runtimeMigrationPlan{}, false
+	}
+	for _, legacyRoot := range legacyRoots {
+		trimmedRoot := strings.TrimSpace(legacyRoot)
+		if trimmedRoot == "" {
+			continue
+		}
+		legacyWorkspaceRoot := filepath.Join(trimmedRoot, "workspace")
+		legacyDatabasePath := filepath.Join(trimmedRoot, "data", "cialloclaw.db")
+		legacySecretPath := secretStorePathForDatabase(legacyDatabasePath)
+		if sameFilePath(legacyWorkspaceRoot, targetWorkspaceRoot) || sameFilePath(legacyDatabasePath, targetDatabasePath) {
+			continue
+		}
+		if !pathExists(legacyWorkspaceRoot) && !pathExists(legacyDatabasePath) && !pathExists(legacySecretPath) {
+			continue
+		}
+		return runtimeMigrationPlan{
+			legacyWorkspaceRoot: legacyWorkspaceRoot,
+			targetWorkspaceRoot: targetWorkspaceRoot,
+			legacyDatabasePath:  legacyDatabasePath,
+			targetDatabasePath:  targetDatabasePath,
+			legacySecretPath:    legacySecretPath,
+			targetSecretPath:    secretStorePathForDatabase(targetDatabasePath),
+		}, true
+	}
+	return runtimeMigrationPlan{}, false
+}
+
+// legacyRuntimeRootsForCompatibility trusts only the executable-adjacent legacy
+// layout because the process working directory is not a stable bootstrap trust
+// boundary in packaged builds.
+func legacyRuntimeRootsForCompatibility() []string {
+	if executablePath, err := getExecutablePathForBootstrap(); err == nil {
+		return dedupePaths([]string{filepath.Dir(executablePath)})
+	}
+	return nil
+}
+
+func dedupePaths(paths []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(paths))
+	for _, pathValue := range paths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		cleaned := filepath.Clean(trimmed)
+		key := filepath.ToSlash(cleaned)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, cleaned)
+	}
+	return result
+}
+
+func sameFilePath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func pathExists(pathValue string) bool {
+	_, err := os.Stat(pathValue)
+	return err == nil
+}
+
+func secretStorePathForDatabase(databasePath string) string {
+	trimmed := strings.TrimSpace(databasePath)
+	if trimmed == "" {
+		return ""
+	}
+	ext := filepath.Ext(trimmed)
+	if ext == "" {
+		return trimmed + ".stronghold.db"
+	}
+	return strings.TrimSuffix(trimmed, ext) + ".stronghold" + ext
+}
+
+func copyDirectoryIfMissing(sourceRoot, targetRoot string) error {
+	if !pathExists(sourceRoot) {
+		return nil
+	}
+	return filepath.WalkDir(sourceRoot, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(sourceRoot, currentPath)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(targetRoot, relativePath)
+		if entry.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		return copyFileContents(currentPath, targetPath, entry.Type())
+	})
+}
+
+func copyFileIfMissing(sourcePath, targetPath string) error {
+	if !pathExists(sourcePath) || pathExists(targetPath) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	return copyFileContents(sourcePath, targetPath, 0)
+}
+
+func copyFileContents(sourcePath, targetPath string, entryMode os.FileMode) error {
+	reader, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = reader.Close() }()
+	mode := os.FileMode(0o644)
+	if entryMode != 0 {
+		mode = entryMode.Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+	}
+	writer, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		// Legacy runtime migration must stay idempotent across repeated launches, so
+		// pre-existing destination files are treated as already migrated content.
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = writer.Close() }()
+	_, err = io.Copy(writer, reader)
+	return err
 }
 
 func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, config.ModelConfig, bool, error) {

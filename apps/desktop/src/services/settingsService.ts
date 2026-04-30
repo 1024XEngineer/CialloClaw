@@ -1,10 +1,22 @@
 // settingsService centralizes desktop settings persistence.
 import type { SettingsSnapshot } from "@cialloclaw/protocol";
+import {
+  readDesktopRuntimeDefaults,
+  type DesktopRuntimeDefaults,
+} from "../platform/desktopRuntimeDefaults";
 import { syncDesktopSettingsSnapshot } from "../platform/desktopSettingsSnapshot";
 import { loadStoredValue, saveStoredValue } from "../platform/storage";
 
 // SETTINGS_KEY is the single storage key for the desktop snapshot.
 const SETTINGS_KEY = "cialloclaw.settings";
+const RUNTIME_DEFAULTS_KEY = "cialloclaw.runtime-defaults";
+const DEFAULT_WORKSPACE_PLACEHOLDER = "workspace";
+const DEFAULT_TASK_SOURCE_PLACEHOLDER = ["workspace/todos"];
+// These legacy defaults remain as migration sentinels only so packaged startup
+// can recognize and rewrite historical snapshots created before runtime-managed
+// host defaults were available.
+const LEGACY_DEFAULT_WORKSPACE_PATH = "D:/CialloClawWorkspace";
+const LEGACY_DEFAULT_TASK_SOURCES = ["D:/workspace/todos"];
 
 type ProtocolSettings = SettingsSnapshot["settings"];
 type ProtocolModelSettings = ProtocolSettings["models"];
@@ -38,7 +50,33 @@ type StoredDesktopSettings = {
   };
 };
 
+function loadRuntimeDefaults(): DesktopRuntimeDefaults | null {
+  const stored = loadStoredValue<DesktopRuntimeDefaults>(RUNTIME_DEFAULTS_KEY);
+  if (!stored || typeof stored.workspace_path !== "string") {
+    return null;
+  }
+
+  const workspacePath = stored.workspace_path.trim();
+  const taskSources = Array.isArray(stored.task_sources)
+    ? stored.task_sources
+        .filter((source): source is string => typeof source === "string")
+        .map((source) => source.trim())
+        .filter((source) => source.length > 0)
+    : [];
+
+  if (workspacePath.length === 0) {
+    return null;
+  }
+
+  return {
+    workspace_path: workspacePath,
+    task_sources: taskSources,
+  };
+}
+
 function createDefaultSettings(): DesktopSettings {
+  const runtimeDefaults = loadRuntimeDefaults();
+
   return {
     settings: {
       general: {
@@ -48,7 +86,7 @@ function createDefaultSettings(): DesktopSettings {
         voice_notification_enabled: true,
         voice_type: "default_female",
         download: {
-          workspace_path: "D:/CialloClawWorkspace",
+          workspace_path: runtimeDefaults?.workspace_path ?? DEFAULT_WORKSPACE_PLACEHOLDER,
           ask_before_save_each_file: true,
         },
       },
@@ -77,7 +115,7 @@ function createDefaultSettings(): DesktopSettings {
           unit: "minute",
           value: 15,
         },
-        task_sources: ["D:/workspace/todos"],
+        task_sources: runtimeDefaults?.task_sources.length ? runtimeDefaults.task_sources : DEFAULT_TASK_SOURCE_PLACEHOLDER,
         remind_before_deadline: true,
         remind_when_stale: false,
       },
@@ -166,6 +204,94 @@ function normalizeSettingsSnapshot(
       models: normalizedModels,
     },
   };
+}
+
+function usesLegacyWorkspaceDefault(workspacePath: string) {
+  const normalized = workspacePath.trim().replaceAll("\\", "/");
+  return (
+    normalized.length === 0 ||
+    normalized === "workspace" ||
+    normalized === LEGACY_DEFAULT_WORKSPACE_PATH
+  );
+}
+
+function usesLegacyTaskSourceDefaults(taskSources: string[]) {
+  if (taskSources.length !== 1) {
+    return false;
+  }
+
+  // Only the historical single-root placeholder should be replaced during
+  // runtime-default hydration. User-owned workspace-relative source layouts
+  // must stay intact even when they happen to live under `workspace/...`.
+  const normalized = taskSources[0]?.trim().replaceAll("\\", "/").toLowerCase() ?? "";
+  return normalized === LEGACY_DEFAULT_TASK_SOURCES[0].toLowerCase() || normalized === DEFAULT_TASK_SOURCE_PLACEHOLDER[0];
+}
+
+/**
+ * Hydrates runtime-default workspace paths from the trusted desktop host and
+ * rewrites legacy local placeholders to the canonical packaged defaults.
+ */
+export async function hydrateDesktopRuntimeDefaults() {
+  let runtimeDefaults: DesktopRuntimeDefaults | null = null;
+  try {
+    runtimeDefaults = await readDesktopRuntimeDefaults();
+  } catch (error) {
+    console.warn("Failed to hydrate desktop runtime defaults from the Tauri host.", error);
+    return null;
+  }
+  if (!runtimeDefaults || runtimeDefaults.workspace_path.trim().length === 0) {
+    return null;
+  }
+
+  const normalizedRuntimeDefaults: DesktopRuntimeDefaults = {
+    workspace_path: runtimeDefaults.workspace_path.trim(),
+    task_sources: runtimeDefaults.task_sources
+      .filter((source): source is string => typeof source === "string")
+      .map((source) => source.trim())
+      .filter((source) => source.length > 0),
+  };
+  saveStoredValue(RUNTIME_DEFAULTS_KEY, normalizedRuntimeDefaults);
+
+  const current = loadSettings();
+  const shouldReplaceWorkspace = usesLegacyWorkspaceDefault(current.settings.general.download.workspace_path);
+  const shouldReplaceTaskSources = usesLegacyTaskSourceDefaults(current.settings.task_automation.task_sources);
+  if (!shouldReplaceWorkspace && !shouldReplaceTaskSources) {
+    return normalizedRuntimeDefaults;
+  }
+
+  saveSettings({
+    settings: {
+      ...current.settings,
+      general: {
+        ...current.settings.general,
+        download: {
+          ...current.settings.general.download,
+          workspace_path: shouldReplaceWorkspace
+            ? normalizedRuntimeDefaults.workspace_path
+            : current.settings.general.download.workspace_path,
+        },
+      },
+      task_automation: {
+        ...current.settings.task_automation,
+        task_sources:
+          shouldReplaceTaskSources && normalizedRuntimeDefaults.task_sources.length > 0
+            ? normalizedRuntimeDefaults.task_sources
+            : current.settings.task_automation.task_sources,
+      },
+    },
+  });
+
+  return normalizedRuntimeDefaults;
+}
+
+/**
+ * Loads the persisted desktop settings after best-effort runtime-default
+ * hydration so fallback UI surfaces prefer trusted host paths over legacy
+ * packaged placeholders when the RPC channel is temporarily unavailable.
+ */
+export async function loadHydratedSettings(): Promise<DesktopSettings> {
+  await hydrateDesktopRuntimeDefaults();
+  return loadSettings();
 }
 
 /**

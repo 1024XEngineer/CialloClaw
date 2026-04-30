@@ -95,6 +95,7 @@ import {
 import {
   applyShellBallBubbleAction,
   createShellBallAgentBubbleItem,
+  createShellBallRuntimeObservationReply,
   shouldAutoOpenShellBallDeliveryResult,
   sortShellBallBubbleItemsByTimestamp,
 } from "./useShellBallCoordinator";
@@ -4003,6 +4004,64 @@ test("shell-ball auto-open helper only targets formal delivery types with native
   assert.equal(shouldAutoOpenShellBallDeliveryResult({ type: "reveal_in_folder" } as any), true);
   assert.equal(shouldAutoOpenShellBallDeliveryResult({ type: "result_page" } as any), true);
 });
+
+test("shell-ball runtime observation helper keeps runtime hints lightweight", () => {
+  assert.equal(
+    createShellBallRuntimeObservationReply({
+      task_id: "task-runtime-observation",
+      message: "Added another instruction.",
+    }),
+    "Added another instruction.",
+  );
+  assert.equal(
+    createShellBallRuntimeObservationReply({
+      task_id: "task-runtime-observation",
+      event: {
+        event_id: "evt_loop_retry_1",
+        run_id: "run-runtime",
+        task_id: "task-runtime-observation",
+        type: "loop.retrying",
+        level: "warn",
+        payload_json: "{}",
+        created_at: "2026-04-27T08:00:00.000Z",
+      },
+      stop_reason: "network timeout",
+    }),
+    "Retrying the current task step after network timeout.",
+  );
+  assert.equal(
+    createShellBallRuntimeObservationReply({
+      task_id: "task-runtime-observation",
+      event: {
+        event_id: "evt_loop_failed_1",
+        run_id: "run-runtime",
+        task_id: "task-runtime-observation",
+        type: "loop.failed",
+        level: "error",
+        payload_json: "{}",
+        created_at: "2026-04-27T08:01:00.000Z",
+      },
+      stop_reason: "rate limit",
+    }),
+    "Task runtime failed: rate limit. Open task detail for more context.",
+  );
+  assert.equal(
+    createShellBallRuntimeObservationReply({
+      task_id: "task-runtime-observation",
+      event: {
+        event_id: "evt_loop_started_1",
+        run_id: "run-runtime",
+        task_id: "task-runtime-observation",
+        type: "loop.started",
+        level: "info",
+        payload_json: "{}",
+        created_at: "2026-04-27T08:02:00.000Z",
+      },
+    }),
+    null,
+  );
+});
+
 test("shell-ball coordinator bubble actions restore unpinned bubbles by timestamp then id", () => {
   const sourceItems: ShellBallBubbleItem[] = [
     {
@@ -4262,6 +4321,9 @@ test("shell-ball selected-text prompt stays below an existing intent bubble even
       },
       "@/rpc/subscriptions": {
         subscribeDeliveryReady() {
+          return () => {};
+        },
+        subscribeAllTaskRuntime() {
           return () => {};
         },
       },
@@ -4567,6 +4629,9 @@ test("shell-ball submit auto-opens formal delivery results through the shared de
         subscribeDeliveryReady() {
           return () => {};
         },
+        subscribeAllTaskRuntime() {
+          return () => {};
+        },
       },
       "@/features/dashboard/tasks/taskOutput.service": {
         openTaskDeliveryForTask(taskId: string) {
@@ -4764,6 +4829,9 @@ test("shell-ball voice submit reuses task tracking and task-detail auto-open flo
       },
       "@/rpc/subscriptions": {
         subscribeDeliveryReady() {
+          return () => {};
+        },
+        subscribeAllTaskRuntime() {
           return () => {};
         },
       },
@@ -4971,6 +5039,9 @@ test("shell-ball replays approval.pending notifications that arrive before submi
         subscribeTaskUpdated() {
           return () => {};
         },
+        subscribeAllTaskRuntime() {
+          return () => {};
+        },
       },
       "@/services/agentInputService": {
         submitTextInput() {
@@ -5159,6 +5230,9 @@ test("shell-ball replays delivery.ready notifications that arrive before submit 
           return () => {};
         },
         subscribeTaskUpdated() {
+          return () => {};
+        },
+        subscribeAllTaskRuntime() {
           return () => {};
         },
       },
@@ -5374,6 +5448,9 @@ test("shell-ball replays task.updated notifications that arrive before submit re
           taskUpdatedListener = callback;
           return () => {};
         },
+        subscribeAllTaskRuntime() {
+          return () => {};
+        },
       },
       "@/services/agentInputService": {
         submitTextInput() {
@@ -5492,6 +5569,183 @@ test("shell-ball replays task.updated notifications that arrive before submit re
   assert.equal(useShellBallStore.getState().visualState, "waiting_auth");
 });
 
+test("shell-ball replays runtime notifications that arrive before submit resolves", async () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  let runtimeListener: ((payload: {
+    task_id: string;
+    message: string;
+  }) => void) | null = null;
+  let resolveSubmit: ((value: {
+    task: {
+      task_id: string;
+      status: "processing";
+    };
+    bubble_message: null;
+    delivery_result: null;
+  }) => void) | null = null;
+  const reactRuntime = createImmediateShellBallReactRuntime();
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"),
+    {
+      react: reactRuntime.react,
+      "@tauri-apps/api/window": {
+        getCurrentWindow() {
+          return {
+            label: shellBallWindowLabels.ball,
+            listen() {
+              return Promise.resolve(() => {});
+            },
+            onMoved() {
+              return Promise.resolve(() => {});
+            },
+            onResized() {
+              return Promise.resolve(() => {});
+            },
+            outerPosition() {
+              return Promise.resolve({ toLogical: () => ({ x: 0, y: 0 }) });
+            },
+            outerSize() {
+              return Promise.resolve({ toLogical: () => ({ width: 124, height: 104 }) });
+            },
+            scaleFactor() {
+              return Promise.resolve(1);
+            },
+          };
+        },
+      },
+      "@/rpc/subscriptions": {
+        subscribeAllTaskRuntime(callback: typeof runtimeListener) {
+          runtimeListener = callback;
+          return () => {};
+        },
+        subscribeApprovalPending() {
+          return () => {};
+        },
+        subscribeDeliveryReady() {
+          return () => {};
+        },
+        subscribeTaskUpdated() {
+          return () => {};
+        },
+      },
+      "@/services/agentInputService": {
+        submitTextInput() {
+          return new Promise((resolve) => {
+            resolveSubmit = resolve as typeof resolveSubmit;
+          });
+        },
+      },
+      "@/features/dashboard/tasks/taskOutput.service": {
+        openTaskDeliveryForTask() {
+          return Promise.resolve(null);
+        },
+        resolveTaskOpenExecutionPlan(): {
+          feedback: string;
+          mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+          path: string | null;
+          taskId: string | null;
+          url: string | null;
+        } {
+          return {
+            feedback: "open task detail",
+            mode: "task_detail" as const,
+            path: null,
+            taskId: null,
+            url: null,
+          };
+        },
+        performTaskOpenExecution() {
+          return Promise.resolve("open task detail");
+        },
+      },
+      "@/features/dashboard/shared/dashboardTaskDetailNavigation": {
+        requestDashboardTaskDetailOpen() {
+          return Promise.resolve();
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME: { width: 240, height: 140 },
+        closeShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        emitToShellBallWindowLabel() {
+          return Promise.resolve();
+        },
+        getShellBallPinnedBubbleIdFromLabel(): string | null {
+          return null;
+        },
+        getShellBallPinnedBubbleWindowAnchor() {
+          return { x: 0, y: 0 };
+        },
+        getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
+          return `shell-ball-bubble-pinned-${bubbleId}`;
+        },
+        openShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        setShellBallPinnedBubbleWindowVisible() {
+          return Promise.resolve();
+        },
+        shellBallWindowLabels,
+      },
+      "./useShellBallWindowMetrics": {
+        getShellBallBubbleAnchor() {
+          return { x: 0, y: 0 };
+        },
+      },
+    },
+    async (moduleExports) => {
+      const { useShellBallCoordinator } = moduleExports as {
+        useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator;
+      };
+
+      const { handlePrimaryAction } = useShellBallCoordinator({
+        visualState: "hover_input",
+        regionActive: false,
+        inputValue: "截屏",
+        inputFocused: true,
+        finalizedSpeechPayload: null,
+        voicePreview: null,
+        voiceHintMode: "hidden",
+        setInputValue: () => {},
+        onFinalizedSpeechHandled: () => {},
+        onRegionEnter: () => {},
+        onRegionLeave: () => {},
+        onInputHoverChange: () => {},
+        onInputFocusChange: () => {},
+        onSubmitText: async () => null,
+        onAttachFile: () => {},
+        onPrimaryClick: () => {},
+      });
+
+      const submitPromise = handlePrimaryAction("submit");
+      await flushAsyncEffects();
+
+      runtimeListener?.({
+        task_id: "task-runtime-race",
+        message: "Added another instruction.",
+      });
+
+      resolveSubmit?.({
+        task: {
+          task_id: "task-runtime-race",
+          status: "processing",
+        },
+        bubble_message: null,
+        delivery_result: null,
+      });
+
+      await submitPromise;
+      await flushAsyncEffects();
+    },
+  );
+
+  assert.match(coordinatorSource, /const queuedRuntimeNotificationsRef = useRef\(new Map<string, QueuedRuntimeNotification\[]>\(\)\);/);
+  const runtimeBubble = reactRuntime.getBubbleItems().find((item) => item.bubble.task_id === "task-runtime-race" && item.bubble.text === "Added another instruction.");
+  assert.ok(runtimeBubble);
+});
+
 test("shell-ball ignores untracked approval.pending notifications without a pending submit", async () => {
   let approvalPendingListener: ((payload: {
     task_id: string;
@@ -5542,6 +5796,9 @@ test("shell-ball ignores untracked approval.pending notifications without a pend
           return () => {};
         },
         subscribeTaskUpdated() {
+          return () => {};
+        },
+        subscribeAllTaskRuntime() {
           return () => {};
         },
       },
@@ -5728,6 +5985,9 @@ test("shell-ball approval responses do not overwrite newer task subscription sta
         },
         subscribeTaskUpdated(callback: typeof taskUpdatedListener) {
           taskUpdatedListener = callback;
+          return () => {};
+        },
+        subscribeAllTaskRuntime() {
           return () => {};
         },
       },
@@ -5929,6 +6189,9 @@ test("shell-ball delivery.ready auto-opens tracked formal delivery results", asy
           deliveryReadyListener = callback;
           return () => {};
         },
+        subscribeAllTaskRuntime() {
+          return () => {};
+        },
       },
       "@/features/dashboard/tasks/taskOutput.service": {
         openTaskDeliveryForTask(taskId: string) {
@@ -6113,6 +6376,9 @@ test("shell-ball task-detail deliveries auto-open the dashboard detail view", as
       },
       "@/rpc/subscriptions": {
         subscribeDeliveryReady() {
+          return () => {};
+        },
+        subscribeAllTaskRuntime() {
           return () => {};
         },
       },
@@ -6911,13 +7177,16 @@ test("shell-ball window command routes through the formal screen task path", () 
   assert.doesNotMatch(coordinatorSource, /createShellBallWindowContextReply/);
 });
 
-test("shell-ball coordinator subscribes to formal task and approval updates", () => {
+test("shell-ball coordinator subscribes to formal task, approval, and runtime updates", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
   assert.match(coordinatorSource, /subscribeTaskUpdated\(\(payload\) => \{/);
   assert.match(coordinatorSource, /subscribeApprovalPending\(\(payload\) => \{/);
+  assert.match(coordinatorSource, /subscribeAllTaskRuntime\(\(payload\) => \{/);
+  assert.match(coordinatorSource, /const queuedRuntimeNotificationsRef = useRef\(new Map<string, QueuedRuntimeNotification\[]>\(\)\);/);
+  assert.match(coordinatorSource, /queuedRuntimeNotifications\.forEach\(\(notification\) => \{\s*appendRuntimeObservationBubble\(notification\.taskId, notification\.payload\);/);
   assert.match(coordinatorSource, /syncShellBallVisualStateFromTaskStatus\(payload\.status\)/);
-  assert.match(coordinatorSource, /createShellBallApprovalPendingReply\(payload\.approval_request\)/);
+  assert.match(coordinatorSource, /approvalRequest: payload\.approval_request/);
 });
 
 test("desktop tauri setup enables mouse activity tracking for dwell context", () => {

@@ -1,6 +1,6 @@
 .mirror-page {
-  --mirror-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --mirror-font-body: "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+  --mirror-font-display: var(--cc-font-display);
+  --mirror-font-body: var(--cc-font-ui);
   --mirror-space-1: 0.55rem;
   --mirror-space-2: 0.8rem;
   --mirror-space-3: 1.05rem;
@@ -10,27 +10,23 @@
   --mirror-radius-sm: 1rem;
   --mirror-radius-md: 1.55rem;
   --mirror-radius-lg: 2rem;
-  --mirror-desk: #e8ddd1;
-  --mirror-desk-soft: rgba(255, 248, 239, 0.78);
-  --mirror-platen: rgba(255, 251, 244, 0.94);
+  --mirror-desk: var(--cc-cream-3);
+  --mirror-desk-soft: var(--cc-paper-soft);
+  --mirror-platen: var(--cc-paper);
   --mirror-platen-glow: rgba(255, 244, 224, 0.88);
-  --mirror-paper: rgba(255, 251, 245, 0.94);
-  --mirror-paper-strong: rgba(255, 253, 249, 0.98);
+  --mirror-paper: var(--cc-paper);
+  --mirror-paper-strong: var(--cc-paper-strong);
   --mirror-film: rgba(251, 255, 253, 0.54);
   --mirror-film-strong: rgba(255, 255, 255, 0.68);
-  --mirror-line: rgba(105, 88, 69, 0.16);
-  --mirror-line-strong: rgba(105, 88, 69, 0.28);
-  --mirror-ink: #2e241b;
-  --mirror-copy: rgba(63, 50, 39, 0.84);
-  --mirror-muted: rgba(92, 72, 53, 0.62);
-  --mirror-accent: #7b5f42;
+  --mirror-line: var(--cc-line);
+  --mirror-line-strong: var(--cc-line-strong);
+  --mirror-ink: var(--cc-ink);
+  --mirror-copy: var(--cc-ink-soft);
+  --mirror-muted: var(--cc-ink-muted);
+  --mirror-accent: var(--cc-module-memory-strong);
   --mirror-focus: rgba(124, 98, 63, 0.58);
   background:
-    radial-gradient(circle at 50% 46%, rgba(255, 252, 247, 0.9), transparent 19%),
-    radial-gradient(circle at 15% 14%, rgba(255, 255, 255, 0.74), transparent 22%),
-    radial-gradient(circle at 84% 16%, rgba(253, 231, 202, 0.44), transparent 24%),
-    radial-gradient(circle at 50% 100%, rgba(181, 142, 96, 0.12), transparent 34%),
-    linear-gradient(180deg, #f5eee4 0%, #eadfce 48%, #e0d2c0 100%);
+    var(--cc-page-bg);
   color: var(--mirror-ink);
   color-scheme: light;
   font-family: var(--mirror-font-body);

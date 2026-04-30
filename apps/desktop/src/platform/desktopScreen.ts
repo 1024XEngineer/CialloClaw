@@ -10,7 +10,7 @@ type DesktopScreenCapturePayload = {
 
 /**
  * Captures the current desktop screen through the Tauri host and stores the
- * image inside `apps/.temp`.
+ * image inside the trusted local runtime temp directory.
  *
  * @returns Metadata describing the saved screenshot file.
  */
