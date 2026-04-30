@@ -2072,6 +2072,176 @@ func TestHandleStreamConnAllowsSettingsReadWhileTaskConfirmWaits(t *testing.T) {
 	releasedBlocking = true
 }
 
+func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *testing.T) {
+	testCases := []struct {
+		name         string
+		method       string
+		firstParams  map[string]any
+		secondParams map[string]any
+	}{
+		{
+			name:   "input submit",
+			method: "agent.input.submit",
+			firstParams: map[string]any{
+				"session_id": "sess_serialized_submit",
+				"input": map[string]any{
+					"type": "text",
+					"text": "first submit",
+				},
+			},
+			secondParams: map[string]any{
+				"session_id": "sess_serialized_submit",
+				"input": map[string]any{
+					"type": "text",
+					"text": "second submit",
+				},
+			},
+		},
+		{
+			name:   "task start",
+			method: "agent.task.start",
+			firstParams: map[string]any{
+				"session_id": "sess_serialized_start",
+				"source":     "floating_ball",
+				"trigger":    "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+					"text": "first selection",
+				},
+			},
+			secondParams: map[string]any{
+				"session_id": "sess_serialized_start",
+				"source":     "floating_ball",
+				"trigger":    "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+					"text": "second selection",
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := newTestServer()
+			firstStarted := make(chan struct{})
+			releaseFirst := make(chan struct{})
+			var callCount int
+			var callMu sync.Mutex
+
+			server.handlers[testCase.method] = func(_ map[string]any) (any, *rpcError) {
+				callMu.Lock()
+				callCount++
+				currentCall := callCount
+				callMu.Unlock()
+
+				if currentCall == 1 {
+					select {
+					case <-firstStarted:
+					default:
+						close(firstStarted)
+					}
+					<-releaseFirst
+				}
+
+				return map[string]any{
+					"task": map[string]any{
+						"task_id": fmt.Sprintf("task_serial_%d", currentCall),
+					},
+				}, nil
+			}
+
+			left, right := net.Pipe()
+			defer left.Close()
+			defer right.Close()
+
+			go server.handleStreamConn(left)
+
+			encoder := json.NewEncoder(right)
+			decoder := json.NewDecoder(right)
+			firstRequest := requestEnvelope{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(`"req-task-starting-1"`),
+				Method:  testCase.method,
+				Params:  mustMarshal(t, testCase.firstParams),
+			}
+			secondRequest := requestEnvelope{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(`"req-task-starting-2"`),
+				Method:  testCase.method,
+				Params:  mustMarshal(t, testCase.secondParams),
+			}
+
+			if err := encoder.Encode(firstRequest); err != nil {
+				t.Fatalf("encode first request: %v", err)
+			}
+
+			select {
+			case <-firstStarted:
+			case <-time.After(500 * time.Millisecond):
+				t.Fatal("expected first task-starting request to begin running")
+			}
+
+			if err := encoder.Encode(secondRequest); err != nil {
+				t.Fatalf("encode second request: %v", err)
+			}
+
+			type decodeResult struct {
+				envelope map[string]any
+				err      error
+			}
+			firstResponseCh := make(chan decodeResult, 1)
+			go func() {
+				var envelope map[string]any
+				err := decoder.Decode(&envelope)
+				firstResponseCh <- decodeResult{envelope: envelope, err: err}
+			}()
+
+			select {
+			case result := <-firstResponseCh:
+				if result.err != nil {
+					t.Fatalf("expected no response before the first task-starting request finishes, got %v", result.err)
+				}
+				t.Fatalf("expected second task-starting request to stay queued until the first finishes, got %+v", result.envelope)
+			case <-time.After(250 * time.Millisecond):
+			}
+
+			close(releaseFirst)
+
+			seenResponses := map[string]bool{}
+			select {
+			case result := <-firstResponseCh:
+				if result.err != nil {
+					t.Fatalf("decode first serialized response envelope: %v", result.err)
+				}
+				id, _ := result.envelope["id"].(string)
+				if id == "req-task-starting-1" || id == "req-task-starting-2" {
+					seenResponses[id] = true
+				}
+			case <-time.After(1 * time.Second):
+				t.Fatal("expected first queued task-starting request to finish after release")
+			}
+
+			if err := right.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil {
+				t.Fatalf("set response deadline: %v", err)
+			}
+			for len(seenResponses) < 2 {
+				var envelope map[string]any
+				if err := decoder.Decode(&envelope); err != nil {
+					t.Fatalf("decode serialized response envelope: %v", err)
+				}
+				id, _ := envelope["id"].(string)
+				if id == "req-task-starting-1" || id == "req-task-starting-2" {
+					seenResponses[id] = true
+				}
+			}
+			if err := right.SetReadDeadline(time.Time{}); err != nil {
+				t.Fatalf("clear response deadline: %v", err)
+			}
+		})
+	}
+}
+
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	server := newTestServer()
 
