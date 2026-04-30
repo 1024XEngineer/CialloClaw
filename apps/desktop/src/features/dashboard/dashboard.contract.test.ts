@@ -437,13 +437,24 @@ function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMe
     delete requireFn.cache[snapshotModulePath];
 
     return requireFn(modulePath) as {
+      formatDashboardSettingsMutationFeedback: (result: {
+        applyMode: string;
+        needRestart: boolean;
+        persisted: boolean;
+        readbackWarning: string | null;
+      }, subject: string) => string;
       updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc" | "mock") => Promise<{
         applyMode: string;
         needRestart: boolean;
         persisted: boolean;
+        readbackWarning: string | null;
         source: string;
         updatedKeys: string[];
         snapshot: {
+          rpcContext: {
+            serverTime: string | null;
+            warnings: string[];
+          };
           source: string;
           settings: {
             models: {
@@ -591,12 +602,15 @@ type DashboardContractRpcMethodOverrides = {
   getDashboardModule?: (params: unknown) => Promise<unknown>;
   getDashboardOverview?: (params: unknown) => Promise<unknown>;
   getRecommendations?: (params: unknown) => Promise<unknown>;
+  getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
+  getSecuritySummaryDetailed?: (params: unknown) => Promise<unknown>;
   getSettings?: (params: unknown) => Promise<unknown>;
   updateSettings?: (params: unknown) => Promise<unknown>;
   getSettingsDetailed?: (params: unknown) => Promise<unknown>;
   getTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
+  listSecurityPendingDetailed?: (params: unknown) => Promise<unknown>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
@@ -702,9 +716,18 @@ function withDesktopAliasRuntime<T>(
         getRecommendations:
           rpcMethods?.getRecommendations ??
           (() => Promise.reject(new Error("getRecommendations should not run in dashboard contract tests"))),
+        getMirrorOverviewDetailed:
+          rpcMethods?.getMirrorOverviewDetailed ??
+          (() => Promise.reject(new Error("getMirrorOverviewDetailed should not run in dashboard contract tests"))),
+        getSecuritySummaryDetailed:
+          rpcMethods?.getSecuritySummaryDetailed ??
+          (() => Promise.reject(new Error("getSecuritySummaryDetailed should not run in dashboard contract tests"))),
         getSettings:
           rpcMethods?.getSettings ??
           (() => Promise.reject(new Error("getSettings should not run in dashboard contract tests"))),
+        listSecurityPendingDetailed:
+          rpcMethods?.listSecurityPendingDetailed ??
+          (() => Promise.reject(new Error("listSecurityPendingDetailed should not run in dashboard contract tests"))),
         listNotepad:
           rpcMethods?.listNotepad ??
           (() => {
@@ -1241,6 +1264,16 @@ test("dashboard home no longer replays mock summon or voice presets when live re
   assert.match(dashboardHomeSource, /if \(data\.summonTemplates\.length === 0\) \{/);
   assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
 });
+
+test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+
+  assert.match(mirrorAppSource, /const dataMode: MirrorOverviewSource = "rpc";/);
+  assert.doesNotMatch(mirrorAppSource, /DashboardMockToggle/);
+  assert.doesNotMatch(mirrorAppSource, /loadDashboardDataMode\("memory"\)/);
+  assert.doesNotMatch(mirrorAppSource, /saveDashboardDataMode\("memory"\)/);
+  assert.doesNotMatch(mirrorAppSource, /setDataMode\(/);
+});
 test("dashboard home entrance labels stay hidden until hover or focus", () => {
   const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
   const entranceOrbSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEntranceOrb.tsx"), "utf8");
@@ -1678,9 +1711,51 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
 });
 
-test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
+test("dashboard settings mutation persists rpc-effective settings into the local snapshot", async () => {
   const { loadSettings } = loadSettingsServiceModule();
-  const { updateDashboardSettings } = loadDashboardSettingsMutationModule();
+  const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
+    updateSettings: async () => ({
+      apply_mode: "immediate",
+      need_restart: false,
+      updated_keys: ["general.download.ask_before_save_each_file", "memory.enabled", "memory.lifecycle", "models.budget_auto_downgrade"],
+      effective_settings: {
+        general: {
+          download: {
+            ask_before_save_each_file: false,
+          },
+        },
+        memory: {
+          enabled: false,
+          lifecycle: "session",
+        },
+        models: {
+          budget_auto_downgrade: false,
+        },
+      },
+    }),
+    getSettingsDetailed: async () => ({
+      data: {
+        settings: {
+          general: {
+            download: {
+              ask_before_save_each_file: false,
+            },
+          },
+          memory: {
+            enabled: false,
+            lifecycle: "session",
+          },
+          models: {
+            budget_auto_downgrade: false,
+          },
+        },
+      },
+      meta: {
+        server_time: "2026-04-28T09:30:00Z",
+      },
+      warnings: [],
+    }),
+  });
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
   const localStorage = {
@@ -1717,14 +1792,19 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
           lifecycle: "session",
         },
       },
-      "mock",
     );
 
-    assert.equal(result.source, "mock");
+    assert.equal(result.source, "rpc");
     assert.equal(result.applyMode, "immediate");
     assert.equal(result.needRestart, false);
     assert.equal(result.persisted, true);
-    assert.deepEqual(result.updatedKeys.sort(), ["general", "memory", "models"]);
+    assert.equal(result.readbackWarning, null);
+    assert.deepEqual(result.updatedKeys.sort(), [
+      "general.download.ask_before_save_each_file",
+      "memory.enabled",
+      "memory.lifecycle",
+      "models.budget_auto_downgrade",
+    ]);
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.memory.lifecycle, "session");
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, false);
@@ -1736,6 +1816,69 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
     assert.equal(persisted.settings.memory.lifecycle, "session");
     assert.equal(persisted.settings.general.download.ask_before_save_each_file, false);
     assert.equal(persisted.settings.models.budget_auto_downgrade, false);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard settings mutation keeps successful writes visible when settings readback fails", async () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const { formatDashboardSettingsMutationFeedback, updateDashboardSettings } = loadDashboardSettingsMutationModule({
+    updateSettings: async () => ({
+      apply_mode: "immediate",
+      need_restart: false,
+      updated_keys: ["memory.enabled"],
+      effective_settings: {
+        memory: {
+          enabled: false,
+        },
+      },
+    }),
+    getSettingsDetailed: async () => {
+      throw new Error("settings readback timed out");
+    },
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const result = await updateDashboardSettings({
+      memory: {
+        enabled: false,
+      },
+    });
+
+    assert.equal(result.persisted, true);
+    assert.equal(result.source, "rpc");
+    assert.equal(result.readbackWarning, "settings readback timed out");
+    assert.equal(result.snapshot.settings.memory.enabled, false);
+    assert.deepEqual(result.snapshot.rpcContext.warnings, ["settings readback timed out"]);
+    assert.equal(loadSettings().settings.memory.enabled, false);
+    assert.match(
+      formatDashboardSettingsMutationFeedback(result, "记忆开关"),
+      /设置已写入，但 settings\.get 回读失败：settings readback timed out。当前先展示刚保存的本地快照。/,
+    );
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -2917,7 +3060,7 @@ test("mirror app reuses the mutation snapshot instead of triggering a second mir
   );
 });
 
-test("dashboard settings mutation keeps fallback snapshots read-only when the RPC transport is unavailable", async () => {
+test("dashboard settings mutation keeps transport failures visible and does not mutate local settings", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
     updateSettings: async () => {
@@ -2946,19 +3089,14 @@ test("dashboard settings mutation keeps fallback snapshots read-only when the RP
 
   try {
     const before = loadSettings();
-    const result = await updateDashboardSettings({
+    await assert.rejects(() => updateDashboardSettings({
       memory: {
         enabled: false,
         lifecycle: "session",
       },
-    });
+    }), /transport is not wired/i);
     const after = loadSettings();
 
-    assert.equal(result.source, "mock");
-    assert.equal(result.persisted, false);
-    assert.deepEqual(result.updatedKeys, []);
-    assert.equal(result.snapshot.settings.memory.enabled, before.settings.memory.enabled);
-    assert.equal(result.snapshot.settings.memory.lifecycle, before.settings.memory.lifecycle);
     assert.equal(after.settings.memory.enabled, before.settings.memory.enabled);
     assert.equal(after.settings.memory.lifecycle, before.settings.memory.lifecycle);
   } finally {
@@ -3957,6 +4095,120 @@ test("dashboard home rpc service keeps transport failures visible instead of swi
   );
 });
 
+test("mirror overview keeps rendering when memory settings snapshot falls back to a warning snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    await withDesktopAliasRuntime(
+      async (requireFn) => {
+        const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/memory/mirrorService.js");
+        const snapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
+        delete requireFn.cache[modulePath];
+        delete requireFn.cache[snapshotModulePath];
+
+        const service = requireFn(modulePath) as {
+          loadMirrorOverviewData: () => Promise<{
+            overview: { history_summary: string[] };
+            rpcContext: { warnings: string[] };
+            settingsSnapshot: {
+              rpcContext: { warnings: string[] };
+              settings: { memory: { enabled: boolean } };
+              source: string;
+            };
+          }>;
+        };
+
+        const result = await service.loadMirrorOverviewData();
+
+        assert.equal(result.overview.history_summary[0], "memory overview");
+        assert.equal(result.settingsSnapshot.source, "rpc");
+        assert.equal(result.settingsSnapshot.settings.memory.enabled, true);
+        assert.deepEqual(result.settingsSnapshot.rpcContext.warnings, ["settings-context: memory settings unavailable"]);
+        assert.ok(result.rpcContext.warnings.includes("settings-context: memory settings unavailable"));
+      },
+      {
+        getMirrorOverviewDetailed: async () => ({
+          data: {
+            daily_summary: null,
+            history_summary: ["memory overview"],
+            memory_references: [],
+            profile: null,
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        getSettingsDetailed: async () => {
+          throw new Error("memory settings unavailable");
+        },
+        getSecuritySummaryDetailed: async () => ({
+          data: {
+            summary: {
+              latest_restore_point: null,
+              pending_authorizations: 0,
+              risk_level: "green",
+              security_status: "normal",
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        listSecurityPendingDetailed: async () => ({
+          data: {
+            items: [],
+            page: {
+              has_more: false,
+              limit: 20,
+              offset: 0,
+              total: 0,
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        listTasks: async () => ({
+          items: [],
+          page: {
+            has_more: false,
+            limit: 20,
+            offset: 0,
+            total: 0,
+          },
+        }),
+      },
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("dashboard home keeps module and recommendation failures local instead of blanking the full orbit", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {
@@ -4011,6 +4263,56 @@ test("dashboard home keeps module and recommendation failures local instead of b
       getRecommendations: async () => {
         throw new Error("recommendations unavailable");
       },
+    },
+  );
+});
+
+test("mirror rpc service keeps transport failures visible instead of switching to mock overview data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/memory/mirrorService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadMirrorOverviewData: (source?: "rpc" | "mock") => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadMirrorOverviewData("rpc"), /transport is not wired/i);
+    },
+    {
+      getMirrorOverviewDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("mirror service no longer imports overview mock data into product runtime", () => {
+  const mirrorServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirrorService.ts"), "utf8");
+
+  assert.doesNotMatch(mirrorServiceSource, /mirrorOverviewMock/);
+  assert.doesNotMatch(mirrorServiceSource, /buildFallbackOverview/);
+  assert.doesNotMatch(mirrorServiceSource, /getInitialMirrorOverviewData/);
+});
+
+test("dashboard home rpc service keeps transport failures visible instead of switching to mock orbit data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadDashboardHomeData(), /transport is not wired/i);
+    },
+    {
+      getDashboardModule: () => Promise.reject(transportError),
+      getDashboardOverview: () => Promise.reject(transportError),
+      getRecommendations: () => Promise.reject(transportError),
     },
   );
 });
