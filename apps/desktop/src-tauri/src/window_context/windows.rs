@@ -894,10 +894,20 @@ fn derive_error_text(
 }
 
 fn looks_like_error_signal(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase();
-    ["error", "failed", "exception"]
-        .iter()
-        .any(|token| normalized.contains(token))
+    let normalized = value.to_lowercase();
+    [
+        "error",
+        "failed",
+        "failure",
+        "exception",
+        "错误",
+        "失败",
+        "异常",
+        "报错",
+        "出错",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token))
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -930,4 +940,18 @@ fn looks_like_url(value: &str) -> bool {
         || lower.starts_with("edge://")
         || lower.starts_with("chrome://")
         || lower.starts_with("about:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_error_signal;
+
+    #[test]
+    fn matches_explicit_failure_tokens_across_languages() {
+        assert!(looks_like_error_signal("Error: publish failed"));
+        assert!(looks_like_error_signal("当前操作失败，请稍后重试"));
+        assert!(looks_like_error_signal("检测到错误：配置无效"));
+        assert!(looks_like_error_signal("服务出现异常"));
+        assert!(!looks_like_error_signal("Warning: release notes are incomplete."));
+    }
 }

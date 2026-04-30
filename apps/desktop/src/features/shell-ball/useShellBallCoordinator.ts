@@ -586,6 +586,35 @@ export function sortShellBallBubbleItemsByTimestamp(items: ShellBallBubbleItem[]
   return [...items].sort(compareShellBallBubbleItemsByTimestamp);
 }
 
+function setShellBallIntentConfirmBubbleHidden(
+  items: ShellBallBubbleItem[],
+  taskId: string,
+  hidden: boolean,
+): ShellBallBubbleItem[] {
+  let changed = false;
+
+  const nextItems = items.map((item) => {
+    if (item.role !== "agent" || item.bubble.type !== "intent_confirm" || item.bubble.task_id.trim() !== taskId) {
+      return item;
+    }
+
+    if (item.bubble.hidden === hidden) {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      bubble: {
+        ...item.bubble,
+        hidden,
+      },
+    };
+  });
+
+  return changed ? nextItems : items;
+}
+
 function isShellBallInputSubmitResult(value: ShellBallInputSubmitResult | null | void): value is ShellBallInputSubmitResult {
   return value !== null && value !== undefined && typeof value === "object" && "task" in value;
 }
@@ -1148,6 +1177,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const autoOpenedDeliveryKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
+  // Intent confirmation bubbles are shell-ball-local affordances for the formal
+  // confirm RPC. Track in-flight submissions so repeat clicks cannot dispatch
+  // duplicate `agent.task.confirm` calls before the bubble is retired.
+  const pendingIntentDecisionTaskIdsRef = useRef(new Set<string>());
   const activeShellBallTaskIdRef = useRef<string | null>(null);
   const revealBubbleRegionRef = useRef<() => void>(() => {});
   const autoOpenShellBallDeliveryResultRef = useRef<(taskId: string, deliveryResult: DeliveryResult | null | undefined) => Promise<void>>(
@@ -2763,6 +2796,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     let cleanupFns: Array<() => void> = [];
 
     async function handleIntentDecision(payload: ShellBallIntentDecisionPayload) {
+      const normalizedTaskId = payload.taskId.trim();
+
+      if (normalizedTaskId === "" || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)) {
+        return;
+      }
+
+      pendingIntentDecisionTaskIdsRef.current.add(normalizedTaskId);
+
       const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
         confirmTask: (request: {
           confirmed: boolean;
@@ -2775,17 +2816,17 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       const turnIndex = allocateBubbleTurnIndex();
       const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
 
-      bindTaskToBubbleTurn(payload.taskId, turnIndex);
+      bindTaskToBubbleTurn(normalizedTaskId, turnIndex);
 
       setBubbleItems((currentItems) =>
         sortShellBallBubbleItemsByTimestamp([
-          ...currentItems,
+          ...setShellBallIntentConfirmBubbleHidden(currentItems, normalizedTaskId, true),
           createShellBallTextBubbleItem({
             createdAt,
             role: "user",
             text: decisionText,
             bubbleType: "status",
-            taskId: payload.taskId,
+            taskId: normalizedTaskId,
             turnIndex,
             turnPhase: 0,
           }),
@@ -2800,7 +2841,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           confirmed: payload.decision === "confirm",
           corrected_intent: payload.correctedIntent,
           request_meta: createShellBallRequestMeta(),
-          task_id: payload.taskId,
+          task_id: normalizedTaskId,
         });
 
         syncShellBallVisualStateFromTaskStatus(result.task.status);
@@ -2821,11 +2862,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         console.warn("shell-ball intent decision failed", error);
         setBubbleItems((currentItems) =>
           sortShellBallBubbleItemsByTimestamp([
-            ...currentItems,
+            ...setShellBallIntentConfirmBubbleHidden(currentItems, normalizedTaskId, false),
             createShellBallTaskErrorBubbleItem({
               createdAt: new Date().toISOString(),
               error,
-              taskId: payload.taskId,
+              taskId: normalizedTaskId,
               turnIndex,
               turnPhase: 1,
             }),
@@ -2833,6 +2874,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         );
         revealBubbleRegionRef.current();
       } finally {
+        pendingIntentDecisionTaskIdsRef.current.delete(normalizedTaskId);
         finishPendingTaskRegistration();
       }
     }

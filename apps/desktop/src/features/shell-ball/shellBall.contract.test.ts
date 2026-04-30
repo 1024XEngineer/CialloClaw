@@ -2717,6 +2717,8 @@ test("desktop error signal helper ignores warning-only host text while preservin
   assert.equal(normalizeDesktopErrorSignalText("Warning: release notes are incomplete."), undefined);
   assert.equal(normalizeDesktopErrorSignalText("  Error: publish failed.  "), "Error: publish failed.");
   assert.equal(normalizeDesktopErrorSignalText("Unhandled exception in worker"), "Unhandled exception in worker");
+  assert.equal(normalizeDesktopErrorSignalText("当前操作失败，请稍后重试"), "当前操作失败，请稍后重试");
+  assert.equal(normalizeDesktopErrorSignalText("检测到错误：配置无效"), "检测到错误：配置无效");
 });
 
 test("submitTextInput keeps ordinary text submissions free of ambient page and screen snapshots", async () => {
@@ -6696,6 +6698,17 @@ test("shell-ball intent confirmation actions stay on the formal confirm event pa
   assert.match(bubbleMessageSource, /onConfirmIntent\?\.\(taskId\)/);
   assert.match(coordinatorSource, /getCurrentWindow\(\)\.emit\(shellBallWindowSyncEvents\.intentDecision,/);
   assert.match(coordinatorSource, /decision: "confirm"/);
+});
+
+test("shell-ball retires intent confirmation bubbles while formal confirmation is in flight", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const pendingIntentDecisionTaskIdsRef = useRef\(new Set<string>\(\)\);/);
+  assert.match(coordinatorSource, /if \(normalizedTaskId === "" \|\| pendingIntentDecisionTaskIdsRef\.current\.has\(normalizedTaskId\)\) \{/);
+  assert.match(coordinatorSource, /pendingIntentDecisionTaskIdsRef\.current\.add\(normalizedTaskId\);/);
+  assert.match(coordinatorSource, /setShellBallIntentConfirmBubbleHidden\(currentItems, normalizedTaskId, true\)/);
+  assert.match(coordinatorSource, /setShellBallIntentConfirmBubbleHidden\(currentItems, normalizedTaskId, false\)/);
+  assert.match(coordinatorSource, /pendingIntentDecisionTaskIdsRef\.current\.delete\(normalizedTaskId\);/);
 });
 
 test("shell-ball pinned bubble windows render one coordinator-owned pinned item and emit detached actions", () => {

@@ -1,4 +1,14 @@
-const DESKTOP_FORMAL_ERROR_SIGNAL_TOKENS = ["error", "failed", "exception"] as const;
+const DESKTOP_FORMAL_ERROR_SIGNAL_TOKENS = [
+  "error",
+  "failed",
+  "failure",
+  "exception",
+  "错误",
+  "失败",
+  "异常",
+  "报错",
+  "出错",
+] as const;
 
 function containsDesktopFormalErrorSignalToken(value: string) {
   const normalizedValue = value.toLowerCase();
@@ -7,7 +17,8 @@ function containsDesktopFormalErrorSignalToken(value: string) {
 
 /**
  * Filters host-provided error candidates down to explicit failure evidence so
- * warning-only labels do not enter the formal desktop error path.
+ * warning-only labels do not enter the formal desktop error path while common
+ * localized failure phrases still survive normalization.
  *
  * @param value Host-provided error candidate text.
  * @returns Trimmed error text when it contains explicit failure evidence.
