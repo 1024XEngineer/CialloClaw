@@ -1,5 +1,5 @@
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
-use crate::window_context::read_window_context_for_hwnd;
+use crate::window_context::read_cached_or_lightweight_window_context_for_hwnd;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::thread;
@@ -165,7 +165,7 @@ pub fn read_selection_snapshot(
 }
 
 fn create_selection_page_context(foreground_window: HWND) -> SelectionPageContextPayload {
-    let window_context = read_window_context_for_hwnd(foreground_window);
+    let window_context = read_cached_or_lightweight_window_context_for_hwnd(foreground_window);
     let title = window_context
         .title
         .clone()

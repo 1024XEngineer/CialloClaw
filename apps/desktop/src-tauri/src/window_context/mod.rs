@@ -9,7 +9,7 @@ mod stub;
 pub use types::ActiveWindowContextPayload;
 
 #[cfg(windows)]
-pub(crate) use windows::read_window_context_for_hwnd;
+pub(crate) use windows::read_cached_or_lightweight_window_context_for_hwnd;
 
 use tauri::AppHandle;
 

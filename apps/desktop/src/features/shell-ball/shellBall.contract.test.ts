@@ -7313,7 +7313,9 @@ test("shell-ball single-click recommendations carry formal desktop context and r
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const bubbleDesktopSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBallBubbleDesktop.ts"), "utf8");
 
-  assert.match(coordinatorSource, /Promise\.allSettled\(\[\s*getActiveWindowContext\(\),\s*getDesktopMouseActivitySnapshot\(\),\s*getDesktopClipboardActivitySnapshot\(\),\s*readClipboardText\(\),/);
+  assert.match(coordinatorSource, /Promise\.allSettled\(\[\s*getActiveWindowContext\(\),\s*getDesktopMouseActivitySnapshot\(\),\s*getDesktopClipboardActivitySnapshot\(\),/);
+  assert.match(coordinatorSource, /if \(\(clipboardActivitySnapshot\?\.copy_count \?\? 0\) > 0\) \{\s*try \{\s*clipboardText = \(await readClipboardText\(\)\)\?\.trim\(\) \|\| undefined;/);
+  assert.doesNotMatch(coordinatorSource, /Promise\.allSettled\(\[\s*getActiveWindowContext\(\),\s*getDesktopMouseActivitySnapshot\(\),\s*getDesktopClipboardActivitySnapshot\(\),\s*readClipboardText\(\),/);
   assert.match(coordinatorSource, /getDesktopMouseActivitySnapshot\(\)/);
   assert.match(coordinatorSource, /getDesktopClipboardActivitySnapshot\(\)/);
   assert.match(coordinatorSource, /createShellBallRecommendationRequestContext\(/);
@@ -7329,6 +7331,10 @@ test("shell-ball single-click recommendations carry formal desktop context and r
   assert.match(coordinatorSource, /scene: recommendationScene/);
   assert.match(coordinatorSource, /pageContext: recommendationContext\.pageContext/);
   assert.match(coordinatorSource, /requestContext: recommendationRequestContext/);
+  assert.match(coordinatorSource, /const pendingRecommendationAcceptIdsRef = useRef\(new Set<string>\(\)\);/);
+  assert.match(coordinatorSource, /if \(pendingRecommendationAcceptIdsRef\.current\.has\(inlineRecommendation\.recommendationId\)\) \{\s*return;\s*\}/);
+  assert.match(coordinatorSource, /pendingRecommendationAcceptIdsRef\.current\.add\(inlineRecommendation\.recommendationId\);/);
+  assert.match(coordinatorSource, /pendingRecommendationAcceptIdsRef\.current\.delete\(inlineRecommendation\.recommendationId\);/);
   assert.match(coordinatorSource, /context: inlineRecommendation\.requestContext/);
   assert.match(coordinatorSource, /pageContext: inlineRecommendation\.pageContext/);
   assert.match(bubbleDesktopSource, /pageContext: PageContext;/);
@@ -7464,6 +7470,7 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   const selectionProviderSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/selection/selection.provider.tsx"), "utf8");
   const selectionTypesSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/types.rs"), "utf8");
   const selectionHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/windows.rs"), "utf8");
+  const windowContextHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
 
   assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
@@ -7481,8 +7488,14 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   assert.doesNotMatch(selectionProviderSource, /useInterval\(/);
   assert.match(selectionTypesSource, /pub visible_text: Option<String>,/);
   assert.match(selectionTypesSource, /pub hover_target: Option<String>,/);
+  assert.match(selectionHostSource, /read_cached_or_lightweight_window_context_for_hwnd\(foreground_window\)/);
+  assert.doesNotMatch(selectionHostSource, /read_window_context_for_hwnd\(foreground_window\)/);
   assert.match(selectionHostSource, /visible_text: window_context\.visible_text\.clone\(\),/);
   assert.match(selectionHostSource, /hover_target: window_context\.hover_target\.clone\(\),/);
+  assert.match(windowContextHostSource, /let mut context = read_cached_or_lightweight_window_context_for_hwnd\(hwnd\);/);
+  assert.match(windowContextHostSource, /let next_context = read_window_context_for_hwnd\(hwnd\);/);
+  assert.match(windowContextHostSource, /looks_like_actionable_error_signal/);
+  assert.match(windowContextHostSource, /assert!\(!looks_like_error_signal\("Rust error handling patterns"\)\);/);
   assert.equal(
     areShellBallSelectionSnapshotsEqual(
       {

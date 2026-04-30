@@ -21,8 +21,8 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
     IUIAutomationElementArray, IUIAutomationValuePattern, SetWinEventHook, TreeScope_Subtree,
-    UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_TextControlTypeId,
-    UIA_ValuePatternId, HWINEVENTHOOK,
+    UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_TextControlTypeId, UIA_ValuePatternId,
+    HWINEVENTHOOK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
@@ -119,7 +119,14 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
         return Ok(read_cached_window_context_with_url());
     }
 
-    let context = read_window_context_for_hwnd(hwnd);
+    let mut context = read_cached_or_lightweight_window_context_for_hwnd(hwnd);
+    context.hover_target = read_hover_target_for_window_context(hwnd, context.title.as_deref())
+        .or_else(|| context.hover_target.clone());
+    context.error_text = derive_error_text(
+        context.visible_text.as_deref(),
+        context.hover_target.as_deref(),
+        context.title.as_deref(),
+    );
     record_window_switch(&context);
     record_page_switch(&context);
     cache_window_context(hwnd, &context);
@@ -180,7 +187,7 @@ fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPa
         .map(|context| (hwnd, context))
 }
 
-fn read_lightweight_window_context_for_hwnd(
+pub(crate) fn read_lightweight_window_context_for_hwnd(
     hwnd: HWND,
 ) -> Result<ActiveWindowContextPayload, String> {
     let process_path = get_process_path(hwnd);
@@ -205,20 +212,32 @@ fn read_lightweight_window_context_for_hwnd(
     })
 }
 
-pub(crate) fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
+fn default_window_context() -> ActiveWindowContextPayload {
+    ActiveWindowContextPayload {
+        app_name: "unknown".to_string(),
+        process_path: None,
+        title: None,
+        url: None,
+        visible_text: None,
+        hover_target: None,
+        error_text: None,
+        browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
+        window_switch_count: None,
+        page_switch_count: None,
+    }
+}
+
+pub(crate) fn read_cached_or_lightweight_window_context_for_hwnd(
+    hwnd: HWND,
+) -> ActiveWindowContextPayload {
+    read_cached_window_context_for_hwnd(hwnd).unwrap_or_else(|| {
+        read_lightweight_window_context_for_hwnd(hwnd).unwrap_or_else(|_| default_window_context())
+    })
+}
+
+fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
     let mut context =
-        read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
-            app_name: "unknown".to_string(),
-            process_path: None,
-            title: None,
-            url: None,
-            visible_text: None,
-            hover_target: None,
-            error_text: None,
-            browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
-            window_switch_count: None,
-            page_switch_count: None,
-        });
+        read_lightweight_window_context_for_hwnd(hwnd).unwrap_or_else(|_| default_window_context());
 
     if let Some(snapshot) = read_window_automation_snapshot(hwnd, &context) {
         context.url = snapshot.url;
@@ -316,9 +335,10 @@ fn create_page_switch_lightweight_fingerprint(context: &ActiveWindowContextPaylo
 }
 
 fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
+    let root_window = get_root_window(hwnd);
     if let Ok(mut cached_context) = LAST_EXTERNAL_WINDOW_CONTEXT.lock() {
         *cached_context = Some(CachedWindowContext {
-            hwnd: hwnd.0 as isize,
+            hwnd: root_window.0 as isize,
             context: context.clone(),
         });
     }
@@ -329,6 +349,15 @@ fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
         cached
             .as_ref()
             .map(|value| with_window_context_activity_counts(value.context.clone()))
+    })
+}
+
+fn read_cached_window_context_for_hwnd(hwnd: HWND) -> Option<ActiveWindowContextPayload> {
+    let root_window = get_root_window(hwnd).0 as isize;
+    LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok().and_then(|cached| {
+        cached
+            .as_ref()
+            .and_then(|value| (value.hwnd == root_window).then(|| value.context.clone()))
     })
 }
 
@@ -343,9 +372,16 @@ fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
         return Some(with_window_context_activity_counts(cached.context));
     }
 
-    let context = read_window_context_for_hwnd(hwnd);
-    record_page_switch_after_url_refresh(&context);
+    let mut context = cached.context;
+    context.hover_target = read_hover_target_for_window_context(hwnd, context.title.as_deref())
+        .or_else(|| context.hover_target.clone());
+    context.error_text = derive_error_text(
+        context.visible_text.as_deref(),
+        context.hover_target.as_deref(),
+        context.title.as_deref(),
+    );
     cache_window_context(hwnd, &context);
+    schedule_window_context_url_refresh(hwnd, &context);
     Some(with_window_context_activity_counts(context))
 }
 
@@ -423,10 +459,6 @@ unsafe extern "system" fn window_context_foreground_hook(
 }
 
 fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContextPayload) {
-    if !should_refresh_window_context_url(context) {
-        return;
-    }
-
     let context = context.clone();
     let hwnd_handle = hwnd.0 as isize;
     let fingerprint = create_window_context_fingerprint(&context);
@@ -458,9 +490,7 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
         thread::sleep(Duration::from_millis(WINDOW_CONTEXT_URL_DEBOUNCE_MS));
 
         let hwnd = HWND(hwnd_handle as *mut core::ffi::c_void);
-        let url = read_url_for_window_context(hwnd, &context);
-        let mut next_context = context.clone();
-        next_context.url = url;
+        let next_context = read_window_context_for_hwnd(hwnd);
         record_page_switch_after_url_refresh(&next_context);
         cache_window_context(hwnd, &next_context);
 
@@ -509,10 +539,17 @@ fn read_window_automation_snapshot(
     } else {
         None
     };
-    let visible_text = read_visible_text_from_root(&automation, &root_element, context.title.as_deref());
+    let visible_text =
+        read_visible_text_from_root(&automation, &root_element, context.title.as_deref());
     let hover_target =
         read_target_candidate_from_recent_points(&automation, hwnd, context.title.as_deref())
-            .or_else(|| read_target_candidate_from_focused_element(&automation, hwnd, context.title.as_deref()));
+            .or_else(|| {
+                read_target_candidate_from_focused_element(
+                    &automation,
+                    hwnd,
+                    context.title.as_deref(),
+                )
+            });
     let error_text = derive_error_text(
         visible_text.as_deref(),
         hover_target.as_deref(),
@@ -639,6 +676,15 @@ fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
     read_browser_url_from_root(&automation, &root_element)
 }
 
+fn read_hover_target_for_window_context(hwnd: HWND, window_title: Option<&str>) -> Option<String> {
+    let _com_guard = ComGuard::initialize().ok()?;
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
+
+    read_target_candidate_from_recent_points(&automation, hwnd, window_title)
+        .or_else(|| read_target_candidate_from_focused_element(&automation, hwnd, window_title))
+}
+
 fn read_browser_url_from_root(
     automation: &IUIAutomation,
     root_element: &IUIAutomationElement,
@@ -688,7 +734,10 @@ fn read_visible_text_from_root(
         return None;
     }
 
-    Some(truncate_text(&candidates.join(" "), WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CHARS))
+    Some(truncate_text(
+        &candidates.join(" "),
+        WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CHARS,
+    ))
 }
 
 fn collect_visible_text_candidates(
@@ -710,7 +759,8 @@ fn collect_visible_text_candidates(
     }) else {
         return;
     };
-    let Some(matches) = (unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok() }) else {
+    let Some(matches) = (unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok() })
+    else {
         return;
     };
     let Some(length) = (unsafe { matches.Length().ok() }) else {
@@ -727,7 +777,11 @@ fn collect_visible_text_candidates(
         };
 
         if let Some(candidate) = read_visible_text_candidate(&element, window_title) {
-            push_unique_text_candidate(candidates, candidate, WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CANDIDATES);
+            push_unique_text_candidate(
+                candidates,
+                candidate,
+                WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CANDIDATES,
+            );
         }
     }
 }
@@ -853,7 +907,9 @@ fn normalize_text_candidate(value: &str, window_title: Option<&str>) -> Option<S
     let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let normalized = trimmed.trim();
 
-    if normalized.is_empty() || looks_like_url(normalized) || looks_like_address_bar_name(normalized)
+    if normalized.is_empty()
+        || looks_like_url(normalized)
+        || looks_like_address_bar_name(normalized)
     {
         return None;
     }
@@ -884,8 +940,11 @@ fn derive_error_text(
     hover_target: Option<&str>,
     window_title: Option<&str>,
 ) -> Option<String> {
-    for value in [visible_text, hover_target, window_title].into_iter().flatten() {
-        if looks_like_error_signal(value) {
+    for value in [visible_text, hover_target, window_title]
+        .into_iter()
+        .flatten()
+    {
+        if looks_like_actionable_error_signal(value) {
             return Some(truncate_text(value, WINDOW_CONTEXT_ERROR_TEXT_MAX_CHARS));
         }
     }
@@ -893,6 +952,7 @@ fn derive_error_text(
     None
 }
 
+#[allow(dead_code)]
 fn looks_like_error_signal(value: &str) -> bool {
     let normalized = value.to_lowercase();
     [
@@ -908,6 +968,70 @@ fn looks_like_error_signal(value: &str) -> bool {
     ]
     .iter()
     .any(|token| normalized.contains(token))
+}
+
+fn looks_like_actionable_error_signal(value: &str) -> bool {
+    let normalized = value
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        return false;
+    }
+
+    if [
+        "fatal error",
+        "syntax error",
+        "runtime error",
+        "server error",
+        "internal error",
+        "error occurred",
+        "exception occurred",
+        "uncaught exception",
+        "unhandled exception",
+        "operation failed",
+        "request failed",
+        "build failed",
+        "login failed",
+        "\u{53D1}\u{751F}\u{9519}\u{8BEF}",
+        "\u{51FA}\u{73B0}\u{9519}\u{8BEF}",
+        "\u{68C0}\u{6D4B}\u{5230}\u{9519}\u{8BEF}",
+        "\u{53D1}\u{751F}\u{5F02}\u{5E38}",
+        "\u{51FA}\u{73B0}\u{5F02}\u{5E38}",
+        "\u{64CD}\u{4F5C}\u{5931}\u{8D25}",
+        "\u{8BF7}\u{6C42}\u{5931}\u{8D25}",
+        "\u{52A0}\u{8F7D}\u{5931}\u{8D25}",
+        "\u{6267}\u{884C}\u{5931}\u{8D25}",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+    {
+        return true;
+    }
+
+    ["error", "exception", "\u{9519}\u{8BEF}", "\u{5F02}\u{5E38}"]
+        .iter()
+        .any(|label| looks_like_labeled_error_phrase(&normalized, label))
+        || [
+            "failed to",
+            " failure:",
+            " failure ",
+            "\u{5931}\u{8D25}",
+            "\u{62A5}\u{9519}",
+            "\u{51FA}\u{9519}",
+        ]
+        .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
+fn looks_like_labeled_error_phrase(normalized: &str, label: &str) -> bool {
+    let ascii_label = format!("{label}:");
+    let wide_label = format!("{label}\u{FF1A}");
+    normalized.starts_with(ascii_label.as_str())
+        || normalized.starts_with(wide_label.as_str())
+        || normalized.contains(format!(" {ascii_label}").as_str())
+        || normalized.contains(format!(" {wide_label}").as_str())
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -944,7 +1068,7 @@ fn looks_like_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::looks_like_error_signal;
+    use super::looks_like_actionable_error_signal as looks_like_error_signal;
 
     #[test]
     fn matches_explicit_failure_tokens_across_languages() {
@@ -952,6 +1076,14 @@ mod tests {
         assert!(looks_like_error_signal("当前操作失败，请稍后重试"));
         assert!(looks_like_error_signal("检测到错误：配置无效"));
         assert!(looks_like_error_signal("服务出现异常"));
-        assert!(!looks_like_error_signal("Warning: release notes are incomplete."));
+        assert!(!looks_like_error_signal(
+            "Warning: release notes are incomplete."
+        ));
+    }
+
+    #[test]
+    fn skips_generic_error_discussion_copy() {
+        assert!(!looks_like_error_signal("Rust error handling patterns"));
+        assert!(!looks_like_error_signal("Exception safety checklist"));
     }
 }

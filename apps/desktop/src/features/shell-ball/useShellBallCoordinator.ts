@@ -1174,6 +1174,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   // are allowed to buffer approval notifications. This keeps unrelated desktop
   // approvals from lingering in shell-ball memory forever.
   const pendingShellBallTaskRegistrationsRef = useRef(0);
+  // Recommendation bubbles disappear asynchronously after acceptance. Track
+  // in-flight ids so fast double clicks cannot dispatch duplicate starts.
+  const pendingRecommendationAcceptIdsRef = useRef(new Set<string>());
   const autoOpenedDeliveryKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
@@ -1895,11 +1898,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       let clipboardActivitySnapshot: Awaited<ReturnType<typeof getDesktopClipboardActivitySnapshot>> | null = null;
       let clipboardText: string | undefined;
 
-      const [windowContextResult, mouseActivityResult, clipboardActivityResult, clipboardResult] = await Promise.allSettled([
+      const [windowContextResult, mouseActivityResult, clipboardActivityResult] = await Promise.allSettled([
         getActiveWindowContext(),
         getDesktopMouseActivitySnapshot(),
         getDesktopClipboardActivitySnapshot(),
-        readClipboardText(),
       ]);
 
       if (windowContextResult.status === "fulfilled") {
@@ -1920,10 +1922,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         console.warn("shell-ball recommendation clipboard activity read failed", clipboardActivityResult.reason);
       }
 
-      if (clipboardResult.status === "fulfilled") {
-        clipboardText = clipboardResult.value?.trim() || undefined;
-      } else {
-        console.warn("shell-ball recommendation clipboard read failed", clipboardResult.reason);
+      if ((clipboardActivitySnapshot?.copy_count ?? 0) > 0) {
+        try {
+          clipboardText = (await readClipboardText())?.trim() || undefined;
+        } catch (error) {
+          console.warn("shell-ball recommendation clipboard read failed", error);
+        }
       }
 
       const recommendationContext = resolveShellBallRecommendationPageContext(activeWindowContext);
@@ -2016,6 +2020,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     if (bubbleItem === undefined || inlineRecommendation === undefined || recommendationText === "") {
       return;
     }
+    if (pendingRecommendationAcceptIdsRef.current.has(inlineRecommendation.recommendationId)) {
+      return;
+    }
+
+    pendingRecommendationAcceptIdsRef.current.add(inlineRecommendation.recommendationId);
     const createdAt = new Date().toISOString();
     const turnIndex = allocateBubbleTurnIndex();
     const userBubbleItem = createShellBallTextBubbleItem({
@@ -2105,6 +2114,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       );
       revealBubbleRegion();
     } finally {
+      pendingRecommendationAcceptIdsRef.current.delete(inlineRecommendation.recommendationId);
       finishPendingTaskRegistration();
     }
   }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion, submitShellBallRecommendationFeedback]);
