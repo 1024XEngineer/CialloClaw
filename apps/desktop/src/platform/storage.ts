@@ -23,7 +23,12 @@ export function loadStoredValue<T>(key: string): T | null {
     return null;
   }
 
-  return JSON.parse(rawValue) as T;
+  try {
+    return JSON.parse(rawValue) as T;
+  } catch (error) {
+    console.warn("[storage] Failed to parse localStorage value", { key, error });
+    return null;
+  }
 }
 
 /**
