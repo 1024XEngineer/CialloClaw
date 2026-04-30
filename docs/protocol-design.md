@@ -635,7 +635,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
-- `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
+- `agent.task.start` 可选接受显式 `intent` 入参，但仅用于复用后端已经产出的结构化意图，例如接受 recommendation 时透传原始 `intent`；前端不得自行发明新的意图语义，常规入口仍应优先由后端结合 `input / context` 统一推断。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 
@@ -757,6 +757,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `session_id`               | 当前会话 ID |
 | `source`                   | 来源位置，取值来自 `request_source` |
 | `trigger`                  | 触发动作，取值来自 `request_trigger` |
+| `intent.name`              | 可选显式意图名称；仅用于复用后端已产出的结构化意图 |
+| `intent.arguments`         | 与 `intent.name` 配套的结构化参数；前端不得自行发明未注册语义 |
 | `input.type`               | 输入对象类型，取值来自 `input_type` |
 | `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
 | `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
@@ -779,7 +781,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
-- `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
+- `agent.task.start` 可选接受显式 `intent` 入参，但仅用于复用后端已产出的结构化意图，例如接受 recommendation 时透传原始 `intent`；视觉型任务与普通自由输入仍优先由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
 - `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。

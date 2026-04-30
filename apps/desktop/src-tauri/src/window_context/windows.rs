@@ -895,7 +895,7 @@ fn derive_error_text(
 
 fn looks_like_error_signal(value: &str) -> bool {
     let normalized = value.to_ascii_lowercase();
-    ["error", "failed", "warning", "exception"]
+    ["error", "failed", "exception"]
         .iter()
         .any(|token| normalized.contains(token))
 }

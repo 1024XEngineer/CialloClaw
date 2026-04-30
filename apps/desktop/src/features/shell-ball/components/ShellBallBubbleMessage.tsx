@@ -7,6 +7,7 @@ type ShellBallBubbleMessageProps = {
   onPin?: (bubbleId: string) => void;
   onAllowApproval?: (bubbleId: string) => void;
   onDenyApproval?: (bubbleId: string) => void;
+  onConfirmIntent?: (taskId: string) => void;
   onAcceptRecommendation?: (bubbleId: string) => void;
   onIgnoreRecommendation?: (bubbleId: string) => void;
 };
@@ -17,11 +18,13 @@ export function ShellBallBubbleMessage({
   onPin,
   onAllowApproval,
   onDenyApproval,
+  onConfirmIntent,
   onAcceptRecommendation,
   onIgnoreRecommendation,
 }: ShellBallBubbleMessageProps) {
   const bubbleId = item.bubble.bubble_id;
   const bubbleText = item.bubble.text;
+  const taskId = item.bubble.task_id.trim();
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;
@@ -31,7 +34,10 @@ export function ShellBallBubbleMessage({
     inlineApproval !== undefined && onAllowApproval !== undefined && onDenyApproval !== undefined;
   const shouldShowInlineRecommendationActions =
     inlineRecommendation !== undefined && onAcceptRecommendation !== undefined && onIgnoreRecommendation !== undefined;
-  const shouldShowBubbleControls = !shouldShowInlineApprovalActions && !shouldShowInlineRecommendationActions;
+  const shouldShowIntentConfirmAction =
+    item.role === "agent" && item.bubble.type === "intent_confirm" && taskId !== "" && onConfirmIntent !== undefined;
+  const shouldShowBubbleControls =
+    !shouldShowInlineApprovalActions && !shouldShowInlineRecommendationActions && !shouldShowIntentConfirmAction;
 
   const allowApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "allow_once" ? "Allowing..." : "Allow";
   const denyApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "deny_once" ? "Denying..." : "Deny";
@@ -138,6 +144,21 @@ export function ShellBallBubbleMessage({
               }}
             >
               Try this
+            </button>
+          </div>
+        ) : shouldShowIntentConfirmAction ? (
+          <div className="shell-ball-bubble-message__recommendation-actions">
+            <button
+              type="button"
+              className="shell-ball-bubble-message__approval-action shell-ball-bubble-message__approval-action--allow"
+              data-bubble-action="confirm_intent"
+              data-bubble-id={bubbleId}
+              aria-label="Confirm intent"
+              onClick={() => {
+                onConfirmIntent?.(taskId);
+              }}
+            >
+              OK
             </button>
           </div>
         ) : null}

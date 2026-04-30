@@ -2411,6 +2411,7 @@ test("task-entry services keep rpc transport failures visible and forward file d
         bootstrapTask: (title: string) => Promise<unknown>;
         startTaskFromErrorSignal: (errorMessage: string, context?: Record<string, unknown>) => Promise<unknown>;
         startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+        startTaskFromRecommendation: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
         startTaskFromSelectedText: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
       };
 
@@ -2476,11 +2477,74 @@ test("task-entry services keep rpc transport failures visible and forward file d
         selection_text: "selected text",
       });
 
+      await service.startTaskFromErrorSignal("  stack trace  ", {
+        context: {
+          error: {
+            message: "stack trace",
+          },
+          error_text: "stack trace",
+        },
+        pageContext: {
+          app_name: "chrome",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
+          visible_text: "Error: publish failed.",
+          hover_target: "Publish button",
+          window_title: "Build Dashboard",
+        },
+        sessionId: "sess_shell_ball_error",
+        source: "floating_ball",
+      });
+
+      assert.equal(startTaskCalls[2]?.session_id, "sess_shell_ball_error");
+      assert.equal(startTaskCalls[2]?.trigger, "error_detected");
+      assert.deepEqual(startTaskCalls[2]?.input, {
+        type: "error",
+        error_message: "stack trace",
+        page_context: {
+          app_name: "chrome",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
+          visible_text: "Error: publish failed.",
+          hover_target: "Publish button",
+          window_title: "Build Dashboard",
+        },
+      });
+
+      await service.startTaskFromRecommendation("  rewrite this summary  ", {
+        context: {
+          screen_summary: "Foreground Notes page is active.",
+        },
+        intent: {
+          name: "rewrite",
+          arguments: {
+            tone: "concise",
+          },
+        },
+        pageContext: {
+          app_name: "notepad",
+          title: "Notes",
+          url: "native://notes",
+          window_title: "Notes",
+        },
+        sessionId: "sess_shell_ball_recommendation",
+        source: "floating_ball",
+      });
+
+      assert.equal(startTaskCalls[3]?.session_id, "sess_shell_ball_recommendation");
+      assert.equal(startTaskCalls[3]?.trigger, "recommendation_click");
+      assert.deepEqual(startTaskCalls[3]?.intent, {
+        name: "rewrite",
+        arguments: {
+          tone: "concise",
+        },
+      });
+
       await service.bootstrapTask("  summarize this  ");
     },
   );
 
-  assert.equal(startTaskCalls.length, 2);
+  assert.equal(startTaskCalls.length, 4);
   assert.equal(bootstrapSubmitCalls.length, 1);
   assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
 
@@ -2510,12 +2574,14 @@ test("task-entry services keep rpc transport failures visible and forward file d
         bootstrapTask: (title: string) => Promise<unknown>;
         startTaskFromErrorSignal: (errorMessage: string, context?: Record<string, unknown>) => Promise<unknown>;
         startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+        startTaskFromRecommendation: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
         startTaskFromSelectedText: (text: string, context?: Record<string, unknown>) => Promise<unknown>;
       };
 
       await assert.rejects(() => service.startTaskFromSelectedText("selected text"), /transport is not wired/i);
       await assert.rejects(() => service.startTaskFromFiles(["C:\\workspace\\notes.md"], {}, "details"), /transport is not wired/i);
       await assert.rejects(() => service.startTaskFromErrorSignal("stack trace"), /transport is not wired/i);
+      await assert.rejects(() => service.startTaskFromRecommendation("rewrite this"), /transport is not wired/i);
       await assert.rejects(() => service.bootstrapTask("hover text"), /transport is not wired/i);
     },
   );
@@ -3888,6 +3954,39 @@ test("shell-ball pending-approval bubbles render inline allow and deny controls"
   assert.match(markup, /shell-ball-bubble-message__approval-actions/);
   assert.equal(markup.match(/data-bubble-action="allow_approval"/g)?.length, 1);
   assert.equal(markup.match(/data-bubble-action="deny_approval"/g)?.length, 1);
+  assert.doesNotMatch(markup, /data-bubble-action="pin"/);
+  assert.doesNotMatch(markup, /data-bubble-action="delete"/);
+});
+
+test("shell-ball intent confirmation bubbles render an inline OK action without pin controls", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "confirming_intent",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-intent-confirm-1",
+            task_id: "task-intent-confirm-1",
+            type: "intent_confirm",
+            text: "Should I continue with a rewrite?",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-30T09:10:00.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+      onConfirmIntentBubble() {},
+      onDeleteBubble() {},
+      onPinBubble() {},
+    }),
+  );
+
+  assert.equal(markup.match(/data-bubble-action="confirm_intent"/g)?.length, 1);
+  assert.match(markup, />OK</);
   assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.doesNotMatch(markup, /data-bubble-action="delete"/);
 });
@@ -6581,6 +6680,21 @@ test("shell-ball approval bubble actions stay on the formal security respond pat
   assert.match(coordinatorSource, /createShellBallApprovalPendingBubbleItem\(\{/);
 });
 
+test("shell-ball intent confirmation actions stay on the formal confirm event path", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const bubbleMessageSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"),
+    "utf8",
+  );
+
+  assert.match(appSource, /onConfirmIntentBubble=\{handleCoordinatorConfirmIntentBubble\}/);
+  assert.match(bubbleMessageSource, /data-bubble-action="confirm_intent"/);
+  assert.match(bubbleMessageSource, /onConfirmIntent\?\.\(taskId\)/);
+  assert.match(coordinatorSource, /getCurrentWindow\(\)\.emit\(shellBallWindowSyncEvents\.intentDecision,/);
+  assert.match(coordinatorSource, /decision: "confirm"/);
+});
+
 test("shell-ball pinned bubble windows render one coordinator-owned pinned item and emit detached actions", () => {
   const helperSnapshot = createShellBallWindowSnapshot({
     visualState: "processing",
@@ -7171,10 +7285,12 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
 
 test("shell-ball stale clipboard prompts fall through to single-click recommendation instead of swallowing the click", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 
   assert.match(appSource, /if \(isShellBallClipboardPromptActive\(clipboardPrompt\)\) \{/);
   assert.match(appSource, /void handleCoordinatorPrimaryAction\("primary_click"\);/);
   assert.doesNotMatch(appSource, /if \(!isShellBallClipboardPromptActive\(clipboardPrompt\)\) \{\s*setClipboardPrompt\(null\);\s*return;/);
+  assert.doesNotMatch(interactionSource, /function handlePrimaryClick\(\)/);
 });
 
 test("shell-ball single-click recommendations carry formal desktop context and reuse the original page context on accept", () => {
@@ -7193,12 +7309,27 @@ test("shell-ball single-click recommendations carry formal desktop context and r
   assert.match(coordinatorSource, /window_switch_count:/);
   assert.match(coordinatorSource, /page_switch_count:/);
   assert.match(coordinatorSource, /lastAction: "primary_click"/);
+  assert.match(coordinatorSource, /const recommendationScene = resolveShellBallRecommendationScene\(\{/);
+  assert.match(coordinatorSource, /scene: recommendationScene/);
   assert.match(coordinatorSource, /pageContext: recommendationContext\.pageContext/);
   assert.match(coordinatorSource, /requestContext: recommendationRequestContext/);
   assert.match(coordinatorSource, /context: inlineRecommendation\.requestContext/);
   assert.match(coordinatorSource, /pageContext: inlineRecommendation\.pageContext/);
   assert.match(bubbleDesktopSource, /pageContext: PageContext;/);
   assert.match(bubbleDesktopSource, /requestContext: RecommendationContext;/);
+});
+
+test("shell-ball recommendation entry resolves backend scenes and promotes explicit error clicks into the formal error task path", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /function resolveShellBallRecommendationScene\(input: \{/);
+  assert.match(coordinatorSource, /if \(input\.errorText\?\.trim\(\)\) \{\s*return "error";/);
+  assert.match(coordinatorSource, /if \(input\.visualState === "hover_input"\) \{\s*return "hover";/);
+  assert.match(coordinatorSource, /const handleErrorSignalPrompt = useCallback\(async \(errorText: string, pageContext: PageContext \| undefined\) => \{/);
+  assert.match(coordinatorSource, /createShellBallErrorSignalRequestContext\(\{/);
+  assert.match(coordinatorSource, /startTaskFromErrorSignal\(normalizedErrorText, \{/);
+  assert.match(coordinatorSource, /if \(recommendationScene === "error" && errorText\) \{/);
+  assert.match(coordinatorSource, /await handleErrorSignalPrompt\(errorText, recommendationContext\.pageContext\);/);
 });
 
 test("shell-ball screenshot command routes through the formal screen task path", () => {
@@ -7423,7 +7554,7 @@ test("shell-ball app injects the demo switcher only in dev mode", () => {
 test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("idle"), "hidden");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
-  assert.equal(getShellBallInputBarMode("confirming_intent"), "readonly");
+  assert.equal(getShellBallInputBarMode("confirming_intent"), "interactive");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
   assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");

@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   BubbleMessage,
+  IntentPayload,
   PageContext,
   RecommendationContext,
 } from "@cialloclaw/protocol";
@@ -32,6 +33,7 @@ export type ShellBallBubbleInlineApprovalState = {
  */
 export type ShellBallBubbleInlineRecommendationState = {
   recommendationId: string;
+  intent: IntentPayload;
   pageContext: PageContext;
   requestContext: RecommendationContext;
 };
@@ -64,6 +66,10 @@ function cloneShellBallBubbleInlineRecommendationState(
 ): ShellBallBubbleInlineRecommendationState {
   return {
     recommendationId: state.recommendationId,
+    intent: {
+      name: state.intent.name,
+      arguments: { ...state.intent.arguments },
+    },
     pageContext: { ...state.pageContext },
     requestContext: {
       ...state.requestContext,

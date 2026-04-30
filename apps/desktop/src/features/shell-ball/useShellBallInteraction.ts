@@ -732,10 +732,6 @@ export function useShellBallInteraction() {
     });
   }
 
-  function handlePrimaryClick() {
-    return;
-  }
-
   function handleRegionEnter() {
     regionActiveRef.current = true;
     setRegionActive(true);
@@ -1168,7 +1164,6 @@ export function useShellBallInteraction() {
       state: visualState,
       interactionConsumed,
     }),
-    handlePrimaryClick,
     handleRegionEnter,
     handleRegionLeave,
     handleSubmitText,

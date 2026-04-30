@@ -245,6 +245,7 @@ export interface AgentTaskStartParams {
   session_id?: string;
   source: RequestSource;
   trigger: RequestTrigger;
+  intent?: IntentPayload;
   input: {
     type: InputType;
     text?: string;
