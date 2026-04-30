@@ -205,7 +205,7 @@ export async function loadMirrorOverviewData(_source: MirrorOverviewSource = "rp
           : "settings-context: load failed";
 
         return {
-          snapshot: buildDashboardSettingsWarningSnapshot(warning),
+          snapshot: await buildDashboardSettingsWarningSnapshot(warning),
           warning,
         };
       }),

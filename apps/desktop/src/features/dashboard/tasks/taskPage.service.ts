@@ -477,6 +477,44 @@ export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit
   };
 }
 
+/**
+ * Locates one formal task preview by task id through the stable task-list RPC
+ * so route-driven detail opens can keep operator controls visible even when the
+ * focused task is outside the currently mounted bucket pages.
+ *
+ * @param taskId Formal task identifier to resolve.
+ * @param source Dashboard data source, currently restricted to RPC.
+ * @returns The matching task preview or null when no task-list page contains it.
+ */
+export async function loadTaskPreviewById(taskId: string, _source: TaskPageDataMode = "rpc"): Promise<TaskListItem | null> {
+  const trimmedTaskId = taskId.trim();
+  if (!trimmedTaskId) {
+    return null;
+  }
+
+  for (const group of ["unfinished", "finished"] as const satisfies ReadonlyArray<TaskListGroup>) {
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const page = await loadTaskBucketPage(group, {
+        limit: INITIAL_TASK_PAGE_LIMIT[group],
+        offset,
+        source: "rpc",
+      });
+      const matched = page.items.find((item) => item.task.task_id === trimmedTaskId) ?? null;
+      if (matched) {
+        return matched;
+      }
+
+      hasMore = page.page.has_more;
+      offset += page.page.limit;
+    }
+  }
+
+  return null;
+}
+
 export async function loadTaskEventPage(taskId: string, _source: TaskPageDataMode = "rpc", filters: Partial<TaskEventFilters> = DEFAULT_TASK_EVENT_FILTERS, nowProvider: () => Date = () => new Date()): Promise<TaskEventPageData> {
   const normalizedFilters = sanitizeTaskEventFilters(filters);
   const params: AgentTaskEventsListParams = {

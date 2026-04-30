@@ -623,13 +623,33 @@ function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMe
   }, rpcMethods);
 }
 
-function loadDashboardSettingsSnapshotModule(rpcMethods?: Pick<DashboardContractRpcMethodOverrides, "getSettingsDetailed">) {
+function loadDashboardSettingsSnapshotModule(
+  rpcMethods?: Pick<DashboardContractRpcMethodOverrides, "getSettingsDetailed">,
+  desktopHost?: DashboardContractDesktopHostOverrides,
+) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
 
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildDashboardSettingsWarningSnapshot: (warning: string) => Promise<{
+        source: string;
+        settings: {
+          general: {
+            download: {
+              workspace_path: string;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+          };
+        };
+        rpcContext: {
+          serverTime: string | null;
+          warnings: string[];
+        };
+      }>;
       loadDashboardSettingsSnapshot: (
         source?: "rpc" | "mock",
         scope?: AgentSettingsGetParams["scope"],
@@ -655,7 +675,7 @@ function loadDashboardSettingsSnapshotModule(rpcMethods?: Pick<DashboardContract
         };
       }>;
     };
-  }, rpcMethods);
+  }, rpcMethods, undefined, desktopHost);
 }
 
 function loadMirrorServiceModule() {
@@ -2768,6 +2788,68 @@ test("dashboard settings snapshot merges scoped memory payloads onto the local b
     assert.equal(snapshot.settings.models.provider, "openai");
     assert.equal(snapshot.rpcContext.serverTime, "2026-04-24T09:30:00Z");
     assert.deepEqual(snapshot.rpcContext.warnings, []);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard settings warning snapshots hydrate runtime defaults before reading the local baseline", async () => {
+  const { buildDashboardSettingsWarningSnapshot } = loadDashboardSettingsSnapshotModule(
+    undefined,
+    {
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    },
+  );
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem("cialloclaw.settings", JSON.stringify({
+      settings: {
+        general: {
+          download: {
+            workspace_path: "workspace",
+          },
+        },
+        task_automation: {
+          task_sources: ["workspace/todos"],
+        },
+      },
+    }));
+
+    const snapshot = await buildDashboardSettingsWarningSnapshot("settings-context: unavailable");
+
+    assert.equal(snapshot.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
+    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(snapshot.rpcContext.warnings, ["settings-context: unavailable"]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -5614,6 +5696,9 @@ test("task detail fallback keeps operator controls available from the selected t
   assert.match(taskPageSource, /taskControlMutation\.mutate\(\{ action, taskId: selectedTask\.task_id \}\)/);
   assert.match(taskPageSource, /taskSteerMutation\.mutate\(\{ message, taskId: selectedTask\.task_id \}\)/);
   assert.match(taskPageSource, /taskId: selectedTask\.task_id/);
+  assert.match(taskPageSource, /loadTaskPreviewById/);
+  assert.match(taskPageSource, /enabled: detailOpen && Boolean\(selectedTaskId\) && selectedTaskItem === null/);
+  assert.match(taskPageSource, /const selectedTaskPreview = detailData[\s\S]*\?\? selectedTaskItem[\s\S]*\?\? selectedTaskPreviewQuery\.data;/);
   assert.doesNotMatch(taskPageSource, /detailData && artifactListQuery\.isError/);
   assert.match(panelSource, /task \? <TaskActionBar detail=\{detail\} onAction=\{onAction\} task=\{task\} \/> : null/);
   assert.doesNotMatch(panelSource, /detailData \? <TaskActionBar/);
@@ -5623,6 +5708,15 @@ test("task detail fallback keeps operator controls available from the selected t
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
   assert.match(mapperSource, /const hasAnchor = detail !== null/);
   assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);
+});
+
+test("task preview lookup walks formal task buckets to recover routed task controls outside the mounted pages", () => {
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
+
+  assert.match(taskServiceSource, /export async function loadTaskPreviewById\(taskId: string, _source: TaskPageDataMode = "rpc"\): Promise<TaskListItem \| null>/);
+  assert.match(taskServiceSource, /for \(const group of \["unfinished", "finished"\] as const/);
+  assert.match(taskServiceSource, /const matched = page\.items\.find\(\(item\) => item\.task\.task_id === trimmedTaskId\) \?\? null;/);
+  assert.match(taskServiceSource, /hasMore = page\.page\.has_more;/);
 });
 
 test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
@@ -5727,4 +5821,3 @@ test("dashboard validators read enum truth sources from protocol exports", () =>
 
   assert.match(validatorSource, /import\s*\{[^}]*APPROVAL_STATUSES[^}]*RISK_LEVELS[^}]*\}\s*from\s*"@cialloclaw\/protocol"/);
 });
-
