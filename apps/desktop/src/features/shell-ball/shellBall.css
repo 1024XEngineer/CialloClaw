@@ -77,11 +77,10 @@ body[data-app-window="shell-ball"],
   opacity: 0.94;
 }
 
-.shell-ball-surface[data-file-drop-active="true"] .shell-ball-mascot__body {
-  box-shadow:
-    0 0 0 2px rgba(106, 145, 200, 0.14),
-    0 28px 46px -24px rgba(78, 130, 195, 0.34),
-    0 1px 0 rgba(255, 255, 255, 0.82) inset;
+.shell-ball-surface[data-file-drop-active="true"] .shell-ball-mascot__pet {
+  filter:
+    drop-shadow(0 0 18px rgba(106, 145, 200, 0.22))
+    drop-shadow(0 26px 34px rgba(78, 130, 195, 0.28));
 }
 
 .shell-ball-surface[data-file-drop-active="true"] .shell-ball-surface__file-drop-overlay {
@@ -92,7 +91,8 @@ body[data-app-window="shell-ball"],
 .shell-ball-surface {
   --shell-ball-helper-width: min(28rem, calc(100vw - 0.75rem));
   --shell-ball-scale: 1;
-  --shell-ball-mascot-scale: 0.5;
+  --shell-ball-mascot-scale: 0.66;
+  --shell-ball-pet-canvas-scale: 1.34;
   --shell-ball-mascot-shell-height: calc((clamp(16.2rem, 30.6vw, 21.6rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-mascot-shell-width: calc((clamp(14.86rem, 27.9vw, 17.1rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-stage-anchor-x: 50%;
@@ -1076,6 +1076,41 @@ body[data-app-window="shell-ball"],
 .shell-ball-mascot__attitude {
   position: relative;
   transition: transform 260ms ease;
+}
+
+.shell-ball-mascot__visual {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  min-height: 0;
+  position: relative;
+  transition: transform 260ms ease;
+  width: 100%;
+  z-index: 2;
+}
+
+.shell-ball-mascot__pet-shell {
+  align-items: center;
+  display: flex;
+  height: clamp(16.2rem, 30.6vw, 21.6rem);
+  justify-content: center;
+  max-height: 100%;
+  max-width: 100%;
+  overflow: visible;
+  position: relative;
+  width: clamp(14.86rem, 27.9vw, 17.1rem);
+}
+
+.shell-ball-mascot__pet {
+  display: block;
+  filter: drop-shadow(0 16px 24px rgba(122, 106, 79, 0.18));
+  height: 100%;
+  /* The aligned PNG stack keeps generous transparent padding, so shell-ball
+     upscales the shared canvas instead of introducing per-layer offsets. */
+  transform: scale(var(--shell-ball-pet-canvas-scale, 1));
+  transform-origin: center center;
+  width: 100%;
 }
 
 .shell-ball-mascot__body-shell {

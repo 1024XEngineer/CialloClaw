@@ -4,6 +4,7 @@ import { AudioLines, Mic, ShieldAlert } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import { SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX, type ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
+import { FloatingPet } from "./floating-pet/FloatingPet";
 
 type ShellBallMascotProps = {
   edgeDockRevealed?: boolean;
@@ -27,8 +28,6 @@ type ShellBallMascotProps = {
   onPressEnd?: (event: PointerEvent<HTMLButtonElement>) => boolean;
   onPressCancel?: (event: PointerEvent<HTMLButtonElement>) => void;
 };
-
-type MotionStyle = CSSProperties & Record<string, string>;
 
 type ShellBallMascotHotspotGesture = "single_click" | "double_click";
 
@@ -127,33 +126,10 @@ export function ShellBallMascot({
   const pointerStartYRef = useRef<number | null>(null);
   const suppressGestureRef = useRef(false);
 
-  const floatStyle: MotionStyle = {
-    "--shell-ball-float-distance": `${motionConfig.floatOffsetY}px`,
-    "--shell-ball-float-duration": `${motionConfig.floatDurationMs}ms`,
-  };
-  const bodyShellStyle: MotionStyle = {
-    "--shell-ball-breathe-scale": String(motionConfig.breatheScale),
-    "--shell-ball-breathe-duration": `${motionConfig.breatheDurationMs}ms`,
-  };
   const dockTiltDeg = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 4 : 12) : (edgeDockRevealed ? -4 : -12);
   const dockShiftPx = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 2 : 6) : (edgeDockRevealed ? -2 : -6);
-  const attitudeStyle: CSSProperties = {
-    transform: `translateX(${dockShiftPx}px) rotate(${motionConfig.bodyTiltDeg + dockTiltDeg}deg) scale(${motionConfig.bodyScale})`,
-  };
-  const wingStyle: MotionStyle = {
-    "--shell-ball-wing-lift": `${motionConfig.wingLiftDeg}deg`,
-    "--shell-ball-wing-duration": `${motionConfig.wingDurationMs}ms`,
-    "--shell-ball-wing-spread": `${motionConfig.wingSpreadPx}px`,
-  };
-  const tailStyle: MotionStyle = {
-    "--shell-ball-tail-swing": `${motionConfig.tailSwingDeg}deg`,
-    "--shell-ball-tail-duration": `${motionConfig.tailDurationMs}ms`,
-  };
-  const eyeStyle: CSSProperties = {
-    animationDelay: `${motionConfig.blinkDelayMs}ms`,
-  };
-  const crestStyle: CSSProperties = {
-    transform: `translateY(${-motionConfig.crestLiftPx}px)`,
+  const visualStyle: CSSProperties = {
+    transform: `translateX(${dockShiftPx}px) rotate(${dockTiltDeg}deg)`,
   };
   const holdRingCircumference = 2 * Math.PI * 84;
   const holdRingDashOffset = holdRingCircumference * (1 - voiceHoldProgress);
@@ -289,7 +265,7 @@ export function ShellBallMascot({
     }
   }
 
-  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+  function handleClick(_event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
       visualState,
       gesture: "single_click",
@@ -304,7 +280,7 @@ export function ShellBallMascot({
     onPrimaryClick();
   }
 
-  function handleDoubleClick(event: MouseEvent<HTMLButtonElement>) {
+  function handleDoubleClick(_event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
       visualState,
       gesture: "double_click",
@@ -359,39 +335,10 @@ export function ShellBallMascot({
         </div>
       )}
 
-      <div className="shell-ball-mascot__float" style={floatStyle}>
-        <div className="shell-ball-mascot__attitude" style={attitudeStyle}>
-          <div className="shell-ball-mascot__tail-shell" style={tailStyle}>
-            <div className="shell-ball-mascot__tail" />
-          </div>
-
-          <div className="shell-ball-mascot__wing-shell shell-ball-mascot__wing-shell--left" style={wingStyle}>
-            <div className="shell-ball-mascot__wing" data-mode={motionConfig.wingMode} data-side="left" />
-          </div>
-          <div className="shell-ball-mascot__wing-shell shell-ball-mascot__wing-shell--right" style={wingStyle}>
-            <div className="shell-ball-mascot__wing" data-mode={motionConfig.wingMode} data-side="right" />
-          </div>
-
-          <div className="shell-ball-mascot__body-shell" style={bodyShellStyle}>
-            <div className="shell-ball-mascot__crest" style={crestStyle}>
-              <span className="shell-ball-mascot__crest-feather shell-ball-mascot__crest-feather--left" />
-              <span className="shell-ball-mascot__crest-feather shell-ball-mascot__crest-feather--center" />
-              <span className="shell-ball-mascot__crest-feather shell-ball-mascot__crest-feather--right" />
-            </div>
-
-            <div className="shell-ball-mascot__body">
-              <div className="shell-ball-mascot__belly" />
-              <div className="shell-ball-mascot__cheek shell-ball-mascot__cheek--left" />
-              <div className="shell-ball-mascot__cheek shell-ball-mascot__cheek--right" />
-
-              <div className="shell-ball-mascot__face">
-                <div className="shell-ball-mascot__eyes" data-eye={motionConfig.eyeMode} style={eyeStyle}>
-                  <span className="shell-ball-mascot__eye" />
-                  <span className="shell-ball-mascot__eye" />
-                </div>
-                <div className="shell-ball-mascot__beak" />
-              </div>
-            </div>
+      <div className="shell-ball-mascot__attitude" style={visualStyle}>
+        <div className="shell-ball-mascot__visual">
+          <div className="shell-ball-mascot__pet-shell">
+            <FloatingPet className="shell-ball-mascot__pet" />
           </div>
 
           {showSelectionMarker ? (
