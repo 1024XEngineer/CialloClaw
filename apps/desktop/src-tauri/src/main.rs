@@ -387,6 +387,32 @@ fn desktop_get_mouse_activity_snapshot() -> Option<activity::MouseActivitySnapsh
     activity::read_mouse_activity_snapshot()
 }
 
+#[derive(Clone, Serialize)]
+struct DesktopClipboardActivitySnapshotPayload {
+    copy_count: u32,
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn desktop_get_clipboard_activity_snapshot() -> Option<DesktopClipboardActivitySnapshotPayload> {
+    let now_millis = current_system_time_millis();
+    let mut state = SHELL_BALL_CLIPBOARD_STATE.lock().ok()?;
+    prune_recent_copy_timestamps(&mut state, now_millis);
+
+    let copy_count = state.recent_copy_timestamps.len() as u32;
+    if copy_count == 0 {
+        return None;
+    }
+
+    Some(DesktopClipboardActivitySnapshotPayload { copy_count })
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn desktop_get_clipboard_activity_snapshot() -> Option<DesktopClipboardActivitySnapshotPayload> {
+    None
+}
+
 #[tauri::command]
 async fn desktop_capture_screenshot(
     runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
@@ -1367,6 +1393,30 @@ fn emit_shell_ball_clipboard_snapshot(app: &tauri::AppHandle, text: String) {
 }
 
 #[cfg(windows)]
+fn current_system_time_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn prune_recent_copy_timestamps(state: &mut ClipboardMonitorState, now_millis: u64) {
+    state.recent_copy_timestamps.retain(|timestamp| {
+        now_millis.saturating_sub(*timestamp) <= SHELL_BALL_CLIPBOARD_ACTIVITY_WINDOW_MS
+    });
+}
+
+#[cfg(windows)]
+fn record_recent_copy_activity() {
+    let now_millis = current_system_time_millis();
+    if let Ok(mut state) = SHELL_BALL_CLIPBOARD_STATE.lock() {
+        prune_recent_copy_timestamps(&mut state, now_millis);
+        state.recent_copy_timestamps.push(now_millis);
+    }
+}
+
+#[cfg(windows)]
 fn schedule_shell_ball_clipboard_probe(delay_ms: u64) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
@@ -1402,6 +1452,7 @@ fn schedule_shell_ball_clipboard_probe(delay_ms: u64) {
         }
 
         if let Ok(Some(text)) = read_windows_clipboard_text() {
+            record_recent_copy_activity();
             emit_shell_ball_clipboard_snapshot(&app, text);
         }
     });
@@ -1636,9 +1687,13 @@ const SHELL_BALL_CLIPBOARD_COPY_DELAY_MS: u64 = 140;
 const SHELL_BALL_CLIPBOARD_RIGHT_CLICK_DELAY_MS: u64 = 3_000;
 
 #[cfg(windows)]
+const SHELL_BALL_CLIPBOARD_ACTIVITY_WINDOW_MS: u64 = 60_000;
+
+#[cfg(windows)]
 #[derive(Default)]
 struct ClipboardMonitorState {
     last_sequence_number: u32,
+    recent_copy_timestamps: Vec<u64>,
 }
 
 #[tauri::command]
@@ -2291,6 +2346,7 @@ fn main() {
             onboarding_reset_interactive_state,
             shell_ball_set_press_lock,
             desktop_get_mouse_activity_snapshot,
+            desktop_get_clipboard_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,
             desktop_open_or_focus_control_panel,

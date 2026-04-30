@@ -141,6 +141,44 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
   return result;
 }
 
+/**
+ * Starts a formal task from an accepted recommendation through the standard
+ * `recommendation_click` task entrypoint.
+ *
+ * @param text Recommendation text accepted by the user.
+ * @param context Optional desktop task-start metadata.
+ * @returns The formal task-start response from the local service.
+ */
+export async function startTaskFromRecommendation(
+  text: string,
+  context: StartTaskContext = {},
+) {
+  const normalizedText = text.trim();
+  const resolvedSessionId = resolveTaskSessionId(context.sessionId);
+  if (normalizedText === "") {
+    throw new Error("recommendation text is empty");
+  }
+
+  const result = await startTask({
+    request_meta: createRequestMeta("recommendation_click"),
+    ...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
+    source: context.source ?? "floating_ball",
+    trigger: "recommendation_click",
+    input: {
+      type: "text",
+      text: normalizedText,
+      page_context: resolveTaskPageContext(context.pageContext),
+    },
+    context: context.context,
+    delivery: context.delivery ?? {
+      preferred: "bubble",
+      fallback: "task_detail",
+    },
+  });
+  rememberConversationSessionFromTask(result.task);
+  return result;
+}
+
 export async function bootstrapTask(title: string) {
   const taskResult = await submitTextInput({
     text: title,

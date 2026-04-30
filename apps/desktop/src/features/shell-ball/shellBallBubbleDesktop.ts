@@ -1,4 +1,4 @@
-import type { ApprovalDecision, BubbleMessage } from "@cialloclaw/protocol";
+import type { ApprovalDecision, BubbleMessage, PageContext } from "@cialloclaw/protocol";
 
 export type ShellBallBubbleRole = "user" | "agent";
 
@@ -21,6 +21,15 @@ export type ShellBallBubbleInlineApprovalState = {
   pendingDecision?: ApprovalDecision;
 };
 
+/**
+ * Inline recommendation metadata stays shell-ball-local until the user accepts
+ * one suggestion and promotes it into the formal task pipeline.
+ */
+export type ShellBallBubbleInlineRecommendationState = {
+  recommendationId: string;
+  pageContext: PageContext;
+};
+
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
@@ -29,6 +38,7 @@ export type ShellBallBubbleDesktopState = {
   turnIndex?: number;
   turnPhase?: number;
   inlineApproval?: ShellBallBubbleInlineApprovalState;
+  inlineRecommendation?: ShellBallBubbleInlineRecommendationState;
 };
 
 export type ShellBallBubbleItem = {
@@ -43,10 +53,22 @@ function cloneShellBallBubbleInlineApprovalState(
   return { ...state };
 }
 
+function cloneShellBallBubbleInlineRecommendationState(
+  state: ShellBallBubbleInlineRecommendationState,
+): ShellBallBubbleInlineRecommendationState {
+  return {
+    recommendationId: state.recommendationId,
+    pageContext: { ...state.pageContext },
+  };
+}
+
 export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
   return {
     ...state,
     ...(state.inlineApproval ? { inlineApproval: cloneShellBallBubbleInlineApprovalState(state.inlineApproval) } : {}),
+    ...(state.inlineRecommendation
+      ? { inlineRecommendation: cloneShellBallBubbleInlineRecommendationState(state.inlineRecommendation) }
+      : {}),
   };
 }
 

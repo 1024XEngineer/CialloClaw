@@ -1237,6 +1237,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.page_title`     | 页面标题                           |
 | `context.app_name`       | 宿主应用                           |
 | `context.selection_text` | 当前选中文本                       |
+| `context.page.url` / `context.page_url` | 当前页面 URL 或等价上下文标识 |
+| `context.page.window_title` / `context.window_title` | 当前窗口标题 |
+| `context.screen.summary` / `context.screen_summary` | 当前屏幕或窗口摘要 |
+| `context.behavior.last_action` | 最近一次交互动作 |
+| `context.behavior.dwell_millis` | 最近停留时长 |
+| `context.behavior.window_switch_count` | 最近窗口切换次数 |
+| `context.behavior.page_switch_count` | 最近页面切换次数 |
+| `context.clipboard.text` / `context.clipboard_text` | 当前剪贴板文本 |
+| `context.error.message` / `context.error_text` | 当前错误提示文本 |
+| `context.hover_target` | 当前悬停对象提示 |
 
 ### agent.recommendation.get 入参示例
 
@@ -1255,7 +1265,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "context": {
       "page_title": "当前页面标题",
       "app_name": "browser",
-      "selection_text": "这里是一段当前选中的文本"
+      "selection_text": "这里是一段当前选中的文本",
+      "page": {
+        "url": "https://example.com/current-page",
+        "window_title": "当前浏览器窗口"
+      },
+      "screen": {
+        "summary": "Foreground browser page is active."
+      },
+      "behavior": {
+        "last_action": "hover_text_input",
+        "dwell_millis": 4200,
+        "window_switch_count": 1,
+        "page_switch_count": 0
+      }
     }
   }
 }

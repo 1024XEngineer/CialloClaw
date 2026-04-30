@@ -488,15 +488,24 @@ export interface RecommendationItem {
   intent: IntentPayload;
 }
 
+export interface RecommendationContext extends InputContext {
+  page_title: string;
+  app_name: string;
+  page_url?: string;
+  window_title?: string;
+  visible_text?: string;
+  screen_summary?: string;
+  clipboard_text?: string;
+  clipboard_mime_type?: string;
+  hover_target?: string;
+  error_text?: string;
+}
+
 export interface AgentRecommendationGetParams {
   request_meta: RequestMeta;
   source: RequestSource;
   scene: RecommendationScene;
-  context: {
-    page_title: string;
-    app_name: string;
-    selection_text?: string;
-  };
+  context: RecommendationContext;
 }
 
 export interface AgentRecommendationGetResult {

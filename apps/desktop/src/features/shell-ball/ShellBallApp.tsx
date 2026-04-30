@@ -244,7 +244,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     voiceHoldProgress,
     regionActive,
     inputFocused,
-    handlePrimaryClick,
     shouldOpenDashboardFromDoubleClick,
     handleRegionEnter,
     handleRegionLeave,
@@ -287,12 +286,21 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: () => undefined,
   });
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
+  const focusInlineInputField = useCallback((syncInteraction = true) => {
+    if (syncInteraction) {
+      handleInputFocusRequest();
+    }
+
+    setInputFocusToken((current) => current + 1);
+  }, [handleInputFocusRequest]);
   const {
     handleClipboardPrompt: handleCoordinatorClipboardPrompt,
     handleDroppedFiles: handleCoordinatorDroppedFiles,
     handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
     handlePrimaryAction: handleCoordinatorPrimaryAction,
     handleBubbleAction: handleCoordinatorBubbleAction,
+    handleRecommendationAccept: handleCoordinatorRecommendationAccept,
+    handleRecommendationIgnore: handleCoordinatorRecommendationIgnore,
     handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,
@@ -322,7 +330,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onSubmitVoiceText: handleSubmitVoiceText,
     getCurrentConversationSessionId,
     onAttachFile: handleAttachFile,
-    onPrimaryClick: handlePrimaryClick,
+    onRequestInputFocus: () => focusInlineInputField(),
   });
   const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
   const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
@@ -393,14 +401,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     lastReportedInteractiveRegionsRef.current = signature;
     await setShellBallInteractiveRegions(regions);
   }, [rootRef]);
-
-  const focusInlineInputField = useCallback((syncInteraction = true) => {
-    if (syncInteraction) {
-      handleInputFocusRequest();
-    }
-
-    setInputFocusToken((current) => current + 1);
-  }, [handleInputFocusRequest]);
 
   const handleInlineAttachFile = useCallback(() => {
     void (async () => {
@@ -918,18 +918,17 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     if (clipboardPrompt !== null) {
-      if (!isShellBallClipboardPromptActive(clipboardPrompt)) {
+      if (isShellBallClipboardPromptActive(clipboardPrompt)) {
         setClipboardPrompt(null);
+        void handleCoordinatorClipboardPrompt(clipboardPrompt.text);
         return;
       }
 
       setClipboardPrompt(null);
-      void handleCoordinatorClipboardPrompt(clipboardPrompt.text);
-      return;
     }
 
-    handlePrimaryClick();
-  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
+    void handleCoordinatorPrimaryAction("primary_click");
+  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorPrimaryAction, handleCoordinatorSelectedTextPrompt, selectionPrompt]);
 
   const handleDockAwareRegionEnter = useCallback(() => {
     setEdgeDockRevealed(true);
@@ -978,6 +977,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
                   onDenyApprovalBubble={(bubbleId) => {
                     handleCoordinatorBubbleAction({ action: "deny_approval", bubbleId, source: "bubble" });
                   }}
+                  onAcceptRecommendationBubble={handleCoordinatorRecommendationAccept}
+                  onIgnoreRecommendationBubble={handleCoordinatorRecommendationIgnore}
                   onPinBubble={(bubbleId) => {
                     handleCoordinatorBubbleAction({ action: "pin", bubbleId, source: "bubble" });
                   }}

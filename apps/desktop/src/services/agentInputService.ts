@@ -2,6 +2,7 @@ import type {
   AgentInputSubmitParams,
   AgentInputSubmitResult,
   BehaviorContext,
+  ErrorContext,
   InputContext,
   PageContext,
   ScreenContext,
@@ -17,12 +18,19 @@ type DesktopWindowContextSnapshot = {
   app_name: string;
   title: string | null;
   url: string | null;
+  visible_text?: string | null;
+  hover_target?: string | null;
+  error_text?: string | null;
   window_switch_count?: number | null;
   page_switch_count?: number | null;
 };
 
 type DesktopMouseActivitySnapshot = {
   updated_at: string;
+};
+
+type DesktopClipboardActivitySnapshot = {
+  copy_count: number;
 };
 
 export type SubmitTextInputParams = {
@@ -107,6 +115,8 @@ function mapDesktopWindowPageContext(snapshot: DesktopWindowContextSnapshot | nu
     title: snapshot.title ?? undefined,
     url: sanitizedUrl,
     window_title: snapshot.title ?? undefined,
+    visible_text: snapshot.visible_text ?? undefined,
+    hover_target: snapshot.hover_target ?? undefined,
   });
 }
 
@@ -120,7 +130,19 @@ function mapDesktopWindowScreenContext(snapshot: DesktopWindowContextSnapshot | 
   return compactContextRecord<ScreenContext>({
     summary,
     screen_summary: summary,
+    visible_text: snapshot.visible_text ?? undefined,
     window_title: snapshot.title ?? undefined,
+    hover_target: snapshot.hover_target ?? undefined,
+  });
+}
+
+function mapDesktopWindowErrorContext(snapshot: DesktopWindowContextSnapshot | null): ErrorContext | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+
+  return compactContextRecord<ErrorContext>({
+    message: snapshot.error_text ?? undefined,
   });
 }
 
@@ -141,12 +163,14 @@ function createFallbackBehaviorContext(
   trigger: AgentInputSubmitParams["trigger"],
   mouseSnapshot: DesktopMouseActivitySnapshot | null,
   windowSnapshot: DesktopWindowContextSnapshot | null,
+  clipboardActivitySnapshot: DesktopClipboardActivitySnapshot | null,
 ): BehaviorContext | undefined {
   const dwellMillis = resolveDesktopDwellMillis(mouseSnapshot?.updated_at);
 
   return compactContextRecord<BehaviorContext>({
     last_action: trigger,
     dwell_millis: dwellMillis,
+    copy_count: clipboardActivitySnapshot?.copy_count,
     window_switch_count: normalizeSwitchCount(windowSnapshot?.window_switch_count),
     page_switch_count: normalizeSwitchCount(windowSnapshot?.page_switch_count),
   });
@@ -229,6 +253,15 @@ async function readDesktopMouseActivitySnapshot(): Promise<DesktopMouseActivityS
   }
 }
 
+async function readDesktopClipboardActivitySnapshot(): Promise<DesktopClipboardActivitySnapshot | null> {
+  try {
+    const clipboardActivityModule = await import("@/platform/desktopClipboardActivity");
+    return await clipboardActivityModule.getDesktopClipboardActivitySnapshot();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Builds the stable `agent.input.submit` payload shared by shell-ball and
  * dashboard text-entry surfaces.
@@ -263,18 +296,26 @@ export type SubmitTextInputResult = AgentInputSubmitResult;
 
 async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
   const enrichVisualContext = shouldEnrichVisualContext(params);
-  const [windowContext, mouseActivitySnapshot] = await Promise.all([
+  const [windowContext, mouseActivitySnapshot, clipboardActivitySnapshot] = await Promise.all([
     // Fetch the foreground window snapshot only for explicit visual requests.
     // Ordinary text submits should not pay the host-side URL lookup cost.
     enrichVisualContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
+    readDesktopClipboardActivitySnapshot(),
   ]);
   const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
-  const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
+  const fallbackErrorContext = enrichVisualContext ? mapDesktopWindowErrorContext(windowContext) : undefined;
+  const fallbackBehaviorContext = createFallbackBehaviorContext(
+    params.trigger,
+    mouseActivitySnapshot,
+    windowContext,
+    clipboardActivitySnapshot,
+  );
   const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
+  const mergedErrorContext = mergeContextRecord<ErrorContext>(params.context.error, fallbackErrorContext);
 
   return {
     ...params,
@@ -289,6 +330,10 @@ async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Prom
       } : {}),
       ...(mergedBehaviorContext ? {
         behavior: mergedBehaviorContext,
+      } : {}),
+      ...(mergedErrorContext ? {
+        error: mergedErrorContext,
+        error_text: mergedErrorContext.message,
       } : {}),
     },
   };

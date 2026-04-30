@@ -42,6 +42,10 @@ function canTriggerShellBallMascotSecondaryGestures(visualState: ShellBallVisual
   return visualState !== "voice_listening" && visualState !== "voice_locked";
 }
 
+function canTriggerShellBallMascotPrimaryClick(visualState: ShellBallVisualState) {
+  return visualState === "idle" || visualState === "hover_input";
+}
+
 export function getShellBallMascotHotspotGestureAction(input: {
   visualState: ShellBallVisualState;
   gesture: ShellBallMascotHotspotGesture;
@@ -53,7 +57,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
   }
 
   if (input.gesture === "single_click") {
-    return input.selectionIndicatorVisible ? "primary_click" : "noop";
+    return canTriggerShellBallMascotPrimaryClick(input.visualState) ? "primary_click" : "noop";
   }
 
   if (canTriggerShellBallMascotSecondaryGestures(input.visualState)) {

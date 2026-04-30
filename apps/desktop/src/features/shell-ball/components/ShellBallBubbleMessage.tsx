@@ -7,6 +7,8 @@ type ShellBallBubbleMessageProps = {
   onPin?: (bubbleId: string) => void;
   onAllowApproval?: (bubbleId: string) => void;
   onDenyApproval?: (bubbleId: string) => void;
+  onAcceptRecommendation?: (bubbleId: string) => void;
+  onIgnoreRecommendation?: (bubbleId: string) => void;
 };
 
 export function ShellBallBubbleMessage({
@@ -15,16 +17,21 @@ export function ShellBallBubbleMessage({
   onPin,
   onAllowApproval,
   onDenyApproval,
+  onAcceptRecommendation,
+  onIgnoreRecommendation,
 }: ShellBallBubbleMessageProps) {
   const bubbleId = item.bubble.bubble_id;
   const bubbleText = item.bubble.text;
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;
+  const inlineRecommendation = item.role === "agent" ? item.desktop.inlineRecommendation : undefined;
   const inlineApprovalBusy = inlineApproval?.status === "submitting";
   const shouldShowInlineApprovalActions =
     inlineApproval !== undefined && onAllowApproval !== undefined && onDenyApproval !== undefined;
-  const shouldShowBubbleControls = !shouldShowInlineApprovalActions;
+  const shouldShowInlineRecommendationActions =
+    inlineRecommendation !== undefined && onAcceptRecommendation !== undefined && onIgnoreRecommendation !== undefined;
+  const shouldShowBubbleControls = !shouldShowInlineApprovalActions && !shouldShowInlineRecommendationActions;
 
   const allowApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "allow_once" ? "Allowing..." : "Allow";
   const denyApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "deny_once" ? "Denying..." : "Deny";
@@ -104,6 +111,33 @@ export function ShellBallBubbleMessage({
               }}
             >
               {allowApprovalLabel}
+            </button>
+          </div>
+        ) : shouldShowInlineRecommendationActions ? (
+          <div className="shell-ball-bubble-message__recommendation-actions">
+            <button
+              type="button"
+              className="shell-ball-bubble-message__recommendation-action shell-ball-bubble-message__recommendation-action--ignore"
+              data-bubble-action="ignore_recommendation"
+              data-bubble-id={bubbleId}
+              aria-label="Dismiss recommendation"
+              onClick={() => {
+                onIgnoreRecommendation?.(bubbleId);
+              }}
+            >
+              Not now
+            </button>
+            <button
+              type="button"
+              className="shell-ball-bubble-message__recommendation-action shell-ball-bubble-message__recommendation-action--accept"
+              data-bubble-action="accept_recommendation"
+              data-bubble-id={bubbleId}
+              aria-label="Accept recommendation"
+              onClick={() => {
+                onAcceptRecommendation?.(bubbleId);
+              }}
+            >
+              Try this
             </button>
           </div>
         ) : null}

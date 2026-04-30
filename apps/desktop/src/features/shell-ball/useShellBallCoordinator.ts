@@ -4,15 +4,21 @@ import type {
   BubbleMessage,
   DeliveryResult,
   InputContext,
+  PageContext,
+  RecommendationContext,
+  RecommendationItem,
   TaskRuntimeNotification,
   TaskSteeredNotification,
   TaskUpdatedNotification,
 } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { respondSecurityDetailed } from "@/rpc/methods";
+import { getRecommendations, respondSecurityDetailed, submitRecommendationFeedback } from "@/rpc/methods";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
+import { getDesktopClipboardActivitySnapshot } from "@/platform/desktopClipboardActivity";
+import { getDesktopMouseActivitySnapshot } from "@/platform/desktopActivity";
+import { getActiveWindowContext } from "@/platform/desktopWindowContext";
 import {
   SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME,
   closeShellBallPinnedBubbleWindow,
@@ -31,7 +37,7 @@ import type { ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.t
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
-import { startTaskFromSelectedText } from "@/services/taskService";
+import { startTaskFromRecommendation, startTaskFromSelectedText } from "@/services/taskService";
 import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
   createDefaultShellBallWindowSnapshot,
@@ -74,7 +80,8 @@ type ShellBallCoordinatorInput = {
   onSubmitVoiceText?: (text: string) => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null;
   getCurrentConversationSessionId?: () => string | undefined;
   onAttachFile: () => void;
-  onPrimaryClick: () => void;
+  onPrimaryClick?: () => void;
+  onRequestInputFocus?: () => void;
 };
 
 type QueuedApprovalPendingNotification = {
@@ -160,6 +167,213 @@ const SHELL_BALL_SCREENSHOT_PROMPT_TEXT = "帮我看看当前屏幕";
 const SHELL_BALL_WINDOW_PROMPT_TEXT = "帮我看看当前窗口";
 const SHELL_BALL_SCREENSHOT_SUMMARY = "Current screen inspection requested from the shell-ball screenshot shortcut.";
 const SHELL_BALL_WINDOW_SUMMARY = "Foreground window inspection requested from the shell-ball window shortcut.";
+const SHELL_BALL_RECOMMENDATION_PAGE_TITLE = "Current Window";
+const SHELL_BALL_RECOMMENDATION_APP_NAME = "desktop";
+const SHELL_BALL_RECOMMENDATION_PAGE_URL = "local://desktop-current-window";
+
+function compactShellBallContextRecord<T extends object>(value: T | undefined): T | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, entry]) => {
+    if (entry === undefined || entry === null) {
+      return false;
+    }
+
+    if (typeof entry === "string") {
+      return entry.trim() !== "";
+    }
+
+    return true;
+  });
+
+  return entries.length > 0 ? Object.fromEntries(entries) as T : undefined;
+}
+
+function sanitizeShellBallRecommendationUrl(rawUrl: string | null | undefined): string {
+  const normalizedUrl = rawUrl?.trim() ?? "";
+
+  if (normalizedUrl === "") {
+    return SHELL_BALL_RECOMMENDATION_PAGE_URL;
+  }
+
+  try {
+    const parsedUrl = new URL(normalizedUrl);
+    parsedUrl.username = "";
+    parsedUrl.password = "";
+    parsedUrl.search = "";
+    parsedUrl.hash = "";
+    return parsedUrl.toString();
+  } catch {
+    return normalizedUrl.split(/[?#]/u, 1)[0]?.trim() || SHELL_BALL_RECOMMENDATION_PAGE_URL;
+  }
+}
+
+function normalizeShellBallSwitchCount(value: number | null | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.trunc(value));
+}
+
+function resolveShellBallRecommendationDwellMillis(updatedAt: string | undefined): number | undefined {
+  if (!updatedAt) {
+    return undefined;
+  }
+
+  const parsed = Number(updatedAt);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+
+  return Math.max(0, Date.now() - parsed);
+}
+
+function createShellBallRecommendationScreenSummary(input: {
+  appName: string;
+  pageTitle: string;
+  pageUrl: string;
+}) {
+  if (input.pageTitle !== "" && input.pageUrl !== "") {
+    return `Foreground ${input.appName || "desktop"} page "${input.pageTitle}" is active at ${input.pageUrl}.`;
+  }
+
+  if (input.pageTitle !== "") {
+    return `Foreground window "${input.pageTitle}" is active.`;
+  }
+
+  if (input.appName !== "") {
+    return `Foreground app ${input.appName} is active.`;
+  }
+
+  return undefined;
+}
+
+function resolveShellBallRecommendationPageContext(
+  windowContext: Awaited<ReturnType<typeof getActiveWindowContext>> | null | undefined,
+) {
+  const title = windowContext?.title?.trim() || SHELL_BALL_RECOMMENDATION_PAGE_TITLE;
+  const appName = windowContext?.app_name?.trim() || SHELL_BALL_RECOMMENDATION_APP_NAME;
+  const url = sanitizeShellBallRecommendationUrl(windowContext?.url);
+
+  return {
+    appName,
+    pageTitle: title,
+    pageContext: {
+      app_name: appName,
+      title,
+      url,
+    },
+  };
+}
+
+function createShellBallRecommendationRequestContext(input: {
+  windowContext: Awaited<ReturnType<typeof getActiveWindowContext>> | null | undefined;
+  mouseActivitySnapshot: Awaited<ReturnType<typeof getDesktopMouseActivitySnapshot>> | null | undefined;
+  lastAction: string;
+  selectionText?: string;
+  clipboardText?: string;
+  copyCount?: number;
+  errorText?: string;
+}): RecommendationContext {
+  const recommendationPageContext = resolveShellBallRecommendationPageContext(input.windowContext);
+  const visibleText = input.windowContext?.visible_text?.trim() || undefined;
+  const hoverTarget = input.windowContext?.hover_target?.trim() || undefined;
+  const errorText = input.errorText?.trim() || input.windowContext?.error_text?.trim() || undefined;
+  const pageContext = compactShellBallContextRecord<PageContext>({
+    app_name: recommendationPageContext.pageContext.app_name,
+    title: recommendationPageContext.pageContext.title,
+    url: recommendationPageContext.pageContext.url,
+    window_title: recommendationPageContext.pageContext.title,
+    visible_text: visibleText,
+    hover_target: hoverTarget,
+  });
+  const screenSummary = createShellBallRecommendationScreenSummary({
+    appName: recommendationPageContext.appName,
+    pageTitle: recommendationPageContext.pageTitle,
+    pageUrl: recommendationPageContext.pageContext.url ?? SHELL_BALL_RECOMMENDATION_PAGE_URL,
+  });
+  const dwellMillis = resolveShellBallRecommendationDwellMillis(input.mouseActivitySnapshot?.updated_at);
+  const windowSwitchCount = normalizeShellBallSwitchCount(input.windowContext?.window_switch_count);
+  const pageSwitchCount = normalizeShellBallSwitchCount(input.windowContext?.page_switch_count);
+
+  return {
+    app_name: recommendationPageContext.appName,
+    page_title: recommendationPageContext.pageTitle,
+    page_url: recommendationPageContext.pageContext.url,
+    window_title: recommendationPageContext.pageContext.title,
+    visible_text: visibleText,
+    screen_summary: screenSummary,
+    selection_text: input.selectionText?.trim() || undefined,
+    clipboard_text: input.clipboardText?.trim() || undefined,
+    clipboard_mime_type: input.clipboardText?.trim() ? "text/plain" : undefined,
+    hover_target: hoverTarget,
+    error_text: errorText,
+    last_action: input.lastAction,
+    dwell_millis: dwellMillis,
+    copy_count: input.copyCount,
+    window_switch_count: windowSwitchCount,
+    page_switch_count: pageSwitchCount,
+    ...(pageContext ? { page: pageContext } : {}),
+    ...(compactShellBallContextRecord({
+      summary: screenSummary,
+      screen_summary: screenSummary,
+      visible_text: visibleText,
+      window_title: recommendationPageContext.pageContext.title,
+      hover_target: hoverTarget,
+    })
+      ? {
+          screen: compactShellBallContextRecord({
+            summary: screenSummary,
+            screen_summary: screenSummary,
+            visible_text: visibleText,
+            window_title: recommendationPageContext.pageContext.title,
+            hover_target: hoverTarget,
+          }),
+        }
+      : {}),
+    ...(compactShellBallContextRecord({
+      last_action: input.lastAction,
+      dwell_millis: dwellMillis,
+      copy_count: input.copyCount,
+      window_switch_count: windowSwitchCount,
+      page_switch_count: pageSwitchCount,
+    })
+      ? {
+          behavior: compactShellBallContextRecord({
+            last_action: input.lastAction,
+            dwell_millis: dwellMillis,
+            copy_count: input.copyCount,
+            window_switch_count: windowSwitchCount,
+            page_switch_count: pageSwitchCount,
+          }),
+        }
+      : {}),
+    ...(input.selectionText?.trim()
+      ? {
+          selection: {
+            text: input.selectionText.trim(),
+          },
+        }
+      : {}),
+    ...(input.clipboardText?.trim()
+      ? {
+          clipboard: {
+            text: input.clipboardText.trim(),
+          },
+        }
+      : {}),
+    ...(errorText
+      ? {
+          error: {
+            message: errorText,
+          },
+        }
+      : {}),
+  };
+}
 
 type ShellBallBubbleTurnOrder = {
   turnIndex?: number;
@@ -491,6 +705,38 @@ function createShellBallApprovalPendingBubbleItem(input: {
   } satisfies ShellBallBubbleItem;
 }
 
+/**
+ * Recommendation bubbles stay local to shell-ball until the user explicitly
+ * accepts one suggestion and promotes it into the formal task pipeline.
+ */
+function createShellBallRecommendationBubbleItem(input: {
+  recommendation: RecommendationItem;
+  createdAt: string;
+  pageContext: PageContext;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  const bubbleItem = createShellBallTextBubbleItem({
+    role: "agent",
+    text: input.recommendation.text,
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+
+  return {
+    ...bubbleItem,
+    desktop: {
+      ...bubbleItem.desktop,
+      inlineRecommendation: {
+        recommendationId: input.recommendation.recommendation_id,
+        pageContext: input.pageContext,
+      },
+    },
+  } satisfies ShellBallBubbleItem;
+}
+
 function createShellBallApprovalResponseBubbleItem(input: {
   createdAt: string;
   decision: ApprovalDecision;
@@ -656,6 +902,12 @@ function createShellBallApprovalErrorBubbleItem(input: {
   });
 }
 
+function removeShellBallInlineRecommendationBubbles(items: ShellBallBubbleItem[]) {
+  return sortShellBallBubbleItemsByTimestamp(
+    items.filter((item) => item.desktop.inlineRecommendation === undefined),
+  );
+}
+
 function setShellBallInlineApprovalState(
   items: ShellBallBubbleItem[],
   bubbleId: string,
@@ -749,6 +1001,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const approvalPendingBubbleKeysRef = useRef(new Set<string>());
+  const recommendationRequestInFlightRef = useRef(false);
   const runtimeObservationBubbleKeysRef = useRef(new Set<string>());
   // Approval notifications can win the race against `agent.input.submit`.
   // Keep them task-scoped until the submit result binds the formal task id to
@@ -803,7 +1056,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
     getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
-    onPrimaryClick: input.onPrimaryClick,
+    onRequestInputFocus: input.onRequestInputFocus ?? (() => {}),
   });
 
   snapshotRef.current = snapshot;
@@ -822,7 +1075,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
     getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
-    onPrimaryClick: input.onPrimaryClick,
+    onRequestInputFocus: input.onRequestInputFocus ?? (() => {}),
   };
 
   const allocateBubbleTurnIndex = useCallback(() => {
@@ -1353,6 +1606,263 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       finishPendingTaskRegistration();
     }
   }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
+
+  /**
+   * Recommendation feedback should never block shell-ball interactions. Submit
+   * it in the background so task-start and bubble cleanup stay responsive even
+   * if the local RPC bridge is temporarily unavailable.
+   */
+  const submitShellBallRecommendationFeedback = useCallback((recommendationId: string, feedback: "ignore" | "positive") => {
+    void submitRecommendationFeedback({
+      feedback,
+      recommendation_id: recommendationId,
+      request_meta: createShellBallRequestMeta(),
+    }).catch((error) => {
+      console.warn("shell-ball recommendation feedback failed", error);
+    });
+  }, []);
+
+  /**
+   * Idle orb clicks should first try the formal recommendation pipeline. When
+   * no suggestion is available, shell-ball falls back to focusing the inline
+   * input instead of remaining a visual no-op.
+   */
+  const handlePrimaryRecommendationClick = useCallback(async () => {
+    const activeRecommendationCount = bubbleItemsRef.current.filter((item) => item.desktop.inlineRecommendation !== undefined).length;
+
+    if (activeRecommendationCount > 0) {
+      revealBubbleRegion();
+      return;
+    }
+
+    if (recommendationRequestInFlightRef.current) {
+      return;
+    }
+
+    recommendationRequestInFlightRef.current = true;
+
+    try {
+      let activeWindowContext: Awaited<ReturnType<typeof getActiveWindowContext>> | null = null;
+      let mouseActivitySnapshot: Awaited<ReturnType<typeof getDesktopMouseActivitySnapshot>> | null = null;
+      let clipboardActivitySnapshot: Awaited<ReturnType<typeof getDesktopClipboardActivitySnapshot>> | null = null;
+      let clipboardText: string | undefined;
+
+      const [windowContextResult, mouseActivityResult, clipboardActivityResult, clipboardResult] = await Promise.allSettled([
+        getActiveWindowContext(),
+        getDesktopMouseActivitySnapshot(),
+        getDesktopClipboardActivitySnapshot(),
+        readClipboardText(),
+      ]);
+
+      if (windowContextResult.status === "fulfilled") {
+        activeWindowContext = windowContextResult.value;
+      } else {
+        console.warn("shell-ball recommendation context read failed", windowContextResult.reason);
+      }
+
+      if (mouseActivityResult.status === "fulfilled") {
+        mouseActivitySnapshot = mouseActivityResult.value;
+      } else {
+        console.warn("shell-ball recommendation activity read failed", mouseActivityResult.reason);
+      }
+
+      if (clipboardActivityResult.status === "fulfilled") {
+        clipboardActivitySnapshot = clipboardActivityResult.value;
+      } else {
+        console.warn("shell-ball recommendation clipboard activity read failed", clipboardActivityResult.reason);
+      }
+
+      if (clipboardResult.status === "fulfilled") {
+        clipboardText = clipboardResult.value?.trim() || undefined;
+      } else {
+        console.warn("shell-ball recommendation clipboard read failed", clipboardResult.reason);
+      }
+
+      const recommendationContext = resolveShellBallRecommendationPageContext(activeWindowContext);
+      const recommendationResult = await getRecommendations({
+        context: createShellBallRecommendationRequestContext({
+          windowContext: activeWindowContext,
+          mouseActivitySnapshot,
+          clipboardText,
+          copyCount: clipboardActivitySnapshot?.copy_count,
+          lastAction: "primary_click",
+        }),
+        request_meta: createShellBallRequestMeta(),
+        scene: "idle",
+        source: "floating_ball",
+      });
+
+      const recommendationItems = recommendationResult.items
+        .filter((item) => item.text.trim() !== "")
+        .slice(0, 2);
+
+      if (recommendationItems.length === 0) {
+        handlersRef.current.onRequestInputFocus();
+        return;
+      }
+
+      const turnIndex = allocateBubbleTurnIndex();
+      const createdAt = new Date().toISOString();
+
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...removeShellBallInlineRecommendationBubbles(currentItems),
+          ...recommendationItems.map((recommendation, index) =>
+            createShellBallRecommendationBubbleItem({
+              recommendation,
+              createdAt,
+              pageContext: recommendationContext.pageContext,
+              turnIndex,
+              turnPhase: index,
+            })),
+        ]),
+      );
+      revealBubbleRegion();
+    } catch (error) {
+      console.warn("shell-ball recommendation request failed", error);
+      const createdAt = new Date().toISOString();
+      const turnIndex = allocateBubbleTurnIndex();
+
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...removeShellBallInlineRecommendationBubbles(currentItems),
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: "Recommendations are unavailable right now. You can type a quick request below.",
+            bubbleType: "status",
+            createdAt,
+            turnIndex,
+            turnPhase: 0,
+          }),
+        ]),
+      );
+      handlersRef.current.onRequestInputFocus();
+      revealBubbleRegion();
+    } finally {
+      recommendationRequestInFlightRef.current = false;
+    }
+  }, [allocateBubbleTurnIndex, revealBubbleRegion]);
+
+  /**
+   * Accepting a recommendation should remove the transient suggestion bubbles
+   * and promote the chosen text into the formal `recommendation_click` entry.
+   */
+  const handleRecommendationAccept = useCallback(async (bubbleId: string) => {
+    const bubbleItem = bubbleItemsRef.current.find((item) => item.bubble.bubble_id === bubbleId);
+    const inlineRecommendation = bubbleItem?.desktop.inlineRecommendation;
+    const recommendationText = bubbleItem?.bubble.text.trim() ?? "";
+
+    if (bubbleItem === undefined || inlineRecommendation === undefined || recommendationText === "") {
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const turnIndex = allocateBubbleTurnIndex();
+    const userBubbleItem = createShellBallTextBubbleItem({
+      role: "user",
+      text: recommendationText,
+      bubbleType: "result",
+      createdAt,
+      turnIndex,
+      turnPhase: 0,
+    });
+    const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+      createdAt,
+      turnIndex,
+      turnPhase: 1,
+    });
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...removeShellBallInlineRecommendationBubbles(currentItems),
+        userBubbleItem,
+        pendingAgentBubbleItem,
+      ]),
+    );
+    revealBubbleRegion();
+
+    const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
+    try {
+      const result = await startTaskFromRecommendation(recommendationText, {
+        delivery: {
+          preferred: "bubble",
+          fallback: "task_detail",
+        },
+        pageContext: inlineRecommendation.pageContext,
+        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
+        source: "floating_ball",
+      });
+
+      if (!isShellBallInputSubmitResult(result)) {
+        setBubbleItems((currentItems) =>
+          replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+        );
+        return;
+      }
+
+      registerShellBallTask(result.task.task_id, turnIndex, result.task.status);
+      setBubbleItems((currentItems) => {
+        const nextItems = currentItems.map((item) =>
+          item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+            ? {
+                ...item,
+                bubble: {
+                  ...item.bubble,
+                  task_id: result.task.task_id,
+                },
+              }
+            : item,
+        );
+
+        return replaceShellBallPendingBubble(
+          nextItems,
+          pendingAgentBubbleItem.bubble.bubble_id,
+          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            turnIndex,
+            turnPhase: 1,
+          }),
+        );
+      });
+      revealBubbleRegion();
+      submitShellBallRecommendationFeedback(inlineRecommendation.recommendationId, "positive");
+      void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+    } catch (error) {
+      console.warn("shell-ball recommendation accept failed", error);
+      setBubbleItems((currentItems) =>
+        replaceShellBallPendingBubble(
+          currentItems,
+          pendingAgentBubbleItem.bubble.bubble_id,
+          createShellBallTaskErrorBubbleItem({
+            createdAt: new Date().toISOString(),
+            error,
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ),
+      );
+      revealBubbleRegion();
+    } finally {
+      finishPendingTaskRegistration();
+    }
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion, submitShellBallRecommendationFeedback]);
+
+  /**
+   * Ignored recommendations should disappear immediately and only best-effort
+   * submit the cooldown feedback in the background.
+   */
+  const handleRecommendationIgnore = useCallback((bubbleId: string) => {
+    const bubbleItem = bubbleItemsRef.current.find((item) => item.bubble.bubble_id === bubbleId);
+    const inlineRecommendation = bubbleItem?.desktop.inlineRecommendation;
+
+    if (bubbleItem === undefined || inlineRecommendation === undefined) {
+      return;
+    }
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp(currentItems.filter((item) => item.bubble.bubble_id !== bubbleId)),
+    );
+    submitShellBallRecommendationFeedback(inlineRecommendation.recommendationId, "ignore");
+  }, [submitShellBallRecommendationFeedback]);
 
   /**
    * Shortcut keywords such as `截屏` and `窗口` still enter the formal task
@@ -2323,10 +2833,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         break;
       }
       case "primary_click":
-        handlersRef.current.onPrimaryClick();
+        void handlePrimaryRecommendationClick();
         break;
     }
-  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handlePrimaryRecommendationClick, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
 
   return {
     snapshot,
@@ -2335,6 +2845,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handleClipboardPrompt,
     handlePrimaryAction,
     handleBubbleAction,
+    handleRecommendationAccept,
+    handleRecommendationIgnore,
     handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,

@@ -580,7 +580,15 @@ body[data-app-window="shell-ball"],
   margin-top: 0.48rem;
 }
 
+.shell-ball-bubble-message__recommendation-actions {
+  display: flex;
+  gap: 0.34rem;
+  justify-content: flex-end;
+  margin-top: 0.48rem;
+}
+
 .shell-ball-bubble-message__approval-action {
+.shell-ball-bubble-message__recommendation-action {
   align-items: center;
   appearance: none;
   border: 1px solid rgba(132, 118, 99, 0.18);
@@ -603,19 +611,22 @@ body[data-app-window="shell-ball"],
     transform 160ms ease;
 }
 
-.shell-ball-bubble-message__approval-action:hover:not(:disabled) {
+.shell-ball-bubble-message__approval-action:hover:not(:disabled),
+.shell-ball-bubble-message__recommendation-action:hover:not(:disabled) {
   color: var(--shell-ball-ink);
   transform: translateY(-1px);
 }
 
-.shell-ball-bubble-message__approval-action:focus-visible {
+.shell-ball-bubble-message__approval-action:focus-visible,
+.shell-ball-bubble-message__recommendation-action:focus-visible {
   box-shadow:
     0 0 0 2px rgba(255, 251, 244, 0.92),
     0 0 0 4px rgba(106, 145, 200, 0.22);
   outline: 0;
 }
 
-.shell-ball-bubble-message__approval-action:disabled {
+.shell-ball-bubble-message__approval-action:disabled,
+.shell-ball-bubble-message__recommendation-action:disabled {
   cursor: progress;
   opacity: 0.72;
   transform: none;
@@ -637,6 +648,24 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-bubble-message__approval-action--deny:hover:not(:disabled) {
   background: rgba(193, 141, 70, 0.2);
+}
+
+.shell-ball-bubble-message__recommendation-action--accept {
+  background: rgba(106, 145, 200, 0.14);
+  border-color: rgba(106, 145, 200, 0.26);
+}
+
+.shell-ball-bubble-message__recommendation-action--accept:hover:not(:disabled) {
+  background: rgba(106, 145, 200, 0.22);
+}
+
+.shell-ball-bubble-message__recommendation-action--ignore {
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(132, 118, 99, 0.14);
+}
+
+.shell-ball-bubble-message__recommendation-action--ignore:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.86);
 }
 
 .shell-ball-bubble-zone[data-state="waiting_auth"] {

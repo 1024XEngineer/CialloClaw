@@ -2555,12 +2555,20 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
             return Promise.resolve({
               app_name: "Chrome",
               browser_kind: "chrome",
+              error_text: "Warning: release notes are incomplete.",
               page_switch_count: 1,
               process_path: null,
               title: "Build Dashboard",
               url: "https://example.com/build?ticket=secret#fragment",
+              hover_target: "Publish button",
+              visible_text: "Warning: release notes are incomplete.",
               window_switch_count: 2,
             });
+          },
+        },
+        "@/platform/desktopClipboardActivity": {
+          getDesktopClipboardActivitySnapshot() {
+            return Promise.resolve({ copy_count: 1 });
           },
         },
       },
@@ -2599,19 +2607,28 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
       app_name: "Chrome",
       title: "Build Dashboard",
       url: "https://example.com/build",
+      visible_text: "Warning: release notes are incomplete.",
+      hover_target: "Publish button",
       window_title: "Build Dashboard",
     },
     screen: {
       summary: "release validation failed on current screen",
       screen_summary: "Foreground Chrome page \"Build Dashboard\" is active at https://example.com/build.",
+      visible_text: "Warning: release notes are incomplete.",
+      hover_target: "Publish button",
       window_title: "Build Dashboard",
     },
     behavior: {
       last_action: "hover_text_input",
       dwell_millis: 5000,
+      copy_count: 1,
       window_switch_count: 2,
       page_switch_count: 1,
     },
+    error: {
+      message: "Warning: release notes are incomplete.",
+    },
+    error_text: "Warning: release notes are incomplete.",
   });
 });
 
@@ -6785,7 +6802,7 @@ test("shell-ball surface keeps drag and click on the mascot hotspot only", () =>
   assert.match(markup, /shell-ball-surface__interaction-zone/);
 });
 
-test("shell-ball mascot hotspot policy only opens primary click for selected-text prompts", () => {
+test("shell-ball mascot hotspot policy keeps primary click available outside voice mode", () => {
   assert.equal(
     getShellBallMascotHotspotGestureAction({
       visualState: "voice_locked",
@@ -6801,7 +6818,7 @@ test("shell-ball mascot hotspot policy only opens primary click for selected-tex
       gesture: "single_click",
       suppressed: false,
     }),
-    "noop",
+    "primary_click",
   );
 
   assert.equal(
@@ -6810,7 +6827,7 @@ test("shell-ball mascot hotspot policy only opens primary click for selected-tex
       gesture: "single_click",
       suppressed: false,
     }),
-    "noop",
+    "primary_click",
   );
 
   assert.equal(
@@ -7132,6 +7149,35 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(coordinatorSource, /trigger: "hover_text_input"/);
   assert.match(coordinatorSource, /inputMode: "text"/);
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
+});
+
+test("shell-ball stale clipboard prompts fall through to single-click recommendation instead of swallowing the click", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+
+  assert.match(appSource, /if \(isShellBallClipboardPromptActive\(clipboardPrompt\)\) \{/);
+  assert.match(appSource, /void handleCoordinatorPrimaryAction\("primary_click"\);/);
+  assert.doesNotMatch(appSource, /if \(!isShellBallClipboardPromptActive\(clipboardPrompt\)\) \{\s*setClipboardPrompt\(null\);\s*return;/);
+});
+
+test("shell-ball single-click recommendations carry formal desktop context and reuse the original page context on accept", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const bubbleDesktopSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBallBubbleDesktop.ts"), "utf8");
+
+  assert.match(coordinatorSource, /Promise\.allSettled\(\[\s*getActiveWindowContext\(\),\s*getDesktopMouseActivitySnapshot\(\),\s*getDesktopClipboardActivitySnapshot\(\),\s*readClipboardText\(\),/);
+  assert.match(coordinatorSource, /getDesktopMouseActivitySnapshot\(\)/);
+  assert.match(coordinatorSource, /getDesktopClipboardActivitySnapshot\(\)/);
+  assert.match(coordinatorSource, /createShellBallRecommendationRequestContext\(/);
+  assert.match(coordinatorSource, /visible_text:/);
+  assert.match(coordinatorSource, /screen_summary:/);
+  assert.match(coordinatorSource, /clipboard_text:/);
+  assert.match(coordinatorSource, /error_text:/);
+  assert.match(coordinatorSource, /copy_count:/);
+  assert.match(coordinatorSource, /window_switch_count:/);
+  assert.match(coordinatorSource, /page_switch_count:/);
+  assert.match(coordinatorSource, /lastAction: "primary_click"/);
+  assert.match(coordinatorSource, /pageContext: recommendationContext\.pageContext/);
+  assert.match(coordinatorSource, /pageContext: inlineRecommendation\.pageContext/);
+  assert.match(bubbleDesktopSource, /pageContext: PageContext;/);
 });
 
 test("shell-ball screenshot command routes through the formal screen task path", () => {

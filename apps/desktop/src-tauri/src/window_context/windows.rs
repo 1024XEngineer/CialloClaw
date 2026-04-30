@@ -20,7 +20,8 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
     IUIAutomationElementArray, IUIAutomationValuePattern, SetWinEventHook, TreeScope_Subtree,
-    UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_ValuePatternId, HWINEVENTHOOK,
+    UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_TextControlTypeId,
+    UIA_ValuePatternId, HWINEVENTHOOK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
@@ -32,6 +33,10 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
+const WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CHARS: usize = 320;
+const WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CANDIDATES: usize = 8;
+const WINDOW_CONTEXT_TARGET_MAX_CHARS: usize = 96;
+const WINDOW_CONTEXT_ERROR_TEXT_MAX_CHARS: usize = 180;
 const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
     "shell-ball",
     "shell-ball-bubble",
@@ -190,6 +195,9 @@ fn read_lightweight_window_context_for_hwnd(
         process_path,
         title,
         url: None,
+        visible_text: None,
+        hover_target: None,
+        error_text: None,
         browser_kind: browser_kind.to_string(),
         window_switch_count: None,
         page_switch_count: None,
@@ -203,12 +211,22 @@ fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
             process_path: None,
             title: None,
             url: None,
+            visible_text: None,
+            hover_target: None,
+            error_text: None,
             browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
             window_switch_count: None,
             page_switch_count: None,
         });
 
-    context.url = read_url_for_window_context(hwnd, &context);
+    if let Some(snapshot) = read_window_automation_snapshot(hwnd, &context) {
+        context.url = snapshot.url;
+        context.visible_text = snapshot.visible_text;
+        context.hover_target = snapshot.hover_target;
+        context.error_text = snapshot.error_text;
+    } else {
+        context.url = read_url_for_window_context(hwnd, &context);
+    }
     context
 }
 
@@ -470,6 +488,43 @@ fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> St
     )
 }
 
+struct WindowAutomationSnapshot {
+    url: Option<String>,
+    visible_text: Option<String>,
+    hover_target: Option<String>,
+    error_text: Option<String>,
+}
+
+fn read_window_automation_snapshot(
+    hwnd: HWND,
+    context: &ActiveWindowContextPayload,
+) -> Option<WindowAutomationSnapshot> {
+    let _com_guard = ComGuard::initialize().ok()?;
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
+    let root_element = unsafe { automation.ElementFromHandle(hwnd).ok()? };
+    let url = if should_refresh_window_context_url(context) {
+        read_browser_url_from_root(&automation, &root_element)
+    } else {
+        None
+    };
+    let visible_text = read_visible_text_from_root(&automation, &root_element, context.title.as_deref());
+    let hover_target =
+        read_target_candidate_from_focused_element(&automation, hwnd, context.title.as_deref());
+    let error_text = derive_error_text(
+        visible_text.as_deref(),
+        hover_target.as_deref(),
+        context.title.as_deref(),
+    );
+
+    Some(WindowAutomationSnapshot {
+        url,
+        visible_text,
+        hover_target,
+        error_text,
+    })
+}
+
 fn read_url_for_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) -> Option<String> {
     match context.browser_kind.as_str() {
         BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => {
@@ -579,6 +634,13 @@ fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
     let automation: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()? };
     let root_element = unsafe { automation.ElementFromHandle(hwnd).ok()? };
+    read_browser_url_from_root(&automation, &root_element)
+}
+
+fn read_browser_url_from_root(
+    automation: &IUIAutomation,
+    root_element: &IUIAutomationElement,
+) -> Option<String> {
     let edit_control_type = VARIANT::from(UIA_EditControlTypeId.0);
     let condition: IUIAutomationCondition = unsafe {
         automation
@@ -597,6 +659,125 @@ fn read_browser_url_via_uia(hwnd: HWND) -> Option<String> {
     }
 
     None
+}
+
+fn read_visible_text_from_root(
+    automation: &IUIAutomation,
+    root_element: &IUIAutomationElement,
+    window_title: Option<&str>,
+) -> Option<String> {
+    let mut candidates = Vec::new();
+    collect_visible_text_candidates(
+        automation,
+        root_element,
+        UIA_TextControlTypeId.0,
+        window_title,
+        &mut candidates,
+    );
+    collect_visible_text_candidates(
+        automation,
+        root_element,
+        UIA_EditControlTypeId.0,
+        window_title,
+        &mut candidates,
+    );
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    Some(truncate_text(&candidates.join(" "), WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CHARS))
+}
+
+fn collect_visible_text_candidates(
+    automation: &IUIAutomation,
+    root_element: &IUIAutomationElement,
+    control_type_id: i32,
+    window_title: Option<&str>,
+    candidates: &mut Vec<String>,
+) {
+    if candidates.len() >= WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CANDIDATES {
+        return;
+    }
+
+    let control_type = VARIANT::from(control_type_id);
+    let Some(condition) = (unsafe {
+        automation
+            .CreatePropertyCondition(UIA_ControlTypePropertyId, &control_type)
+            .ok()
+    }) else {
+        return;
+    };
+    let Some(matches) = (unsafe { root_element.FindAll(TreeScope_Subtree, &condition).ok() }) else {
+        return;
+    };
+    let Some(length) = (unsafe { matches.Length().ok() }) else {
+        return;
+    };
+
+    for index in 0..length {
+        if candidates.len() >= WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CANDIDATES {
+            break;
+        }
+
+        let Some(element) = (unsafe { matches.GetElement(index).ok() }) else {
+            continue;
+        };
+
+        if let Some(candidate) = read_visible_text_candidate(&element, window_title) {
+            push_unique_text_candidate(candidates, candidate, WINDOW_CONTEXT_VISIBLE_TEXT_MAX_CANDIDATES);
+        }
+    }
+}
+
+fn read_visible_text_candidate(
+    element: &IUIAutomationElement,
+    window_title: Option<&str>,
+) -> Option<String> {
+    let value_candidate = read_value_pattern_text(element)
+        .and_then(|value| normalize_text_candidate(&value, window_title));
+    let name_candidate = read_current_name_text(element)
+        .and_then(|value| normalize_text_candidate(&value, window_title));
+
+    match (value_candidate, name_candidate) {
+        (Some(value), Some(name)) if value != name && value.len() < name.len() => Some(name),
+        (Some(value), Some(_)) => Some(value),
+        (Some(value), None) => Some(value),
+        (None, Some(name)) => Some(name),
+        (None, None) => None,
+    }
+}
+
+fn read_target_candidate_from_focused_element(
+    automation: &IUIAutomation,
+    hwnd: HWND,
+    window_title: Option<&str>,
+) -> Option<String> {
+    let focused = unsafe { automation.GetFocusedElement().ok()? };
+    let focused_hwnd = unsafe { focused.CurrentNativeWindowHandle().ok()? };
+    if focused_hwnd.0.is_null() {
+        return None;
+    }
+
+    if get_root_window(focused_hwnd) != get_root_window(hwnd) {
+        return None;
+    }
+
+    read_target_candidate(&focused, window_title)
+}
+
+fn read_target_candidate(
+    element: &IUIAutomationElement,
+    window_title: Option<&str>,
+) -> Option<String> {
+    let candidate = read_current_name_text(element)
+        .and_then(|value| normalize_text_candidate(&value, window_title))
+        .or_else(|| {
+            read_value_pattern_text(element)
+                .and_then(|value| normalize_text_candidate(&value, window_title))
+        })?;
+
+    Some(truncate_text(&candidate, WINDOW_CONTEXT_TARGET_MAX_CHARS))
 }
 
 fn read_element_url_candidate(element: &IUIAutomationElement) -> Option<String> {
@@ -620,6 +801,78 @@ fn read_element_url_candidate(element: &IUIAutomationElement) -> Option<String> 
     }
 
     None
+}
+
+fn read_current_name_text(element: &IUIAutomationElement) -> Option<String> {
+    let name: BSTR = unsafe { element.CurrentName().ok()? };
+    let normalized = name.to_string();
+    (!normalized.trim().is_empty()).then_some(normalized)
+}
+
+fn read_value_pattern_text(element: &IUIAutomationElement) -> Option<String> {
+    let value_pattern: IUIAutomationValuePattern =
+        unsafe { element.GetCurrentPatternAs(UIA_ValuePatternId).ok()? };
+    let value = unsafe { value_pattern.CurrentValue().ok()? }.to_string();
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn normalize_text_candidate(value: &str, window_title: Option<&str>) -> Option<String> {
+    let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = trimmed.trim();
+
+    if normalized.is_empty() || looks_like_url(normalized) || looks_like_address_bar_name(normalized)
+    {
+        return None;
+    }
+
+    if window_title.is_some_and(|title| normalized.eq_ignore_ascii_case(title.trim())) {
+        return None;
+    }
+
+    Some(normalized.to_string())
+}
+
+fn push_unique_text_candidate(candidates: &mut Vec<String>, candidate: String, max_len: usize) {
+    if candidates
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(candidate.as_str()))
+    {
+        return;
+    }
+
+    candidates.push(candidate);
+    if candidates.len() > max_len {
+        candidates.truncate(max_len);
+    }
+}
+
+fn derive_error_text(
+    visible_text: Option<&str>,
+    hover_target: Option<&str>,
+    window_title: Option<&str>,
+) -> Option<String> {
+    for value in [visible_text, hover_target, window_title].into_iter().flatten() {
+        if looks_like_error_signal(value) {
+            return Some(truncate_text(value, WINDOW_CONTEXT_ERROR_TEXT_MAX_CHARS));
+        }
+    }
+
+    None
+}
+
+fn looks_like_error_signal(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    ["error", "failed", "warning", "exception"]
+        .iter()
+        .any(|token| normalized.contains(token))
+}
+
+fn truncate_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    value.chars().take(max_chars).collect()
 }
 
 fn looks_like_address_bar_name(value: &str) -> bool {
