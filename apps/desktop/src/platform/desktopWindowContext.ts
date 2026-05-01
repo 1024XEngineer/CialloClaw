@@ -3,9 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 export type DesktopWindowContextPayload = {
   app_name: string;
   process_path: string | null;
+  process_id: number | null;
   title: string | null;
   url: string | null;
-  browser_kind: "chrome" | "edge" | "other_browser" | "non_browser";
+  browser_kind: "chrome" | "edge" | "unsupported_browser" | "non_browser";
   window_switch_count?: number | null;
   page_switch_count?: number | null;
 };
