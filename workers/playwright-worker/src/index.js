@@ -209,16 +209,21 @@ function selectAttachedPage(pageDescriptors, attachConfig) {
   let candidates = pageDescriptors;
   if (attachConfig.targetURL) {
     const exactURLMatches = pageDescriptors.filter((descriptor) => descriptor.url === attachConfig.targetURL);
-    if (exactURLMatches.length > 0) {
-      candidates = exactURLMatches;
+    if (exactURLMatches.length === 0) {
+      throw createStructuredWorkerError("page_target_not_found", `no attached browser page matched url '${attachConfig.targetURL}'`);
     }
+    candidates = exactURLMatches;
   }
 
   if (attachConfig.targetTitleContains) {
     const titleMatches = candidates.filter((descriptor) => descriptor.title.toLowerCase().includes(attachConfig.targetTitleContains));
-    if (titleMatches.length > 0) {
-      candidates = titleMatches;
+    if (titleMatches.length === 0) {
+      throw createStructuredWorkerError(
+        "page_target_not_found",
+        `no attached browser page matched title_contains '${attachConfig.targetTitleContains}'`,
+      );
     }
+    candidates = titleMatches;
   }
 
   if (attachConfig.pageIndex !== undefined) {

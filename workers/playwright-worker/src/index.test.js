@@ -421,6 +421,33 @@ test("page_read reports attached browser resolution failures as structured error
   }, createDeps({ connectedContexts: [{}] }));
   assert.equal(malformedContext.ok, false);
   assert.equal(malformedContext.error.code, "page_target_not_found");
+
+  const missingURLMatch = await handleRequest({
+    action: "page_read",
+    attach: {
+      browser_kind: "chrome",
+      target: { url: "https://example.com/missing" },
+    },
+  }, createDeps({
+    connectedPages: [createPage({ currentURL: "https://example.com/current", title: "Current" })],
+  }));
+  assert.equal(missingURLMatch.ok, false);
+  assert.equal(missingURLMatch.error.code, "page_target_not_found");
+
+  const missingTitleMatch = await handleRequest({
+    action: "page_read",
+    attach: {
+      browser_kind: "chrome",
+      target: {
+        url: "https://example.com/current",
+        title_contains: "missing title",
+      },
+    },
+  }, createDeps({
+    connectedPages: [createPage({ currentURL: "https://example.com/current", title: "Current" })],
+  }));
+  assert.equal(missingTitleMatch.ok, false);
+  assert.equal(missingTitleMatch.error.code, "page_target_not_found");
 });
 
 test("page_interact uses attached tabs without forcing a new navigation", async () => {
