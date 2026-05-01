@@ -37,20 +37,42 @@ function normalizeTaskInputText(value: string | undefined) {
   return trimmed === "" ? undefined : trimmed;
 }
 
-function resolveTaskPageContext(pageContext: PageContext | undefined) {
-  const normalizedAppName = pageContext?.app_name?.trim();
-  const normalizedTitle = pageContext?.title?.trim();
-  const normalizedUrl = pageContext?.url?.trim();
+function normalizeOptionalPageContextText(value: string | undefined) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed === "" ? undefined : trimmed;
+}
 
-  if (normalizedAppName && normalizedTitle && normalizedUrl) {
-    return {
-      app_name: normalizedAppName,
-      title: normalizedTitle,
-      url: normalizedUrl,
-    };
+function compactTaskPageContext(pageContext: PageContext | undefined): PageContext | undefined {
+  if (!pageContext) {
+    return undefined;
   }
 
-  return DEFAULT_TASK_PAGE_CONTEXT;
+  const appName = normalizeOptionalPageContextText(pageContext.app_name);
+  const title = normalizeOptionalPageContextText(pageContext.title);
+  const url = normalizeOptionalPageContextText(pageContext.url);
+  const processPath = normalizeOptionalPageContextText(pageContext.process_path);
+  const windowTitle = normalizeOptionalPageContextText(pageContext.window_title);
+  const visibleText = normalizeOptionalPageContextText(pageContext.visible_text);
+  const hoverTarget = normalizeOptionalPageContextText(pageContext.hover_target);
+  const compacted: PageContext = {
+    ...(appName ? { app_name: appName } : {}),
+    ...(title ? { title } : {}),
+    ...(url ? { url } : {}),
+    ...(pageContext.browser_kind ? { browser_kind: pageContext.browser_kind } : {}),
+    ...(processPath ? { process_path: processPath } : {}),
+    ...(Number.isInteger(pageContext.process_id) && (pageContext.process_id ?? 0) > 0
+      ? { process_id: pageContext.process_id }
+      : {}),
+    ...(windowTitle ? { window_title: windowTitle } : {}),
+    ...(visibleText ? { visible_text: visibleText } : {}),
+    ...(hoverTarget ? { hover_target: hoverTarget } : {}),
+  };
+
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function resolveTaskPageContext(pageContext: PageContext | undefined) {
+  return compactTaskPageContext(pageContext) ?? DEFAULT_TASK_PAGE_CONTEXT;
 }
 
 function resolveTaskSessionId(sessionId: string | undefined) {

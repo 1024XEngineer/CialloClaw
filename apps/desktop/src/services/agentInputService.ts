@@ -104,6 +104,9 @@ function mapDesktopWindowPageContext(snapshot: DesktopWindowContextSnapshot | nu
 
   return compactContextRecord<PageContext>({
     app_name: snapshot.app_name,
+    browser_kind: snapshot.browser_kind,
+    process_path: snapshot.process_path ?? undefined,
+    process_id: snapshot.process_id ?? undefined,
     title: snapshot.title ?? undefined,
     url: sanitizedUrl,
     window_title: snapshot.title ?? undefined,
