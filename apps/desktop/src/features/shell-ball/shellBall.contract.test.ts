@@ -31,6 +31,11 @@ import {
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
+  mapDesktopWindowSnapshotToPageContext,
+  resolveTaskPageContext,
+  sanitizePageContextUrl,
+} from "../../services/pageContext";
+import {
   isShellBallClipboardPromptActive,
   ShellBallApp,
   shouldArmShellBallTextDropTarget,
@@ -2322,6 +2327,15 @@ test("task-entry services keep rpc transport failures visible and forward file d
           mirrorCalls.push("success");
         },
       },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
+      },
+      "./pageContext": {
+        resolveTaskPageContext,
+      },
     },
     async (moduleExports) => {
       const service = moduleExports as {
@@ -2398,6 +2412,17 @@ test("task-entry services keep rpc transport failures visible and forward file d
           },
         },
       },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
+      },
+      "./pageContext": {
+        mapDesktopWindowSnapshotToPageContext,
+        resolveTaskPageContext,
+        sanitizePageContextUrl,
+      },
       "./agentInputService": {
         submitTextInput(params: Record<string, unknown>) {
           bootstrapSubmitCalls.push(params);
@@ -2438,6 +2463,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
       await service.startTaskFromSelectedText("  selected text  ", {
         pageContext: {
           app_name: "notepad",
+          browser_kind: "non_browser",
+          process_id: 8844,
+          process_path: "C:/Windows/System32/notepad.exe",
           title: "Notes",
           url: "native://windows-uia-selection",
         },
@@ -2452,6 +2480,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
         text: "selected text",
         page_context: {
           app_name: "notepad",
+          browser_kind: "non_browser",
+          process_id: 8844,
+          process_path: "C:/Windows/System32/notepad.exe",
           title: "Notes",
           url: "native://windows-uia-selection",
         },
@@ -2479,6 +2510,15 @@ test("task-entry services keep rpc transport failures visible and forward file d
             return { tasks: [] as Array<Record<string, unknown>> };
           },
         },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
+      },
+      "./pageContext": {
+        resolveTaskPageContext,
       },
       "./agentInputService": {
         submitTextInput() {
@@ -2539,6 +2579,11 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
           },
           rememberConversationSessionFromTask() {},
         },
+        "./pageContext": {
+          mapDesktopWindowSnapshotToPageContext,
+          resolveTaskPageContext,
+          sanitizePageContextUrl,
+        },
         "./mirrorMemoryService": {
           recordMirrorConversationFailure() {},
           recordMirrorConversationStart() {},
@@ -2555,7 +2600,8 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
               app_name: "Chrome",
               browser_kind: "chrome",
               page_switch_count: 1,
-              process_path: null,
+              process_id: 4412,
+              process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
               title: "Build Dashboard",
               url: "https://example.com/build?ticket=secret#fragment",
               window_switch_count: 2,
@@ -2596,6 +2642,9 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
     files: [],
     page: {
       app_name: "Chrome",
+      browser_kind: "chrome",
+      process_id: 4412,
+      process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
       title: "Build Dashboard",
       url: "https://example.com/build",
       window_title: "Build Dashboard",
@@ -2652,6 +2701,11 @@ test("submitTextInput keeps ordinary text submissions free of ambient page and s
           },
           rememberConversationSessionFromTask() {},
         },
+        "./pageContext": {
+          mapDesktopWindowSnapshotToPageContext,
+          resolveTaskPageContext,
+          sanitizePageContextUrl,
+        },
         "./mirrorMemoryService": {
           recordMirrorConversationFailure() {},
           recordMirrorConversationStart() {},
@@ -2669,7 +2723,8 @@ test("submitTextInput keeps ordinary text submissions free of ambient page and s
               app_name: "Chrome",
               browser_kind: "chrome",
               page_switch_count: 1,
-              process_path: null,
+              process_id: 4412,
+              process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
               title: "Build Dashboard",
               url: "https://example.com/build?ticket=secret#fragment",
               window_switch_count: 2,
