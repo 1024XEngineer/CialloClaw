@@ -9,9 +9,12 @@ export const manifest = {
 };
 
 const browserTimeoutMS = 15000;
+const defaultCDPEndpointURL = "http://127.0.0.1:9222";
+const supportedCDPBrowserKinds = new Set(["chrome", "edge"]);
 const workerUserAgent = "CialloClawPlaywrightWorker/0.1";
 
 const defaultDependencies = {
+  connectToBrowser,
   launchBrowser,
 };
 
@@ -59,6 +62,11 @@ async function launchBrowser() {
   return chromium.launch({ headless: true });
 }
 
+async function connectToBrowser(endpointURL) {
+  const { chromium } = await import("playwright");
+  return chromium.connectOverCDP(endpointURL);
+}
+
 async function closeIfPossible(target, methodName) {
   if (target && typeof target[methodName] === "function") {
     await target[methodName]();
@@ -89,10 +97,174 @@ async function openBrowserPage(url, deps, callback) {
     if (!response.ok()) {
       throw new Error(`http_${response.status()}`);
     }
-    return await callback(page, response);
+    return await callback(page, response, {
+      attached: false,
+      browserKind: undefined,
+      browserTransport: "launch",
+      endpointURL: undefined,
+      source: "playwright_worker_browser",
+    });
   } finally {
     await closeResources(context, browser);
   }
+}
+
+function createStructuredWorkerError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function structuredWorkerErrorResponse(error) {
+  if (!error || typeof error.code !== "string") {
+    return null;
+  }
+
+  return {
+    ok: false,
+    error: {
+      code: error.code,
+      message: error.message,
+    },
+  };
+}
+
+function normalizeOptionalString(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized === "" ? undefined : normalized;
+}
+
+function normalizeComparableURL(url) {
+  const normalized = normalizeOptionalString(url);
+  if (!normalized) {
+    return undefined;
+  }
+
+  try {
+    return new URL(normalized).toString();
+  } catch {
+    return normalized;
+  }
+}
+
+// resolveAttachConfig keeps the worker-side attach contract additive so the Go
+// runtime can keep using the legacy launch flow until issue-3 wiring lands.
+function resolveAttachConfig(request) {
+  const attach = request?.attach;
+  if (!attach) {
+    return null;
+  }
+
+  const mode = normalizeOptionalString(attach.mode) ?? "cdp";
+  if (mode !== "cdp") {
+    throw createStructuredWorkerError("invalid_input", "attach.mode must be 'cdp'");
+  }
+
+  const browserKind = normalizeOptionalString(attach.browser_kind)?.toLowerCase();
+  if (browserKind && !supportedCDPBrowserKinds.has(browserKind)) {
+    throw createStructuredWorkerError("unsupported_browser_kind", `unsupported browser kind '${browserKind}'`);
+  }
+
+  const target = typeof attach.target === "object" && attach.target !== null ? attach.target : {};
+  const rawPageIndex = target.page_index;
+  const pageIndex = rawPageIndex === undefined ? undefined : Number(rawPageIndex);
+  if (rawPageIndex !== undefined && (!Number.isInteger(pageIndex) || pageIndex < 0)) {
+    throw createStructuredWorkerError("invalid_input", "attach.target.page_index must be a non-negative integer");
+  }
+
+  return {
+    browserKind,
+    endpointURL: normalizeOptionalString(attach.endpoint_url) ?? defaultCDPEndpointURL,
+    pageIndex,
+    targetTitleContains: normalizeOptionalString(target.title_contains)?.toLowerCase(),
+    targetURL: normalizeComparableURL(target.url ?? request?.url),
+  };
+}
+
+async function describeAttachedPages(browser) {
+  const contexts = typeof browser?.contexts === "function" ? browser.contexts() : [];
+  const pages = contexts.flatMap((context) => {
+    if (!context || typeof context.pages !== "function") {
+      return [];
+    }
+    return context.pages();
+  });
+
+  return Promise.all(pages.map(async (page, index) => ({
+    index,
+    page,
+    title: normalizeOptionalString(await page.title().catch(() => "")) ?? "",
+    url: normalizeComparableURL(typeof page.url === "function" ? page.url() : "") ?? "",
+  })));
+}
+
+// selectAttachedPage avoids blind tab selection by progressively narrowing the
+// candidate set and only falling back when the connected browser exposes a
+// single usable page.
+function selectAttachedPage(pageDescriptors, attachConfig) {
+  if (pageDescriptors.length === 0) {
+    throw createStructuredWorkerError("page_target_not_found", "no attached browser pages are available");
+  }
+
+  let candidates = pageDescriptors;
+  if (attachConfig.targetURL) {
+    const exactURLMatches = pageDescriptors.filter((descriptor) => descriptor.url === attachConfig.targetURL);
+    if (exactURLMatches.length > 0) {
+      candidates = exactURLMatches;
+    }
+  }
+
+  if (attachConfig.targetTitleContains) {
+    const titleMatches = candidates.filter((descriptor) => descriptor.title.toLowerCase().includes(attachConfig.targetTitleContains));
+    if (titleMatches.length > 0) {
+      candidates = titleMatches;
+    }
+  }
+
+  if (attachConfig.pageIndex !== undefined) {
+    if (attachConfig.pageIndex >= candidates.length) {
+      throw createStructuredWorkerError("page_target_not_found", `attach.target.page_index ${attachConfig.pageIndex} is out of range`);
+    }
+    return candidates[attachConfig.pageIndex].page;
+  }
+
+  if (candidates.length === 1) {
+    return candidates[0].page;
+  }
+
+  throw createStructuredWorkerError(
+    "page_target_not_found",
+    "could not resolve a unique attached browser page; provide a stricter url, title_contains, or page_index",
+  );
+}
+
+async function openAttachedPage(request, deps, callback) {
+  const attachConfig = resolveAttachConfig(request);
+  if (!attachConfig) {
+    return openBrowserPage(String(request.url ?? ""), deps, callback);
+  }
+
+  let browser;
+  try {
+    browser = await deps.connectToBrowser(attachConfig.endpointURL);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw createStructuredWorkerError("browser_attach_failed", message);
+  }
+
+  const pageDescriptors = await describeAttachedPages(browser);
+  const page = selectAttachedPage(pageDescriptors, attachConfig);
+
+  // The real browser is user-owned; the short-lived worker process exits after
+  // one request, so we intentionally leave the remote browser running and let
+  // process teardown release the CDP connection.
+  return callback(page, undefined, {
+    attached: true,
+    browserKind: attachConfig.browserKind,
+    browserTransport: "cdp",
+    endpointURL: attachConfig.endpointURL,
+    source: "playwright_worker_cdp",
+  });
 }
 
 // healthResponse validates that the worker can load Playwright, start a browser,
@@ -116,14 +288,20 @@ export async function healthResponse(deps = defaultDependencies) {
   }
 }
 
-async function fetchPage(url, deps) {
-  return openBrowserPage(url, deps, async (page, response) => {
+async function fetchPage(request, deps) {
+  return openAttachedPage(request, deps, async (page, response, execution) => {
+    const fallbackURL = String(request?.url ?? "");
     const html = await page.content();
     const bodyText = await page.locator("body").innerText().catch(() => html);
-    const contentType = response.headers()["content-type"] ?? "text/html";
+    const contentType = response?.headers?.()["content-type"] ?? "text/html";
     return {
-      url: page.url() || url,
+      attached: execution.attached,
+      browserKind: execution.browserKind,
+      browserTransport: execution.browserTransport,
+      endpointURL: execution.endpointURL,
+      url: page.url() || fallbackURL,
       html,
+      source: execution.source,
       title: (await page.title()) || extractTitle(html, page.url()),
       textContent: normalizeText(bodyText),
       contentType,
@@ -131,8 +309,9 @@ async function fetchPage(url, deps) {
   });
 }
 
-async function buildStructuredDOM(url, deps) {
-  return openBrowserPage(url, deps, async (page) => {
+async function buildStructuredDOM(request, deps) {
+  return openAttachedPage(request, deps, async (page, _response, execution) => {
+    const fallbackURL = String(request?.url ?? "");
     const snapshot = await page.evaluate(() => ({
       headings: Array.from(document.querySelectorAll("h1, h2, h3")).map((node) => node.textContent?.trim()).filter(Boolean).slice(0, 20),
       links: Array.from(document.querySelectorAll("a[href]")).map((node) => node.textContent?.trim() || node.getAttribute("href") || "").filter(Boolean).slice(0, 20),
@@ -140,9 +319,13 @@ async function buildStructuredDOM(url, deps) {
       inputs: Array.from(document.querySelectorAll("input, textarea, select")).map((node) => node.getAttribute("name") || node.getAttribute("aria-label") || node.getAttribute("placeholder") || node.tagName.toLowerCase()).filter(Boolean).slice(0, 20),
     }));
     return {
-      url: page.url() || url,
+      attached: execution.attached,
+      browserKind: execution.browserKind,
+      browserTransport: execution.browserTransport,
+      endpointURL: execution.endpointURL,
+      url: page.url() || fallbackURL,
       title: (await page.title()) || extractTitle(await page.content(), page.url()),
-      source: "playwright_worker_browser",
+      source: execution.source,
       ...snapshot,
     };
   });
@@ -183,8 +366,9 @@ function validatePageActions(actions) {
   return null;
 }
 
-async function interactWithPage(url, actions, deps) {
-  return openBrowserPage(url, deps, async (page) => {
+async function interactWithPage(request, actions, deps) {
+  return openAttachedPage(request, deps, async (page, _response, execution) => {
+    const fallbackURL = String(request?.url ?? "");
     let applied = 0;
     for (const action of actions) {
       const type = String(action?.type ?? "").trim().toLowerCase();
@@ -225,13 +409,32 @@ async function interactWithPage(url, actions, deps) {
     const html = await page.content();
     const bodyText = await page.locator("body").innerText().catch(() => html);
     return {
-      url: page.url() || url,
+      attached: execution.attached,
+      browserKind: execution.browserKind,
+      browserTransport: execution.browserTransport,
+      endpointURL: execution.endpointURL,
+      url: page.url() || fallbackURL,
       title: (await page.title()) || extractTitle(html, page.url()),
       text_content: normalizeText(bodyText),
       actions_applied: applied,
-      source: "playwright_worker_browser",
+      source: execution.source,
     };
   });
+}
+
+async function executeBrowserRequest(request, deps, callback) {
+  try {
+    return {
+      ok: true,
+      result: await callback(),
+    };
+  } catch (error) {
+    const structured = structuredWorkerErrorResponse(error);
+    if (structured) {
+      return structured;
+    }
+    throw error;
+  }
 }
 
 // handleRequest keeps the worker protocol stable for the Go sidecar runtime and
@@ -241,46 +444,49 @@ export async function handleRequest(request, deps = defaultDependencies) {
     case "health":
       return healthResponse(deps);
     case "page_read": {
-      const page = await fetchPage(String(request.url ?? ""), deps);
-      return {
-        ok: true,
-        result: {
+      return executeBrowserRequest(request, deps, async () => {
+        const page = await fetchPage(request, deps);
+        return {
+          attached: page.attached,
+          browser_kind: page.browserKind,
+          browser_transport: page.browserTransport,
+          endpoint_url: page.endpointURL,
           url: page.url,
           title: page.title,
           text_content: page.textContent,
           mime_type: page.contentType,
           text_type: page.contentType,
-          source: "playwright_worker_browser",
-        },
-      };
+          source: page.source,
+        };
+      });
     }
     case "page_search": {
-      const page = await fetchPage(String(request.url ?? ""), deps);
-      const normalizedQuery = String(request.query ?? "").trim().toLowerCase();
-      const rawLimit = Number(request.limit ?? 0);
-      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
-      const segments = page.textContent
-        .split(/[.!?。！？]\s*/)
-        .map((segment) => segment.trim())
-        .filter(Boolean);
-      const allMatches = normalizedQuery === "" ? [] : segments.filter((segment) => segment.toLowerCase().includes(normalizedQuery));
-      const matches = allMatches.slice(0, limit);
-      return {
-        ok: true,
-        result: {
+      return executeBrowserRequest(request, deps, async () => {
+        const page = await fetchPage(request, deps);
+        const normalizedQuery = String(request.query ?? "").trim().toLowerCase();
+        const rawLimit = Number(request.limit ?? 0);
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
+        const segments = page.textContent
+          .split(/[.!?。！？]\s*/)
+          .map((segment) => segment.trim())
+          .filter(Boolean);
+        const allMatches = normalizedQuery === "" ? [] : segments.filter((segment) => segment.toLowerCase().includes(normalizedQuery));
+        const matches = allMatches.slice(0, limit);
+        return {
+          attached: page.attached,
+          browser_kind: page.browserKind,
+          browser_transport: page.browserTransport,
+          endpoint_url: page.endpointURL,
           url: page.url,
           query: String(request.query ?? ""),
           match_count: allMatches.length,
           matches,
-          source: "playwright_worker_browser",
-        },
-      };
+          source: page.source,
+        };
+      });
     }
     case "structured_dom": {
-      return {
-        ok: true,
-        result: await buildStructuredDOM(String(request.url ?? ""), deps),
-      };
+      return executeBrowserRequest(request, deps, async () => buildStructuredDOM(request, deps));
     }
     case "page_interact": {
       const actions = Array.isArray(request.actions) ? request.actions : [];
@@ -288,14 +494,7 @@ export async function handleRequest(request, deps = defaultDependencies) {
       if (validationError) {
         return validationError;
       }
-      return {
-        ok: true,
-        result: await interactWithPage(
-          String(request.url ?? ""),
-          actions,
-          deps,
-        ),
-      };
+      return executeBrowserRequest(request, deps, async () => interactWithPage(request, actions, deps));
     }
     default:
       return {
