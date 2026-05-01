@@ -295,6 +295,21 @@ export async function loadHydratedSettings(): Promise<DesktopSettings> {
 }
 
 /**
+ * Reads the trusted desktop runtime-default directories that currently define
+ * the active workspace scope for local open actions.
+ *
+ * The returned value intentionally stays separate from the formal settings
+ * draft because pending `workspace_path` edits do not hot-switch the running
+ * desktop/runtime workspace until the backend restarts.
+ *
+ * @returns The latest trusted runtime-default directories, if available.
+ */
+export async function loadDesktopRuntimeDefaultsSnapshot(): Promise<DesktopRuntimeDefaults | null> {
+  await hydrateDesktopRuntimeDefaults();
+  return loadRuntimeDefaults();
+}
+
+/**
  * Hydrates shared RPC settings into the desktop-local settings shape.
  *
  * @param settings Shared or desktop-local settings snapshot.
