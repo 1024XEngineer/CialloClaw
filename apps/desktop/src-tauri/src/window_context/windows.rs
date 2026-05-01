@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const BROWSER_KIND_CHROME: &str = "chrome";
 const BROWSER_KIND_EDGE: &str = "edge";
-const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
+const BROWSER_KIND_UNSUPPORTED_BROWSER: &str = "unsupported_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
 const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
@@ -177,7 +177,8 @@ fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPa
 fn read_lightweight_window_context_for_hwnd(
     hwnd: HWND,
 ) -> Result<ActiveWindowContextPayload, String> {
-    let process_path = get_process_path(hwnd);
+    let process_id = get_process_id(hwnd);
+    let process_path = process_id.and_then(get_process_path);
     let app_name = process_path
         .as_deref()
         .and_then(extract_process_stem)
@@ -188,6 +189,7 @@ fn read_lightweight_window_context_for_hwnd(
     Ok(ActiveWindowContextPayload {
         app_name,
         process_path,
+        process_id,
         title,
         url: None,
         browser_kind: browser_kind.to_string(),
@@ -201,6 +203,7 @@ fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
         read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
             app_name: "unknown".to_string(),
             process_path: None,
+            process_id: None,
             title: None,
             url: None,
             browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
@@ -457,7 +460,7 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
 fn should_refresh_window_context_url(context: &ActiveWindowContextPayload) -> bool {
     matches!(
         context.browser_kind.as_str(),
-        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER
+        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_UNSUPPORTED_BROWSER
     )
 }
 
@@ -472,7 +475,7 @@ fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> St
 
 fn read_url_for_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) -> Option<String> {
     match context.browser_kind.as_str() {
-        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => {
+        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_UNSUPPORTED_BROWSER => {
             read_browser_url_via_uia(hwnd)
         }
         _ => None,
@@ -483,24 +486,12 @@ fn classify_browser_kind(app_name: &str) -> &'static str {
     match app_name.to_ascii_lowercase().as_str() {
         "chrome" => BROWSER_KIND_CHROME,
         "msedge" => BROWSER_KIND_EDGE,
-        "firefox" | "opera" | "brave" | "vivaldi" => BROWSER_KIND_OTHER_BROWSER,
+        "firefox" | "opera" | "brave" | "vivaldi" => BROWSER_KIND_UNSUPPORTED_BROWSER,
         _ => BROWSER_KIND_NON_BROWSER,
     }
 }
 
-fn get_process_path(hwnd: HWND) -> Option<String> {
-    let process_handle = open_process(hwnd)?;
-    let path = get_module_file_name(process_handle)
-        .or_else(|| get_query_process_image_name(process_handle));
-
-    unsafe {
-        let _ = CloseHandle(process_handle);
-    }
-
-    path
-}
-
-fn open_process(hwnd: HWND) -> Option<HANDLE> {
+fn get_process_id(hwnd: HWND) -> Option<u32> {
     let process_id = unsafe {
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
@@ -511,6 +502,22 @@ fn open_process(hwnd: HWND) -> Option<HANDLE> {
         return None;
     }
 
+    Some(process_id)
+}
+
+fn get_process_path(process_id: u32) -> Option<String> {
+    let process_handle = open_process(process_id)?;
+    let path = get_module_file_name(process_handle)
+        .or_else(|| get_query_process_image_name(process_handle));
+
+    unsafe {
+        let _ = CloseHandle(process_handle);
+    }
+
+    path
+}
+
+fn open_process(process_id: u32) -> Option<HANDLE> {
     unsafe {
         OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
