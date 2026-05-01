@@ -18,8 +18,8 @@ import {
 } from "@/rpc/methods";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
-  hydrateDesktopRuntimeDefaults,
   hydrateDesktopSettings,
+  loadDesktopRuntimeDefaultsSnapshot,
   loadSettings,
   saveSettings,
   type DesktopSettingsData,
@@ -31,6 +31,7 @@ export type ControlPanelData = {
   settings: DesktopSettingsData;
   inspector: AgentTaskInspectorConfigGetResult;
   securitySummary: AgentSecuritySummaryGetResult["summary"];
+  runtimeWorkspacePath: string | null;
   providerApiKeyInput: string;
   source: ControlPanelSource;
   warnings?: string[];
@@ -318,8 +319,8 @@ function createRequestMeta(): RequestMeta {
  */
 async function loadControlPanelRpcSnapshot(
   timeoutMs: number = CONTROL_PANEL_RPC_TIMEOUT_MS,
-): Promise<Pick<ControlPanelData, "inspector" | "securitySummary" | "settings">> {
-  await hydrateDesktopRuntimeDefaults();
+): Promise<Pick<ControlPanelData, "inspector" | "runtimeWorkspacePath" | "securitySummary" | "settings">> {
+  const runtimeDefaults = await loadDesktopRuntimeDefaultsSnapshot();
   const requestMeta = createRequestMeta();
   const localSettings = loadSettings().settings;
   const [settingsResult, inspectorResult, securityResult] = await Promise.all([
@@ -337,6 +338,7 @@ async function loadControlPanelRpcSnapshot(
     settings: effectiveSettings,
     inspector: inspectorResult,
     securitySummary: securityResult.summary,
+    runtimeWorkspacePath: runtimeDefaults?.workspace_path ?? null,
   };
 }
 

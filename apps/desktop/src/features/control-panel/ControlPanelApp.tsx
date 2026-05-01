@@ -37,7 +37,7 @@ import {
   type ControlPanelModelValidationOptions,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
-import { loadHydratedSettings } from "@/services/settingsService";
+import { loadDesktopRuntimeDefaultsSnapshot, loadHydratedSettings } from "@/services/settingsService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -47,6 +47,7 @@ import {
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
+import { openDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
 import { ensureOnboardingWindow } from "@/platform/onboardingWindowController";
 import "./controlPanel.css";
@@ -324,11 +325,13 @@ function buildLocalInspectorFallback(settings: ControlPanelData["settings"]): Co
  */
 async function buildLocalControlPanelSnapshot(): Promise<ControlPanelData> {
   const settings = (await loadHydratedSettings()).settings;
+  const runtimeDefaults = await loadDesktopRuntimeDefaultsSnapshot();
 
   return {
     settings,
     inspector: buildLocalInspectorFallback(settings),
     providerApiKeyInput: "",
+    runtimeWorkspacePath: runtimeDefaults?.workspace_path ?? null,
     securitySummary: {
       security_status: "execution_error",
       pending_authorizations: 0,
@@ -608,6 +611,7 @@ function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPane
     ...base,
     inspector: result.savedInspector ? result.effectiveInspector : base.inspector,
     providerApiKeyInput: result.savedSettings ? "" : base.providerApiKeyInput,
+    runtimeWorkspacePath: base.runtimeWorkspacePath,
     settings: nextSettings,
     source: result.source,
     warnings: result.warnings,
@@ -628,6 +632,7 @@ export function ControlPanelApp() {
   // About actions only affect local clipboard/help affordances, so their
   // feedback must stay in local UI state instead of polluting formal settings.
   const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
+  const [workspaceActionFeedback, setWorkspaceActionFeedback] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -836,6 +841,9 @@ export function ControlPanelApp() {
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
   const onboardingReplayDisabled = isSaving || isRunningInspection || isReplayingOnboarding;
+  const runtimeWorkspacePath = draft.runtimeWorkspacePath?.trim() ?? "";
+  const runtimeWorkspacePathLabel = runtimeWorkspacePath || "当前运行时工作区暂不可用";
+  const canOpenRuntimeWorkspace = runtimeWorkspacePath.length > 0;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -883,6 +891,22 @@ export function ControlPanelApp() {
     setDraft(panelData);
     setSaveFeedback("已恢复为上次载入的设置快照。");
     setModelValidationFeedback(null);
+    setWorkspaceActionFeedback(null);
+  };
+
+  const handleOpenCurrentWorkspaceDirectory = async () => {
+    if (!canOpenRuntimeWorkspace) {
+      setWorkspaceActionFeedback("当前运行时工作区暂不可用。");
+      return;
+    }
+
+    try {
+      await openDesktopLocalPath(runtimeWorkspacePath);
+      setWorkspaceActionFeedback("已在系统中打开当前工作区目录。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "打开当前工作区目录失败。";
+      setWorkspaceActionFeedback(`打开当前工作区目录失败：${message}`);
+    }
   };
 
   const handleValidateModel = async (options: ControlPanelModelValidationOptions = {}) => {
@@ -1121,24 +1145,32 @@ export function ControlPanelApp() {
               </ControlLine>
             </SettingsCard>
 
-            <SettingsCard title="工作区与下载" description="变更后仅影响后续新生成的文件位置。">
-              <ControlLine label="工作区路径" hint="任务文档与生成文件默认写入的本地位置。">
-                <TextField.Root
-                  className="control-panel-shell__input"
-                  value={draft.settings.general.download.workspace_path}
-                  onChange={(event) =>
-                    updateSettings((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        general: {
-                          ...current.settings.general,
-                          download: { ...current.settings.general.download, workspace_path: event.target.value },
-                        },
-                      },
-                    }))
-                  }
-                />
+            <SettingsCard title="工作区与下载" description="当前目录以后端当前运行时为准，仅影响本地打开范围与后续文件默认落盘语义。">
+              <ControlLine
+                label="当前工作区目录"
+                hint="这里展示桌面端当前实际生效的工作区目录；待重启的 settings 草稿不会改变本地打开范围。"
+                className="control-panel-shell__row--stacked"
+              >
+                <div className="control-panel-shell__path-stack">
+                  <code className="control-panel-shell__path-value">{runtimeWorkspacePathLabel}</code>
+                  <div className="control-panel-shell__path-actions">
+                    <Button
+                      type="button"
+                      variant="soft"
+                      color="gray"
+                      className="control-panel-shell__button control-panel-shell__button--ghost"
+                      onClick={() => void handleOpenCurrentWorkspaceDirectory()}
+                      disabled={!canOpenRuntimeWorkspace}
+                    >
+                      打开当前目录
+                    </Button>
+                  </div>
+                  {workspaceActionFeedback ? (
+                    <Text as="p" size="2" className="control-panel-shell__action-feedback control-panel-shell__path-feedback" aria-live="polite">
+                      {workspaceActionFeedback}
+                    </Text>
+                  ) : null}
+                </div>
               </ControlLine>
 
               <ToggleLine

@@ -392,14 +392,22 @@ function loadNoteSourceServiceModule(
   );
 }
 
-function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
+function loadControlPanelServiceModule(
+  rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
+) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/controlPanelService.ts");
+    const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[settingsModulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
       loadControlPanelData: () => Promise<{
         source: "rpc";
+        runtimeWorkspacePath: string | null;
         settings: {
           general: {
             voice_type: string;
@@ -517,7 +525,7 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
         tool_calling_ready: boolean;
       }>;
     };
-  }, rpcMethods);
+  }, rpcMethods, undefined, desktopHost);
 }
 
 function loadControlPanelAboutServiceModule() {
@@ -2477,6 +2485,18 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
 });
 
+test("control panel workspace section opens the trusted runtime directory instead of editing draft paths", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /loadDesktopRuntimeDefaultsSnapshot/);
+  assert.match(controlPanelAppSource, /openDesktopLocalPath/);
+  assert.match(controlPanelAppSource, /const handleOpenCurrentWorkspaceDirectory = async \(\) =>/);
+  assert.match(controlPanelAppSource, /runtimeWorkspacePathLabel/);
+  assert.match(controlPanelAppSource, /打开当前目录/);
+  assert.doesNotMatch(controlPanelAppSource, /value=\{draft\.settings\.general\.download\.workspace_path\}/);
+  assert.doesNotMatch(controlPanelAppSource, /workspace_path: event\.target\.value/);
+});
+
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule();
@@ -2696,6 +2716,138 @@ test("dashboard settings mutation reloads only the touched memory scope after rp
     assert.equal(result.source, "rpc");
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel data keeps the trusted runtime workspace separate from the formal settings snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadControlPanelData } = loadControlPanelServiceModule(
+      {
+        getSecuritySummary: async () => ({
+          summary: {
+            security_status: "normal",
+            pending_authorizations: 0,
+            latest_restore_point: null,
+            token_cost_summary: {
+              current_task_tokens: 0,
+              current_task_cost: 0,
+              today_tokens: 0,
+              today_cost: 0,
+              single_task_limit: 50000,
+              daily_limit: 300000,
+              budget_auto_downgrade: true,
+            },
+          },
+        }),
+        getSettings: async () => ({
+          settings: {
+            general: {
+              language: "zh-CN",
+              auto_launch: true,
+              theme_mode: "follow_system",
+              voice_notification_enabled: true,
+              voice_type: "default_female",
+              download: {
+                workspace_path: "D:/pending-workspace",
+                ask_before_save_each_file: true,
+              },
+            },
+            floating_ball: {
+              auto_snap: true,
+              idle_translucent: true,
+              position_mode: "draggable",
+              size: "medium",
+            },
+            memory: {
+              enabled: true,
+              lifecycle: "30d",
+              work_summary_interval: { unit: "day", value: 7 },
+              profile_refresh_interval: { unit: "week", value: 2 },
+            },
+            task_automation: {
+              inspect_on_startup: true,
+              inspect_on_file_change: true,
+              inspection_interval: { unit: "minute", value: 15 },
+              task_sources: ["D:/pending-workspace/todos"],
+              remind_before_deadline: true,
+              remind_when_stale: false,
+            },
+            models: {
+              provider: "openai",
+              credentials: {
+                budget_auto_downgrade: true,
+                provider_api_key_configured: false,
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-4.1-mini",
+                stronghold: {
+                  backend: "stronghold",
+                  available: true,
+                  fallback: false,
+                  initialized: true,
+                  formal_store: true,
+                },
+              },
+            },
+          },
+        }),
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["D:/pending-workspace/todos"],
+          inspection_interval: { unit: "minute", value: 15 },
+          inspect_on_file_change: true,
+          inspect_on_startup: true,
+          remind_before_deadline: true,
+          remind_when_stale: false,
+        }),
+      },
+      {
+        invoke: async (command) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime-workspace",
+              task_sources: ["D:/runtime-workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop host command: ${command}`);
+        },
+      },
+    );
+
+    const loaded = await loadControlPanelData();
+
+    assert.equal(loaded.runtimeWorkspacePath, "D:/runtime-workspace");
+    assert.equal(loaded.settings.general.download.workspace_path, "D:/pending-workspace");
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");

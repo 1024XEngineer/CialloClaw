@@ -632,6 +632,38 @@
   width: 100%;
 }
 
+.control-panel-shell__path-stack {
+  display: grid;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.control-panel-shell__path-value {
+  background: color-mix(in srgb, var(--cp-paper-soft) 72%, white 28%);
+  border: 1px solid color-mix(in srgb, var(--cp-line) 78%, white 22%);
+  border-radius: 1rem;
+  color: var(--cp-copy);
+  display: block;
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 0.8rem 0.95rem;
+  word-break: break-word;
+}
+
+.control-panel-shell__path-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.control-panel-shell__path-feedback {
+  text-align: right;
+}
+
 .control-panel-shell__about-actions {
   display: flex;
   flex-wrap: wrap;
