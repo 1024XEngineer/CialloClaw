@@ -2665,6 +2665,17 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
 });
 
+test("control panel keeps budget rows in the safety page instead of duplicating them", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /title="模型与安全摘要"/);
+  assert.match(controlPanelAppSource, /label="安全状态"/);
+  assert.match(controlPanelAppSource, /label="待确认授权"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="今日成本"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="单任务上限"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="当日上限"/);
+});
+
 test("control panel restore-default helper preserves workspace and task-source boundaries", () => {
   const { buildControlPanelRestoreDefaultsData } = loadControlPanelServiceModule();
 

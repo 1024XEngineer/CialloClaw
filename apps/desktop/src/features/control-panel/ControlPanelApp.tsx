@@ -1646,31 +1646,11 @@ export function ControlPanelApp() {
               </SettingsCard>
             </div>
 
-            <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
+            <SettingsCard title="模型与安全摘要" description="查看当前模型路由、API Key 状态与安全摘要。">
               <InfoRow label="当前模型" value={draft.settings.models.model} />
               <InfoRow label="API Key 状态" value={providerApiKeyStatus} />
               <InfoRow label="安全状态" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.security_status} />
               <InfoRow label="待确认授权" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.pending_authorizations} />
-              <InfoRow
-                label="今日成本"
-                value={hasRpcLoadError ? "暂不可用" : `¥${draft.securitySummary.token_cost_summary.today_cost.toFixed(2)}`}
-              />
-              <InfoRow
-                label="单任务上限"
-                value={
-                  hasRpcLoadError
-                    ? "暂不可用"
-                    : `${draft.securitySummary.token_cost_summary.single_task_limit.toLocaleString("zh-CN")} tokens`
-                }
-              />
-              <InfoRow
-                label="当日上限"
-                value={
-                  hasRpcLoadError
-                    ? "暂不可用"
-                    : `${draft.securitySummary.token_cost_summary.daily_limit.toLocaleString("zh-CN")} tokens`
-                }
-              />
             </SettingsCard>
           </>
         );
