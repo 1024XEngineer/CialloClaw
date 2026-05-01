@@ -46,6 +46,28 @@ test("mapDesktopWindowSnapshotToPageContext returns undefined when no snapshot e
   assert.equal(mapDesktopWindowSnapshotToPageContext(null), undefined);
 });
 
+test("mapDesktopWindowSnapshotToPageContext keeps the legacy other_browser wire value", () => {
+  assert.deepEqual(
+    mapDesktopWindowSnapshotToPageContext({
+      app_name: "Firefox",
+      browser_kind: "other_browser",
+      process_id: 9001,
+      process_path: "C:/Program Files/Mozilla Firefox/firefox.exe",
+      title: "Release Notes",
+      url: "https://example.com/release-notes?ref=feed#summary",
+    }),
+    {
+      app_name: "Firefox",
+      browser_kind: "other_browser",
+      process_id: 9001,
+      process_path: "C:/Program Files/Mozilla Firefox/firefox.exe",
+      title: "Release Notes",
+      url: "https://example.com/release-notes",
+      window_title: "Release Notes",
+    },
+  );
+});
+
 test("compactPageContext drops empty fields and invalid process ids", () => {
   assert.deepEqual(
     compactPageContext({

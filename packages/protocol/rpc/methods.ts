@@ -141,7 +141,7 @@ export interface PageContext {
   title?: string;
   app_name?: string;
   url?: string;
-  browser_kind?: "chrome" | "edge" | "unsupported_browser" | "non_browser";
+  browser_kind?: "chrome" | "edge" | "other_browser" | "non_browser";
   process_path?: string;
   process_id?: number;
   window_title?: string;

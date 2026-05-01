@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const BROWSER_KIND_CHROME: &str = "chrome";
 const BROWSER_KIND_EDGE: &str = "edge";
-const BROWSER_KIND_UNSUPPORTED_BROWSER: &str = "unsupported_browser";
+const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
 const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
@@ -460,7 +460,7 @@ fn schedule_window_context_url_refresh(hwnd: HWND, context: &ActiveWindowContext
 fn should_refresh_window_context_url(context: &ActiveWindowContextPayload) -> bool {
     matches!(
         context.browser_kind.as_str(),
-        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_UNSUPPORTED_BROWSER
+        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER
     )
 }
 
@@ -475,7 +475,7 @@ fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> St
 
 fn read_url_for_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) -> Option<String> {
     match context.browser_kind.as_str() {
-        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_UNSUPPORTED_BROWSER => {
+        BROWSER_KIND_CHROME | BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => {
             read_browser_url_via_uia(hwnd)
         }
         _ => None,
@@ -486,7 +486,7 @@ fn classify_browser_kind(app_name: &str) -> &'static str {
     match app_name.to_ascii_lowercase().as_str() {
         "chrome" => BROWSER_KIND_CHROME,
         "msedge" => BROWSER_KIND_EDGE,
-        "firefox" | "opera" | "brave" | "vivaldi" => BROWSER_KIND_UNSUPPORTED_BROWSER,
+        "firefox" | "opera" | "brave" | "vivaldi" => BROWSER_KIND_OTHER_BROWSER,
         _ => BROWSER_KIND_NON_BROWSER,
     }
 }
@@ -564,7 +564,7 @@ mod tests {
     use super::{
         classify_browser_kind, should_refresh_window_context_url, ActiveWindowContextPayload,
         BROWSER_KIND_CHROME, BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER,
-        BROWSER_KIND_UNSUPPORTED_BROWSER,
+        BROWSER_KIND_OTHER_BROWSER,
     };
 
     fn build_context(browser_kind: &str) -> ActiveWindowContextPayload {
@@ -584,14 +584,8 @@ mod tests {
     fn classify_browser_kind_distinguishes_supported_and_unsupported_targets() {
         assert_eq!(classify_browser_kind("chrome"), BROWSER_KIND_CHROME);
         assert_eq!(classify_browser_kind("msedge"), BROWSER_KIND_EDGE);
-        assert_eq!(
-            classify_browser_kind("firefox"),
-            BROWSER_KIND_UNSUPPORTED_BROWSER
-        );
-        assert_eq!(
-            classify_browser_kind("brave"),
-            BROWSER_KIND_UNSUPPORTED_BROWSER
-        );
+        assert_eq!(classify_browser_kind("firefox"), BROWSER_KIND_OTHER_BROWSER);
+        assert_eq!(classify_browser_kind("brave"), BROWSER_KIND_OTHER_BROWSER);
         assert_eq!(classify_browser_kind("notepad"), BROWSER_KIND_NON_BROWSER);
     }
 
@@ -604,7 +598,7 @@ mod tests {
             BROWSER_KIND_EDGE
         )));
         assert!(should_refresh_window_context_url(&build_context(
-            BROWSER_KIND_UNSUPPORTED_BROWSER,
+            BROWSER_KIND_OTHER_BROWSER,
         )));
         assert!(!should_refresh_window_context_url(&build_context(
             BROWSER_KIND_NON_BROWSER

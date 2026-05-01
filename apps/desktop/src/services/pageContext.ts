@@ -2,7 +2,7 @@ import type { PageContext } from "@cialloclaw/protocol";
 
 export type DesktopWindowPageContextSnapshot = {
   app_name: string;
-  browser_kind: "chrome" | "edge" | "unsupported_browser" | "non_browser";
+  browser_kind: "chrome" | "edge" | "other_browser" | "non_browser";
   process_path: string | null;
   process_id: number | null;
   title: string | null;
