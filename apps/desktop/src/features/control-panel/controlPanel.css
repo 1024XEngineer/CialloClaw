@@ -649,6 +649,17 @@
   word-break: break-all;
 }
 
+.control-panel-shell__about-note {
+  color: var(--cp-copy);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.control-panel-shell__about-confirm {
+  display: grid;
+  gap: 0.85rem;
+}
+
 .control-panel-shell__feedback-grid {
   display: grid;
   gap: 0.9rem;

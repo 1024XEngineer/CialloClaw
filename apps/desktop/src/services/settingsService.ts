@@ -51,6 +51,10 @@ type StoredDesktopSettings = {
 };
 
 function loadRuntimeDefaults(): DesktopRuntimeDefaults | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
   const stored = loadStoredValue<DesktopRuntimeDefaults>(RUNTIME_DEFAULTS_KEY);
   if (!stored || typeof stored.workspace_path !== "string") {
     return null;
@@ -137,6 +141,16 @@ function createDefaultSettings(): DesktopSettings {
       },
     },
   };
+}
+
+/**
+ * Builds the default desktop settings snapshot using the latest cached runtime
+ * defaults so local reset flows stay aligned with the packaged host baseline.
+ *
+ * @returns The default desktop settings snapshot.
+ */
+export function buildDefaultDesktopSettingsSnapshot(): DesktopSettings {
+  return createDefaultSettings();
 }
 
 // The desktop control panel keeps a flat local `models` view while the formal

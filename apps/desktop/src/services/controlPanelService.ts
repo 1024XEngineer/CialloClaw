@@ -18,6 +18,7 @@ import {
 } from "@/rpc/methods";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
+  buildDefaultDesktopSettingsSnapshot,
   hydrateDesktopRuntimeDefaults,
   hydrateDesktopSettings,
   loadSettings,
@@ -169,6 +170,52 @@ function mergeProtocolSettings(
           }
         : base.models,
     }),
+  };
+}
+
+/**
+ * Builds a restore-defaults draft while preserving workspace-bound task sources
+ * and any already-saved provider secret state that lives outside the ordinary
+ * settings snapshot.
+ *
+ * @param current The current control-panel draft.
+ * @returns A draft aligned with desktop defaults and preserved boundary fields.
+ */
+export function buildControlPanelRestoreDefaultsData(current: ControlPanelData): ControlPanelData {
+  const defaultSettings = buildDefaultDesktopSettingsSnapshot().settings;
+  const preservedTaskSources = current.inspector.task_sources;
+
+  return {
+    ...current,
+    inspector: {
+      task_sources: preservedTaskSources,
+      inspection_interval: defaultSettings.task_automation.inspection_interval,
+      inspect_on_file_change: defaultSettings.task_automation.inspect_on_file_change,
+      inspect_on_startup: defaultSettings.task_automation.inspect_on_startup,
+      remind_before_deadline: defaultSettings.task_automation.remind_before_deadline,
+      remind_when_stale: defaultSettings.task_automation.remind_when_stale,
+    },
+    providerApiKeyInput: "",
+    settings: {
+      ...defaultSettings,
+      general: {
+        ...defaultSettings.general,
+        download: {
+          ...defaultSettings.general.download,
+          workspace_path: current.settings.general.download.workspace_path,
+        },
+      },
+      task_automation: {
+        ...defaultSettings.task_automation,
+        task_sources: preservedTaskSources,
+      },
+      models: {
+        ...defaultSettings.models,
+        provider_api_key_configured: current.settings.models.provider_api_key_configured,
+        stronghold: current.settings.models.stronghold,
+      },
+    },
+    warnings: [],
   };
 }
 

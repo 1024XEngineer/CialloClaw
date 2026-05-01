@@ -28,6 +28,7 @@ import {
   type ControlPanelAboutSnapshot,
 } from "@/services/controlPanelAboutService";
 import {
+  buildControlPanelRestoreDefaultsData,
   ControlPanelSaveError,
   loadControlPanelData,
   runControlPanelInspection,
@@ -628,6 +629,7 @@ export function ControlPanelApp() {
   // About actions only affect local clipboard/help affordances, so their
   // feedback must stay in local UI state instead of polluting formal settings.
   const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
+  const [isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming] = useState(false);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -838,6 +840,7 @@ export function ControlPanelApp() {
   const onboardingReplayDisabled = isSaving || isRunningInspection || isReplayingOnboarding;
   const localDataPath = aboutSnapshot.localDataPath?.trim() ?? "";
   const localDataPathLabel = localDataPath || "当前本地存储目录暂不可用";
+  const restoreDefaultsDisabled = isSaving || isRunningInspection || isValidatingModel || isReplayingOnboarding;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -885,6 +888,20 @@ export function ControlPanelApp() {
     setDraft(panelData);
     setSaveFeedback("已恢复为上次载入的设置快照。");
     setModelValidationFeedback(null);
+    setIsRestoreDefaultsConfirming(false);
+  };
+
+  const handlePrepareRestoreDefaults = () => {
+    if (restoreDefaultsDisabled) {
+      return;
+    }
+
+    setIsRestoreDefaultsConfirming(true);
+    setSaveFeedback(null);
+  };
+
+  const handleCancelRestoreDefaults = () => {
+    setIsRestoreDefaultsConfirming(false);
   };
 
   const handleValidateModel = async (options: ControlPanelModelValidationOptions = {}) => {
@@ -990,6 +1007,47 @@ export function ControlPanelApp() {
       setSaveFeedback(errorMessage);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleRestoreDefaults = async () => {
+    if (restoreDefaultsDisabled) {
+      return;
+    }
+
+    const restoreDraft = buildControlPanelRestoreDefaultsData(draft);
+
+    setIsSaving(true);
+    try {
+      const result = await saveControlPanelData(restoreDraft, {
+        confirmedInspector: panelData.inspector,
+        saveInspector: true,
+        saveSettings: true,
+        validateModel: false,
+      });
+      const nextPanelData = applyControlPanelSaveResult(restoreDraft, result);
+      const nextDraft = applyControlPanelSaveResult(restoreDraft, result);
+      setLoadError(null);
+      setPanelData(nextPanelData);
+      setDraft(nextDraft);
+      setSaveFeedback(`已恢复默认设置。${getApplyModeCopy(result.applyMode, result.needRestart)}`);
+      setModelValidationFeedback(null);
+    } catch (error) {
+      if (error instanceof ControlPanelSaveError && error.partialResult) {
+        const nextPanelData = applyControlPanelSaveResult(restoreDraft, error.partialResult);
+        const nextDraft = applyControlPanelSaveResult(restoreDraft, error.partialResult);
+        setPanelData(nextPanelData);
+        setDraft(nextDraft);
+      }
+
+      const errorMessage = error instanceof Error ? error.message : "恢复默认设置失败。";
+      if (shouldSurfaceRpcErrorBanner(errorMessage)) {
+        setLoadError(errorMessage);
+      }
+      setSaveFeedback(errorMessage);
+    } finally {
+      setIsSaving(false);
+      setIsRestoreDefaultsConfirming(false);
     }
   };
 
@@ -1669,6 +1727,57 @@ export function ControlPanelApp() {
             <SettingsCard title="版本信息" description="查看当前桌面端版本号。">
               <InfoRow label="产品名称" value={aboutSnapshot.appName} />
               <InfoRow label="应用版本" value={aboutSnapshot.appVersion} />
+            </SettingsCard>
+
+            <SettingsCard title="恢复默认设置" description="将桌面端普通设置恢复到默认值，同时保留当前 workspace、任务来源与已保存 API Key。">
+              <Text as="p" size="2" className="control-panel-shell__about-note">
+                恢复默认设置不会删除任务历史、记忆、本地文件，也不会重置当前 workspace 路径、任务来源或清除已保存 API Key。
+              </Text>
+
+              {isRestoreDefaultsConfirming ? (
+                <div className="control-panel-shell__about-confirm">
+                  <Text as="p" size="2" className="control-panel-shell__about-note">
+                    确认后会立即提交默认设置；模型路由相关变更仍按后端当前 `apply_mode` 规则生效。
+                  </Text>
+                  <div className="control-panel-shell__about-actions">
+                    <Button
+                      type="button"
+                      variant="soft"
+                      color="amber"
+                      className="control-panel-shell__about-button"
+                      onClick={() => void handleRestoreDefaults()}
+                      disabled={restoreDefaultsDisabled}
+                    >
+                      确认恢复默认设置
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="soft"
+                      color="gray"
+                      className="control-panel-shell__about-button"
+                      onClick={handleCancelRestoreDefaults}
+                      disabled={restoreDefaultsDisabled}
+                    >
+                      取消
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <ControlLine label="恢复操作" hint="这里只重置普通设置，不会改动当前 workspace、任务来源或已保存 API Key。" className="control-panel-shell__row--stacked">
+                  <div className="control-panel-shell__about-actions">
+                    <Button
+                      type="button"
+                      variant="soft"
+                      color="gray"
+                      className="control-panel-shell__about-button"
+                      onClick={handlePrepareRestoreDefaults}
+                      disabled={restoreDefaultsDisabled}
+                    >
+                      恢复默认设置
+                    </Button>
+                  </div>
+                </ControlLine>
+              )}
             </SettingsCard>
 
           </>
