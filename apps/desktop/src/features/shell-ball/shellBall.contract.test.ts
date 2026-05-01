@@ -2473,6 +2473,19 @@ test("task-entry services keep rpc transport failures visible and forward file d
         source: "floating_ball",
       });
 
+      await service.startTaskFromErrorSignal("  stack trace  ", {
+        pageContext: {
+          app_name: "Chrome",
+          browser_kind: "chrome",
+          process_id: 4412,
+          process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
+        },
+        sessionId: "sess_shell_ball_error",
+        source: "floating_ball",
+      });
+
       assert.equal(startTaskCalls[1]?.session_id, "sess_shell_ball_selection");
       assert.equal(startTaskCalls[1]?.trigger, "text_selected_click");
       assert.deepEqual(startTaskCalls[1]?.input, {
@@ -2488,11 +2501,26 @@ test("task-entry services keep rpc transport failures visible and forward file d
         },
       });
 
+      assert.equal(startTaskCalls[2]?.session_id, "sess_shell_ball_error");
+      assert.equal(startTaskCalls[2]?.trigger, "error_detected");
+      assert.deepEqual(startTaskCalls[2]?.input, {
+        type: "error",
+        error_message: "stack trace",
+        page_context: {
+          app_name: "Chrome",
+          browser_kind: "chrome",
+          process_id: 4412,
+          process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
+        },
+      });
+
       await service.bootstrapTask("  summarize this  ");
     },
   );
 
-  assert.equal(startTaskCalls.length, 2);
+  assert.equal(startTaskCalls.length, 3);
   assert.equal(bootstrapSubmitCalls.length, 1);
   assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
 
@@ -7024,6 +7052,49 @@ test("shell-ball selected-text prompt only surfaces in resting states", () => {
         updated_at: "2026-04-16T10:00:00.000Z",
       },
       visualState: "processing",
+    }),
+    false,
+  );
+});
+
+test("shell-ball selection snapshot equality includes browser attach hints", () => {
+  const left = {
+    text: "selected text",
+    page_context: {
+      title: "A",
+      url: "native://windows-uia-selection",
+      app_name: "notepad",
+      browser_kind: "non_browser" as const,
+      process_path: "C:/Windows/System32/notepad.exe",
+      process_id: 8844,
+    },
+    source: "windows_uia" as const,
+    updated_at: "1",
+  };
+  const right = {
+    text: "selected text",
+    page_context: {
+      title: "A",
+      url: "native://windows-uia-selection",
+      app_name: "notepad",
+      browser_kind: "non_browser" as const,
+      process_path: "C:/Windows/System32/notepad.exe",
+      process_id: 8844,
+    },
+    source: "windows_uia" as const,
+    updated_at: "2",
+  };
+
+  assert.equal(areShellBallSelectionSnapshotsEqual(left, right), true);
+  assert.equal(
+    areShellBallSelectionSnapshotsEqual(left, {
+      ...right,
+      page_context: {
+        ...right.page_context,
+        browser_kind: "chrome" as const,
+        process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        process_id: 4412,
+      },
     }),
     false,
   );
