@@ -10,6 +10,7 @@ import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
 import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import { resolveTaskPageContext } from "./pageContext";
 
 type StartTaskContext = {
   context?: InputContext;
@@ -37,44 +38,6 @@ function normalizeTaskInputText(value: string | undefined) {
   return trimmed === "" ? undefined : trimmed;
 }
 
-function normalizeOptionalPageContextText(value: string | undefined) {
-  const trimmed = value?.trim() ?? "";
-  return trimmed === "" ? undefined : trimmed;
-}
-
-function compactTaskPageContext(pageContext: PageContext | undefined): PageContext | undefined {
-  if (!pageContext) {
-    return undefined;
-  }
-
-  const appName = normalizeOptionalPageContextText(pageContext.app_name);
-  const title = normalizeOptionalPageContextText(pageContext.title);
-  const url = normalizeOptionalPageContextText(pageContext.url);
-  const processPath = normalizeOptionalPageContextText(pageContext.process_path);
-  const windowTitle = normalizeOptionalPageContextText(pageContext.window_title);
-  const visibleText = normalizeOptionalPageContextText(pageContext.visible_text);
-  const hoverTarget = normalizeOptionalPageContextText(pageContext.hover_target);
-  const compacted: PageContext = {
-    ...(appName ? { app_name: appName } : {}),
-    ...(title ? { title } : {}),
-    ...(url ? { url } : {}),
-    ...(pageContext.browser_kind ? { browser_kind: pageContext.browser_kind } : {}),
-    ...(processPath ? { process_path: processPath } : {}),
-    ...(Number.isInteger(pageContext.process_id) && (pageContext.process_id ?? 0) > 0
-      ? { process_id: pageContext.process_id }
-      : {}),
-    ...(windowTitle ? { window_title: windowTitle } : {}),
-    ...(visibleText ? { visible_text: visibleText } : {}),
-    ...(hoverTarget ? { hover_target: hoverTarget } : {}),
-  };
-
-  return Object.keys(compacted).length > 0 ? compacted : undefined;
-}
-
-function resolveTaskPageContext(pageContext: PageContext | undefined) {
-  return compactTaskPageContext(pageContext) ?? DEFAULT_TASK_PAGE_CONTEXT;
-}
-
 function resolveTaskSessionId(sessionId: string | undefined) {
   return sessionId?.trim() || getCurrentConversationSessionId();
 }
@@ -94,7 +57,7 @@ export async function startTaskFromSelectedText(text: string, context: StartTask
     input: {
       type: "text_selection",
       text: normalizedText,
-      page_context: resolveTaskPageContext(context.pageContext),
+      page_context: resolveTaskPageContext(context.pageContext, DEFAULT_TASK_PAGE_CONTEXT),
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -124,7 +87,7 @@ export async function startTaskFromFiles(files: string[], context: StartTaskCont
       type: "file",
       ...(normalizedText === undefined ? {} : { text: normalizedText }),
       files: normalizedFiles,
-      page_context: resolveTaskPageContext(context.pageContext),
+      page_context: resolveTaskPageContext(context.pageContext, DEFAULT_TASK_PAGE_CONTEXT),
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -151,7 +114,7 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
     input: {
       type: "error",
       error_message: normalizedMessage,
-      page_context: resolveTaskPageContext(context.pageContext),
+      page_context: resolveTaskPageContext(context.pageContext, DEFAULT_TASK_PAGE_CONTEXT),
     },
     context: context.context,
     delivery: context.delivery ?? {

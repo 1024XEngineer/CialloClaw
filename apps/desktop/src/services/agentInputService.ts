@@ -12,11 +12,13 @@ import {
   recordMirrorConversationSuccess,
 } from "./mirrorMemoryService";
 import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import {
+  mapDesktopWindowSnapshotToPageContext,
+  sanitizePageContextUrl,
+  type DesktopWindowPageContextSnapshot,
+} from "./pageContext";
 
-type DesktopWindowContextSnapshot = {
-  app_name: string;
-  title: string | null;
-  url: string | null;
+type DesktopWindowContextSnapshot = DesktopWindowPageContextSnapshot & {
   window_switch_count?: number | null;
   page_switch_count?: number | null;
 };
@@ -96,21 +98,7 @@ function createBaseInputContext(input: SubmitTextInputParams): InputContext {
 }
 
 function mapDesktopWindowPageContext(snapshot: DesktopWindowContextSnapshot | null): PageContext | undefined {
-  if (!snapshot) {
-    return undefined;
-  }
-
-  const sanitizedUrl = sanitizeDesktopContextUrl(snapshot.url);
-
-  return compactContextRecord<PageContext>({
-    app_name: snapshot.app_name,
-    browser_kind: snapshot.browser_kind,
-    process_path: snapshot.process_path ?? undefined,
-    process_id: snapshot.process_id ?? undefined,
-    title: snapshot.title ?? undefined,
-    url: sanitizedUrl,
-    window_title: snapshot.title ?? undefined,
-  });
+  return mapDesktopWindowSnapshotToPageContext(snapshot);
 }
 
 function mapDesktopWindowScreenContext(snapshot: DesktopWindowContextSnapshot | null): ScreenContext | undefined {
@@ -170,7 +158,7 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
 
   const appName = snapshot.app_name.trim();
   const title = snapshot.title?.trim() ?? "";
-  const url = sanitizeDesktopContextUrl(snapshot.url) ?? "";
+  const url = sanitizePageContextUrl(snapshot.url) ?? "";
 
   if (title !== "" && url !== "") {
     return `Foreground ${appName || "desktop"} page "${title}" is active at ${url}.`;
@@ -189,25 +177,6 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
   }
 
   return undefined;
-}
-
-function sanitizeDesktopContextUrl(rawUrl: string | null | undefined): string | undefined {
-  const normalizedUrl = rawUrl?.trim() ?? "";
-
-  if (normalizedUrl === "") {
-    return undefined;
-  }
-
-  try {
-    const parsedUrl = new URL(normalizedUrl);
-    parsedUrl.username = "";
-    parsedUrl.password = "";
-    parsedUrl.search = "";
-    parsedUrl.hash = "";
-    return parsedUrl.toString();
-  } catch {
-    return normalizedUrl.split(/[?#]/u, 1)[0]?.trim() || undefined;
-  }
 }
 
 function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
