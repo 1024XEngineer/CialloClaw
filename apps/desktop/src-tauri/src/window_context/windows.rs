@@ -559,6 +559,59 @@ fn get_query_process_image_name(process: HANDLE) -> Option<String> {
     Some(String::from_utf16_lossy(&buffer[..size as usize]))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_browser_kind, should_refresh_window_context_url, ActiveWindowContextPayload,
+        BROWSER_KIND_CHROME, BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER,
+        BROWSER_KIND_UNSUPPORTED_BROWSER,
+    };
+
+    fn build_context(browser_kind: &str) -> ActiveWindowContextPayload {
+        ActiveWindowContextPayload {
+            app_name: "browser".to_string(),
+            process_path: Some("C:/browser.exe".to_string()),
+            process_id: Some(42),
+            title: Some("Title".to_string()),
+            url: None,
+            browser_kind: browser_kind.to_string(),
+            window_switch_count: None,
+            page_switch_count: None,
+        }
+    }
+
+    #[test]
+    fn classify_browser_kind_distinguishes_supported_and_unsupported_targets() {
+        assert_eq!(classify_browser_kind("chrome"), BROWSER_KIND_CHROME);
+        assert_eq!(classify_browser_kind("msedge"), BROWSER_KIND_EDGE);
+        assert_eq!(
+            classify_browser_kind("firefox"),
+            BROWSER_KIND_UNSUPPORTED_BROWSER
+        );
+        assert_eq!(
+            classify_browser_kind("brave"),
+            BROWSER_KIND_UNSUPPORTED_BROWSER
+        );
+        assert_eq!(classify_browser_kind("notepad"), BROWSER_KIND_NON_BROWSER);
+    }
+
+    #[test]
+    fn refreshable_browser_kinds_match_the_supported_takeover_boundary() {
+        assert!(should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_CHROME
+        )));
+        assert!(should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_EDGE
+        )));
+        assert!(should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_UNSUPPORTED_BROWSER,
+        )));
+        assert!(!should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_NON_BROWSER
+        )));
+    }
+}
+
 fn extract_process_stem(path: &str) -> Option<String> {
     Path::new(path)
         .file_stem()
