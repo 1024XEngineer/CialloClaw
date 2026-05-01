@@ -619,6 +619,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.page`               | 当前页面上下文                 |
 | `context.page.title`         | 当前页面标题                   |
 | `context.page.url`           | 当前页面 URL                   |
+| `context.page.browser_kind`  | 当前浏览器分类，取值为 `chrome / edge / unsupported_browser / non_browser` |
+| `context.page.process_path`  | 当前宿主进程路径               |
+| `context.page.process_id`    | 当前宿主进程 ID                |
 | `context.page.app_name`      | 当前宿主应用名                 |
 | `context.page.window_title`  | 当前窗口标题                   |
 | `context.page.visible_text`  | 当前页面可见文本摘录           |
@@ -763,6 +766,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
 | `input.page_context.title` | 当前页面标题，可用于页面级任务标题与上下文冻结 |
 | `input.page_context.url`   | 当前页面 URL |
+| `input.page_context.browser_kind` | 当前浏览器分类，取值为 `chrome / edge / unsupported_browser / non_browser` |
+| `input.page_context.process_path` | 当前宿主进程路径 |
+| `input.page_context.process_id` | 当前宿主进程 ID |
 | `input.page_context.app_name` | 当前宿主应用名 |
 | `input.page_context.window_title` | 当前窗口标题 |
 | `input.page_context.visible_text` | 当前页面可见文本摘录 |
