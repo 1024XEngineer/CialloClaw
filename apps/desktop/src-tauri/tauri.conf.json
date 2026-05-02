@@ -10,10 +10,29 @@
     "beforeBuildCommand": "node ./src-tauri/scripts/runWithSidecar.mjs build"
   },
   "bundle": {
+    "active": true,
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "externalBin": [
+      "binaries/local-service"
+    ],
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "language": "zh-CN"
+      }
+    }
   },
   "app": {
     "windows": [
