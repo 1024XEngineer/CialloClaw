@@ -18,6 +18,9 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 				"title":        " Editor ",
 				"url":          " https://example.com/doc ",
 				"app_name":     " desktop ",
+				"browser_kind": " chrome ",
+				"process_path": " C:/Program Files/Google/Chrome/Application/chrome.exe ",
+				"process_id":   float64(4242),
 				"window_title": " Browser - Example ",
 				"visible_text": " visible paragraph ",
 			},
@@ -53,6 +56,9 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 	if snapshot.PageTitle != "Editor" || snapshot.PageURL != "https://example.com/doc" || snapshot.AppName != "desktop" {
 		t.Fatalf("expected page fields to be normalized, got %+v", snapshot)
 	}
+	if snapshot.BrowserKind != "chrome" || snapshot.ProcessPath != "C:/Program Files/Google/Chrome/Application/chrome.exe" || snapshot.ProcessID != 4242 {
+		t.Fatalf("expected browser attach hints to be normalized, got %+v", snapshot)
+	}
 	if snapshot.WindowTitle != "Browser - Example" || snapshot.VisibleText != "visible paragraph" || snapshot.ScreenSummary != "dashboard warning" {
 		t.Fatalf("expected richer perception fields to be normalized, got %+v", snapshot)
 	}
@@ -76,6 +82,9 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 				"title":        " Build Pipeline ",
 				"url":          " https://example.com/build ",
 				"app_name":     " Chrome ",
+				"browser_kind": " edge ",
+				"process_path": " C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe ",
+				"process_id":   float64(5150),
 				"window_title": " Build Pipeline - Browser ",
 			},
 		},
@@ -84,6 +93,9 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 				"title":        " Legacy Page Title ",
 				"url":          " https://example.com/legacy ",
 				"app_name":     " Legacy Browser ",
+				"browser_kind": " chrome ",
+				"process_path": " C:/Legacy/browser.exe ",
+				"process_id":   float64(99),
 				"window_title": " Legacy Window ",
 				"visible_text": " fallback visible text ",
 			},
@@ -102,6 +114,9 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 
 	if snapshot.PageTitle != "Build Pipeline" || snapshot.PageURL != "https://example.com/build" || snapshot.AppName != "Chrome" {
 		t.Fatalf("expected input.page_context to stay authoritative, got %+v", snapshot)
+	}
+	if snapshot.BrowserKind != "edge" || snapshot.ProcessPath != "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" || snapshot.ProcessID != 5150 {
+		t.Fatalf("expected input.page_context attach hints to stay authoritative, got %+v", snapshot)
 	}
 	if snapshot.WindowTitle != "Build Pipeline - Browser" {
 		t.Fatalf("expected input.page_context window title to win, got %+v", snapshot)
