@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import path from "node:path";
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process";
 import { fileURLToPath } from "node:url";
@@ -147,6 +148,34 @@ function normalizeComparableURL(url) {
   }
 }
 
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname ?? "").trim().toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+  return isIP(normalized) === 4 && normalized.startsWith("127.");
+}
+
+// normalizeAttachEndpointURL keeps the real-browser attach path bound to local
+// debugging targets, so issue-2 does not become a generic outbound CDP dialer.
+function normalizeAttachEndpointURL(rawEndpointURL) {
+  const endpointURL = normalizeOptionalString(rawEndpointURL) ?? defaultCDPEndpointURL;
+  let parsedURL;
+  try {
+    parsedURL = new URL(endpointURL);
+  } catch {
+    throw createStructuredWorkerError("invalid_input", "attach.endpoint_url must be a valid URL");
+  }
+
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsedURL.protocol)) {
+    throw createStructuredWorkerError("invalid_input", "attach.endpoint_url must use http, https, ws, or wss");
+  }
+  if (!isLoopbackHostname(parsedURL.hostname)) {
+    throw createStructuredWorkerError("invalid_input", "attach.endpoint_url must target a loopback host");
+  }
+  return endpointURL;
+}
+
 // resolveAttachConfig keeps the worker-side attach contract additive so the Go
 // runtime can keep using the legacy launch flow until issue-3 wiring lands.
 function resolveAttachConfig(request) {
@@ -174,7 +203,7 @@ function resolveAttachConfig(request) {
 
   return {
     browserKind,
-    endpointURL: normalizeOptionalString(attach.endpoint_url) ?? defaultCDPEndpointURL,
+    endpointURL: normalizeAttachEndpointURL(attach.endpoint_url),
     pageIndex,
     targetTitleContains: normalizeOptionalString(target.title_contains)?.toLowerCase(),
     targetURL: normalizeComparableURL(target.url ?? request?.url),

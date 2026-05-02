@@ -383,6 +383,29 @@ test("page_read reports invalid attach modes and browser kinds without throwing"
   }, createDeps());
   assert.equal(invalidPageIndex.ok, false);
   assert.equal(invalidPageIndex.error.code, "invalid_input");
+
+  const lifecycle = [];
+  const externalEndpoint = await handleRequest({
+    action: "page_read",
+    attach: {
+      browser_kind: "chrome",
+      endpoint_url: "http://example.com:9222",
+    },
+  }, createDeps({ lifecycle }));
+  assert.equal(externalEndpoint.ok, false);
+  assert.equal(externalEndpoint.error.code, "invalid_input");
+  assert.match(externalEndpoint.error.message, /loopback host/);
+  assert.deepEqual(lifecycle, []);
+
+  const invalidEndpoint = await handleRequest({
+    action: "page_read",
+    attach: {
+      browser_kind: "chrome",
+      endpoint_url: "not-a-url",
+    },
+  }, createDeps());
+  assert.equal(invalidEndpoint.ok, false);
+  assert.equal(invalidEndpoint.error.code, "invalid_input");
 });
 
 test("page_read reports attached browser resolution failures as structured errors", async () => {
