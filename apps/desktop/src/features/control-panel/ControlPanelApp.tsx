@@ -37,7 +37,7 @@ import {
   type ControlPanelModelValidationOptions,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
-import { loadSettings } from "@/services/settingsService";
+import { loadHydratedSettings } from "@/services/settingsService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -322,8 +322,8 @@ function buildLocalInspectorFallback(settings: ControlPanelData["settings"]): Co
  * Keeps the control-panel shell renderable when the RPC bootstrap fails by
  * falling back to the last persisted local snapshot under an explicit error banner.
  */
-function buildLocalControlPanelSnapshot(): ControlPanelData {
-  const settings = loadSettings().settings;
+async function buildLocalControlPanelSnapshot(): Promise<ControlPanelData> {
+  const settings = (await loadHydratedSettings()).settings;
 
   return {
     settings,
@@ -375,7 +375,7 @@ function HelpTooltip({ content }: { content: string }) {
   return (
     <Tooltip>
       <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
-        <CircleHelp size={15} strokeWidth={2.35} />
+        <CircleHelp size={14} strokeWidth={1.75} />
       </TooltipTrigger>
       <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
     </Tooltip>
@@ -687,7 +687,10 @@ export function ControlPanelApp() {
           return;
         }
 
-        const fallbackData = buildLocalControlPanelSnapshot();
+        const fallbackData = await buildLocalControlPanelSnapshot();
+        if (cancelled) {
+          return;
+        }
         setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
         setPanelData((current) => current ?? fallbackData);
         setDraft((current) => current ?? fallbackData);

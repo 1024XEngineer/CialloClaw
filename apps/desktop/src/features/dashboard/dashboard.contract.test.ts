@@ -83,6 +83,74 @@ function loadDashboardTaskDetailNavigationSource() {
   return readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardTaskDetailNavigation.ts"), "utf8");
 }
 
+function loadDashboardOpeningTransitionModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/app/dashboard/dashboardOpeningTransition.js")) as {
+      DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS: number;
+      createDashboardOpeningTransitionController: (environment: {
+        cancelAnimationFrame: (handle: number) => void;
+        clearTimeout: (handle: number) => void;
+        hasFocus: () => boolean;
+        getVisibilityState: () => DocumentVisibilityState;
+        requestAnimationFrame: (callback: FrameRequestCallback) => number;
+        setIsOpening: (value: boolean) => void;
+        setTimeout: (callback: () => void, timeoutMs: number) => number;
+      }) => {
+        dispose: () => void;
+        handleVisibilityChange: () => boolean;
+        handleWindowFocusChanged: (focused: boolean) => boolean;
+        restoreIfNeeded: () => boolean;
+        trigger: () => void;
+      };
+    },
+  );
+}
+
+function loadDashboardWindowErrorBoundaryModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/app/dashboard/DashboardWindowErrorBoundary.js")) as {
+      DashboardWindowErrorBoundary: (props: { children: unknown }) => {
+        props: { children: unknown };
+        type: {
+          new (props: { children: unknown }): {
+            componentDidCatch: (error: Error, errorInfo: { componentStack: string }) => void;
+            props: { children: unknown };
+            render: () => unknown;
+            state: { hasError: boolean };
+          };
+          getDerivedStateFromError: () => { hasError: boolean };
+        };
+      };
+    },
+  );
+}
+
+function instantiateDashboardWindowErrorBoundary(
+  DashboardWindowErrorBoundary: (props: { children: unknown }) => {
+    props: { children: unknown };
+    type: {
+      new (props: { children: unknown }): {
+          componentDidCatch: (error: Error, errorInfo: { componentStack: string }) => void;
+          props: { children: unknown };
+          render: () => unknown;
+          state: { hasError: boolean };
+        };
+        getDerivedStateFromError: () => { hasError: boolean };
+      };
+  },
+) {
+  const renderedBoundary = DashboardWindowErrorBoundary({ children: null });
+  const BoundaryImplementation = renderedBoundary.type;
+
+  return {
+    BoundaryImplementation,
+    create(props: { children: unknown }) {
+      const element = DashboardWindowErrorBoundary(props);
+      return new BoundaryImplementation(element.props);
+    },
+  };
+}
+
 function loadConversationSessionServiceModule() {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/conversationSessionService.ts");
@@ -127,6 +195,10 @@ function loadNotePageQueryModule() {
 type DashboardContractDesktopLocalPathOverrides = {
   openDesktopLocalPath?: (path: string) => Promise<void>;
   revealDesktopLocalPath?: (path: string) => Promise<void>;
+};
+
+type DashboardContractDesktopHostOverrides = {
+  invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> | unknown;
 };
 
 function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
@@ -221,9 +293,26 @@ function loadTaskPageMapperModule() {
   );
 }
 
-function loadSettingsServiceModule() {
-  return withDesktopAliasRuntime((requireFn) =>
-    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js")) as {
+function loadSettingsServiceModule(desktopHost?: DashboardContractDesktopHostOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
+    delete requireFn.cache[modulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
+
+    return requireFn(modulePath) as {
+      loadHydratedSettings: () => Promise<{
+        settings: {
+          general: {
+            download: {
+              workspace_path: string;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+          };
+        };
+      }>;
       loadSettings: () => {
         settings: {
           models: {
@@ -258,10 +347,44 @@ function loadSettingsServiceModule() {
               value: number;
             };
           };
+          task_automation: {
+            task_sources: string[];
+          };
         };
       };
       saveSettings: (settings: unknown) => void;
+    };
+  },
+    undefined,
+    undefined,
+    desktopHost,
+  );
+}
+
+function loadNoteSourceServiceModule(
+  rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
+) {
+  return withDesktopAliasRuntime(
+    (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/notes/noteSource.service.ts");
+      const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+      const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
+      const sourceNotesModulePath = resolve(desktopRoot, "src/platform/desktopSourceNotes.ts");
+      delete requireFn.cache[modulePath];
+      delete requireFn.cache[settingsModulePath];
+      delete requireFn.cache[runtimeDefaultsModulePath];
+      delete requireFn.cache[sourceNotesModulePath];
+
+      return requireFn(modulePath) as {
+        loadNoteSourceConfig: () => Promise<{
+          task_sources: string[];
+        }>;
+      };
     },
+    rpcMethods,
+    undefined,
+    desktopHost,
   );
 }
 
@@ -585,6 +708,40 @@ function loadMirrorServiceModule() {
   });
 }
 
+function findRenderedElement(
+  node: unknown,
+  predicate: (element: { props: Record<string, unknown>; type: unknown }) => boolean,
+): { props: Record<string, unknown>; type: unknown } | null {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const match = findRenderedElement(item, predicate);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+
+  const maybeElement = node as { props?: Record<string, unknown>; type?: unknown };
+  if (!maybeElement.props || !("type" in maybeElement)) {
+    return null;
+  }
+
+  const element = {
+    props: maybeElement.props,
+    type: maybeElement.type,
+  };
+  if (predicate(element)) {
+    return element;
+  }
+
+  return findRenderedElement(element.props.children, predicate);
+}
+
 type DashboardContractRpcMethodOverrides = {
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
@@ -606,16 +763,19 @@ function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
 ): Promise<T>;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
 ): T;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T | Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
 ): T | Promise<T> {
   const NodeModule = require("node:module") as {
     _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -637,6 +797,20 @@ function withDesktopAliasRuntime<T>(
       const emittedCandidates = [`${emittedBasePath}.js`, resolve(emittedBasePath, "index.js")];
 
       for (const candidate of emittedCandidates) {
+        if (existsSync(candidate)) {
+          return candidate;
+        }
+      }
+
+      const sourceBasePath = resolve(desktopRoot, "src", modulePath);
+      const sourceCandidates = [
+        `${sourceBasePath}.ts`,
+        `${sourceBasePath}.tsx`,
+        resolve(sourceBasePath, "index.ts"),
+        resolve(sourceBasePath, "index.tsx"),
+      ];
+
+      for (const candidate of sourceCandidates) {
         if (existsSync(candidate)) {
           return candidate;
         }
@@ -668,6 +842,14 @@ function withDesktopAliasRuntime<T>(
   NodeModule._load = function loadDesktopRuntime(request: string, parent: unknown, isMain: boolean) {
     if (request === "@cialloclaw/protocol") {
       return originalLoad(resolve(protocolRoot, "types/core.ts"), parent, isMain);
+    }
+
+    if (request === "@tauri-apps/api/core") {
+      return {
+        invoke:
+          desktopHost?.invoke ??
+          (() => Promise.reject(new Error("invoke should not run in dashboard contract tests"))),
+      };
     }
 
     if (request === "@/rpc/methods") {
@@ -1527,6 +1709,554 @@ test("settings service ignores stale legacy settings aliases when models are alr
   }
 });
 
+test("settings service falls back to neutral placeholders before runtime hydration", () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const loaded = loadSettings();
+    assert.equal(loaded.settings.general.download.workspace_path, "workspace");
+    assert.deepEqual(loaded.settings.task_automation.task_sources, ["workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service hydrates runtime defaults before loading fallback snapshots", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const settingsService = loadSettingsServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+    const hydrated = await settingsService.loadHydratedSettings();
+
+    assert.equal(hydrated.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service loadHydratedSettings keeps existing snapshot when host hydration fails", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "/cached/workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["/cached/workspace/todos"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => {
+        throw new Error("desktop runtime defaults unavailable");
+      },
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.equal(hydrated.settings.general.download.workspace_path, "/cached/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/cached/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service preserves user-owned workspace-relative task sources during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/review"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.equal(hydrated.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service preserves multi-root workspace-relative task sources during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/backlog", "workspace/review"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["workspace/backlog", "workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service rewrites only the legacy single-root task source placeholder during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["d:/workspace/todos"],
+          },
+        },
+      }),
+    );
+    const rewrittenWindowsLegacy = await settingsService.loadHydratedSettings();
+    assert.deepEqual(rewrittenWindowsLegacy.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config prefers hydrated unix task sources over legacy workspace snapshots", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["workspace/todos"],
+        }),
+      },
+      {
+        invoke: async (command) => {
+          assert.equal(command, "desktop_get_runtime_defaults");
+          return {
+            workspace_path: "/Users/runtime/CialloClaw/workspace",
+            task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+          };
+        },
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config keeps remote task sources when cached settings are not absolute", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule({
+      getTaskInspectorConfig: async () => ({
+        task_sources: ["workspace/review"],
+      }),
+    });
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config keeps remote task sources when cached settings are explicitly empty", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: [],
+          },
+        },
+      }),
+    );
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule({
+      getTaskInspectorConfig: async () => ({
+        task_sources: ["workspace/review"],
+      }),
+    });
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config surfaces rpc transport failures with the localized retry copy", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule({
+      getTaskInspectorConfig: async () => {
+        throw new Error("transport is not wired");
+      },
+    });
+
+    await assert.rejects(loadNoteSourceConfig(), /当前无法读取任务来源配置，请稍后重试。/);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config prefers cached task sources when the backend returns an empty list", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => ({
+          task_sources: [],
+        }),
+      },
+      {
+        invoke: async () => ({
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        }),
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("control panel about service exposes fallback metadata and feedback channel config", () => {
   const { getControlPanelAboutFallbackSnapshot, getControlPanelAboutFeedbackChannels } = loadControlPanelAboutServiceModule();
   const fallback = getControlPanelAboutFallbackSnapshot();
@@ -1640,6 +2370,8 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
   assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
+  assert.match(controlPanelAppSource, /const settings = \(await loadHydratedSettings\(\)\)\.settings;/);
+  assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
 });
 
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
@@ -3503,6 +4235,267 @@ test("dashboard task-detail routing deduplicates retry request ids and accepts t
   assert.match(taskPageSource, /const detailRouteState = readDashboardTaskDetailRouteState\(location\.state\);[\s\S]*if \(detailRouteState\) \{[\s\S]*setSelectedTaskId\(detailRouteState\.focusTaskId\);[\s\S]*navigate\(location\.pathname, \{ replace: true, state: null \}\);[\s\S]*return;/);
   assert.doesNotMatch(taskPageSource, /detailRouteState && allTasks\.some\(\(item\) => item\.task\.task_id === detailRouteState\.focusTaskId\)/);
   assert.match(taskPageSource, /if \(selectedTaskId && detailOpen\) \{/);
+});
+
+test("dashboard opening mask replays after Tauri window focus returns from hidden desktop sessions", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+
+  assert.match(dashboardRootSource, /createDashboardOpeningTransitionController/);
+  assert.match(dashboardRootSource, /const handleVisibilityChange = \(\) => \{/);
+  assert.match(dashboardRootSource, /\.onFocusChanged\(\(\{ payload: focused \}\) => \{/);
+  assert.match(dashboardRootSource, /openingTransitionController\.handleWindowFocusChanged\(focused\);/);
+});
+
+test("dashboard opening transition controller replays focus and visibility recovery at runtime", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  const cancelledFrames: number[] = [];
+  const clearedTimeouts: number[] = [];
+  const frameCallbacks = new Map<number, FrameRequestCallback>();
+  const timeoutCallbacks = new Map<number, () => void>();
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "visible";
+  let hasFocus = true;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: (handle) => {
+      if (handle > 0) {
+        cancelledFrames.push(handle);
+        frameCallbacks.delete(handle);
+      }
+    },
+    clearTimeout: (handle) => {
+      if (handle > 0) {
+        clearedTimeouts.push(handle);
+        timeoutCallbacks.delete(handle);
+      }
+    },
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: (callback) => {
+      const handle = nextHandle++;
+      frameCallbacks.set(handle, callback);
+      return handle;
+    },
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (callback, timeoutMs) => {
+      const handle = nextHandle++;
+      timeoutDurations.push(timeoutMs);
+      timeoutCallbacks.set(handle, callback);
+      return handle;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  controller.handleWindowFocusChanged(false);
+  assert.equal(cancelledFrames.length, 1);
+  assert.equal(clearedTimeouts.length, 1);
+
+  controller.handleWindowFocusChanged(true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+  assert.equal(frameCallbacks.size, 1);
+  Array.from(frameCallbacks.values()).at(-1)?.(16.7);
+  assert.deepEqual(openingStates, [true, true, false]);
+
+  controller.handleWindowFocusChanged(false);
+  visibilityState = "hidden";
+  controller.handleWindowFocusChanged(true);
+  assert.deepEqual(openingStates, [true, true, false]);
+
+  visibilityState = "visible";
+  controller.handleVisibilityChange();
+  assert.deepEqual(openingStates, [true, true, false, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+  Array.from(timeoutCallbacks.values()).at(-1)?.();
+  assert.deepEqual(openingStates, [true, true, false, true, false]);
+
+  controller.dispose();
+  assert.equal(cancelledFrames.length, 3);
+  assert.equal(clearedTimeouts.length, 3);
+});
+
+test("dashboard opening transition controller replays the opening mask for windows mounted while hidden", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  const frameCallbacks = new Map<number, FrameRequestCallback>();
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "hidden";
+  let hasFocus = false;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: (handle) => {
+      frameCallbacks.delete(handle);
+    },
+    clearTimeout: () => {},
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: (callback) => {
+      const handle = nextHandle++;
+      frameCallbacks.set(handle, callback);
+      return handle;
+    },
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (_callback, timeoutMs) => {
+      timeoutDurations.push(timeoutMs);
+      return nextHandle++;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  visibilityState = "visible";
+  assert.equal(controller.handleVisibilityChange(), true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+});
+
+test("dashboard opening transition controller replays the opening mask for windows mounted while unfocused", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "visible";
+  let hasFocus = false;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: () => {},
+    clearTimeout: () => {},
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: () => nextHandle++,
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (_callback, timeoutMs) => {
+      timeoutDurations.push(timeoutMs);
+      return nextHandle++;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  hasFocus = true;
+  assert.equal(controller.handleWindowFocusChanged(true), true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+});
+
+test("dashboard entry keeps a window-level error boundary so runtime faults do not collapse into a blank shell", () => {
+  const dashboardMainSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/main.tsx"), "utf8");
+  const dashboardErrorBoundarySource = readFileSync(
+    resolve(desktopRoot, "src/app/dashboard/DashboardWindowErrorBoundary.tsx"),
+    "utf8",
+  );
+
+  assert.match(dashboardMainSource, /DashboardWindowErrorBoundary/);
+  assert.match(
+    dashboardMainSource,
+    /<DashboardWindowErrorBoundary>[\s\S]*<AppProviders>[\s\S]*<DashboardRoot \/>[\s\S]*<\/AppProviders>[\s\S]*<\/DashboardWindowErrorBoundary>/,
+  );
+  assert.match(dashboardErrorBoundarySource, /export function DashboardWindowErrorBoundary/);
+  assert.match(dashboardErrorBoundarySource, /class DashboardWindowErrorBoundaryImpl extends Component/);
+  assert.match(dashboardErrorBoundarySource, /static getDerivedStateFromError/);
+  assert.match(dashboardErrorBoundarySource, /window\.location\.reload\(\)/);
+  assert.match(dashboardErrorBoundarySource, /dashboard window render failed/);
+});
+
+test("dashboard window error boundary renders a recovery fallback and reload action after runtime faults", () => {
+  const { DashboardWindowErrorBoundary } = loadDashboardWindowErrorBoundaryModule();
+  const child = { props: { id: "child" }, type: "mock-child" };
+  const { BoundaryImplementation, create } = instantiateDashboardWindowErrorBoundary(DashboardWindowErrorBoundary);
+  const boundary = create({ children: child });
+  const originalConsoleError = console.error;
+  const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const consoleMessages: unknown[][] = [];
+  let reloadCalls = 0;
+
+  try {
+    console.error = (...args: unknown[]) => {
+      consoleMessages.push(args);
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          reload: () => {
+            reloadCalls += 1;
+          },
+        },
+      },
+      writable: true,
+    });
+
+    assert.equal(boundary.render(), child);
+
+    boundary.componentDidCatch(new Error("dashboard exploded"), {
+      componentStack: "\n    at DashboardRoot",
+    });
+    assert.equal(consoleMessages.length, 1);
+    assert.match(String(consoleMessages[0][0]), /dashboard window render failed/);
+
+    boundary.state = {
+      ...boundary.state,
+      ...BoundaryImplementation.getDerivedStateFromError(),
+    };
+
+    const fallbackTree = boundary.render();
+    const title = findRenderedElement(
+      fallbackTree,
+      (element) => element.type === "h1" && element.props.children === "仪表盘需要恢复",
+    );
+    const reloadButton = findRenderedElement(
+      fallbackTree,
+      (element) => element.props.type === "button" && typeof element.props.onClick === "function",
+    );
+
+    assert.ok(title);
+    assert.ok(reloadButton);
+    (reloadButton.props.onClick as () => void)();
+    assert.equal(reloadCalls, 1);
+  } finally {
+    console.error = originalConsoleError;
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    } else {
+      delete (globalThis as { window?: unknown }).window;
+    }
+  }
 });
 
 test("conversation session reuse expires after the backend freshness window", () => {

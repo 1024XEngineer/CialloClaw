@@ -151,6 +151,8 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClic
     width: `${config.size}px`,
     height: `${config.size}px`,
   } as CSSProperties;
+  // CSS variable colors cannot be alpha-suffixed like hex values, so the ring uses color-mix for transparency.
+  const ringColor = `color-mix(in srgb, ${config.color} 30%, transparent)`;
 
   return (
     <motion.button
@@ -178,7 +180,7 @@ export function DashboardEntranceOrb({ config, dimmed, isHovered, offset, onClic
       whileTap={{ scale: 0.98 }}
     >
       <span className="dashboard-orbit-entrance__halo" style={{ background: `radial-gradient(circle, ${config.glow} 0%, transparent 70%)` }} />
-      <span className="dashboard-orbit-entrance__shell" style={{ boxShadow: `0 26px 44px -34px ${config.glow}, 0 0 0 1px ${config.color}30 inset` }}>
+      <span className="dashboard-orbit-entrance__shell" style={{ boxShadow: `0 26px 44px -34px ${config.glow}, 0 0 0 1px ${ringColor} inset` }}>
         <span className="dashboard-orbit-entrance__core" style={{ background: `radial-gradient(circle at 30% 28%, rgba(255,255,255,0.92), ${config.color} 56%, color-mix(in srgb, ${config.color} 74%, #566070) 100%)` }}>
           <Icon className="h-[34%] w-[34%] text-white/90" />
         </span>

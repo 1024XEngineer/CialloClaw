@@ -23,51 +23,59 @@ import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated 
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
+import { createDashboardOpeningTransitionController } from "./dashboardOpeningTransition";
 import "./dashboard.css";
 
 const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
 
-function useDashboardDomainExpansion() {
+/**
+ * Replays the dashboard opening mask after a hidden desktop window becomes
+ * visible again so long-idle sessions do not stay visually clipped.
+ */
+function useDashboardOpeningTransitionState() {
   const [isOpening, setIsOpening] = useState(true);
-  const hiddenRef = useRef(false);
 
   useEffect(() => {
-    let frame = 0;
-    let timeout = 0;
-
-    const trigger = () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
-      setIsOpening(true);
-      frame = window.requestAnimationFrame(() => {
-        setIsOpening(false);
-      });
-      // Hidden/background Tauri windows can miss the RAF edge and stay clipped.
-      timeout = window.setTimeout(() => {
-        setIsOpening(false);
-      }, 720);
-    };
+    let disposed = false;
+    let clearWindowFocusListener: (() => void) | null = null;
+    // Keep the visibility/focus recovery state machine outside the hook so the
+    // long-idle window path stays contract-testable without mounting Tauri.
+    const openingTransitionController = createDashboardOpeningTransitionController({
+      cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
+      clearTimeout: (handle) => window.clearTimeout(handle),
+      hasFocus: () => document.hasFocus(),
+      getVisibilityState: () => document.visibilityState,
+      requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
+      setIsOpening,
+      setTimeout: (callback, timeoutMs) => window.setTimeout(callback, timeoutMs),
+    });
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        hiddenRef.current = true;
-        return;
-      }
-
-      if (!hiddenRef.current) {
-        return;
-      }
-
-      hiddenRef.current = false;
-      trigger();
+      openingTransitionController.handleVisibilityChange();
     };
 
-    trigger();
+    openingTransitionController.trigger();
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        openingTransitionController.handleWindowFocusChanged(focused);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        clearWindowFocusListener = unlisten;
+      })
+      .catch((error) => {
+        console.warn("dashboard focus listener failed", error);
+      });
 
     return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
+      disposed = true;
+      openingTransitionController.dispose();
+      clearWindowFocusListener?.();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
@@ -79,7 +87,7 @@ function DashboardRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const isOpening = useDashboardDomainExpansion();
+  const isOpening = useDashboardOpeningTransitionState();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
   const dashboardHomeQuery = useQuery({
@@ -282,6 +290,9 @@ function DashboardRoutes() {
   );
 }
 
+/**
+ * Mounts the dashboard router tree for the dedicated desktop window.
+ */
 export function DashboardRoot() {
   return (
     <HashRouter>
