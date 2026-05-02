@@ -8,11 +8,27 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
+func attachedBrowserInput() map[string]any {
+	return map[string]any{
+		"attach": map[string]any{
+			"mode":         "cdp",
+			"browser_kind": "chrome",
+			"target": map[string]any{
+				"url": "https://example.com/docs",
+			},
+		},
+	}
+}
+
 type stubPlaywrightClient struct {
 	readResult       tools.BrowserPageReadResult
 	searchResult     tools.BrowserPageSearchResult
 	interactResult   tools.BrowserPageInteractResult
 	structuredResult tools.BrowserStructuredDOMResult
+	attachResult     tools.BrowserAttachedPageResult
+	snapshotResult   tools.BrowserSnapshotResult
+	navigateResult   tools.BrowserNavigationResult
+	tabsResult       tools.BrowserTabsListResult
 	err              error
 }
 
@@ -67,6 +83,48 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 	return result, nil
 }
 
+func (s stubPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	if s.err != nil {
+		return tools.BrowserSnapshotResult{}, s.err
+	}
+	return s.snapshotResult, nil
+}
+
+func (s stubPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	if s.err != nil {
+		return tools.BrowserNavigationResult{}, s.err
+	}
+	return s.navigateResult, nil
+}
+
+func (s stubPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	if s.err != nil {
+		return tools.BrowserTabsListResult{}, s.err
+	}
+	return s.tabsResult, nil
+}
+
+func (s stubPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	return s.interactResult, nil
+}
+
 func TestPageReadToolExecuteSuccess(t *testing.T) {
 	tool := NewPageReadTool()
 	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{
@@ -104,6 +162,9 @@ func TestPlaywrightNoopClientAndValidators(t *testing.T) {
 	}
 	if _, err := client.InteractPage(context.Background(), "https://example.com", nil); !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
 		t.Fatalf("expected noop interact failure, got %v", err)
+	}
+	if _, err := client.AttachCurrentPage(context.Background(), tools.BrowserAttachConfig{Mode: tools.BrowserAttachModeCDP}); !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
+		t.Fatalf("expected noop attach failure, got %v", err)
 	}
 	if err := NewPageReadTool().Validate(map[string]any{"url": "https://example.com"}); err != nil {
 		t.Fatalf("expected page_read validate to pass, got %v", err)
@@ -171,6 +232,111 @@ func TestStructuredDOMToolExecuteSuccess(t *testing.T) {
 	}
 }
 
+func TestBrowserAttachToolsExecuteSuccess(t *testing.T) {
+	execCtx := &tools.ToolExecuteContext{Playwright: stubPlaywrightClient{
+		attachResult: tools.BrowserAttachedPageResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+			PageIndex:                2,
+			Title:                    "Docs",
+			URL:                      "https://example.com/docs",
+			Source:                   "playwright_worker_cdp",
+		},
+		snapshotResult: tools.BrowserSnapshotResult{
+			BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+				BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+				PageIndex:                2,
+				Title:                    "Docs",
+				URL:                      "https://example.com/docs",
+				Source:                   "playwright_worker_cdp",
+			},
+			TextContent: "Install guide",
+			Headings:    []string{"Install"},
+			Links:       []string{"Guide"},
+			Buttons:     []string{"Next"},
+			Inputs:      []string{"search"},
+		},
+		navigateResult: tools.BrowserNavigationResult{
+			BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+				BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+				PageIndex:                2,
+				Title:                    "Start",
+				URL:                      "https://example.com/docs/start",
+				Source:                   "playwright_worker_cdp",
+			},
+			TextContent: "Getting started",
+			MIMEType:    "text/html",
+			TextType:    "text/html",
+		},
+		tabsResult: tools.BrowserTabsListResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+			TabCount:                 2,
+			Tabs:                     []tools.BrowserTabInfo{{PageIndex: 0, Title: "Home", URL: "https://example.com"}, {PageIndex: 2, Title: "Docs", URL: "https://example.com/docs"}},
+			Source:                   "playwright_worker_cdp",
+		},
+		interactResult: tools.BrowserPageInteractResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+			Title:                    "Docs",
+			URL:                      "https://example.com/docs",
+			TextContent:              "Clicked next",
+			ActionsApplied:           1,
+			Source:                   "playwright_worker_cdp",
+		},
+	}}
+
+	attachResult, err := NewBrowserAttachCurrentTool().Execute(context.Background(), execCtx, attachedBrowserInput())
+	if err != nil || attachResult.RawOutput["page_index"] != 2 {
+		t.Fatalf("unexpected browser_attach_current result=%+v err=%v", attachResult, err)
+	}
+
+	snapshotResult, err := NewBrowserSnapshotTool().Execute(context.Background(), execCtx, attachedBrowserInput())
+	if err != nil || snapshotResult.SummaryOutput["heading_count"] != 1 {
+		t.Fatalf("unexpected browser_snapshot result=%+v err=%v", snapshotResult, err)
+	}
+
+	navigateInput := attachedBrowserInput()
+	navigateInput["url"] = "https://example.com/docs/start"
+	navigateResult, err := NewBrowserNavigateTool().Execute(context.Background(), execCtx, navigateInput)
+	if err != nil || navigateResult.SummaryOutput["content_preview"] != "Getting started" {
+		t.Fatalf("unexpected browser_navigate result=%+v err=%v", navigateResult, err)
+	}
+
+	tabsResult, err := NewBrowserTabsListTool().Execute(context.Background(), execCtx, attachedBrowserInput())
+	if err != nil || tabsResult.SummaryOutput["tab_count"] != 2 {
+		t.Fatalf("unexpected browser_tabs_list result=%+v err=%v", tabsResult, err)
+	}
+
+	focusInput := attachedBrowserInput()
+	focusInput["attach"].(map[string]any)["target"] = map[string]any{"page_index": 2.0}
+	focusResult, err := NewBrowserTabFocusTool().Execute(context.Background(), execCtx, focusInput)
+	if err != nil || focusResult.SummaryOutput["page_index"] != 2 {
+		t.Fatalf("unexpected browser_tab_focus result=%+v err=%v", focusResult, err)
+	}
+
+	interactInput := attachedBrowserInput()
+	interactInput["actions"] = []any{map[string]any{"type": "click", "selector": "a.next"}}
+	interactResult, err := NewBrowserInteractTool().Execute(context.Background(), execCtx, interactInput)
+	if err != nil || interactResult.RawOutput["actions_applied"] != 1 {
+		t.Fatalf("unexpected browser_interact result=%+v err=%v", interactResult, err)
+	}
+}
+
+func TestBrowserAttachToolsValidateAttachContract(t *testing.T) {
+	if err := NewBrowserAttachCurrentTool().Validate(map[string]any{}); err == nil {
+		t.Fatal("expected browser_attach_current validate to fail without attach")
+	}
+	if err := NewBrowserSnapshotTool().Validate(map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{}}}); err == nil {
+		t.Fatal("expected browser_snapshot validate to fail without target filters")
+	}
+	if err := NewBrowserNavigateTool().Validate(attachedBrowserInput()); err == nil {
+		t.Fatal("expected browser_navigate validate to require url")
+	}
+	interactInput := attachedBrowserInput()
+	interactInput["actions"] = []any{map[string]any{"selector": "a.next"}}
+	if err := NewBrowserInteractTool().Validate(interactInput); err == nil {
+		t.Fatal("expected browser_interact validate to require action type")
+	}
+}
+
 func TestRegisterPlaywrightTools(t *testing.T) {
 	registry := tools.NewRegistry()
 	if err := RegisterPlaywrightTools(registry); err != nil {
@@ -187,5 +353,10 @@ func TestRegisterPlaywrightTools(t *testing.T) {
 	}
 	if _, err := registry.Get("structured_dom"); err != nil {
 		t.Fatalf("expected structured_dom to be registered, got %v", err)
+	}
+	for _, name := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
+		if _, err := registry.Get(name); err != nil {
+			t.Fatalf("expected %s to be registered, got %v", name, err)
+		}
 	}
 }
