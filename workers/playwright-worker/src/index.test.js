@@ -334,6 +334,82 @@ test("page_read can attach to a real browser page over CDP", async () => {
   assert.deepEqual(navigationLog, []);
 });
 
+test("browser_attach_current returns the selected real browser tab", async () => {
+  const response = await handleRequest({
+    action: "browser_attach_current",
+    attach: {
+      browser_kind: "chrome",
+      target: {
+        title_contains: "connected page",
+      },
+    },
+  }, createDeps({
+    connectedPages: [
+      createPage({ currentURL: "https://example.com/other", title: "Other Page" }),
+      createPage({ currentURL: "https://example.com/current", title: "Connected Page" }),
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.attached, true);
+  assert.equal(response.result.page_index, 1);
+  assert.equal(response.result.title, "Connected Page");
+  assert.equal(response.result.url, "https://example.com/current");
+});
+
+test("browser_snapshot returns structured content for the attached tab", async () => {
+  const response = await handleRequest({
+    action: "browser_snapshot",
+    attach: {
+      browser_kind: "edge",
+      target: {
+        page_index: 0,
+      },
+    },
+  }, createDeps({
+    connectedPages: [createPage({
+      currentURL: "https://example.com/current",
+      title: "Snapshot Page",
+      bodyText: "Snapshot body text",
+      snapshot: {
+        headings: ["Heading A"],
+        links: ["Docs"],
+        buttons: ["Submit"],
+        inputs: ["email"],
+      },
+    })],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.page_index, 0);
+  assert.equal(response.result.title, "Snapshot Page");
+  assert.equal(response.result.text_content, "Snapshot body text");
+  assert.deepEqual(response.result.headings, ["Heading A"]);
+  assert.deepEqual(response.result.links, ["Docs"]);
+});
+
+test("browser_tabs_list reports attached browser tabs with stable indexes", async () => {
+  const response = await handleRequest({
+    action: "browser_tabs_list",
+    attach: {
+      browser_kind: "chrome",
+    },
+  }, createDeps({
+    connectedPages: [
+      createPage({ currentURL: "https://example.com/one", title: "One" }),
+      createPage({ currentURL: "https://example.com/two", title: "Two" }),
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.attached, true);
+  assert.equal(response.result.tab_count, 2);
+  assert.deepEqual(response.result.tabs, [
+    { page_index: 0, title: "One", url: "https://example.com/one" },
+    { page_index: 1, title: "Two", url: "https://example.com/two" },
+  ]);
+});
+
 test("page_read ignores top-level request url unless attach.target.url is explicit", async () => {
   const singlePage = await handleRequest({
     action: "page_read",
