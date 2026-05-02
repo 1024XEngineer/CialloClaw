@@ -192,6 +192,20 @@ function serializeExecutionMetadata(execution) {
   };
 }
 
+function detectConnectedBrowserKind(versionString) {
+  const normalized = normalizeOptionalString(versionString)?.toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.includes("edge")) {
+    return "edge";
+  }
+  if (normalized.includes("chrome")) {
+    return "chrome";
+  }
+  return undefined;
+}
+
 function isLoopbackHostname(hostname) {
   const normalized = String(hostname ?? "").trim().toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
   if (normalized === "localhost" || normalized === "::1") {
@@ -325,6 +339,14 @@ async function connectAttachedBrowser(request, deps) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw createStructuredWorkerError("browser_attach_failed", message);
+  }
+
+  const connectedBrowserKind = detectConnectedBrowserKind(await browser?.version?.().catch(() => ""));
+  if (attachConfig.browserKind && connectedBrowserKind && attachConfig.browserKind !== connectedBrowserKind) {
+    throw createStructuredWorkerError(
+      "browser_kind_mismatch",
+      `attach.browser_kind '${attachConfig.browserKind}' did not match connected browser '${connectedBrowserKind}'`,
+    );
   }
 
   return {
