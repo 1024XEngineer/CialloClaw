@@ -174,9 +174,9 @@ function mergeProtocolSettings(
 }
 
 /**
- * Builds a restore-defaults draft while preserving workspace-bound task sources
- * and any already-saved provider secret state that lives outside the ordinary
- * settings snapshot.
+ * Builds a restore-defaults draft while preserving workspace-bound task
+ * sources, the active model route, and any already-saved provider secret state
+ * that lives outside the ordinary settings snapshot.
  *
  * @param current The current control-panel draft.
  * @returns A draft aligned with desktop defaults and preserved boundary fields.
@@ -184,6 +184,7 @@ function mergeProtocolSettings(
 export function buildControlPanelRestoreDefaultsData(current: ControlPanelData): ControlPanelData {
   const defaultSettings = buildDefaultDesktopSettingsSnapshot().settings;
   const preservedTaskSources = current.inspector.task_sources;
+  const preservedModels = current.settings.models;
 
   return {
     ...current,
@@ -211,8 +212,11 @@ export function buildControlPanelRestoreDefaultsData(current: ControlPanelData):
       },
       models: {
         ...defaultSettings.models,
-        provider_api_key_configured: current.settings.models.provider_api_key_configured,
-        stronghold: current.settings.models.stronghold,
+        provider: preservedModels.provider,
+        provider_api_key_configured: preservedModels.provider_api_key_configured,
+        stronghold: preservedModels.stronghold,
+        base_url: preservedModels.base_url,
+        model: preservedModels.model,
       },
     },
     warnings: [],

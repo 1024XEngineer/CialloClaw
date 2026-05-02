@@ -516,6 +516,13 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
             budget_auto_downgrade: boolean;
             base_url: string;
             model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
           };
           floating_ball: {
             auto_snap: boolean;
@@ -2660,6 +2667,7 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const \[isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming\] = useState\(false\);/);
   assert.match(controlPanelAppSource, /const restoreDraft = buildControlPanelRestoreDefaultsData\(draft\);/);
   assert.match(controlPanelAppSource, /validateModel: false/);
+  assert.match(controlPanelAppSource, /模型路由或已保存 API Key/);
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
   assert.match(controlPanelAppSource, /const settings = \(await loadHydratedSettings\(\)\)\.settings;/);
   assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
@@ -2676,7 +2684,7 @@ test("control panel keeps budget rows in the safety page instead of duplicating 
   assert.doesNotMatch(controlPanelAppSource, /label="当日上限"/);
 });
 
-test("control panel restore-default helper preserves workspace and task-source boundaries", () => {
+test("control panel restore-default helper preserves workspace, task-source, and model-route boundaries", () => {
   const { buildControlPanelRestoreDefaultsData } = loadControlPanelServiceModule();
 
   const restored = buildControlPanelRestoreDefaultsData({
@@ -2773,10 +2781,18 @@ test("control panel restore-default helper preserves workspace and task-source b
   assert.equal(restored.settings.floating_ball.size, "medium");
   assert.equal(restored.settings.memory.enabled, true);
   assert.equal(restored.settings.memory.lifecycle, "30d");
-  assert.equal(restored.settings.models.provider, "openai");
-  assert.equal(restored.settings.models.base_url, "https://api.openai.com/v1");
-  assert.equal(restored.settings.models.model, "gpt-3.5-turbo");
+  assert.equal(restored.settings.models.provider, "anthropic");
+  assert.equal(restored.settings.models.base_url, "https://api.anthropic.com");
+  assert.equal(restored.settings.models.model, "claude-3-7-sonnet");
+  assert.equal(restored.settings.models.budget_auto_downgrade, true);
   assert.equal(restored.settings.models.provider_api_key_configured, true);
+  assert.deepEqual(restored.settings.models.stronghold, {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  });
   assert.deepEqual(restored.settings.task_automation.task_sources, ["D:/custom-todos"]);
   assert.deepEqual(restored.inspector.task_sources, ["D:/custom-todos"]);
   assert.deepEqual(restored.inspector.inspection_interval, { unit: "minute", value: 15 });
