@@ -131,3 +131,46 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 		t.Fatalf("expected flat behavior counters to be normalized, got %+v", snapshot)
 	}
 }
+
+func TestServiceSnapshotAndCaptureInferenceHelpers(t *testing.T) {
+	service := NewService()
+	if snapshot := service.Snapshot(); snapshot["source"] != "desktop" {
+		t.Fatalf("expected snapshot descriptor to report desktop source, got %+v", snapshot)
+	}
+
+	selectionOnly := service.Capture(map[string]any{
+		"context": map[string]any{
+			"selection": map[string]any{"text": " selected line "},
+		},
+	})
+	if selectionOnly.InputType != "text_selection" || selectionOnly.Trigger != "text_selected_click" || selectionOnly.Text != "selected line" {
+		t.Fatalf("expected selection-only payload to infer text selection input, got %+v", selectionOnly)
+	}
+
+	errorOnly := service.Capture(map[string]any{
+		"context": map[string]any{
+			"error": map[string]any{"message": " build failed "},
+		},
+	})
+	if errorOnly.InputType != "error" || errorOnly.Trigger != "error_detected" || errorOnly.Text != "build failed" {
+		t.Fatalf("expected error-only payload to infer error input, got %+v", errorOnly)
+	}
+}
+
+func TestContextPrimitiveHelpersCoverAdditionalBranches(t *testing.T) {
+	if values := stringSliceValue([]string{" demo ", "demo", "notes"}); len(values) != 2 || values[0] != "demo" || values[1] != "notes" {
+		t.Fatalf("expected []string branch to trim and dedupe, got %+v", values)
+	}
+	if values := stringSliceValue("  single-item  "); len(values) != 1 || values[0] != "single-item" {
+		t.Fatalf("expected string branch to trim values, got %+v", values)
+	}
+	if values := stringSliceValue("   "); values != nil {
+		t.Fatalf("expected blank string branch to return nil, got %+v", values)
+	}
+	if value := intValue(map[string]any{"count": int64(9)}, "count", 1); value != 9 {
+		t.Fatalf("expected int64 branch to decode value, got %d", value)
+	}
+	if value := intValue(map[string]any{"count": "invalid"}, "count", 3); value != 3 {
+		t.Fatalf("expected fallback branch to preserve fallback, got %d", value)
+	}
+}
