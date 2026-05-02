@@ -28,17 +28,18 @@ type workerInvoker interface {
 }
 
 type sidecarRequest struct {
-	Action       string           `json:"action"`
-	URL          string           `json:"url,omitempty"`
-	Query        string           `json:"query,omitempty"`
-	Path         string           `json:"path,omitempty"`
-	Language     string           `json:"language,omitempty"`
-	OutputPath   string           `json:"output_path,omitempty"`
-	OutputDir    string           `json:"output_dir,omitempty"`
-	Format       string           `json:"format,omitempty"`
-	Limit        int              `json:"limit,omitempty"`
-	EverySeconds float64          `json:"every_seconds,omitempty"`
-	Actions      []map[string]any `json:"actions,omitempty"`
+	Action       string                     `json:"action"`
+	URL          string                     `json:"url,omitempty"`
+	Query        string                     `json:"query,omitempty"`
+	Attach       *tools.BrowserAttachConfig `json:"attach,omitempty"`
+	Path         string                     `json:"path,omitempty"`
+	Language     string                     `json:"language,omitempty"`
+	OutputPath   string                     `json:"output_path,omitempty"`
+	OutputDir    string                     `json:"output_dir,omitempty"`
+	Format       string                     `json:"format,omitempty"`
+	Limit        int                        `json:"limit,omitempty"`
+	EverySeconds float64                    `json:"every_seconds,omitempty"`
+	Actions      []map[string]any           `json:"actions,omitempty"`
 }
 
 type sidecarResponse struct {
@@ -136,98 +137,179 @@ type runtimePlaywrightClient struct {
 	runtime *PlaywrightSidecarRuntime
 }
 
-func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tools.BrowserPageReadResult, error) {
+func (c runtimePlaywrightClient) invokeBrowserRequest(ctx context.Context, request sidecarRequest) (sidecarResponse, error) {
 	if c.runtime == nil || !c.runtime.Available() {
-		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
+		return sidecarResponse{}, tools.ErrPlaywrightSidecarFailed
 	}
 	if !c.runtime.Ready() {
-		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
+		return sidecarResponse{}, tools.ErrPlaywrightSidecarFailed
 	}
-	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_read", URL: url})
+	response, err := c.runtime.invoke(ctx, request)
 	if err != nil {
 		if shouldMarkRuntimeFailure(err) {
 			_ = c.runtime.markFailure()
 		}
-		return tools.BrowserPageReadResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+		return sidecarResponse{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+	}
+	return response, nil
+}
+
+func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tools.BrowserPageReadResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_read", URL: url})
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
 	}
 	return tools.BrowserPageReadResult{
-		URL:         stringValue(response.Result, "url"),
-		Title:       stringValue(response.Result, "title"),
-		TextContent: stringValue(response.Result, "text_content"),
-		MIMEType:    stringValue(response.Result, "mime_type"),
-		TextType:    stringValue(response.Result, "text_type"),
-		Source:      firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		MIMEType:                 stringValue(response.Result, "mime_type"),
+		TextType:                 stringValue(response.Result, "text_type"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 
 func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
-	if c.runtime == nil || !c.runtime.Available() {
-		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	if !c.runtime.Ready() {
-		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
 	if err != nil {
-		if shouldMarkRuntimeFailure(err) {
-			_ = c.runtime.markFailure()
-		}
-		return tools.BrowserPageSearchResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+		return tools.BrowserPageSearchResult{}, err
 	}
 	return tools.BrowserPageSearchResult{
-		URL:        stringValue(response.Result, "url"),
-		Query:      stringValue(response.Result, "query"),
-		MatchCount: intValue(response.Result, "match_count"),
-		Matches:    stringSliceValue(response.Result, "matches"),
-		Source:     firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Query:                    stringValue(response.Result, "query"),
+		MatchCount:               intValue(response.Result, "match_count"),
+		Matches:                  stringSliceValue(response.Result, "matches"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 
 func (c runtimePlaywrightClient) InteractPage(ctx context.Context, url string, actions []map[string]any) (tools.BrowserPageInteractResult, error) {
-	if c.runtime == nil || !c.runtime.Available() {
-		return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	if !c.runtime.Ready() {
-		return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_interact", URL: url, Actions: cloneActionSlice(actions)})
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_interact", URL: url, Actions: cloneActionSlice(actions)})
 	if err != nil {
-		if shouldMarkRuntimeFailure(err) {
-			_ = c.runtime.markFailure()
-		}
-		return tools.BrowserPageInteractResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+		return tools.BrowserPageInteractResult{}, err
 	}
 	return tools.BrowserPageInteractResult{
-		URL:            stringValue(response.Result, "url"),
-		Title:          stringValue(response.Result, "title"),
-		TextContent:    stringValue(response.Result, "text_content"),
-		ActionsApplied: intValue(response.Result, "actions_applied"),
-		Source:         firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		ActionsApplied:           intValue(response.Result, "actions_applied"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 
 func (c runtimePlaywrightClient) StructuredDOM(ctx context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	if c.runtime == nil || !c.runtime.Available() {
-		return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	if !c.runtime.Ready() {
-		return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "structured_dom", URL: url})
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url})
 	if err != nil {
-		if shouldMarkRuntimeFailure(err) {
-			_ = c.runtime.markFailure()
-		}
-		return tools.BrowserStructuredDOMResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
+		return tools.BrowserStructuredDOMResult{}, err
 	}
 	return tools.BrowserStructuredDOMResult{
-		URL:      stringValue(response.Result, "url"),
-		Title:    stringValue(response.Result, "title"),
-		Headings: stringSliceValue(response.Result, "headings"),
-		Links:    stringSliceValue(response.Result, "links"),
-		Buttons:  stringSliceValue(response.Result, "buttons"),
-		Inputs:   stringSliceValue(response.Result, "inputs"),
-		Source:   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		Headings:                 stringSliceValue(response.Result, "headings"),
+		Links:                    stringSliceValue(response.Result, "links"),
+		Buttons:                  stringSliceValue(response.Result, "buttons"),
+		Inputs:                   stringSliceValue(response.Result, "inputs"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) AttachCurrentPage(ctx context.Context, attach tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_attach_current", Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserAttachedPageResult{}, err
+	}
+	return tools.BrowserAttachedPageResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		PageIndex:                intValue(response.Result, "page_index"),
+		Title:                    stringValue(response.Result, "title"),
+		URL:                      stringValue(response.Result, "url"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) SnapshotBrowser(ctx context.Context, attach tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_snapshot", Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserSnapshotResult{}, err
+	}
+	return tools.BrowserSnapshotResult{
+		BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+			BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+			PageIndex:                intValue(response.Result, "page_index"),
+			Title:                    stringValue(response.Result, "title"),
+			URL:                      stringValue(response.Result, "url"),
+			Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+		},
+		TextContent: stringValue(response.Result, "text_content"),
+		Headings:    stringSliceValue(response.Result, "headings"),
+		Links:       stringSliceValue(response.Result, "links"),
+		Buttons:     stringSliceValue(response.Result, "buttons"),
+		Inputs:      stringSliceValue(response.Result, "inputs"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) NavigateBrowser(ctx context.Context, request tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_navigate", URL: strings.TrimSpace(request.URL), Attach: cloneAttachConfigPtr(&request.Attach)})
+	if err != nil {
+		return tools.BrowserNavigationResult{}, err
+	}
+	return tools.BrowserNavigationResult{
+		BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+			BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+			PageIndex:                intValue(response.Result, "page_index"),
+			Title:                    stringValue(response.Result, "title"),
+			URL:                      stringValue(response.Result, "url"),
+			Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+		},
+		TextContent: stringValue(response.Result, "text_content"),
+		MIMEType:    stringValue(response.Result, "mime_type"),
+		TextType:    stringValue(response.Result, "text_type"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) ListBrowserTabs(ctx context.Context, attach tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_tabs_list", Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserTabsListResult{}, err
+	}
+	return tools.BrowserTabsListResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		TabCount:                 intValue(response.Result, "tab_count"),
+		Tabs:                     browserTabSliceValue(response.Result, "tabs"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) FocusBrowserTab(ctx context.Context, attach tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_tab_focus", Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserAttachedPageResult{}, err
+	}
+	return tools.BrowserAttachedPageResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		PageIndex:                intValue(response.Result, "page_index"),
+		Title:                    stringValue(response.Result, "title"),
+		URL:                      stringValue(response.Result, "url"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) InteractBrowser(ctx context.Context, request tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_interact", Attach: cloneAttachConfigPtr(&request.Attach), Actions: cloneActionSlice(request.Actions)})
+	if err != nil {
+		return tools.BrowserPageInteractResult{}, err
+	}
+	return tools.BrowserPageInteractResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		ActionsApplied:           intValue(response.Result, "actions_applied"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
 	}, nil
 }
 
@@ -412,6 +494,26 @@ func intValue(values map[string]any, key string) int {
 	}
 }
 
+func browserExecutionMetadata(values map[string]any) tools.BrowserExecutionMetadata {
+	if len(values) == 0 {
+		return tools.BrowserExecutionMetadata{}
+	}
+	return tools.BrowserExecutionMetadata{
+		Attached:         boolValue(values, "attached"),
+		BrowserKind:      stringValue(values, "browser_kind"),
+		BrowserTransport: stringValue(values, "browser_transport"),
+		EndpointURL:      stringValue(values, "endpoint_url"),
+	}
+}
+
+func boolValue(values map[string]any, key string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	value, _ := values[key].(bool)
+	return value
+}
+
 func stringSliceValue(values map[string]any, key string) []string {
 	if len(values) == 0 {
 		return nil
@@ -430,6 +532,41 @@ func stringSliceValue(values map[string]any, key string) []string {
 		return append([]string(nil), typed...)
 	}
 	return nil
+}
+
+func browserTabSliceValue(values map[string]any, key string) []tools.BrowserTabInfo {
+	if len(values) == 0 {
+		return nil
+	}
+	rawItems, ok := values[key].([]any)
+	if !ok {
+		return nil
+	}
+	items := make([]tools.BrowserTabInfo, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		typed, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		items = append(items, tools.BrowserTabInfo{
+			PageIndex: intValue(typed, "page_index"),
+			Title:     stringValue(typed, "title"),
+			URL:       stringValue(typed, "url"),
+		})
+	}
+	return items
+}
+
+func cloneAttachConfigPtr(input *tools.BrowserAttachConfig) *tools.BrowserAttachConfig {
+	if input == nil {
+		return nil
+	}
+	cloned := *input
+	if input.Target.PageIndex != nil {
+		pageIndex := *input.Target.PageIndex
+		cloned.Target.PageIndex = &pageIndex
+	}
+	return &cloned
 }
 
 func resolveWorkerEntryPath() (string, error) {

@@ -33,6 +33,30 @@ func (noopPlaywrightSidecarClient) StructuredDOM(_ context.Context, _ string) (t
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (noopPlaywrightSidecarClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	return tools.BrowserSnapshotResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	return tools.BrowserNavigationResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	return tools.BrowserTabsListResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 type PageReadTool struct {
 	meta tools.ToolMetadata
 }
@@ -269,7 +293,18 @@ func (t *PageSearchTool) Execute(ctx context.Context, execCtx *tools.ToolExecute
 }
 
 func RegisterPlaywrightTools(registry *tools.Registry) error {
-	for _, tool := range []tools.Tool{NewPageReadTool(), NewPageSearchTool(), NewPageInteractTool(), NewStructuredDOMTool()} {
+	for _, tool := range []tools.Tool{
+		NewPageReadTool(),
+		NewPageSearchTool(),
+		NewPageInteractTool(),
+		NewStructuredDOMTool(),
+		NewBrowserAttachCurrentTool(),
+		NewBrowserSnapshotTool(),
+		NewBrowserNavigateTool(),
+		NewBrowserTabsListTool(),
+		NewBrowserTabFocusTool(),
+		NewBrowserInteractTool(),
+	} {
 		if err := registry.Register(tool); err != nil {
 			return err
 		}

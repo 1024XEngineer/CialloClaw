@@ -91,6 +91,10 @@ type stubPlaywrightClient struct {
 	searchResult     tools.BrowserPageSearchResult
 	interactResult   tools.BrowserPageInteractResult
 	structuredResult tools.BrowserStructuredDOMResult
+	attachResult     tools.BrowserAttachedPageResult
+	snapshotResult   tools.BrowserSnapshotResult
+	navigateResult   tools.BrowserNavigationResult
+	tabsResult       tools.BrowserTabsListResult
 	err              error
 }
 
@@ -180,6 +184,30 @@ func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (too
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (localHTTPPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	return tools.BrowserSnapshotResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	return tools.BrowserNavigationResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	return tools.BrowserTabsListResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 func (c *recordingScreenCaptureClient) StartSession(ctx context.Context, input tools.ScreenSessionStartInput) (tools.ScreenSessionState, error) {
 	c.startCalls = append(c.startCalls, input)
 	return c.base.StartSession(ctx, input)
@@ -258,6 +286,48 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (s stubPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	if s.err != nil {
+		return tools.BrowserSnapshotResult{}, s.err
+	}
+	return s.snapshotResult, nil
+}
+
+func (s stubPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	if s.err != nil {
+		return tools.BrowserNavigationResult{}, s.err
+	}
+	return s.navigateResult, nil
+}
+
+func (s stubPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	if s.err != nil {
+		return tools.BrowserTabsListResult{}, s.err
+	}
+	return s.tabsResult, nil
+}
+
+func (s stubPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	return s.interactResult, nil
 }
 
 func (s stubOCRWorkerClient) ExtractText(_ context.Context, _ string) (tools.OCRTextResult, error) {
