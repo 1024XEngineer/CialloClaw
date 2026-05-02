@@ -207,6 +207,78 @@ func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testin
 	}
 }
 
+func TestBuildRiskPrecheckInputBrowserSnapshotUsesAttachTargetAndAppScope(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_snapshot", DisplayName: "Browser Snapshot", Source: ToolSourceSidecar},
+		"browser_snapshot",
+		execCtx,
+		map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}},
+	)
+	if input.Workspace.TargetPath != "https://example.com/docs" {
+		t.Fatalf("expected attach URL target path, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within != nil {
+		t.Fatalf("expected browser snapshot not to perform workspace boundary check, got %+v", input.Workspace)
+	}
+
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	webpages := result.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "https://example.com/docs" {
+		t.Fatalf("expected attach webpage impact scope, got %+v", result.ImpactScope)
+	}
+	apps := result.ImpactScope["apps"].([]string)
+	if len(apps) != 1 || apps[0] != "chrome" {
+		t.Fatalf("expected browser app scope, got %+v", result.ImpactScope)
+	}
+	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {
+		t.Fatalf("expected browser_snapshot to stay green, got %+v", result)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserTabFocusUsesSyntheticTabTarget(t *testing.T) {
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), RiskPrecheckInput{
+		Metadata: ToolMetadata{Name: "browser_tab_focus", DisplayName: "Browser Focus", Source: ToolSourceSidecar},
+		ToolName: "browser_tab_focus",
+		Input: map[string]any{
+			"attach": map[string]any{
+				"browser_kind": "edge",
+				"target":       map[string]any{"page_index": float64(2)},
+			},
+		},
+		Workspace: WorkspaceBoundaryInfo{TargetPath: "browser_tab:2"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected browser_tab_focus to require approval, got %+v", result)
+	}
+	apps := result.ImpactScope["apps"].([]string)
+	if len(apps) != 1 || apps[0] != "edge" {
+		t.Fatalf("expected browser app scope, got %+v", result.ImpactScope)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserNavigateUsesDestinationURL(t *testing.T) {
+	execCtx := &ToolExecuteContext{WorkspacePath: "/workspace", Platform: riskPlatformStub{workspacePath: "/workspace"}}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_navigate", DisplayName: "Browser Navigate", Source: ToolSourceSidecar},
+		"browser_navigate",
+		execCtx,
+		map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}},
+	)
+	if input.Workspace.TargetPath != "https://example.com/docs/start" {
+		t.Fatalf("expected browser navigate target to follow destination URL, got %+v", input.Workspace)
+	}
+}
+
 func TestBuildRiskPrecheckInputUsesMediaOutputTarget(t *testing.T) {
 	execCtx := &ToolExecuteContext{
 		WorkspacePath: "/workspace",

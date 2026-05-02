@@ -1072,6 +1072,9 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	if _, err := s.tools.Get(intentName); err != nil {
 		return "", nil, false
 	}
+	if input, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
+		return intentName, input, true
+	}
 
 	switch intentName {
 	case "read_file":
@@ -1942,9 +1945,9 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		InputText:       runtimeInput,
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
-		ToolDefinitions: s.agentLoopToolDefinitions(),
+		ToolDefinitions: s.agentLoopToolDefinitionsForSnapshot(request.Snapshot),
 		AllowedTool: func(name string) bool {
-			return s.isAllowedAgentLoopTool(name) && !budgetDowngradeDisallowsDirectTool(request, name)
+			return s.isAllowedAgentLoopToolForSnapshot(name, request.Snapshot) && !budgetDowngradeDisallowsDirectTool(request, name)
 		},
 		PollSteering: func(_ context.Context, taskID string) []string {
 			if s.steeringPoller == nil {
@@ -2961,6 +2964,9 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 			if budgetDowngradeDisallowsDirectTool(request, intentName) {
 				return "", nil, nil, false, nil
 			}
+			if input, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
+				return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
+			}
 			switch intentName {
 			case "read_file":
 				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
@@ -3127,6 +3133,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return browserGovernanceTargetObject(toolInput)
+	case "browser_navigate":
+		return firstNonEmpty(stringValue(toolInput, "url", ""), browserGovernanceTargetObject(toolInput))
 	default:
 		for _, key := range governedTargetKeys(toolName) {
 			if value := stringValue(toolInput, key, ""); value != "" {
@@ -3158,6 +3168,14 @@ func approvedTargetObject(intent map[string]any, workspacePath string) string {
 	if intentName == "exec_command" {
 		return workspacePath
 	}
+	if intentName == "browser_navigate" {
+		if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
+			return url
+		}
+	}
+	if target := browserIntentTargetObject(arguments); target != "" {
+		return target
+	}
 	if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
 		return url
 	}
@@ -3184,6 +3202,135 @@ func approvedTargetKeys(intentName string) []string {
 	default:
 		return []string{"target_path", "path", "working_dir"}
 	}
+}
+
+// resolveBrowserToolInput injects the real-browser attach contract from the
+// captured task snapshot so planner-visible browser tools do not need to reason
+// about CDP endpoints or hidden attach metadata.
+func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	browserKind := strings.ToLower(strings.TrimSpace(firstNonEmpty(stringValue(arguments, "browser_kind", ""), snapshot.BrowserKind)))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return nil, false
+	}
+	useSnapshotTarget := true
+	if intentName == "browser_tab_focus" {
+		useSnapshotTarget = browserTargetOverrideMissing(arguments)
+	}
+	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget)
+	if len(attach) == 0 {
+		return nil, false
+	}
+	input := map[string]any{"attach": attach}
+	if endpoint := stringValue(arguments, "endpoint_url", ""); endpoint != "" {
+		attach["endpoint_url"] = endpoint
+	}
+	switch intentName {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := stringValue(arguments, "url", "")
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := arguments["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget bool) map[string]any {
+	target := map[string]any{}
+	if pageIndex, ok := browserAttachPageIndex(arguments); ok {
+		target["page_index"] = pageIndex
+	}
+	if targetURL := stringValue(arguments, "target_url", ""); targetURL != "" {
+		target["url"] = targetURL
+	} else if useSnapshotTarget && strings.TrimSpace(snapshot.PageURL) != "" {
+		target["url"] = strings.TrimSpace(snapshot.PageURL)
+	}
+	if titleContains := stringValue(arguments, "title_contains", ""); titleContains != "" {
+		target["title_contains"] = titleContains
+	} else if useSnapshotTarget && strings.TrimSpace(snapshot.WindowTitle) != "" {
+		target["title_contains"] = strings.TrimSpace(snapshot.WindowTitle)
+	}
+	if len(target) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"mode":         string(tools.BrowserAttachModeCDP),
+		"browser_kind": browserKind,
+		"target":       target,
+	}
+}
+
+func browserAttachPageIndex(arguments map[string]any) (int, bool) {
+	rawValue, ok := arguments["page_index"]
+	if !ok {
+		return 0, false
+	}
+	switch typed := rawValue.(type) {
+	case int:
+		if typed >= 0 {
+			return typed, true
+		}
+	case float64:
+		if typed >= 0 && typed == float64(int(typed)) {
+			return int(typed), true
+		}
+	}
+	return 0, false
+}
+
+func browserTargetOverrideMissing(arguments map[string]any) bool {
+	if _, ok := browserAttachPageIndex(arguments); ok {
+		return false
+	}
+	if stringValue(arguments, "target_url", "") != "" {
+		return false
+	}
+	return stringValue(arguments, "title_contains", "") == ""
+}
+
+func browserGovernanceTargetObject(input map[string]any) string {
+	attach := mapValue(input, "attach")
+	target := mapValue(attach, "target")
+	if url := stringValue(target, "url", ""); url != "" {
+		return url
+	}
+	if titleContains := stringValue(target, "title_contains", ""); titleContains != "" {
+		return titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(target); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	if browserKind := stringValue(attach, "browser_kind", ""); browserKind != "" {
+		return browserKind
+	}
+	return ""
+}
+
+func browserIntentTargetObject(arguments map[string]any) string {
+	if targetURL := stringValue(arguments, "target_url", ""); targetURL != "" {
+		return targetURL
+	}
+	if titleContains := stringValue(arguments, "title_contains", ""); titleContains != "" {
+		return titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(arguments); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	if browserKind := stringValue(arguments, "browser_kind", ""); browserKind != "" {
+		return browserKind
+	}
+	return ""
 }
 
 func requireAuthorizationFlag(intent map[string]any) bool {

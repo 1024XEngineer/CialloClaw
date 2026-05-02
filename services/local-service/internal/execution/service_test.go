@@ -1215,7 +1215,10 @@ func TestExecuteBudgetDowngradeRetainsReadOnlyWebToolsInPlannerCatalog(t *testin
 	if !strings.Contains(modelClient.plannerInputs[0], "网页读取可能触发审批") {
 		t.Fatalf("expected planner input to preserve approval boundary for web tools, got %q", modelClient.plannerInputs[0])
 	}
-	if strings.Contains(modelClient.plannerInputs[0], "page_interact") || strings.Contains(modelClient.plannerInputs[0], "structured_dom") {
+	if !strings.Contains(modelClient.plannerInputs[0], "- structured_dom") {
+		t.Fatalf("expected structured_dom to remain visible as a read-only web tool, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "browser_attach_current") || strings.Contains(modelClient.plannerInputs[0], "page_interact") {
 		t.Fatalf("expected planner input to stay bounded to the frozen agent loop catalog, got %q", modelClient.plannerInputs[0])
 	}
 	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
@@ -3078,6 +3081,69 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 	}
 }
 
+func TestAssessGovernanceBrowserSnapshotUsesAttachedPageTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_auth",
+		RunID:  "run_browser_snapshot_auth",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "chrome",
+			PageURL:     "https://example.com/docs",
+			WindowTitle: "Example Docs",
+		},
+		DeliveryType: "bubble",
+		ResultTitle:  "浏览器快照结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot governance path to be handled")
+	}
+	if assessment.OperationName != "browser_snapshot" || assessment.TargetObject != "https://example.com/docs" {
+		t.Fatalf("unexpected browser_snapshot assessment: %+v", assessment)
+	}
+	if assessment.ApprovalRequired {
+		t.Fatalf("expected browser_snapshot to stay approval-free, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_snapshot green risk level, got %+v", assessment)
+	}
+	apps, _ := assessment.ImpactScope["apps"].([]string)
+	if len(apps) != 1 || apps[0] != "chrome" {
+		t.Fatalf("expected browser_snapshot app scope, got %+v", assessment.ImpactScope)
+	}
+}
+
+func TestAssessGovernanceBrowserNavigateUsesDestinationURL(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_navigate_auth",
+		RunID:  "run_browser_navigate_auth",
+		Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs/start"}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "edge",
+			PageURL:     "https://example.com/docs",
+			WindowTitle: "Example Docs",
+		},
+		DeliveryType: "bubble",
+		ResultTitle:  "浏览器导航结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_navigate governance path to be handled")
+	}
+	if assessment.OperationName != "browser_navigate" || assessment.TargetObject != "https://example.com/docs/start" {
+		t.Fatalf("unexpected browser_navigate assessment: %+v", assessment)
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_navigate to require approval, got %+v", assessment)
+	}
+}
+
 func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
 	tests := []struct {
@@ -3086,6 +3152,9 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 		wantTool string
 		wantKey  string
 	}{
+		{name: "browser_snapshot", request: Request{Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_snapshot", wantKey: "attach"},
+		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_navigate", wantKey: "url"},
+		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_interact", wantKey: "actions"},
 		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact", wantKey: "url"},
 		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom", wantKey: "url"},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
@@ -3112,6 +3181,8 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 		request  Request
 		wantTool string
 	}{
+		{name: "browser_snapshot", request: Request{TaskID: "task_000", RunID: "run_000", DeliveryType: "bubble", ResultTitle: "浏览器快照结果", Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_snapshot"},
+		{name: "browser_navigate", request: Request{TaskID: "task_000a", RunID: "run_000a", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_navigate"},
 		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact"},
 		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom"},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
@@ -3270,6 +3341,15 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
+	if governanceTargetObject("browser_snapshot", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs" {
+		t.Fatalf("expected browser_snapshot governance target url")
+	}
+	if governanceTargetObject("browser_tab_focus", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 2}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "browser_tab:2" {
+		t.Fatalf("expected browser_tab_focus governance target to use tab index")
+	}
+	if governanceTargetObject("browser_navigate", map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs/start" {
+		t.Fatalf("expected browser_navigate governance target to prefer destination url")
+	}
 	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
 		t.Fatalf("expected file-based governance target path")
 	}
@@ -3281,6 +3361,12 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	}
 	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
 		t.Fatalf("expected webpage intent to preserve approved url target")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"page_index": 3.0, "browser_kind": "chrome"}}, "/workspace") != "browser_tab:3" {
+		t.Fatalf("expected browser tab focus approval target to use tab index")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"target_url": "https://example.com/docs", "browser_kind": "chrome"}}, "/workspace") != "https://example.com/docs" {
+		t.Fatalf("expected browser snapshot approval target to preserve target_url")
 	}
 	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
 		t.Fatalf("expected media intent approval target to follow output_path")

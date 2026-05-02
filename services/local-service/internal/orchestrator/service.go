@@ -6197,6 +6197,18 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 		return "网页读取结果", "结果已通过气泡返回", "网页主要内容已经整理完成，可直接查看。"
 	case "page_search":
 		return "网页搜索结果", "结果已通过气泡返回", "网页搜索结果已经返回，可直接查看。"
+	case "browser_attach_current":
+		return "浏览器附着结果", "结果已通过气泡返回", "当前浏览器页已经附着成功，可继续操作。"
+	case "browser_snapshot":
+		return "浏览器快照结果", "结果已通过气泡返回", "当前浏览器页的关键信息已经整理完成，可直接查看。"
+	case "browser_tabs_list":
+		return "浏览器标签页结果", "结果已通过气泡返回", "当前浏览器标签页列表已经返回，可直接查看。"
+	case "browser_navigate":
+		return "浏览器导航结果", "结果已通过气泡返回", "当前浏览器页已经导航完成，可继续查看。"
+	case "browser_tab_focus":
+		return "浏览器切页结果", "结果已通过气泡返回", "目标浏览器标签页已经切换完成，可继续查看。"
+	case "browser_interact":
+		return "浏览器交互结果", "结果已通过气泡返回", "当前浏览器页交互已经完成，可继续查看。"
 	case "write_file":
 		return "文件写入结果", "已为你写入文档并打开", "文件已经生成，可直接查看。"
 	default:
@@ -6207,7 +6219,7 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 // deliveryTypeFromIntent returns the default delivery type for an intent.
 func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
-	case "agent_loop", "translate", "explain", "page_read", "page_search":
+	case "agent_loop", "translate", "explain", "page_read", "page_search", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_navigate", "browser_tab_focus", "browser_interact":
 		return "bubble"
 	default:
 		return "workspace_document"
@@ -7565,7 +7577,7 @@ func executionAttemptHasSideEffects(result execution.Result) bool {
 
 func isMutatingToolCall(toolName string) bool {
 	switch strings.TrimSpace(toolName) {
-	case "write_file", "exec_command", "page_interact", "transcode_media", "normalize_recording", "extract_frames":
+	case "write_file", "exec_command", "page_interact", "browser_navigate", "browser_tab_focus", "browser_interact", "transcode_media", "normalize_recording", "extract_frames":
 		return true
 	default:
 		return false

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -148,6 +149,9 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 	targetObject := input.Workspace.TargetPath
 	if isWebpageTool(input.ToolName) {
 		impactScope.Webpages = webpagesFromTarget(input.Workspace.TargetPath)
+		if browserKind := browserAttachKind(input.Input); browserKind != "" {
+			impactScope.Apps = []string{browserKind}
+		}
 	} else {
 		impactScope.Files = filesFromTarget(firstNonEmptyTarget(input.Workspace.TargetPath, input.Workspace.WorkspacePath))
 	}
@@ -172,6 +176,16 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 	if toolName == "exec_command" {
 		if value, ok := input["working_dir"].(string); ok && strings.TrimSpace(value) != "" {
+			return value, true
+		}
+	}
+	if toolName == "browser_navigate" {
+		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), true
+		}
+	}
+	if isBrowserTool(toolName) {
+		if value := browserAttachTarget(input); value != "" {
 			return value, true
 		}
 	}
@@ -256,16 +270,72 @@ func webpagesFromTarget(target string) []string {
 	if trimmed == "" {
 		return nil
 	}
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		return nil
+	}
 	return []string{trimmed}
 }
 
 func isWebpageTool(toolName string) bool {
 	switch toolName {
-	case "page_read", "page_search", "page_interact", "structured_dom":
+	case "page_read", "page_search", "page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		return true
 	default:
 		return false
 	}
+}
+
+func isBrowserTool(toolName string) bool {
+	switch toolName {
+	case "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func browserAttachTarget(input map[string]any) string {
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if value, ok := target["url"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if value, ok := target["title_contains"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if pageIndex, ok := browserAttachPageIndexValue(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	return ""
+}
+
+func browserAttachKind(input map[string]any) string {
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, _ := attach["browser_kind"].(string)
+	return strings.TrimSpace(value)
+}
+
+func browserAttachPageIndexValue(rawValue any) (int, bool) {
+	switch typed := rawValue.(type) {
+	case int:
+		if typed >= 0 {
+			return typed, true
+		}
+	case float64:
+		if typed >= 0 && typed == float64(int(typed)) {
+			return int(typed), true
+		}
+	}
+	return 0, false
 }
 
 func withinWorkspacePath(workspacePath, targetPath string) *bool {

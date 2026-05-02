@@ -6,6 +6,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
@@ -17,11 +18,11 @@ import (
 func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
 	definitions := service.agentLoopToolDefinitions()
-	if len(definitions) != 4 {
-		t.Fatalf("expected four planner-visible agent loop tools, got %+v", definitions)
+	if len(definitions) != 5 {
+		t.Fatalf("expected five planner-visible agent loop tools without browser snapshot hints, got %+v", definitions)
 	}
 
-	wantNames := []string{"read_file", "list_dir", "page_read", "page_search"}
+	wantNames := []string{"read_file", "list_dir", "page_read", "page_search", "structured_dom"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -39,6 +40,9 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 	if !strings.Contains(definitions[3].Description, "返回受限数量的关键词命中") {
 		t.Fatalf("expected page_search description to include search constraint, got %q", definitions[3].Description)
 	}
+	if !strings.Contains(definitions[4].Description, "不会执行页面交互") {
+		t.Fatalf("expected structured_dom description to preserve read-only contract, got %q", definitions[4].Description)
+	}
 
 	mutated := definitions[0].InputSchema
 	mutatedProperties, ok := mutated["properties"].(map[string]any)
@@ -51,6 +55,26 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 	refreshedProperties, ok := refreshed[0].InputSchema["properties"].(map[string]any)
 	if !ok || refreshedProperties["path"] == nil {
 		t.Fatalf("expected shared catalog schemas to be cloned per call, got %+v", refreshed[0].InputSchema)
+	}
+}
+
+func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t *testing.T) {
+	service := newAgentLoopCapabilityTestService(t, true)
+	definitions := service.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"})
+	if len(definitions) != 10 {
+		t.Fatalf("expected browser-capable snapshot to expose ten planner-visible tools, got %+v", definitions)
+	}
+	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_navigate", "browser_tab_focus", "page_read", "page_search", "structured_dom"}
+	for index, want := range wantNames {
+		if definitions[index].Name != want {
+			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
+		}
+	}
+	if !strings.Contains(definitions[2].Description, "不会隐式导航或交互页面") {
+		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", definitions[2].Description)
+	}
+	if !strings.Contains(definitions[5].Description, "不会自动把关键词转换成搜索引擎查询") {
+		t.Fatalf("expected browser_navigate description to include navigation constraint, got %q", definitions[5].Description)
 	}
 }
 
@@ -69,13 +93,25 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	if !builtinOnly.isAllowedAgentLoopTool("read_file") {
 		t.Fatal("expected registered catalog tool to be allowed")
 	}
+	if builtinOnly.isAllowedAgentLoopTool("browser_snapshot") {
+		t.Fatal("expected missing browser registry entry to stay disallowed")
+	}
 	if builtinOnly.isAllowedAgentLoopTool("page_search") {
 		t.Fatal("expected missing registry entry to stay disallowed")
 	}
 
 	withPlaywright := newAgentLoopCapabilityTestService(t, true)
-	if withPlaywright.isAllowedAgentLoopTool("structured_dom") {
-		t.Fatal("expected non-catalog tool to stay disallowed even when registered")
+	if !withPlaywright.isAllowedAgentLoopTool("structured_dom") {
+		t.Fatal("expected structured_dom to become planner-visible once cataloged")
+	}
+	if withPlaywright.isAllowedAgentLoopTool("browser_attach_current") {
+		t.Fatal("expected browser_attach_current to stay hidden without attach-capable snapshot hints")
+	}
+	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
+		t.Fatal("expected browser_attach_current to be allowed when the snapshot exposes an attach-capable browser")
+	}
+	if withPlaywright.isAllowedAgentLoopTool("browser_interact") {
+		t.Fatal("expected browser_interact to stay disallowed until the planner catalog opts in")
 	}
 	if withPlaywright.isAllowedAgentLoopTool("unknown_tool") {
 		t.Fatal("expected unknown tool to stay disallowed")

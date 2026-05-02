@@ -3,6 +3,7 @@ package execution
 import (
 	"strings"
 
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -50,6 +51,93 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
+		Name:                   "browser_attach_current",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要附着当前真实浏览器标签页，并确认当前页面 URL 或标题",
+		AvoidWhen:              "当前任务并不依赖用户真实浏览器，或上下文里没有受支持浏览器线索",
+		Constraints: []string{
+			"仅附着本地已开启调试端口的 Chrome/Edge",
+			"执行层会自动注入附着线索",
+			"不会隐式导航或交互页面",
+		},
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                   "browser_snapshot",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要读取当前真实浏览器页的可见文本、标题和结构化摘要",
+		AvoidWhen:              "用户已经提供明确 URL，并且只需要离线读取页面而不关心真实浏览器状态",
+		Constraints: []string{
+			"仅适用于当前真实浏览器标签页",
+			"执行层会自动注入附着线索",
+			"不会主动导航页面",
+		},
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                   "browser_tabs_list",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要查看当前真实浏览器里有哪些标签页可供后续切换",
+		AvoidWhen:              "用户已经明确指定当前页就足够，不需要切换其它标签页",
+		Constraints: []string{
+			"仅返回标签页摘要",
+			"执行层会自动注入附着线索",
+			"不会切换或关闭标签页",
+		},
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                   "browser_navigate",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要在当前真实浏览器标签页里打开一个新的绝对 URL",
+		AvoidWhen:              "用户只需要读取当前页面，或只是想搜索页面内关键词",
+		Constraints: []string{
+			"浏览器导航可能触发审批",
+			"一次只导航到一个绝对 URL",
+			"不会自动把关键词转换成搜索引擎查询",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "Absolute URL to open in the attached browser tab."},
+			},
+			"required":             []string{"url"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                   "browser_tab_focus",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要切换到当前真实浏览器中的另一个已知标签页",
+		AvoidWhen:              "用户只需要查看标签页列表，或需要直接导航到一个全新 URL",
+		Constraints: []string{
+			"切换标签页可能触发审批",
+			"可选使用 page_index 或目标线索缩小范围",
+			"不会修改页面内容",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"page_index":     map[string]any{"type": "integer", "minimum": 0},
+				"target_url":     map[string]any{"type": "string", "description": "Optional URL hint for the target tab."},
+				"title_contains": map[string]any{"type": "string", "description": "Optional title substring hint for the target tab."},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
 		Name:      "page_read",
 		UseWhen:   "需要读取某个网页的标题或主要可见文本",
 		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
@@ -87,26 +175,52 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 			"additionalProperties": false,
 		},
 	},
+	{
+		Name:      "structured_dom",
+		UseWhen:   "需要快速了解页面的标题层级、链接、按钮和输入框结构",
+		AvoidWhen: "用户只需要通读正文，或只需要确认某个关键词是否出现",
+		Constraints: []string{
+			"页面结构读取可能触发审批",
+			"一次只提取一个绝对 URL 的结构摘要",
+			"不会执行页面交互",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "Absolute URL to inspect."},
+			},
+			"required":             []string{"url"},
+			"additionalProperties": false,
+		},
+	},
 }
 
 type agentLoopCapabilitySpec struct {
-	Name        string
-	UseWhen     string
-	AvoidWhen   string
-	Constraints []string
-	InputSchema map[string]any
+	Name                   string
+	RequiresCurrentBrowser bool
+	UseWhen                string
+	AvoidWhen              string
+	Constraints            []string
+	InputSchema            map[string]any
 }
 
 // agentLoopToolDefinitions resolves the runtime-visible planner tools from the
 // shared catalog and the live registry. Missing registry entries are skipped so
 // partially wired environments never advertise tools that cannot execute.
 func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
+	return s.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{})
+}
+
+func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot contextsvc.TaskContextSnapshot) []model.ToolDefinition {
 	if s == nil || s.tools == nil {
 		return nil
 	}
 
 	definitions := make([]model.ToolDefinition, 0, len(agentLoopCapabilityCatalog))
 	for _, capability := range agentLoopCapabilityCatalog {
+		if !capability.allowedForSnapshot(snapshot) {
+			continue
+		}
 		metadata, ok := s.agentLoopToolMetadata(capability.Name)
 		if !ok {
 			continue
@@ -120,12 +234,19 @@ func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
 // catalog and the live registry. This prevents hallucinated or unregistered tool
 // names from slipping past the allowlist even when they resemble supported tools.
 func (s *Service) isAllowedAgentLoopTool(name string) bool {
+	return s.isAllowedAgentLoopToolForSnapshot(name, contextsvc.TaskContextSnapshot{})
+}
+
+func (s *Service) isAllowedAgentLoopToolForSnapshot(name string, snapshot contextsvc.TaskContextSnapshot) bool {
 	if s == nil || s.tools == nil {
 		return false
 	}
 
 	capability, ok := agentLoopCapabilityByName(name)
 	if !ok {
+		return false
+	}
+	if !capability.allowedForSnapshot(snapshot) {
 		return false
 	}
 
@@ -186,4 +307,18 @@ func joinCapabilityConstraints(values []string) string {
 		cleaned = append(cleaned, trimmed)
 	}
 	return strings.Join(cleaned, ", ")
+}
+
+func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
+	if !c.RequiresCurrentBrowser {
+		return true
+	}
+	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.PageURL) != "" {
+		return true
+	}
+	return strings.TrimSpace(snapshot.WindowTitle) != ""
 }
