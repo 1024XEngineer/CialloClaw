@@ -1,7 +1,12 @@
 import type { AgentSettingsGetParams, RequestMeta, SettingsSnapshot, TimeInterval } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getSettingsDetailed } from "@/rpc/methods";
-import { hydrateDesktopSettings, loadSettings, toProtocolSettingsSnapshot } from "@/services/settingsService";
+import {
+  hydrateDesktopRuntimeDefaults,
+  hydrateDesktopSettings,
+  loadSettings,
+  toProtocolSettingsSnapshot,
+} from "@/services/settingsService";
 
 export type DashboardSettingsSource = "rpc" | "mock";
 export type DashboardSettingsSnapshotScope = AgentSettingsGetParams["scope"];
@@ -93,6 +98,7 @@ export async function loadDashboardSettingsSnapshot(
   source: DashboardSettingsSource = "rpc",
   scope: DashboardSettingsSnapshotScope = "all",
 ): Promise<DashboardSettingsSnapshotData> {
+  await hydrateDesktopRuntimeDefaults();
   if (source === "mock") {
     return getInitialDashboardSettingsSnapshot();
   }

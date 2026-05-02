@@ -12,9 +12,9 @@ use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_
 
 const SCREENSHOT_PREFIX: &str = "screenshot";
 
-/// Captures the current primary screen into `apps/.temp` and returns the saved
+/// Captures the current primary screen into the runtime temp directory and returns the saved
 /// screenshot metadata.
-pub fn capture_screenshot() -> Result<ScreenCapturePayload, String> {
+pub fn capture_screenshot(temp_dir: PathBuf) -> Result<ScreenCapturePayload, String> {
     let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
 
@@ -97,7 +97,7 @@ pub fn capture_screenshot() -> Result<ScreenCapturePayload, String> {
 
         let image = ImageBuffer::<Rgba<u8>, _>::from_raw(width as u32, height as u32, pixels)
             .ok_or_else(|| "failed to build screenshot image buffer".to_string())?;
-        let (absolute_path, relative_path) = next_screenshot_paths()?;
+        let (absolute_path, relative_path) = next_screenshot_paths(&temp_dir)?;
         image
             .save(&absolute_path)
             .map_err(|error| format!("failed to save screenshot image: {error}"))?;
@@ -120,8 +120,7 @@ pub fn capture_screenshot() -> Result<ScreenCapturePayload, String> {
     capture_result
 }
 
-fn next_screenshot_paths() -> Result<(PathBuf, String), String> {
-    let temp_dir = apps_temp_dir()?;
+fn next_screenshot_paths(temp_dir: &Path) -> Result<(PathBuf, String), String> {
     fs::create_dir_all(&temp_dir)
         .map_err(|error| format!("failed to create screenshot temp dir: {error}"))?;
 
@@ -131,16 +130,7 @@ fn next_screenshot_paths() -> Result<(PathBuf, String), String> {
         .unwrap_or(0);
     let file_name = format!("{SCREENSHOT_PREFIX}_{timestamp}.png");
     let absolute_path = temp_dir.join(&file_name);
-    let relative_path = Path::new("apps").join(".temp").join(&file_name);
+    let relative_path = Path::new("temp").join(&file_name);
 
     Ok((absolute_path, relative_path.to_string_lossy().to_string()))
-}
-
-fn apps_temp_dir() -> Result<PathBuf, String> {
-    let apps_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| "failed to resolve apps directory from cargo manifest".to_string())?;
-
-    Ok(apps_dir.join(".temp"))
 }

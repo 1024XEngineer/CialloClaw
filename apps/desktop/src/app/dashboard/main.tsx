@@ -1,9 +1,10 @@
-// 该入口负责挂载仪表盘窗口。
+// This entrypoint mounts the dashboard desktop window.
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import { AppProviders } from "@/features/shared/AppProviders";
 import { installHideOnCloseRequest } from "@/platform/hideOnCloseRequest";
 import { DashboardRoot } from "./DashboardRoot";
+import { DashboardWindowErrorBoundary } from "./DashboardWindowErrorBoundary";
 
 function installDashboardEscapeClose(windowHandle = getCurrentWindow()) {
   let closing = false;
@@ -40,7 +41,11 @@ void installHideOnCloseRequest();
 installDashboardEscapeClose();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <AppProviders>
-    <DashboardRoot />
-  </AppProviders>,
+  // Keep the recovery boundary above AppProviders so provider init failures
+  // still land on the dashboard fallback instead of collapsing the window.
+  <DashboardWindowErrorBoundary>
+    <AppProviders>
+      <DashboardRoot />
+    </AppProviders>
+  </DashboardWindowErrorBoundary>,
 );

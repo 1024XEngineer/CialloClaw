@@ -461,6 +461,9 @@ export interface AgentTaskStartParams {
   };
   context?: InputContext;
   delivery?: DeliveryPreference;
+  options?: {
+    confirm_required?: boolean;
+  };
 }
 
 export interface AgentTaskStartResult {

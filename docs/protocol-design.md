@@ -629,6 +629,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.behavior.last_action` | 最近行为信号，例如 `copy`    |
 | `context.behavior.dwell_millis` | 当前场景停留时长             |
 | `voice_meta`                 | 语音会话元信息                 |
+| `options.confirm_required`   | 是否强制先进入意图确认         |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
 
 补充约束：
@@ -638,6 +639,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
+- 若同一 `session` 内只有一个 `waiting_input / confirming_intent` 任务，普通文本补充可续接到该任务；`options.confirm_required = true` 只表示本次补充后仍需确认，不应把普通文本补充机械拆成新 task。
+- 文件、选区、错误等结构化补充证据若要续接旧 task，仍必须存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage。
 
 ### agent.input.submit 入参示例
 
@@ -758,7 +761,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `source`                   | 来源位置，取值来自 `request_source` |
 | `trigger`                  | 触发动作，取值来自 `request_trigger` |
 | `input.type`               | 输入对象类型，取值来自 `input_type` |
-| `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
+| `input.text`               | 当 `input.type = text_selection` 时表示选中文本内容；当 `input.type = file` 时可表示用户对附件的明确说明 |
 | `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
 | `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
 | `input.page_context.title` | 当前页面标题，可用于页面级任务标题与上下文冻结 |
@@ -774,16 +777,21 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.behavior.dwell_millis` | 当前场景停留时长 |
 | `delivery.preferred`       | 优先交付方式 |
 | `delivery.fallback`        | 兜底交付方式 |
+| `options.confirm_required` | 是否强制先进入意图确认；不用于绕过风险授权 |
 
 补充约束：
 
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
+- `options.confirm_required = true` 仅表示调用方要求先进入意图确认；`false` 或省略只表示不强制确认，不得跳过风险授权、审计、恢复点或必要澄清。
+- 当 `input.type = file` 且 `input.text` 已包含用户对附件的明确说明时，后端应直接进入 Agent Loop / 治理 / 执行链路，不应重复返回通用意图确认气泡。
+- 当 `input.type = file` 但缺少明确说明时，后端仍可进入意图确认或补充输入状态，避免对裸附件直接执行不明确任务。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
 - `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
-- 当后端在正式主链路中已经解析出结构化意图或视觉任务信号时，不得仅凭“当前只有一个 waiting task”就把新输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或本次输入本身就是结构化补充证据时，才允许视为旧 task 的 continuation。
+- 当后端在正式主链路中已经解析出结构化意图或视觉任务信号时，不得仅凭“当前只有一个 waiting task”或“本次输入是结构化对象”就把新输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage 时，才允许视为旧 task 的 continuation；多候选场景下只有存在唯一任务特定匹配时才允许续接。
+- 悬浮球默认入口锚点（如 `desktop / local://shell-ball`）只表示输入从悬浮球进入系统，不得作为共享页面 / 窗口 / App 锚点来证明 continuation。
 - continuation 分类发给模型的信号必须至少带上当前输入解析后的 `intent_name / delivery_type` 和候选 task 的 `intent_name / delivery_type`；仅靠 `explicit_intent_present=true` 之类布尔位不足以支撑正式路由判断。
 
 ### agent.task.start 入参示例
@@ -3647,7 +3655,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
 - `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
+- 打包版默认 `general.download.workspace_path` 会解析为用户本机的 `AppLocalData/CialloClaw/workspace`，历史 `workspace` 相对占位值会在 settings snapshot 读取时迁移到该绝对目录。
+- 打包版默认 `task_automation.task_sources` 会解析为 `${workspace_path}/todos`；settings snapshot 读取时仅会把历史默认占位值（`workspace/todos` 或旧的 `D:/workspace/todos`）迁移到该绝对目录，用户自定义的 `workspace/...` 多根来源会保持原样。
 - `general.download.workspace_path` 当前不会热重建 bootstrap 时已经绑定的 workspace runtime（例如文件系统、执行后端与 execution workspace）；更新该字段会写入正式 settings snapshot，并返回 `apply_mode = restart_required` 与 `need_restart = true`，用于显式提示“重启后端后生效”。
+- 桌面宿主侧 `desktop_open_local_path`、`desktop_reveal_local_path` 只允许使用当前 bootstrap 生效的 `workspace root` 或宿主明确白名单的 runtime 子目录（当前仅接受 `temp/...` 前缀，并解析到 runtime temp 目录）；source-note 路径解析允许使用当前 `workspace root` 或宿主 `runtime root`。这些路径解析都不再回退到编译时 repo root，也不会因为待重启的 `workspace_path` 草稿而漂移本地打开范围。
+- 仪表盘 `trust_summary.workspace_path` 与 `out_of_workspace` 判断展示的是当前运行时真实生效的 workspace 根目录，而不是待重启后才会生效的 settings 草稿值。
 
 ### agent.settings.update 入参说明
 
