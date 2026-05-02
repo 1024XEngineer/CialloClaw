@@ -54,7 +54,7 @@ export function compactPageContext(pageContext: PageContext | undefined): PageCo
 
   const appName = normalizeOptionalPageContextText(pageContext.app_name);
   const title = normalizeOptionalPageContextText(pageContext.title);
-  const url = normalizeOptionalPageContextText(pageContext.url);
+  const url = sanitizePageContextUrl(pageContext.url);
   const processPath = normalizeOptionalPageContextText(pageContext.process_path);
   const windowTitle = normalizeOptionalPageContextText(pageContext.window_title);
   const visibleText = normalizeOptionalPageContextText(pageContext.visible_text);

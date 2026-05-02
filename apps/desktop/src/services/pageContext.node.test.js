@@ -76,7 +76,7 @@ test("compactPageContext drops empty fields and invalid process ids", () => {
       process_id: 0,
       process_path: "  ",
       title: " Build Dashboard ",
-      url: " https://example.com/build ",
+      url: " https://user:secret@example.com/build?ticket=1#summary ",
       visible_text: "   ",
       hover_target: "Open docs",
       window_title: " Build Dashboard ",
@@ -110,12 +110,14 @@ test("resolveTaskPageContext falls back only when no page hints remain", () => {
       {
         browser_kind: "non_browser",
         process_id: 8844,
+        url: "https://example.com/editor?draft=1#cursor",
       },
       fallback,
     ),
     {
       browser_kind: "non_browser",
       process_id: 8844,
+      url: "https://example.com/editor",
     },
   );
 });

@@ -31,6 +31,7 @@ import {
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
+  compactPageContext,
   mapDesktopWindowSnapshotToPageContext,
   resolveTaskPageContext,
   sanitizePageContextUrl,
@@ -2334,6 +2335,8 @@ test("task-entry services keep rpc transport failures visible and forward file d
         rememberConversationSessionFromTask() {},
       },
       "./pageContext": {
+        compactPageContext,
+        mapDesktopWindowSnapshotToPageContext,
         resolveTaskPageContext,
       },
     },
@@ -2480,7 +2483,7 @@ test("task-entry services keep rpc transport failures visible and forward file d
           process_id: 4412,
           process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
           title: "Build Dashboard",
-          url: "https://example.com/build",
+          url: "https://example.com/build?ticket=secret#fragment",
         },
         sessionId: "sess_shell_ball_error",
         source: "floating_ball",
@@ -2608,6 +2611,7 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
           rememberConversationSessionFromTask() {},
         },
         "./pageContext": {
+          compactPageContext,
           mapDesktopWindowSnapshotToPageContext,
           resolveTaskPageContext,
           sanitizePageContextUrl,
@@ -2730,6 +2734,7 @@ test("submitTextInput enriches floating-ball text submissions with foreground pa
           rememberConversationSessionFromTask() {},
         },
         "./pageContext": {
+          compactPageContext,
           mapDesktopWindowSnapshotToPageContext,
           resolveTaskPageContext,
           sanitizePageContextUrl,
@@ -2843,6 +2848,7 @@ test("submitTextInput keeps dashboard voice submissions free of ambient page and
           rememberConversationSessionFromTask() {},
         },
         "./pageContext": {
+          compactPageContext,
           mapDesktopWindowSnapshotToPageContext,
           resolveTaskPageContext,
           sanitizePageContextUrl,
@@ -2904,6 +2910,111 @@ test("submitTextInput keeps dashboard voice submissions free of ambient page and
     },
   });
   assert.equal(windowContextCallCount, 0);
+});
+
+test("submitTextInput sanitizes explicit page context urls before rpc submit", async () => {
+  const submitCalls: Array<Record<string, unknown>> = [];
+  let windowContextCallCount = 0;
+  const originalDateNow = Date.now;
+  Date.now = () => 1_713_864_005_000;
+
+  try {
+    await withSourceModuleRuntime(
+      resolve(desktopRoot, "src/services/agentInputService.ts"),
+      {
+        "@/rpc/methods": {
+          submitInput(params: Record<string, unknown>) {
+            submitCalls.push(params);
+            return Promise.resolve({
+              bubble_message: null,
+              delivery_result: null,
+              task: {
+                task_id: "task_ctx_004",
+                session_id: null,
+                title: "Summarize note",
+                source_type: "text_input",
+                status: "processing",
+                intent: null,
+                current_step: "processing",
+                risk_level: "green",
+                started_at: "2026-04-23T10:00:00.000Z",
+                updated_at: "2026-04-23T10:00:00.000Z",
+                finished_at: null,
+              },
+            });
+          },
+        },
+        "./conversationSessionService": {
+          getCurrentConversationSessionId(): string | undefined {
+            return undefined;
+          },
+          rememberConversationSessionFromTask() {},
+        },
+        "./pageContext": {
+          compactPageContext,
+          mapDesktopWindowSnapshotToPageContext,
+          resolveTaskPageContext,
+          sanitizePageContextUrl,
+        },
+        "./mirrorMemoryService": {
+          recordMirrorConversationFailure() {},
+          recordMirrorConversationStart() {},
+          recordMirrorConversationSuccess() {},
+        },
+        "@/platform/desktopActivity": {
+          getDesktopMouseActivitySnapshot() {
+            return Promise.resolve({ updated_at: "1713864000000" });
+          },
+        },
+        "@/platform/desktopWindowContext": {
+          getActiveWindowContext() {
+            windowContextCallCount += 1;
+            return Promise.resolve(null);
+          },
+        },
+      },
+      async (moduleExports) => {
+        const service = moduleExports as {
+          submitTextInput: (input: {
+            text: string;
+            source: "floating_ball" | "dashboard" | "tray_panel";
+            trigger: "voice_commit" | "hover_text_input";
+            inputMode: "voice" | "text";
+            pageContext?: Record<string, unknown>;
+          }) => Promise<unknown>;
+        };
+
+        await service.submitTextInput({
+          text: "Summarize this note",
+          source: "dashboard",
+          trigger: "voice_commit",
+          inputMode: "voice",
+          pageContext: {
+            app_name: "Chrome",
+            title: "Build Dashboard",
+            url: "https://user:secret@example.com/build?ticket=secret#fragment",
+          },
+        });
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(submitCalls[0]?.context, {
+    files: [],
+    page: {
+      app_name: "Chrome",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
+    },
+    behavior: {
+      last_action: "voice_commit",
+      dwell_millis: 5000,
+    },
+  });
+  assert.equal(windowContextCallCount, 1);
 });
 
 test("shell-ball text drop helpers only accept non-file drags and extract plain text", () => {

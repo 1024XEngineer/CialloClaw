@@ -13,6 +13,7 @@ import {
 } from "./mirrorMemoryService";
 import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
 import {
+  compactPageContext,
   mapDesktopWindowSnapshotToPageContext,
   sanitizePageContextUrl,
   type DesktopWindowPageContextSnapshot,
@@ -88,7 +89,9 @@ function mergeContextRecord<T extends object>(primary: T | undefined, fallback: 
 }
 
 function createBaseInputContext(input: SubmitTextInputParams): InputContext {
-  const mergedPageContext = mergeContextRecord<PageContext>(input.pageContext, input.context?.page);
+  const mergedPageContext = compactPageContext(
+    mergeContextRecord<PageContext>(input.pageContext, input.context?.page),
+  );
 
   return {
     ...(input.context ?? {}),
@@ -254,7 +257,9 @@ async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Prom
     : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
   const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
-  const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
+  const mergedPageContext = compactPageContext(
+    mergeContextRecord<PageContext>(params.context.page, fallbackPageContext),
+  );
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
 
