@@ -91,8 +91,8 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.toolRegistry == nil || app.toolExecutor == nil {
 		t.Fatal("expected tool registry and executor to be wired")
 	}
-	if app.toolRegistry.Count() != 15 {
-		t.Fatalf("expected 15 tools to be registered, got %d", app.toolRegistry.Count())
+	if app.toolRegistry.Count() != 21 {
+		t.Fatalf("expected 21 tools to be registered, got %d", app.toolRegistry.Count())
 	}
 	if _, err := app.toolRegistry.Get("generate_text"); err != nil {
 		t.Fatalf("expected generate_text to be registered, got %v", err)
@@ -115,7 +115,7 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if _, err := app.toolRegistry.Get("page_search"); err != nil {
 		t.Fatalf("expected page_search to be registered, got %v", err)
 	}
-	for _, toolName := range []string{"page_interact", "structured_dom", "extract_text", "ocr_image", "ocr_pdf", "transcode_media", "extract_frames", "normalize_recording"} {
+	for _, toolName := range []string{"page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact", "extract_text", "ocr_image", "ocr_pdf", "transcode_media", "extract_frames", "normalize_recording"} {
 		if _, err := app.toolRegistry.Get(toolName); err != nil {
 			t.Fatalf("expected %s to be registered, got %v", toolName, err)
 		}
