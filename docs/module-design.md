@@ -1734,7 +1734,7 @@ flowchart TB
 #### worker 契约补充
 - attached 模式结果可追加 `attached / browser_kind / browser_transport / endpoint_url / source` 元信息，供后续 Go sidecar、引用映射与前端承接复用；
 - `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tab_focus` 结果至少需要稳定回写 `page_index / url / title`，`browser_tabs_list` 需要回写 `tabs[]` 与 `tab_count`；
-- worker 至少需要把 `browser_attach_failed`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
+- worker 至少需要把 `browser_attach_failed`、`browser_kind_mismatch`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
 
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。

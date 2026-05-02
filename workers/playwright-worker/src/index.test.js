@@ -88,6 +88,9 @@ function createDeps(overrides = {}) {
         throw overrides.connectError;
       }
       return {
+        async version() {
+          return overrides.browserVersion ?? "Chrome/125.0.0.0";
+        },
         contexts() {
           return overrides.connectedContexts ?? [{
             pages() {
@@ -370,6 +373,7 @@ test("browser_snapshot returns structured content for the attached tab", async (
       },
     },
   }, createDeps({
+    browserVersion: "Microsoft Edge/125.0.0.0",
     connectedPages: [createPage({
       currentURL: "https://example.com/current",
       title: "Snapshot Page",
@@ -425,6 +429,7 @@ test("browser_tab_focus brings the selected tab to the front", async () => {
     },
   }, createDeps({
     actionLog,
+    browserVersion: "Microsoft Edge/125.0.0.0",
     connectedPages: [
       createPage({ actionLog, currentURL: "https://example.com/one", title: "One" }),
       createPage({ actionLog, currentURL: "https://example.com/two", title: "Two" }),
@@ -489,6 +494,7 @@ test("browser_interact keeps real-browser actions on the attached tab", async ()
   }, createDeps({
     actionLog,
     navigationLog,
+    browserVersion: "Microsoft Edge/125.0.0.0",
     connectedPages: [createPage({
       actionLog,
       navigationLog,
@@ -555,6 +561,7 @@ test("page_read resolves attached pages by url and title narrowing", async () =>
       },
     },
   }, createDeps({
+    browserVersion: "Microsoft Edge/125.0.0.0",
     connectedPages: [
       createPage({ currentURL: "https://example.com/docs", title: "Background tab", bodyText: "Ignore me" }),
       createPage({ currentURL: "https://example.com/docs", title: "Target Docs", bodyText: "Selected tab" }),
@@ -581,6 +588,16 @@ test("page_read reports invalid attach modes and browser kinds without throwing"
   }, createDeps());
   assert.equal(unsupportedBrowser.ok, false);
   assert.equal(unsupportedBrowser.error.code, "unsupported_browser_kind");
+
+  const mismatchedBrowser = await handleRequest({
+    action: "browser_attach_current",
+    attach: { browser_kind: "edge" },
+  }, createDeps({
+    browserVersion: "Chrome/125.0.0.0",
+    connectedPages: [createPage({ currentURL: "https://example.com/current", title: "Current" })],
+  }));
+  assert.equal(mismatchedBrowser.ok, false);
+  assert.equal(mismatchedBrowser.error.code, "browser_kind_mismatch");
 
   const invalidPageIndex = await handleRequest({
     action: "page_read",
@@ -711,6 +728,7 @@ test("page_interact uses attached tabs without forcing a new navigation", async 
   }, createDeps({
     actionLog,
     navigationLog,
+    browserVersion: "Microsoft Edge/125.0.0.0",
     connectedPages: [createPage({
       actionLog,
       navigationLog,
@@ -736,6 +754,7 @@ test("structured_dom can read an attached page chosen by page index", async () =
       target: { page_index: 1 },
     },
   }, createDeps({
+    browserVersion: "Microsoft Edge/125.0.0.0",
     connectedPages: [
       createPage({ currentURL: "https://example.com/one", title: "One", snapshot: { headings: ["Ignore"], links: [], buttons: [], inputs: [] } }),
       createPage({ currentURL: "https://example.com/two", title: "Two", snapshot: { headings: ["Chosen"], links: ["Docs"], buttons: ["Save"], inputs: ["email"] } }),
