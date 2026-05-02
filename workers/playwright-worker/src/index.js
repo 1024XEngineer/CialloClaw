@@ -6,7 +6,18 @@ import { fileURLToPath } from "node:url";
 export const manifest = {
   worker_name: "playwright_worker",
   transport: ["stdio", "jsonrpc"],
-  capabilities: ["page_read", "page_search", "page_interact", "structured_dom"],
+  capabilities: [
+    "page_read",
+    "page_search",
+    "page_interact",
+    "structured_dom",
+    "browser_attach_current",
+    "browser_snapshot",
+    "browser_navigate",
+    "browser_tabs_list",
+    "browser_tab_focus",
+    "browser_interact",
+  ],
 };
 
 const browserTimeoutMS = 15000;
@@ -148,6 +159,34 @@ function normalizeComparableURL(url) {
   }
 }
 
+function createAttachedExecution(attachConfig) {
+  return {
+    attached: true,
+    browserKind: attachConfig.browserKind,
+    browserTransport: "cdp",
+    endpointURL: attachConfig.endpointURL,
+    source: "playwright_worker_cdp",
+  };
+}
+
+function requireAttachConfig(request) {
+  const attachConfig = resolveAttachConfig(request);
+  if (!attachConfig) {
+    throw createStructuredWorkerError("invalid_input", "attach is required for browser_* actions");
+  }
+  return attachConfig;
+}
+
+function serializeExecutionMetadata(execution) {
+  return {
+    attached: execution.attached,
+    browser_kind: execution.browserKind,
+    browser_transport: execution.browserTransport,
+    endpoint_url: execution.endpointURL,
+    source: execution.source,
+  };
+}
+
 function isLoopbackHostname(hostname) {
   const normalized = String(hostname ?? "").trim().toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
   if (normalized === "localhost" || normalized === "::1") {
@@ -259,11 +298,11 @@ function selectAttachedPage(pageDescriptors, attachConfig) {
     if (attachConfig.pageIndex >= candidates.length) {
       throw createStructuredWorkerError("page_target_not_found", `attach.target.page_index ${attachConfig.pageIndex} is out of range`);
     }
-    return candidates[attachConfig.pageIndex].page;
+    return candidates[attachConfig.pageIndex];
   }
 
   if (candidates.length === 1) {
-    return candidates[0].page;
+    return candidates[0];
   }
 
   throw createStructuredWorkerError(
@@ -272,11 +311,8 @@ function selectAttachedPage(pageDescriptors, attachConfig) {
   );
 }
 
-async function openAttachedPage(request, deps, callback) {
-  const attachConfig = resolveAttachConfig(request);
-  if (!attachConfig) {
-    return openBrowserPage(String(request.url ?? ""), deps, callback);
-  }
+async function connectAttachedBrowser(request, deps) {
+  const attachConfig = requireAttachConfig(request);
 
   let browser;
   try {
@@ -286,19 +322,48 @@ async function openAttachedPage(request, deps, callback) {
     throw createStructuredWorkerError("browser_attach_failed", message);
   }
 
-  const pageDescriptors = await describeAttachedPages(browser);
-  const page = selectAttachedPage(pageDescriptors, attachConfig);
+  return {
+    attachConfig,
+    browser,
+    execution: createAttachedExecution(attachConfig),
+    pageDescriptors: await describeAttachedPages(browser),
+  };
+}
 
-  // The real browser is user-owned; the short-lived worker process exits after
-  // one request, so we intentionally leave the remote browser running and let
-  // process teardown release the CDP connection.
-  return callback(page, undefined, {
-    attached: true,
-    browserKind: attachConfig.browserKind,
-    browserTransport: "cdp",
-    endpointURL: attachConfig.endpointURL,
-    source: "playwright_worker_cdp",
+async function withAttachedBrowser(request, deps, callback) {
+  return callback(await connectAttachedBrowser(request, deps));
+}
+
+async function withAttachedPage(request, deps, callback) {
+  return withAttachedBrowser(request, deps, async (session) => {
+    const descriptor = selectAttachedPage(session.pageDescriptors, session.attachConfig);
+    return callback(descriptor, session.execution);
   });
+}
+
+async function openAttachedPage(request, deps, callback) {
+  if (!request?.attach) {
+    return openBrowserPage(String(request.url ?? ""), deps, callback);
+  }
+
+  return withAttachedPage(request, deps, async (descriptor, execution) => {
+    // The real browser is user-owned; the short-lived worker process exits after
+    // one request, so we intentionally leave the remote browser running and let
+    // process teardown release the CDP connection.
+    return callback(descriptor.page, undefined, {
+      ...execution,
+      pageIndex: descriptor.index,
+    });
+  });
+}
+
+function serializeAttachedPageSelection(descriptor, execution) {
+  return {
+    ...serializeExecutionMetadata(execution),
+    page_index: descriptor.index,
+    title: descriptor.title,
+    url: descriptor.url,
+  };
 }
 
 // healthResponse validates that the worker can load Playwright, start a browser,
@@ -363,6 +428,43 @@ async function buildStructuredDOM(request, deps) {
       ...snapshot,
     };
   });
+}
+
+async function buildBrowserSnapshot(request, deps) {
+  return withAttachedPage(request, deps, async (descriptor, execution) => {
+    const page = descriptor.page;
+    const html = await page.content();
+    const bodyText = await page.locator("body").innerText().catch(() => html);
+    const snapshot = await page.evaluate(() => ({
+      headings: Array.from(document.querySelectorAll("h1, h2, h3")).map((node) => node.textContent?.trim()).filter(Boolean).slice(0, 20),
+      links: Array.from(document.querySelectorAll("a[href]")).map((node) => node.textContent?.trim() || node.getAttribute("href") || "").filter(Boolean).slice(0, 20),
+      buttons: Array.from(document.querySelectorAll("button, [role='button']")).map((node) => node.textContent?.trim()).filter(Boolean).slice(0, 20),
+      inputs: Array.from(document.querySelectorAll("input, textarea, select")).map((node) => node.getAttribute("name") || node.getAttribute("aria-label") || node.getAttribute("placeholder") || node.tagName.toLowerCase()).filter(Boolean).slice(0, 20),
+    }));
+    return {
+      ...serializeAttachedPageSelection(descriptor, execution),
+      text_content: normalizeText(bodyText),
+      ...snapshot,
+    };
+  });
+}
+
+async function attachCurrentBrowserPage(request, deps) {
+  return withAttachedPage(request, deps, async (descriptor, execution) => ({
+    ...serializeAttachedPageSelection(descriptor, execution),
+  }));
+}
+
+async function listBrowserTabs(request, deps) {
+  return withAttachedBrowser(request, deps, async ({ execution, pageDescriptors }) => ({
+    ...serializeExecutionMetadata(execution),
+    tab_count: pageDescriptors.length,
+    tabs: pageDescriptors.map((descriptor) => ({
+      page_index: descriptor.index,
+      title: descriptor.title,
+      url: descriptor.url,
+    })),
+  }));
 }
 
 function pageActionTarget(page, selector) {
@@ -521,6 +623,15 @@ export async function handleRequest(request, deps = defaultDependencies) {
     }
     case "structured_dom": {
       return executeBrowserRequest(request, deps, async () => buildStructuredDOM(request, deps));
+    }
+    case "browser_attach_current": {
+      return executeBrowserRequest(request, deps, async () => attachCurrentBrowserPage(request, deps));
+    }
+    case "browser_snapshot": {
+      return executeBrowserRequest(request, deps, async () => buildBrowserSnapshot(request, deps));
+    }
+    case "browser_tabs_list": {
+      return executeBrowserRequest(request, deps, async () => listBrowserTabs(request, deps));
     }
     case "page_interact": {
       const actions = Array.isArray(request.actions) ? request.actions : [];
