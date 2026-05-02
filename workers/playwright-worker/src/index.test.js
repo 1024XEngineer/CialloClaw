@@ -19,6 +19,9 @@ function createPage(overrides = {}) {
     async content() {
       return overrides.html ?? "<html><head><title>Demo Page</title></head><body>Hello world. Search target. Another target.</body></html>";
     },
+    async bringToFront() {
+      actionLog.push({ action: "bringToFront" });
+    },
     async evaluate() {
       return overrides.snapshot ?? {
         headings: ["Heading A"],
@@ -410,6 +413,99 @@ test("browser_tabs_list reports attached browser tabs with stable indexes", asyn
   ]);
 });
 
+test("browser_tab_focus brings the selected tab to the front", async () => {
+  const actionLog = [];
+  const response = await handleRequest({
+    action: "browser_tab_focus",
+    attach: {
+      browser_kind: "edge",
+      target: {
+        page_index: 1,
+      },
+    },
+  }, createDeps({
+    actionLog,
+    connectedPages: [
+      createPage({ actionLog, currentURL: "https://example.com/one", title: "One" }),
+      createPage({ actionLog, currentURL: "https://example.com/two", title: "Two" }),
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.page_index, 1);
+  assert.equal(response.result.title, "Two");
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["bringToFront"]);
+});
+
+test("browser_navigate drives the attached tab to a new url", async () => {
+  const lifecycle = [];
+  const navigationLog = [];
+  const response = await handleRequest({
+    action: "browser_navigate",
+    url: "https://example.com/next",
+    attach: {
+      browser_kind: "chrome",
+      target: {
+        page_index: 0,
+      },
+    },
+  }, createDeps({
+    lifecycle,
+    navigationLog,
+    connectedPages: [createPage({
+      navigationLog,
+      currentURL: "https://example.com/current",
+      gotoURL: "https://example.com/next",
+      title: "Next Page",
+      bodyText: "Navigation complete",
+    })],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.attached, true);
+  assert.equal(response.result.page_index, 0);
+  assert.equal(response.result.url, "https://example.com/next");
+  assert.equal(response.result.title, "Next Page");
+  assert.equal(response.result.text_content, "Navigation complete");
+  assert.deepEqual(lifecycle, ["connect:http://127.0.0.1:9222"]);
+  assert.deepEqual(navigationLog, [{ action: "goto", url: "https://example.com/next" }]);
+});
+
+test("browser_interact keeps real-browser actions on the attached tab", async () => {
+  const actionLog = [];
+  const navigationLog = [];
+  const response = await handleRequest({
+    action: "browser_interact",
+    attach: {
+      browser_kind: "edge",
+      target: {
+        page_index: 0,
+      },
+    },
+    actions: [
+      { type: "click", selector: "button.submit" },
+      { type: "fill", selector: "input[name=email]", value: "demo@example.com" },
+    ],
+  }, createDeps({
+    actionLog,
+    navigationLog,
+    connectedPages: [createPage({
+      actionLog,
+      navigationLog,
+      currentURL: "https://example.com/form",
+      title: "Connected Form",
+      bodyText: "Interaction complete",
+    })],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.attached, true);
+  assert.equal(response.result.actions_applied, 2);
+  assert.equal(response.result.source, "playwright_worker_cdp");
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["click", "fill"]);
+  assert.deepEqual(navigationLog, []);
+});
+
 test("page_read ignores top-level request url unless attach.target.url is explicit", async () => {
   const singlePage = await handleRequest({
     action: "page_read",
@@ -518,6 +614,19 @@ test("page_read reports invalid attach modes and browser kinds without throwing"
   }, createDeps());
   assert.equal(invalidEndpoint.ok, false);
   assert.equal(invalidEndpoint.error.code, "invalid_input");
+
+  const missingAttach = await handleRequest({
+    action: "browser_attach_current",
+  }, createDeps());
+  assert.equal(missingAttach.ok, false);
+  assert.equal(missingAttach.error.code, "invalid_input");
+
+  const missingNavigationURL = await handleRequest({
+    action: "browser_navigate",
+    attach: { browser_kind: "chrome" },
+  }, createDeps());
+  assert.equal(missingNavigationURL.ok, false);
+  assert.equal(missingNavigationURL.error.code, "invalid_input");
 });
 
 test("page_read reports attached browser resolution failures as structured errors", async () => {
