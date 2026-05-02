@@ -93,22 +93,27 @@ async function closeResources(context, browser) {
   }
 }
 
+async function navigatePage(page, url) {
+  const response = await page.goto(url, {
+    waitUntil: "networkidle",
+    timeout: browserTimeoutMS,
+  });
+  if (!response) {
+    throw new Error("navigation_failed");
+  }
+  if (!response.ok()) {
+    throw new Error(`http_${response.status()}`);
+  }
+  return response;
+}
+
 async function openBrowserPage(url, deps, callback) {
   const browser = await deps.launchBrowser();
   let context;
   try {
     context = await browser.newContext({ userAgent: workerUserAgent });
     const page = await context.newPage();
-    const response = await page.goto(url, {
-      waitUntil: "networkidle",
-      timeout: browserTimeoutMS,
-    });
-    if (!response) {
-      throw new Error("navigation_failed");
-    }
-    if (!response.ok()) {
-      throw new Error(`http_${response.status()}`);
-    }
+    const response = await navigatePage(page, url);
     return await callback(page, response, {
       attached: false,
       browserKind: undefined,
@@ -366,6 +371,32 @@ function serializeAttachedPageSelection(descriptor, execution) {
   };
 }
 
+function requireTopLevelURL(request, actionName) {
+  const url = normalizeOptionalString(request?.url);
+  if (!url) {
+    throw createStructuredWorkerError("invalid_input", `${actionName} requires a top-level url`);
+  }
+  return url;
+}
+
+async function summarizeLoadedPage(page, fallbackURL, execution, response) {
+  const html = await page.content();
+  const bodyText = await page.locator("body").innerText().catch(() => html);
+  const contentType = response?.headers?.()["content-type"] ?? "text/html";
+  return {
+    attached: execution.attached,
+    browserKind: execution.browserKind,
+    browserTransport: execution.browserTransport,
+    endpointURL: execution.endpointURL,
+    url: page.url() || fallbackURL,
+    html,
+    source: execution.source,
+    title: (await page.title()) || extractTitle(html, page.url()),
+    textContent: normalizeText(bodyText),
+    contentType,
+  };
+}
+
 // healthResponse validates that the worker can load Playwright, start a browser,
 // and create a fresh page before the Go runtime marks the sidecar as ready.
 export async function healthResponse(deps = defaultDependencies) {
@@ -389,22 +420,7 @@ export async function healthResponse(deps = defaultDependencies) {
 
 async function fetchPage(request, deps) {
   return openAttachedPage(request, deps, async (page, response, execution) => {
-    const fallbackURL = String(request?.url ?? "");
-    const html = await page.content();
-    const bodyText = await page.locator("body").innerText().catch(() => html);
-    const contentType = response?.headers?.()["content-type"] ?? "text/html";
-    return {
-      attached: execution.attached,
-      browserKind: execution.browserKind,
-      browserTransport: execution.browserTransport,
-      endpointURL: execution.endpointURL,
-      url: page.url() || fallbackURL,
-      html,
-      source: execution.source,
-      title: (await page.title()) || extractTitle(html, page.url()),
-      textContent: normalizeText(bodyText),
-      contentType,
-    };
+    return summarizeLoadedPage(page, String(request?.url ?? ""), execution, response);
   });
 }
 
@@ -465,6 +481,29 @@ async function listBrowserTabs(request, deps) {
       url: descriptor.url,
     })),
   }));
+}
+
+async function focusBrowserTab(request, deps) {
+  return withAttachedPage(request, deps, async (descriptor, execution) => {
+    await descriptor.page.bringToFront();
+    return serializeAttachedPageSelection(descriptor, execution);
+  });
+}
+
+async function navigateBrowserPage(request, deps) {
+  const destinationURL = requireTopLevelURL(request, "browser_navigate");
+  return withAttachedPage(request, deps, async (descriptor, execution) => {
+    const response = await navigatePage(descriptor.page, destinationURL);
+    const summary = await summarizeLoadedPage(descriptor.page, destinationURL, execution, response);
+    return {
+      ...serializeAttachedPageSelection(descriptor, execution),
+      url: summary.url,
+      title: summary.title,
+      text_content: summary.textContent,
+      mime_type: summary.contentType,
+      text_type: summary.contentType,
+    };
+  });
 }
 
 function pageActionTarget(page, selector) {
@@ -558,6 +597,11 @@ async function interactWithPage(request, actions, deps) {
   });
 }
 
+async function interactWithAttachedBrowserPage(request, actions, deps) {
+  requireAttachConfig(request);
+  return interactWithPage(request, actions, deps);
+}
+
 async function executeBrowserRequest(request, deps, callback) {
   try {
     return {
@@ -632,6 +676,20 @@ export async function handleRequest(request, deps = defaultDependencies) {
     }
     case "browser_tabs_list": {
       return executeBrowserRequest(request, deps, async () => listBrowserTabs(request, deps));
+    }
+    case "browser_navigate": {
+      return executeBrowserRequest(request, deps, async () => navigateBrowserPage(request, deps));
+    }
+    case "browser_tab_focus": {
+      return executeBrowserRequest(request, deps, async () => focusBrowserTab(request, deps));
+    }
+    case "browser_interact": {
+      const actions = Array.isArray(request.actions) ? request.actions : [];
+      const validationError = validatePageActions(actions);
+      if (validationError) {
+        return validationError;
+      }
+      return executeBrowserRequest(request, deps, async () => interactWithAttachedBrowserPage(request, actions, deps));
     }
     case "page_interact": {
       const actions = Array.isArray(request.actions) ? request.actions : [];
