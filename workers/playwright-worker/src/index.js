@@ -206,7 +206,7 @@ function resolveAttachConfig(request) {
     endpointURL: normalizeAttachEndpointURL(attach.endpoint_url),
     pageIndex,
     targetTitleContains: normalizeOptionalString(target.title_contains)?.toLowerCase(),
-    targetURL: normalizeComparableURL(target.url ?? request?.url),
+    targetURL: normalizeComparableURL(target.url),
   };
 }
 

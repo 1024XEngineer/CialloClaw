@@ -1726,10 +1726,17 @@ flowchart TB
 
 #### 实现约束
 - Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类正式能力；
+- sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
+- `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
+
+#### worker 契约补充
+- attached 模式结果可追加 `attached / browser_kind / browser_transport / endpoint_url / source` 元信息，供后续 Go sidecar、引用映射与前端承接复用；
+- worker 至少需要把 `browser_attach_failed`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
 
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。
