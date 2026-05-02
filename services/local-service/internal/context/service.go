@@ -17,6 +17,9 @@ type TaskContextSnapshot struct {
 	PageTitle      string
 	PageURL        string
 	AppName        string
+	BrowserKind    string
+	ProcessPath    string
+	ProcessID      int
 	WindowTitle    string
 	VisibleText    string
 	ScreenSummary  string
@@ -101,6 +104,9 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 		PageTitle:      firstNonEmpty(stringValue(pageContext, "title"), stringValue(pageFallback, "title")),
 		PageURL:        firstNonEmpty(stringValue(pageContext, "url"), stringValue(pageFallback, "url")),
 		AppName:        firstNonEmpty(stringValue(pageContext, "app_name"), stringValue(pageFallback, "app_name")),
+		BrowserKind:    firstNonEmpty(stringValue(pageContext, "browser_kind"), stringValue(pageFallback, "browser_kind")),
+		ProcessPath:    firstNonEmpty(stringValue(pageContext, "process_path"), stringValue(pageFallback, "process_path")),
+		ProcessID:      intValue(pageContext, "process_id", intValue(pageFallback, "process_id", 0)),
 		WindowTitle:    firstNonEmpty(stringValue(pageContext, "window_title"), stringValue(pageFallback, "window_title"), stringValue(screen, "window_title")),
 		VisibleText:    firstNonEmpty(stringValue(pageContext, "visible_text"), stringValue(pageFallback, "visible_text"), stringValue(screen, "visible_text")),
 		ScreenSummary:  firstNonEmpty(stringValue(contextValue, "screen_summary"), stringValue(screen, "summary"), stringValue(screen, "screen_summary")),
