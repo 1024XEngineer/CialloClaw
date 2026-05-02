@@ -334,6 +334,42 @@ test("page_read can attach to a real browser page over CDP", async () => {
   assert.deepEqual(navigationLog, []);
 });
 
+test("page_read ignores top-level request url unless attach.target.url is explicit", async () => {
+  const singlePage = await handleRequest({
+    action: "page_read",
+    url: "https://example.com/launch-shape",
+    attach: {
+      browser_kind: "chrome",
+    },
+  }, createDeps({
+    connectedPages: [createPage({
+      currentURL: "https://example.com/current-tab",
+      title: "Current Tab",
+      bodyText: "Attached browser content",
+    })],
+  }));
+
+  assert.equal(singlePage.ok, true);
+  assert.equal(singlePage.result.title, "Current Tab");
+  assert.equal(singlePage.result.url, "https://example.com/current-tab");
+
+  const ambiguousWithoutExplicitTarget = await handleRequest({
+    action: "page_read",
+    url: "https://example.com/current-tab",
+    attach: {
+      browser_kind: "chrome",
+    },
+  }, createDeps({
+    connectedPages: [
+      createPage({ currentURL: "https://example.com/current-tab", title: "Matching URL" }),
+      createPage({ currentURL: "https://example.com/other-tab", title: "Other Tab" }),
+    ],
+  }));
+
+  assert.equal(ambiguousWithoutExplicitTarget.ok, false);
+  assert.equal(ambiguousWithoutExplicitTarget.error.code, "page_target_not_found");
+});
+
 test("page_read resolves attached pages by url and title narrowing", async () => {
   const response = await handleRequest({
     action: "page_read",
