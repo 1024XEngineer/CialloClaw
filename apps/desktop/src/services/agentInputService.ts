@@ -183,6 +183,11 @@ function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
   return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
 }
 
+function shouldAttachForegroundPageContext(params: AgentInputSubmitParams): boolean {
+  return params.source === "floating_ball"
+    && (params.trigger === "hover_text_input" || params.trigger === "voice_commit");
+}
+
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
   try {
     const desktopWindowContextModule = await import("@/platform/desktopWindowContext");
@@ -235,13 +240,18 @@ export type SubmitTextInputResult = AgentInputSubmitResult;
 
 async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
   const enrichVisualContext = shouldEnrichVisualContext(params);
+  const attachForegroundPageContext = shouldAttachForegroundPageContext(params);
+  const shouldReadForegroundWindowContext = enrichVisualContext || attachForegroundPageContext;
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
-    // Fetch the foreground window snapshot only for explicit visual requests.
-    // Ordinary text submits should not pay the host-side URL lookup cost.
-    enrichVisualContext ? readDesktopWindowContext() : Promise.resolve(null),
+    // Explicit visual requests still need both page and screen fallbacks, while
+    // shell-ball near-field text/voice submits should also inherit the current
+    // foreground page attach hints for real-browser takeover planning.
+    shouldReadForegroundWindowContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
   ]);
-  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
+  const fallbackPageContext = shouldReadForegroundWindowContext
+    ? mapDesktopWindowPageContext(windowContext)
+    : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
   const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
   const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
