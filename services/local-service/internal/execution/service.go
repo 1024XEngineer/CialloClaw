@@ -1869,7 +1869,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 	}
 	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
-		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, promptInputText, err); fallbackOK {
 			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
 			return fallbackTrace, nil
 		}

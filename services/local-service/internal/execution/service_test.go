@@ -40,6 +40,7 @@ type stubModelClient struct {
 
 type recordingPromptModelClient struct {
 	output string
+	err    error
 	input  string
 }
 
@@ -183,6 +184,9 @@ func (s *stubModelClient) GenerateText(_ context.Context, request model.Generate
 
 func (s *recordingPromptModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 	s.input = request.Input
+	if s.err != nil {
+		return model.GenerateTextResponse{}, s.err
+	}
 	return model.GenerateTextResponse{
 		TaskID:     request.TaskID,
 		RunID:      request.RunID,
@@ -892,6 +896,42 @@ func TestExecuteBudgetDowngradeFallsBackWhenModelClientUnavailable(t *testing.T)
 	}
 	if result.BudgetFailure == nil || result.BudgetFailure["action"] != "budget_auto_downgrade.failure_signal" {
 		t.Fatalf("expected fallback execution to expose budget failure signal, got %+v", result.BudgetFailure)
+	}
+}
+
+func TestExecuteBudgetDowngradeFallbackIncludesQueuedSteeringMessages(t *testing.T) {
+	modelClient := &recordingPromptModelClient{err: model.ErrClientNotConfigured}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:           "task_budget_fallback_queued_steer",
+		RunID:            "run_budget_fallback_queued_steer",
+		Title:            "Budget fallback queued steering",
+		Intent:           map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:         contextsvc.TaskContextSnapshot{InputType: "text", Text: "Summarize the release note."},
+		SteeringMessages: []string{"Focus on the network impact."},
+		DeliveryType:     "bubble",
+		ResultTitle:      "Budget fallback queued steering result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "provider_unavailable",
+			"degrade_actions": []string{"lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if !strings.Contains(modelClient.input, "Focus on the network impact.") {
+		t.Fatalf("expected attempted prompt input to include queued steering, got %q", modelClient.input)
+	}
+	if !strings.Contains(result.Content, "Focus on the network impact") {
+		t.Fatalf("expected fallback content to include queued steering, got %q", result.Content)
+	}
+	if result.ModelInvocation["provider"] != "budget_downgrade_fallback" || result.ModelInvocation["fallback"] != true {
+		t.Fatalf("expected fallback model invocation marker, got %+v", result.ModelInvocation)
+	}
+	if result.BudgetFailure == nil || result.BudgetFailure["reason"] != model.ErrClientNotConfigured.Error() {
+		t.Fatalf("expected budget failure reason to preserve model error, got %+v", result.BudgetFailure)
 	}
 }
 
