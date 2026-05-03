@@ -1,4 +1,3 @@
-// 该文件承载仪表盘任务工作台相关的界面逻辑。
 import { ArrowUpRight, ShieldCheck, Workflow } from "lucide-react";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { MetricCard } from "@/components/MetricCard";
@@ -6,7 +5,7 @@ import { resolveDashboardRouteHref } from "@/features/dashboard/shared/dashboard
 import { mapTaskToDetailViewModel } from "@/models/TaskDetailViewModel";
 import { useTaskStore } from "@/stores/taskStore";
 
-// DashboardApp 处理当前模块的相关逻辑。
+// DashboardApp keeps the legacy dashboard workspace readable on the shared light desktop theme.
 export function DashboardApp() {
   const tasks = useTaskStore((state) => state.tasks).map(mapTaskToDetailViewModel);
   const safetyHref = resolveDashboardRouteHref("safety");
@@ -14,11 +13,11 @@ export function DashboardApp() {
   return (
     <main className="app-shell">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
-        <header className="flex flex-col gap-3 rounded-[32px] border border-white/10 bg-slate-950/45 p-8 backdrop-blur-xl md:flex-row md:items-end md:justify-between">
+        <header className="flex flex-col gap-3 rounded-[32px] border border-[color:var(--cc-line)] bg-[color:var(--cc-paper)] p-8 shadow-[var(--cc-card-shadow)] backdrop-blur-xl md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-cyan-300/75">dashboard</p>
-            <h1 className="mt-3 text-4xl font-semibold text-white">P0 任务工作台</h1>
-            <p className="mt-3 max-w-3xl text-slate-300">
+            <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--cc-module-task-strong)]">dashboard</p>
+            <h1 className="mt-3 text-4xl font-semibold text-[color:var(--cc-ink)]">P0 任务工作台</h1>
+            <p className="mt-3 max-w-3xl text-[color:var(--cc-ink-soft)]">
               任务状态、正式交付、安全摘要与记忆回填会统一落到同一个 task 视角工作台里。
             </p>
           </div>
@@ -33,15 +32,15 @@ export function DashboardApp() {
           <PanelSurface title="任务概览" eyebrow="task-state">
             <div className="space-y-4">
               {tasks.map((task) => (
-                <article key={task.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <article key={task.id} className="rounded-2xl border border-[color:var(--cc-line)] bg-[color:var(--cc-glass)] p-4">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <h2 className="text-lg text-white">{task.title}</h2>
-                      <p className="mt-1 font-mono text-xs text-slate-400">{task.id}</p>
+                      <h2 className="text-lg text-[color:var(--cc-ink)]">{task.title}</h2>
+                      <p className="mt-1 font-mono text-xs text-[color:var(--cc-ink-muted)]">{task.id}</p>
                     </div>
                     <StatusBadge tone={task.statusTone}>{task.statusLabel}</StatusBadge>
                   </div>
-                  <p className="mt-4 text-sm text-slate-300">开始时间：{task.startedAtLabel}</p>
+                  <p className="mt-4 text-sm text-[color:var(--cc-ink-soft)]">开始时间：{task.startedAtLabel}</p>
                 </article>
               ))}
             </div>
@@ -49,14 +48,14 @@ export function DashboardApp() {
 
           <div className="grid gap-6">
             <PanelSurface title="安全治理" eyebrow="risk-and-approval">
-              <div className="space-y-4 text-sm text-slate-300">
+              <div className="space-y-4 text-sm text-[color:var(--cc-ink-soft)]">
                 <div className="flex items-start gap-3">
-                  <ShieldCheck className="mt-0.5 h-5 w-5 text-emerald-300" />
+                  <ShieldCheck className="mt-0.5 h-5 w-5 text-[color:var(--cc-module-safety-strong)]" />
                   <p>风险、审计、恢复点和工作区边界模块已在 Go harness 骨架中分层隔离。</p>
                 </div>
                 <a
                   href={safetyHref}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white transition hover:border-cyan-300/40 hover:bg-cyan-300/10"
+                  className="inline-flex items-center gap-2 rounded-full border border-[color:var(--cc-line)] bg-[color:var(--cc-paper-soft)] px-4 py-2 text-sm text-[color:var(--cc-ink)] transition hover:border-[color:var(--cc-line-strong)] hover:bg-[color:var(--cc-paper)]"
                 >
                   进入安全模块
                   <ArrowUpRight className="h-4 w-4" />
@@ -65,8 +64,8 @@ export function DashboardApp() {
             </PanelSurface>
 
             <PanelSurface title="Worker 与能力接入" eyebrow="capability-access">
-              <div className="flex items-start gap-3 text-sm text-slate-300">
-                <Workflow className="mt-0.5 h-5 w-5 text-cyan-300" />
+              <div className="flex items-start gap-3 text-sm text-[color:var(--cc-ink-soft)]">
+                <Workflow className="mt-0.5 h-5 w-5 text-[color:var(--cc-module-task-strong)]" />
                 <p>Playwright、OCR 和 media worker 已隔离在 `workers/*`，仅允许由 harness 编排接入。</p>
               </div>
             </PanelSurface>

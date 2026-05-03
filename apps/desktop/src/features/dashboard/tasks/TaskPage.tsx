@@ -208,18 +208,18 @@ export function TaskPage() {
   const archiveSection = clusterSections[3];
 
   const pageStyle = {
-    "--task-accent": "#92abc1",
-    "--task-accent-strong": "#5c7894",
-    "--task-accent-soft": "#90a98e",
-    "--task-alert": "#d1ad78",
-    "--task-danger": "#c9877b",
-    "--task-success": "#86a889",
-    "--task-ink": "#32444c",
-    "--task-copy": "rgba(68, 81, 88, 0.74)",
-    "--task-line": "rgba(146, 171, 193, 0.18)",
-    "--task-panel": "rgba(252, 248, 242, 0.9)",
-    "--task-panel-strong": "rgba(255, 253, 249, 0.97)",
-    "--task-panel-soft": "rgba(255, 255, 255, 0.58)",
+    "--task-accent": "var(--cc-module-task)",
+    "--task-accent-strong": "var(--cc-module-task-strong)",
+    "--task-accent-soft": "var(--cc-module-safety)",
+    "--task-alert": "var(--cc-honey)",
+    "--task-danger": "var(--cc-rose)",
+    "--task-success": "var(--cc-sage)",
+    "--task-ink": "var(--cc-ink)",
+    "--task-copy": "var(--cc-ink-muted)",
+    "--task-line": "var(--cc-line)",
+    "--task-panel": "var(--cc-paper)",
+    "--task-panel-strong": "var(--cc-paper-strong)",
+    "--task-panel-soft": "var(--cc-glass)",
   } as CSSProperties;
 
   useEffect(() => {

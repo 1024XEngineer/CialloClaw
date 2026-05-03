@@ -1,6 +1,6 @@
 .security-page {
-  --security-font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --security-font-body: "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+  --security-font-display: var(--cc-font-display);
+  --security-font-body: var(--cc-font-ui);
   --security-space-1: 0.45rem;
   --security-space-2: 0.8rem;
   --security-space-3: 1rem;
@@ -8,22 +8,20 @@
   --security-space-5: 1.9rem;
   --security-radius-md: 1.3rem;
   --security-radius-lg: 1.9rem;
-  --security-paper: rgba(255, 252, 247, 0.84);
-  --security-paper-strong: rgba(255, 253, 250, 0.94);
-  --security-paper-soft: rgba(249, 243, 235, 0.74);
-  --security-line: rgba(126, 109, 89, 0.14);
-  --security-ink: #2e322d;
-  --security-copy: #656055;
-  --security-muted: #8d7f6b;
-  --security-accent: #7d9270;
+  --security-paper: var(--cc-paper);
+  --security-paper-strong: var(--cc-paper-strong);
+  --security-paper-soft: var(--cc-paper-soft);
+  --security-line: var(--cc-line);
+  --security-ink: var(--cc-ink);
+  --security-copy: var(--cc-ink-soft);
+  --security-muted: var(--cc-ink-muted);
+  --security-accent: var(--cc-module-safety-strong);
   --security-accent-warm: #d4a670;
   --security-accent-rose: #d8a4a0;
   --security-accent-sky: #98aec8;
   --security-shadow: rgba(65, 55, 43, 0.14);
   background:
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.78), transparent 18%),
-    radial-gradient(circle at 86% 8%, rgba(233, 205, 162, 0.28), transparent 20%),
-    linear-gradient(180deg, #f5ede0 0%, #eee3d1 44%, #e3d7c3 100%);
+    var(--cc-page-bg);
   color: var(--security-ink);
   color-scheme: light;
   font-family: var(--security-font-body);

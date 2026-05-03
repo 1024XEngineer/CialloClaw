@@ -170,6 +170,14 @@
           "enum": ["bubble", "workspace_document", "result_page", "open_file", "reveal_in_folder", "task_detail"]
         }
       }
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "confirm_required": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }
