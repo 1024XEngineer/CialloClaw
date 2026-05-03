@@ -86,7 +86,7 @@
   --cp-ink: #f7efe7;
   --cp-copy: #d8cdc2;
   --cp-muted: #af9f92;
-  --cp-placeholder: rgba(247, 239, 231, 0.92);
+  --cp-placeholder: rgba(216, 205, 194, 0.72);
   --cp-accent: #ff9f43;
   --cp-accent-soft: rgba(255, 159, 67, 0.2);
   --cp-accent-strong: #ffb76a;
@@ -866,11 +866,6 @@ body[data-control-panel-appearance="dark"] .control-panel-shell__tooltip {
 
 .control-panel-shell :where(.control-panel-shell__input input::placeholder) {
   color: var(--cp-placeholder);
-  opacity: 1;
-}
-
-.control-panel-shell[data-appearance="dark"] :where(.control-panel-shell__input input::placeholder) {
-  color: rgba(247, 239, 231, 0.92);
   opacity: 1;
 }
 
