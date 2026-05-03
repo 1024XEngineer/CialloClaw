@@ -893,6 +893,29 @@ func TestEngineControlTaskResumeSupportsHumanLoopBlockedTasks(t *testing.T) {
 	}
 }
 
+func TestEngineControlTaskResumePreservesPromptFallbackStep(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_prompt_fallback_resume",
+		Title:       "agent loop prompt fallback",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	if _, err := engine.ControlTask(task.TaskID, "pause", map[string]any{"task_id": task.TaskID, "type": "status", "text": "paused"}); err != nil {
+		t.Fatalf("expected pause to succeed, got %v", err)
+	}
+	resumed, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status", "text": "resumed"})
+	if err != nil {
+		t.Fatalf("expected resume to succeed, got %v", err)
+	}
+	if resumed.Status != "processing" || resumed.CurrentStep != "generate_output" {
+		t.Fatalf("expected prompt fallback resume to preserve generate_output, got %+v", resumed)
+	}
+}
+
 func TestEngineCompleteTaskClearsPendingHumanLoopPayload(t *testing.T) {
 	engine := NewEngine()
 	task := engine.CreateTask(CreateTaskInput{
