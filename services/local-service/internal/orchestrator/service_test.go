@@ -12480,26 +12480,64 @@ func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 
 func TestServiceTaskSteerRejectsActivePromptTask(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task steer")
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   "sess_task_steer_prompt",
-		Title:       "Prompt task",
-		SourceType:  "hover_input",
-		Status:      "processing",
-		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		CurrentStep: "generate_output",
-		RiskLevel:   "green",
-	})
 
-	_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Add a network impact section."})
-	if !errors.Is(err, ErrTaskStatusInvalid) {
-		t.Fatalf("expected prompt-path processing task to reject active steering, got %v", err)
+	testCases := []struct {
+		name   string
+		intent map[string]any
+		step   string
+	}{
+		{
+			name:   "prompt intent",
+			intent: map[string]any{"name": "summarize", "arguments": map[string]any{}},
+			step:   "generate_output",
+		},
+		{
+			name:   "agent loop prompt fallback",
+			intent: map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+			step:   "generate_output",
+		},
 	}
-	record, ok := service.runEngine.GetTask(task.TaskID)
-	if !ok {
-		t.Fatal("expected task to remain in runtime")
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_prompt",
+				Title:       "Prompt task",
+				SourceType:  "hover_input",
+				Status:      "processing",
+				Intent:      testCase.intent,
+				CurrentStep: testCase.step,
+				RiskLevel:   "green",
+			})
+
+			_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Add a network impact section."})
+			if !errors.Is(err, ErrTaskStatusInvalid) {
+				t.Fatalf("expected prompt-path processing task to reject active steering, got %v", err)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 0 {
+				t.Fatalf("expected rejected steering to leave task queue empty, got %+v", record.SteeringMessages)
+			}
+		})
 	}
-	if len(record.SteeringMessages) != 0 {
-		t.Fatalf("expected rejected steering to leave task queue empty, got %+v", record.SteeringMessages)
+}
+
+func TestServiceActiveExecutionStepNameTracksSteeringCapability(t *testing.T) {
+	promptService, _ := newTestServiceWithModelClient(t, stubModelClient{output: "prompt fallback"})
+	intent := map[string]any{"name": "agent_loop", "arguments": map[string]any{}}
+	if step := promptService.activeExecutionStepName(intent); step != "generate_output" {
+		t.Fatalf("expected prompt-only agent-loop intent to start generate_output, got %s", step)
+	}
+
+	loopService, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{output: "loop ready"})
+	if step := loopService.activeExecutionStepName(intent); step != "agent_loop" {
+		t.Fatalf("expected pollable tool-calling loop to start agent_loop, got %s", step)
+	}
+
+	if step := loopService.activeExecutionStepName(map[string]any{"name": "summarize"}); step != "generate_output" {
+		t.Fatalf("expected non-loop intent to start generate_output, got %s", step)
 	}
 }
 

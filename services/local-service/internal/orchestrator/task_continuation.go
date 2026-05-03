@@ -149,7 +149,11 @@ func canContinueTask(task runengine.TaskRecord) bool {
 }
 
 func taskCanConsumeActiveSteering(task runengine.TaskRecord) bool {
-	return strings.TrimSpace(stringValue(task.Intent, "name", "")) == "agent_loop"
+	// CurrentStep carries the execution mode that was actually started. The
+	// intent can remain agent_loop even when runtime capabilities force prompt
+	// fallback, and prompt fallback cannot poll active steering.
+	return strings.TrimSpace(stringValue(task.Intent, "name", "")) == "agent_loop" &&
+		strings.TrimSpace(task.CurrentStep) == "agent_loop"
 }
 
 func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) taskContinuationDecision {

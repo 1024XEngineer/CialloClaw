@@ -163,8 +163,11 @@ func TestCanContinueTaskOnlyAllowsExplicitFollowUpAndLoopProcessingStates(t *tes
 			t.Fatalf("expected %s to remain continuation-eligible", status)
 		}
 	}
-	if !canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "agent_loop"}}) {
+	if !canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "agent_loop"}, CurrentStep: "agent_loop"}) {
 		t.Fatal("expected agent-loop processing task to remain continuation-eligible")
+	}
+	if canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "agent_loop"}, CurrentStep: "generate_output"}) {
+		t.Fatal("expected agent-loop prompt fallback to be excluded from continuation eligibility")
 	}
 	if canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "summarize"}}) {
 		t.Fatal("expected prompt-path processing task to be excluded from continuation eligibility")
