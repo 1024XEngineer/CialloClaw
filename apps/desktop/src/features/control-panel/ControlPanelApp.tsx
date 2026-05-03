@@ -807,9 +807,25 @@ export function ControlPanelApp() {
     })();
   }, [onboardingSession]);
 
+  const controlPanelAppearance = draft ? resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance) : systemAppearance;
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return undefined;
+    }
+
+    // Tooltip popups render through a portal, so the window appearance needs a
+    // document-level marker instead of relying on the local shell subtree.
+    document.body.dataset.controlPanelAppearance = controlPanelAppearance;
+
+    return () => {
+      delete document.body.dataset.controlPanelAppearance;
+    };
+  }, [controlPanelAppearance]);
+
   if (!draft || !panelData) {
     return (
-      <main className="app-shell control-panel-shell" data-appearance={systemAppearance}>
+      <main className="app-shell control-panel-shell" data-appearance={controlPanelAppearance}>
         <div className="control-panel-shell__loading">
           <div className="control-panel-shell__loading-stack">
             <Text size="2" className="control-panel-shell__loading-copy">
@@ -832,7 +848,6 @@ export function ControlPanelApp() {
   const modelSettingsDirty = !isEqual(draft.settings.models, panelData.settings.models) || draft.providerApiKeyInput.trim() !== "";
   const hasChanges = inspectorDirty || settingsDirty;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
-  const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
   const onboardingReplayDisabled = isSaving || isRunningInspection || isReplayingOnboarding;
@@ -1658,7 +1673,7 @@ export function ControlPanelApp() {
   };
 
   return (
-    <main className="app-shell control-panel-shell" data-appearance={resolvedAppearance}>
+    <main className="app-shell control-panel-shell" data-appearance={controlPanelAppearance}>
       <div className="control-panel-shell__titlebar" aria-label="控制面板窗口操作" onPointerDown={handleTopbarPointerDown}>
         <div className="control-panel-shell__titlebar-copy">
           <Heading size="5" className="control-panel-shell__titlebar-title">

@@ -86,7 +86,7 @@
   --cp-ink: #f7efe7;
   --cp-copy: #d8cdc2;
   --cp-muted: #af9f92;
-  --cp-placeholder: rgba(216, 205, 194, 0.56);
+  --cp-placeholder: rgba(247, 239, 231, 0.92);
   --cp-accent: #ff9f43;
   --cp-accent-soft: rgba(255, 159, 67, 0.2);
   --cp-accent-strong: #ffb76a;
@@ -122,9 +122,9 @@
   --cp-choice-track-shadow: 0 0 0 1px rgba(255, 241, 228, 0.08);
   --cp-choice-ink: #f7efe7;
   --cp-choice-selected: rgba(61, 47, 42, 0.98);
-  --cp-tooltip-surface: rgba(49, 38, 34, 0.94);
-  --cp-tooltip-ink: #15120f;
-  --cp-tooltip-copy: rgba(247, 239, 231, 0.74);
+  --cp-tooltip-surface: rgba(59, 45, 40, 0.98);
+  --cp-tooltip-ink: #f7efe7;
+  --cp-tooltip-copy: rgba(247, 239, 231, 0.9);
   --cp-action-bar-surface: rgba(38, 30, 27, 0.96);
   --cp-slider-track: rgba(74, 58, 52, 0.92);
   --cp-slider-range: linear-gradient(90deg, rgba(255, 183, 106, 0.98), rgba(255, 159, 67, 0.9));
@@ -386,15 +386,22 @@
 .control-panel-shell__tooltip {
   max-width: 18rem;
   border-radius: 14px;
-  background: var(--cp-tooltip-surface) !important;
-  color: var(--cp-tooltip-copy) !important;
-  border: 1px solid color-mix(in srgb, var(--cp-border-strong) 62%, transparent);
+  background: rgba(255, 252, 248, 0.96) !important;
+  color: rgba(116, 103, 91, 0.92) !important;
+  border: 1px solid rgba(126, 101, 76, 0.16);
   box-shadow: 0 18px 38px -28px rgba(71, 54, 34, 0.32);
   font-size: 0.82rem;
   font-weight: 500;
   line-height: 1.58;
   padding: 0.56rem 0.72rem;
   text-wrap: pretty;
+}
+
+body[data-control-panel-appearance="dark"] .control-panel-shell__tooltip {
+  background: rgba(59, 45, 40, 0.98) !important;
+  color: rgba(247, 239, 231, 0.9) !important;
+  border-color: rgba(255, 241, 228, 0.16);
+  box-shadow: 0 18px 42px -26px rgba(0, 0, 0, 0.5);
 }
 
 .control-panel-shell__tooltip * {
@@ -859,6 +866,12 @@
 
 .control-panel-shell :where(.control-panel-shell__input input::placeholder) {
   color: var(--cp-placeholder);
+  opacity: 1;
+}
+
+.control-panel-shell[data-appearance="dark"] :where(.control-panel-shell__input input::placeholder) {
+  color: rgba(247, 239, 231, 0.92);
+  opacity: 1;
 }
 
 .control-panel-shell :where(.control-panel-shell__textarea) {
