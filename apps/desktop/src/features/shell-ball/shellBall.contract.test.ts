@@ -197,6 +197,19 @@ function withDashboardRouteRuntime<T>(callback: (components: { DashboardRoot: un
       return require(resolve(desktopRoot, ".cache/shell-ball-tests/app/dashboard/DashboardHome.js"));
     }
 
+    if (request === "./dashboardOpeningTransition") {
+      return {
+        createDashboardOpeningTransitionController() {
+          return {
+            trigger() {},
+            handleVisibilityChange() {},
+            handleWindowFocusChanged() {},
+            dispose() {},
+          };
+        },
+      };
+    }
+
     if (request === "./SecurityPageShell" || request.endsWith("/SecurityPageShell")) {
       return {
         SecurityPageShell() {
@@ -1562,8 +1575,8 @@ test("onboarding window is card-sized, interactive, and promoted natively", () =
   assert.doesNotMatch(mainSource, /fn desktop_recreate_onboarding/);
   assert.match(mainSource, /fn desktop_promote_onboarding\(app: tauri::AppHandle\) -> Result<\(\), String> \{[\s\S]*?SetWindowPos\(/);
   assert.match(mainSource, /desktop_promote_onboarding,/);
-  assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_WIDTH = 460/);
-  assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_HEIGHT = 340/);
+  assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_WIDTH = 420/);
+  assert.match(onboardingControllerSource, /const ONBOARDING_CARD_WINDOW_HEIGHT = 300/);
   assert.match(onboardingControllerSource, /function resolveOnboardingCardWindowFrame/);
   assert.match(onboardingControllerSource, /export async function getOnboardingWindow\(\)/);
   assert.match(onboardingControllerSource, /await setOnboardingIgnoreCursorEvents\(false\)/);
@@ -1585,9 +1598,11 @@ test("onboarding window is card-sized, interactive, and promoted natively", () =
   assert.doesNotMatch(controlPanelAppSource, /retriedSession/);
 });
 
-test("hide-on-close helper destroys onboarding before closing the control panel", () => {
+test("hide-on-close helper destroys the control panel through the native close path", () => {
   const hideOnCloseSource = readFileSync(resolve(desktopRoot, "src/platform/hideOnCloseRequest.ts"), "utf8");
-  assert.match(hideOnCloseSource, /await destroyOnboardingWindow\(\)/);
+  assert.match(hideOnCloseSource, /const destroyOnCloseLabels = new Set\(\["control-panel"\]\)/);
+  assert.match(hideOnCloseSource, /await windowHandle\.destroy\(\)/);
+  assert.doesNotMatch(hideOnCloseSource, /destroyOnboardingWindow/);
 });
 
 test("control-panel entrypoint and view keep frameless window close and drag controls wired", () => {
@@ -1599,8 +1614,6 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelMainSource, /installDesktopEscapeClose\(\)/);
   assert.match(controlPanelAppSource, /startCurrentDesktopWindowDragging/);
   assert.match(controlPanelAppSource, /requestCurrentDesktopWindowClose/);
-  assert.match(controlPanelAppSource, /minimizeCurrentDesktopWindow/);
-  assert.match(desktopWindowFrameSource, /export async function minimizeCurrentDesktopWindow\(\)/);
   assert.match(desktopWindowFrameSource, /export function installDesktopEscapeClose\(windowHandle\?: DesktopCloseHandle \| null\)/);
   assert.match(desktopWindowFrameSource, /const currentWindow = windowHandle \?\? getDesktopFrameWindow\(\)/);
   assert.match(controlPanelAppSource, /control-panel-shell__titlebar/);
@@ -2428,6 +2441,18 @@ test("shell-ball file task params preserve attachment descriptions for agent.tas
     text: "explain these files",
     files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
   });
+  assert.deepEqual(fileParams.options, {
+    confirm_required: false,
+  });
+  const fileParamsWithoutDescription = createShellBallTaskStartParams({
+    text: "   ",
+    files: ["C:\\workspace\\notes.md"],
+  });
+  assert.ok(fileParamsWithoutDescription);
+  assert.deepEqual(fileParamsWithoutDescription.options, {
+    confirm_required: false,
+  });
+  assert.equal(fileParamsWithoutDescription.input.text, undefined);
   assert.equal(createShellBallTaskStartParams({ text: "   ", files: [] }), null);
 });
 
@@ -2453,6 +2478,13 @@ test("task-entry services keep rpc transport failures visible and forward file d
         recordMirrorConversationSuccess() {
           mirrorCalls.push("success");
         },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
       },
     },
     async (moduleExports) => {
@@ -2482,6 +2514,11 @@ test("task-entry services keep rpc transport failures visible and forward file d
 
   const startTaskCalls: Array<Record<string, unknown>> = [];
   const bootstrapSubmitCalls: Array<Record<string, unknown>> = [];
+  const rememberedPageContext = {
+    app_name: "Chrome",
+    title: "Build Dashboard",
+    url: "https://example.com/build",
+  };
   const taskResult: {
     bubble_message: null;
     delivery_result: null;
@@ -2536,6 +2573,16 @@ test("task-entry services keep rpc transport failures visible and forward file d
           return Promise.resolve(taskResult);
         },
       },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return "sess_shell_ball_files";
+        },
+        getConversationPageContextForSession(sessionId?: string) {
+          return sessionId === "sess_shell_ball_files" ? rememberedPageContext : undefined;
+        },
+        rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
+      },
     },
     async (moduleExports) => {
       const service = moduleExports as {
@@ -2561,9 +2608,27 @@ test("task-entry services keep rpc transport failures visible and forward file d
         text: "explain these files",
         files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
         page_context: {
-          app_name: "desktop",
-          title: "Quick Intake",
-          url: "local://shell-ball",
+          app_name: "Chrome",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
+        },
+      });
+      assert.deepEqual(startTaskCalls[0]?.options, {
+        confirm_required: false,
+      });
+
+      await service.startTaskFromFiles(["C:\\workspace\\logs.txt"]);
+      assert.equal(startTaskCalls[1]?.session_id, "sess_shell_ball_files");
+      assert.deepEqual(startTaskCalls[1]?.options, {
+        confirm_required: false,
+      });
+      assert.deepEqual(startTaskCalls[1]?.input, {
+        type: "file",
+        files: ["C:\\workspace\\logs.txt"],
+        page_context: {
+          app_name: "Chrome",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
         },
       });
 
@@ -2577,9 +2642,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
         source: "floating_ball",
       });
 
-      assert.equal(startTaskCalls[1]?.session_id, "sess_shell_ball_selection");
-      assert.equal(startTaskCalls[1]?.trigger, "text_selected_click");
-      assert.deepEqual(startTaskCalls[1]?.input, {
+      assert.equal(startTaskCalls[2]?.session_id, "sess_shell_ball_selection");
+      assert.equal(startTaskCalls[2]?.trigger, "text_selected_click");
+      assert.deepEqual(startTaskCalls[2]?.input, {
         type: "text_selection",
         text: "selected text",
         page_context: {
@@ -2593,7 +2658,7 @@ test("task-entry services keep rpc transport failures visible and forward file d
     },
   );
 
-  assert.equal(startTaskCalls.length, 2);
+  assert.equal(startTaskCalls.length, 3);
   assert.equal(bootstrapSubmitCalls.length, 1);
   assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
 
@@ -2616,6 +2681,16 @@ test("task-entry services keep rpc transport failures visible and forward file d
         submitTextInput() {
           return Promise.reject(transportError);
         },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return undefined;
+        },
+        getConversationPageContextForSession(): undefined {
+          return undefined;
+        },
+        rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
       },
     },
     async (moduleExports) => {
@@ -2670,6 +2745,7 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
             return undefined;
           },
           rememberConversationSessionFromTask() {},
+          rememberConversationPageContextFromTask() {},
         },
         "./mirrorMemoryService": {
           recordMirrorConversationFailure() {},
@@ -2783,6 +2859,7 @@ test("submitTextInput keeps ordinary text submissions free of ambient page and s
             return undefined;
           },
           rememberConversationSessionFromTask() {},
+          rememberConversationPageContextFromTask() {},
         },
         "./mirrorMemoryService": {
           recordMirrorConversationFailure() {},
@@ -7160,6 +7237,8 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
 
   assert.match(sessionServiceSource, /export function getCurrentConversationSessionId\(\) \{/);
   assert.match(sessionServiceSource, /export function rememberConversationSessionFromTask\(task: Task \| null \| undefined\) \{/);
+  assert.match(sessionServiceSource, /export function rememberConversationPageContextFromTask\(/);
+  assert.match(sessionServiceSource, /export function getConversationPageContextForSession\(/);
   assert.doesNotMatch(interactionSource, /function ensureConversationSessionId\(\) \{/);
   assert.doesNotMatch(interactionSource, /createShellBallConversationSessionId/);
   assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
@@ -7167,6 +7246,56 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(appSource, /getCurrentConversationSessionId,/);
   assert.match(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
+});
+
+test("conversation session cache preserves real page anchors for later file continuations", () => {
+  withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/conversationSessionService.ts"),
+    {},
+    (moduleExports) => {
+      const service = moduleExports as {
+        getConversationPageContextForSession: (sessionId?: string) => unknown;
+        rememberConversationPageContextFromTask: (task: Record<string, unknown>, pageContext: Record<string, unknown>) => unknown;
+        rememberConversationSessionFromTask: (task: Record<string, unknown>) => unknown;
+      };
+
+      service.rememberConversationSessionFromTask({
+        task_id: "task_shell_ball_anchor",
+        session_id: "sess_shell_ball_anchor",
+      });
+
+      assert.equal(
+        service.rememberConversationPageContextFromTask(
+          { session_id: "sess_shell_ball_anchor" },
+          { app_name: "desktop", title: "Quick Intake", url: "local://shell-ball" },
+        ),
+        null,
+      );
+      assert.equal(service.getConversationPageContextForSession("sess_shell_ball_anchor"), undefined);
+
+      service.rememberConversationPageContextFromTask(
+        { session_id: "sess_shell_ball_anchor" },
+        { app_name: "Chrome", title: "Build Dashboard", url: "https://example.com/build" },
+      );
+
+      assert.deepEqual(service.getConversationPageContextForSession("sess_shell_ball_anchor"), {
+        app_name: "Chrome",
+        title: "Build Dashboard",
+        url: "https://example.com/build",
+        window_title: undefined,
+        visible_text: undefined,
+        hover_target: undefined,
+      });
+      assert.deepEqual(service.getConversationPageContextForSession(), {
+        app_name: "Chrome",
+        title: "Build Dashboard",
+        url: "https://example.com/build",
+        window_title: undefined,
+        visible_text: undefined,
+        hover_target: undefined,
+      });
+    },
+  );
 });
 
 test("shell-ball surface passes mascot double-click and drag wiring through the mascot only", () => {
@@ -7218,10 +7347,11 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   assert.doesNotMatch(interactionSource, /startTaskFromSelectedText/);
   assert.match(appSource, /const handleSurfaceTextDrop = useCallback\(\(text: string\) => \{/);
   assert.match(appSource, /handleDroppedText\(text\);\s*window\.requestAnimationFrame\(\(\) => \{\s*focusInlineInputField\(false\);\s*\}\);/);
-  assert.match(appSource, /useEventListener\("dragenter", handleWindowTextDrag,/);
-  assert.match(appSource, /useEventListener\("dragover", handleWindowTextDrag,/);
-  assert.match(appSource, /useEventListener\("dragleave", clearTextDragState,/);
-  assert.match(appSource, /useEventListener\("drop", clearTextDragState,/);
+  assert.doesNotMatch(appSource, /emitShellBallInputRequestFocus/);
+  assert.match(appSource, /useEventListener\("dragenter", handleWindowTextDrag, \{/);
+  assert.match(appSource, /useEventListener\("dragover", handleWindowTextDrag, \{/);
+  assert.match(appSource, /useEventListener\("dragleave", clearTextDragState, \{/);
+  assert.match(appSource, /useEventListener\("drop", clearTextDragState, \{/);
   assert.match(appSource, /onTextDrop=\{handleSurfaceTextDrop\}/);
   assert.match(appSource, /textDropActive=\{shouldArmShellBallTextDropTarget\(/);
   assert.match(surfaceSource, /onDragEnterCapture=\{handleDragOver\}/);
@@ -7328,12 +7458,15 @@ test("desktop tauri setup enables mouse activity tracking for dwell context", ()
 });
 
 test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 
   assert.match(coordinatorSource, /const handleDroppedFiles = useCallback\(async \(paths: string\[\]\) => \{/);
   assert.match(coordinatorSource, /handlersRef\.current\.onAppendPendingFiles\(normalizedPaths\);/);
   assert.doesNotMatch(coordinatorSource, /emitShellBallInputRequestFocus/);
+  assert.match(appSource, /const droppedPaths = event\.payload\.paths;\s*void \(async \(\) => \{\s*try \{\s*await dragDropHandlersRef\.current\.handleDroppedFiles\(droppedPaths\);\s*inputFocusRequestRef\.current\(\);/);
+  assert.match(appSource, /console\.warn\("shell-ball file drop handling failed", error\);/);
   assert.doesNotMatch(coordinatorSource, /issue #187/);
   assert.match(interactionSource, /function handleDroppedFiles\(paths: string\[\]\) \{/);
   assert.match(interactionSource, /setPendingFiles\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);

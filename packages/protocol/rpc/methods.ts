@@ -254,6 +254,9 @@ export interface AgentTaskStartParams {
   };
   context?: InputContext;
   delivery?: DeliveryPreference;
+  options?: {
+    confirm_required?: boolean;
+  };
 }
 
 // AgentTaskStartResult 定义当前模块的接口约束。

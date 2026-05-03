@@ -307,14 +307,19 @@ func (s *Service) RunEngine() *runengine.Engine {
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	options := mapValue(params, "options")
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
+	confirmRequired := boolValue(options, "confirm_required", false)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: confirmRequired,
+		AllowAsyncBubble: strings.TrimSpace(stringValue(params, "source", "")) == "floating_ball" &&
+			strings.TrimSpace(stringValue(options, "preferred_delivery", "")) == "bubble",
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
 	} else if strings.TrimSpace(resolvedSessionID) != "" {
 		params = withResolvedSessionID(params, resolvedSessionID)
 	}
-	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
@@ -428,7 +433,13 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+	options := mapValue(params, "options")
+	forceConfirmRequired := boolValue(options, "confirm_required", false)
+	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent, taskContinuationOptions{
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: forceConfirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
@@ -440,8 +451,15 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
-	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
+	suggestion := s.intent.Suggest(snapshot, explicitIntent, confirmRequired)
+	fallbackConfirmRequired := confirmRequired
+	// Screen inference already carries its own authorization boundary; only an
+	// explicit caller request should turn an unavailable screen path back into
+	// intent confirmation.
+	if stringValue(suggestion.Intent, "name", "") == "screen_analyze" && !forceConfirmRequired {
+		fallbackConfirmRequired = suggestion.RequiresConfirm
+	}
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, fallbackConfirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -516,6 +534,28 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		response["delivery_result"] = nil
 	}
 	return response, nil
+}
+
+// taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.
+// Object-based task starts with their own instruction can enter the Agent Loop
+// directly, while bare objects still stop for intent confirmation.
+func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, forceConfirm bool) bool {
+	if forceConfirm {
+		return true
+	}
+	if len(explicitIntent) > 0 {
+		return false
+	}
+	return !taskStartHasExplicitGoal(snapshot)
+}
+
+func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
+	switch snapshot.InputType {
+	case "file":
+		return strings.TrimSpace(snapshot.Text) != ""
+	default:
+		return false
+	}
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
@@ -3488,19 +3528,65 @@ func mergeTaskLists(runtimeTasks, storageTasks []runengine.TaskRecord) []runengi
 }
 
 func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	selected := storageTask
 	if runtimeTask.UpdatedAt.After(storageTask.UpdatedAt) {
-		return runtimeTask
+		selected = runtimeTask
+	} else if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
+		selected = storageTask
+	} else if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
+		selected = runtimeTask
+	} else if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
+		selected = storageTask
 	}
-	if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
-		return storageTask
+	return taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask)
+}
+
+func taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	// Snapshot anchors are continuation evidence, not freshness state; keep the
+	// fresher task fields and only fill missing anchors from the alternate
+	// copies. A partial fresher snapshot can still carry text or files while
+	// missing the page/window anchors needed for follow-up routing.
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, runtimeTask.Snapshot)
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, storageTask.Snapshot)
+	return selected
+}
+
+func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	if isEmptySnapshot(selected) {
+		if isEmptySnapshot(fallback) {
+			return selected
+		}
+		return cloneTaskSnapshot(fallback)
 	}
-	if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
-		return runtimeTask
+	if isEmptySnapshot(fallback) {
+		return cloneTaskSnapshot(selected)
 	}
-	if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
-		return storageTask
+	merged := cloneTaskSnapshot(selected)
+	if isShellBallIntakeAnchor(merged) && !isShellBallIntakeAnchor(fallback) {
+		// Shell-ball intake context is not a task-specific anchor. Treat it as
+		// missing when another persisted copy still has the real page/window
+		// anchors needed for continuation routing.
+		merged.PageTitle = ""
+		merged.PageURL = ""
+		merged.AppName = ""
+		merged.WindowTitle = ""
 	}
-	return storageTask
+	if strings.TrimSpace(merged.PageTitle) == "" {
+		merged.PageTitle = fallback.PageTitle
+	}
+	if strings.TrimSpace(merged.PageURL) == "" {
+		merged.PageURL = fallback.PageURL
+	}
+	if strings.TrimSpace(merged.AppName) == "" {
+		merged.AppName = fallback.AppName
+	}
+	if strings.TrimSpace(merged.WindowTitle) == "" {
+		merged.WindowTitle = fallback.WindowTitle
+	}
+	if strings.TrimSpace(merged.HoverTarget) == "" {
+		merged.HoverTarget = fallback.HoverTarget
+	}
+	return merged
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {

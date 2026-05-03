@@ -11,7 +11,11 @@ import {
   recordMirrorConversationStart,
   recordMirrorConversationSuccess,
 } from "./mirrorMemoryService";
-import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import {
+  getCurrentConversationSessionId,
+  rememberConversationPageContextFromTask,
+  rememberConversationSessionFromTask,
+} from "./conversationSessionService";
 
 type DesktopWindowContextSnapshot = {
   app_name: string;
@@ -316,6 +320,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
   try {
     const result = await rpcMethods.submitInput(enrichedParams);
     rememberConversationSessionFromTask(result.task);
+    rememberConversationPageContextFromTask(result.task, enrichedParams.context.page);
     recordMirrorConversationSuccess(enrichedParams, result);
     return result;
   } catch (error) {

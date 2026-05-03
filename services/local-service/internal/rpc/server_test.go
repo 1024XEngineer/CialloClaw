@@ -996,6 +996,53 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
+	server := newTestServerWithModelClient(&stubLoopModelClient{})
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-start-file-instruction"`),
+		Method:  "agent.task.start",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_file_instruction_rpc",
+			"source":     "floating_ball",
+			"trigger":    "file_drop",
+			"input": map[string]any{
+				"type":  "file",
+				"text":  "帮我看看这里面有什么",
+				"files": []string{"workspace/MyToDos_Vue"},
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+			"delivery": map[string]any{
+				"preferred": "bubble",
+				"fallback":  "task_detail",
+			},
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	result := success.Result.Data.(map[string]any)
+	task := result["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected instructed file start to skip intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected dragged_file source type, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected task.start to keep backend agent_loop suggestion, got %+v", task["intent"])
+	}
+	if result["delivery_result"] == nil {
+		t.Fatal("expected instructed file start to return delivery_result")
+	}
+}
+
 // TestHandleDebugEventsReturnsQueuedNotifications verifies that queued
 // notifications can be fetched through the debug events endpoint.
 func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {

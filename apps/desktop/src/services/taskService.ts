@@ -9,7 +9,12 @@ import type {
 import { startTask } from "@/rpc/methods";
 import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
-import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import {
+  getConversationPageContextForSession,
+  getCurrentConversationSessionId,
+  rememberConversationPageContextFromTask,
+  rememberConversationSessionFromTask,
+} from "./conversationSessionService";
 
 type StartTaskContext = {
   context?: InputContext;
@@ -37,17 +42,56 @@ function normalizeTaskInputText(value: string | undefined) {
   return trimmed === "" ? undefined : trimmed;
 }
 
-function resolveTaskPageContext(pageContext: PageContext | undefined) {
+function compactTaskPageContext(pageContext: PageContext | undefined) {
+  if (!pageContext) {
+    return undefined;
+  }
+
   const normalizedAppName = pageContext?.app_name?.trim();
   const normalizedTitle = pageContext?.title?.trim();
   const normalizedUrl = pageContext?.url?.trim();
+  const normalizedWindowTitle = pageContext?.window_title?.trim();
+  const normalizedVisibleText = pageContext?.visible_text?.trim();
+  const normalizedHoverTarget = pageContext?.hover_target?.trim();
 
-  if (normalizedAppName && normalizedTitle && normalizedUrl) {
-    return {
-      app_name: normalizedAppName,
-      title: normalizedTitle,
-      url: normalizedUrl,
-    };
+  const compacted = {
+    ...(normalizedAppName ? { app_name: normalizedAppName } : {}),
+    ...(normalizedTitle ? { title: normalizedTitle } : {}),
+    ...(normalizedUrl ? { url: normalizedUrl } : {}),
+    ...(normalizedWindowTitle ? { window_title: normalizedWindowTitle } : {}),
+    ...(normalizedVisibleText ? { visible_text: normalizedVisibleText } : {}),
+    ...(normalizedHoverTarget ? { hover_target: normalizedHoverTarget } : {}),
+  } satisfies PageContext;
+
+  return Object.keys(compacted).length === 0 ? undefined : compacted;
+}
+
+function isShellBallIntakePageContext(pageContext: PageContext) {
+  return pageContext.url === "local://shell-ball" && pageContext.app_name?.toLowerCase() === "desktop";
+}
+
+function hasTaskSpecificPageContextAnchor(pageContext: PageContext | undefined) {
+  if (!pageContext || isShellBallIntakePageContext(pageContext)) {
+    return false;
+  }
+
+  return Boolean(
+    pageContext.url
+      || pageContext.hover_target
+      || (pageContext.app_name && (pageContext.title || pageContext.window_title)),
+  );
+}
+
+function resolveTaskPageContext(pageContext: PageContext | undefined, sessionId: string | undefined) {
+  const compactedPageContext = compactTaskPageContext(pageContext);
+
+  if (hasTaskSpecificPageContextAnchor(compactedPageContext)) {
+    return compactedPageContext;
+  }
+
+  const rememberedPageContext = getConversationPageContextForSession(sessionId);
+  if (rememberedPageContext) {
+    return rememberedPageContext;
   }
 
   return DEFAULT_TASK_PAGE_CONTEXT;
@@ -60,6 +104,7 @@ function resolveTaskSessionId(sessionId: string | undefined) {
 export async function startTaskFromSelectedText(text: string, context: StartTaskContext = {}) {
   const normalizedText = text.trim();
   const resolvedSessionId = resolveTaskSessionId(context.sessionId);
+  const pageContext = resolveTaskPageContext(context.pageContext, resolvedSessionId);
   if (normalizedText === "") {
     throw new Error("selected text is empty");
   }
@@ -72,7 +117,7 @@ export async function startTaskFromSelectedText(text: string, context: StartTask
     input: {
       type: "text_selection",
       text: normalizedText,
-      page_context: resolveTaskPageContext(context.pageContext),
+      page_context: pageContext,
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -81,12 +126,14 @@ export async function startTaskFromSelectedText(text: string, context: StartTask
     },
   });
   rememberConversationSessionFromTask(result.task);
+  rememberConversationPageContextFromTask(result.task, pageContext);
   return result;
 }
 
 export async function startTaskFromFiles(files: string[], context: StartTaskContext = {}, text?: string) {
   const normalizedFiles = files.map((file) => file.trim()).filter(Boolean);
   const resolvedSessionId = resolveTaskSessionId(context.sessionId);
+  const pageContext = resolveTaskPageContext(context.pageContext, resolvedSessionId);
   if (normalizedFiles.length === 0) {
     throw new Error("dropped files are empty");
   }
@@ -102,21 +149,28 @@ export async function startTaskFromFiles(files: string[], context: StartTaskCont
       type: "file",
       ...(normalizedText === undefined ? {} : { text: normalizedText }),
       files: normalizedFiles,
-      page_context: resolveTaskPageContext(context.pageContext),
+      page_context: pageContext,
     },
     context: context.context,
     delivery: context.delivery ?? {
       preferred: "bubble",
       fallback: "task_detail",
     },
+    options: {
+      // File drops do not force the confirmation gate; the backend decides
+      // whether this is a new bare-file task or evidence for a pending task.
+      confirm_required: false,
+    },
   });
   rememberConversationSessionFromTask(result.task);
+  rememberConversationPageContextFromTask(result.task, pageContext);
   return result;
 }
 
 export async function startTaskFromErrorSignal(errorMessage: string, context: StartTaskContext = {}) {
   const normalizedMessage = errorMessage.trim();
   const resolvedSessionId = resolveTaskSessionId(context.sessionId);
+  const pageContext = resolveTaskPageContext(context.pageContext, resolvedSessionId);
   if (normalizedMessage === "") {
     throw new Error("error signal is empty");
   }
@@ -129,7 +183,7 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
     input: {
       type: "error",
       error_message: normalizedMessage,
-      page_context: resolveTaskPageContext(context.pageContext),
+      page_context: pageContext,
     },
     context: context.context,
     delivery: context.delivery ?? {
@@ -138,6 +192,7 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
     },
   });
   rememberConversationSessionFromTask(result.task);
+  rememberConversationPageContextFromTask(result.task, pageContext);
   return result;
 }
 

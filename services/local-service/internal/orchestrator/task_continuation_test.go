@@ -6,6 +6,7 @@ import (
 	"time"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -101,7 +102,7 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	}, taskContinuationContext{
 		SessionMode: "implicit_active",
 		Candidates:  []runengine.TaskRecord{candidate},
-	})
+	}, taskContinuationOptions{})
 
 	for _, sensitive := range []string{
 		snapshot.Text,
@@ -133,6 +134,25 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	}
 	if strings.Contains(prompt, "continuation_markers=") {
 		t.Fatalf("expected prompt to stop relying on continuation markers, got %s", prompt)
+	}
+}
+
+func TestTaskContinuationInputSummaryUsesConfirmationPolicy(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{
+		Trigger:   "file_drop",
+		InputType: "file",
+		Text:      "Summarize the attachment.",
+		Files:     []string{"notes/source.md"},
+	}
+
+	directSummary := taskContinuationInputSummary(snapshot, nil, taskContinuationOptions{})
+	if !strings.Contains(directSummary, "requires_confirmation=false") {
+		t.Fatalf("expected described file input to keep direct-start confirmation semantics, got %s", directSummary)
+	}
+
+	forcedSummary := taskContinuationInputSummary(snapshot, nil, taskContinuationOptions{ConfirmRequired: true})
+	if !strings.Contains(forcedSummary, "requires_confirmation=true") {
+		t.Fatalf("expected explicit confirmation policy to reach continuation summary, got %s", forcedSummary)
 	}
 }
 
@@ -171,6 +191,7 @@ func TestClassifyTaskContinuationContinuesExplicitWaitingTaskWithoutSignalWords(
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "continue" || decision.TaskID != "task_001" {
@@ -203,6 +224,7 @@ func TestClassifyTaskContinuationStartsNewTaskForExplicitIntentWithoutAnchors(t 
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
@@ -236,6 +258,7 @@ func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testin
 				},
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
@@ -243,7 +266,150 @@ func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testin
 	}
 }
 
-func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEvidence(t *testing.T) {
+func TestClassifyTaskContinuationContinuesConfirmRequiredPendingTaskWithMatchingAnchor(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "file_drop",
+			InputType: "file",
+			Files:     []string{"logs/network.log"},
+			PageTitle: "Build Dashboard",
+			PageURL:   "https://example.com/build-a",
+			AppName:   "Chrome",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+				Snapshot: contextsvc.TaskContextSnapshot{
+					PageTitle:   "Build Dashboard",
+					PageURL:     "https://example.com/build-a",
+					AppName:     "Chrome",
+					WindowTitle: "Browser - Build Dashboard",
+				},
+			}},
+		},
+		taskContinuationOptions{ConfirmRequired: true},
+	)
+
+	if decision.Decision != "continue" || decision.TaskID != "task_001" {
+		t.Fatalf("expected matching anchored file intake to continue the pending task, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationStartsNewConfirmRequiredTaskWithoutTaskEvidence(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "file_drop",
+			InputType: "file",
+			Files:     []string{"logs/network.log"},
+			PageTitle: "Quick Intake",
+			PageURL:   "local://shell-ball",
+			AppName:   "desktop",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+				Snapshot: contextsvc.TaskContextSnapshot{
+					PageTitle:   "Build Dashboard",
+					PageURL:     "https://example.com/build-a",
+					AppName:     "Chrome",
+					WindowTitle: "Browser - Build Dashboard",
+				},
+			}},
+		},
+		taskContinuationOptions{ConfirmRequired: true},
+	)
+
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected shell-ball-only structured input to open a new task, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationStartsNewStructuredMultiCandidateWithoutUniqueMatch(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_structured_multi_candidate_no_match",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"continue","task_id":"task_001","reason":"model must not choose unanchored structured continuation"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:     "file_drop",
+			InputType:   "file",
+			Files:       []string{"logs/network.log"},
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "explicit_active",
+			Candidates: []runengine.TaskRecord{
+				{
+					TaskID:      "task_001",
+					Status:      "waiting_input",
+					CurrentStep: "collect_input",
+					UpdatedAt:   time.Now().Add(-10 * time.Second),
+					Snapshot: contextsvc.TaskContextSnapshot{
+						PageTitle:   "Build Dashboard",
+						PageURL:     "https://example.com/build",
+						AppName:     "Chrome",
+						WindowTitle: "Browser - Build Dashboard",
+					},
+				},
+				{
+					TaskID:      "task_002",
+					Status:      "waiting_input",
+					CurrentStep: "collect_input",
+					UpdatedAt:   time.Now().Add(-9 * time.Second),
+					Snapshot: contextsvc.TaskContextSnapshot{
+						PageTitle:   "Issue Tracker",
+						PageURL:     "https://example.com/issues",
+						AppName:     "Chrome",
+						WindowTitle: "Browser - Issue Tracker",
+					},
+				},
+			},
+		},
+		taskContinuationOptions{},
+	)
+
+	if modelCalled {
+		t.Fatal("expected unanchored structured multi-candidate input to bypass model continuation")
+	}
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected structured input without a unique task-specific match to open a new task, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationStartsNewTaskForProcessingStructuredEvidence(t *testing.T) {
 	service := newTestService()
 	service.model = nil
 
@@ -269,10 +435,11 @@ func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEviden
 				},
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
-	if decision.Decision != "continue" || decision.TaskID != "task_001" {
-		t.Fatalf("expected strong context plus attachment evidence to continue the processing task, got %+v", decision)
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected structured evidence not to attach to the processing task, got %+v", decision)
 	}
 }
 
@@ -327,6 +494,7 @@ func TestClassifyTaskContinuationDoesNotAutoMergeSameExplicitIntentName(t *testi
 				Intent:      map[string]any{"name": "write_file"},
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
@@ -354,6 +522,7 @@ func TestClassifyTaskContinuationDoesNotAutoMergeGenericFocusCueWithoutContext(t
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
 			}},
 		},
+		taskContinuationOptions{},
 	)
 
 	if decision.Decision != "new_task" {
