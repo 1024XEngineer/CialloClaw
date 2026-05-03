@@ -849,6 +849,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleHideDelayTimeoutRef = useRef<number | null>(null);
   const bubbleHideCompleteTimeoutRef = useRef<number | null>(null);
   helperWindowsVisibleRef.current = helpersVisible;
+  // Programmatic interaction-state changes can retire the input without a DOM
+  // blur event, so keep the visibility timer ref aligned with the latest prop.
+  inputFocusedRef.current = input.inputFocused;
   const handlersRef = useRef({
     setInputValue: input.setInputValue,
     onAppendPendingFiles: input.onAppendPendingFiles ?? (() => {}),

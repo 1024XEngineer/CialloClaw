@@ -7955,6 +7955,7 @@ test("shell-ball coordinator does not resurrect hover presence from hover_input 
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
   assert.match(coordinatorSource, /regionActiveRef\.current = input\.regionActive;/);
+  assert.match(coordinatorSource, /inputFocusedRef\.current = input\.inputFocused;/);
   assert.match(coordinatorSource, /const voicePreviewActiveState =[\s\S]*input\.visualState === "voice_listening" \|\| input\.visualState === "voice_locked";/);
   assert.doesNotMatch(coordinatorSource, /input\.visualState === "hover_input" \|\| input\.visualState === "voice_listening" \|\| input\.visualState === "voice_locked"/);
 });
