@@ -1168,6 +1168,34 @@ func TestExecuteAgentLoopConsumesActiveRunSteeringBetweenRounds(t *testing.T) {
 	}
 }
 
+func TestCanConsumeActiveSteeringRequiresLoopRuntimeAndPoller(t *testing.T) {
+	modelClient := &stubModelClient{output: "loop ready"}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	intent := map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}}
+
+	if service.CanConsumeActiveSteering(intent) {
+		t.Fatal("expected agent-loop service without a steering poller to reject active steering")
+	}
+	service = service.WithSteeringPoller(func(_ string) []string { return nil })
+	if !service.CanConsumeActiveSteering(intent) {
+		t.Fatal("expected tool-calling loop service with a poller to accept active steering")
+	}
+	if service.CanConsumeActiveSteering(map[string]any{"name": "summarize"}) {
+		t.Fatal("expected non-agent-loop intent to reject active steering")
+	}
+
+	promptService, _ := newTestExecutionServiceWithModelClient(t, &recordingPromptModelClient{output: "prompt ready"})
+	promptService = promptService.WithSteeringPoller(func(_ string) []string { return nil })
+	if promptService.CanConsumeActiveSteering(intent) {
+		t.Fatal("expected prompt-only model service to reject active steering")
+	}
+
+	service.loop = nil
+	if service.CanConsumeActiveSteering(intent) {
+		t.Fatal("expected missing loop runtime to reject active steering")
+	}
+}
+
 func TestExecuteAgentLoopAppendsMultipleActiveSteeringMessages(t *testing.T) {
 	modelClient := &stubModelClient{
 		toolCalls: []model.ToolCallResult{

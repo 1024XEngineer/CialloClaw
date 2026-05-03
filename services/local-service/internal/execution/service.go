@@ -109,6 +109,18 @@ func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Servi
 	return s
 }
 
+// CanConsumeActiveSteering reports whether an in-flight task with this intent
+// can drain follow-up guidance before execution finishes. Agent-loop intent is
+// not enough on its own because prompt fallback paths and loop runs without a
+// poller have no live steering consumption point.
+func (s *Service) CanConsumeActiveSteering(taskIntent map[string]any) bool {
+	if s == nil || s.steeringPoller == nil || !isAgentLoopIntent(taskIntent) {
+		return false
+	}
+	modelService := s.currentModel()
+	return modelService != nil && modelService.SupportsToolCalling() && s.loop != nil
+}
+
 // Request carries the minimum execution input for one task attempt.
 type Request struct {
 	TaskID               string
