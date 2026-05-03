@@ -4059,7 +4059,7 @@ test("shell-ball runtime observation helper keeps runtime hints lightweight", ()
       task_id: "task-runtime-observation",
       message: "Added another instruction.",
     }),
-    "Added another instruction.",
+    null,
   );
   assert.equal(
     createShellBallRuntimeObservationReply({

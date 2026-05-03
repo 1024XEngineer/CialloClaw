@@ -465,8 +465,9 @@ function createShellBallApprovalPendingReply(approvalRequest: ApprovalRequest) {
  */
 export function createShellBallRuntimeObservationReply(payload: ShellBallRuntimeNotification) {
   if ("message" in payload) {
-    const message = payload.message.trim();
-    return message === "" ? null : message;
+    // task.steered carries the user's raw follow-up text. The RPC response
+    // already provides the backend acknowledgement bubble for shell-ball.
+    return null;
   }
 
   const stopReason = payload.stop_reason?.trim();
