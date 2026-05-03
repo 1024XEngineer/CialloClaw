@@ -2726,9 +2726,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
           return Promise.reject(transportError);
         },
       },
-      "./conversationSessionService": {
-        rememberConversationSessionFromTask() {},
-      },
       "./mirrorMemoryService": {
         recordMirrorConversationFailure() {
           mirrorCalls.push("failure");
@@ -2827,9 +2824,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
             return { tasks: [] as Array<Record<string, unknown>> };
           },
         },
-      },
-      "./conversationSessionService": {
-        rememberConversationSessionFromTask() {},
       },
       "./agentInputService": {
         submitTextInput(params: Record<string, unknown>) {
@@ -2956,9 +2950,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
             return { tasks: [] as Array<Record<string, unknown>> };
           },
         },
-      },
-      "./conversationSessionService": {
-        rememberConversationSessionFromTask() {},
       },
       "./agentInputService": {
         submitTextInput() {
@@ -7953,6 +7944,21 @@ test("shell-ball region leave keeps hover input visible while the text field is 
   assert.match(interactionSource, /function handleRegionLeave\(\) \{[\s\S]*hoverRetained: getHoverRetained\(\),[\s\S]*\}/);
 });
 
+test("shell-ball hover timing stays driven by real hotspot enter and leave events", () => {
+  const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+
+  assert.match(interactionSource, /function handleRegionEnter\(\) \{[\s\S]*dispatch\("pointer_enter_hotspot", \{[\s\S]*regionActive: true,[\s\S]*hoverRetained: getHoverRetained\(\),[\s\S]*\}\);[\s\S]*syncVisualState\(\);[\s\S]*\}/);
+  assert.match(interactionSource, /function handleRegionLeave\(\) \{[\s\S]*dispatch\("pointer_leave_region", \{[\s\S]*regionActive: false,[\s\S]*hoverRetained: getHoverRetained\(\),[\s\S]*\}\);[\s\S]*syncVisualState\(\);[\s\S]*\}/);
+});
+
+test("shell-ball coordinator does not resurrect hover presence from hover_input state alone", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /regionActiveRef\.current = input\.regionActive;/);
+  assert.match(coordinatorSource, /const voicePreviewActiveState =[\s\S]*input\.visualState === "voice_listening" \|\| input\.visualState === "voice_locked";/);
+  assert.doesNotMatch(coordinatorSource, /input\.visualState === "hover_input" \|\| input\.visualState === "voice_listening" \|\| input\.visualState === "voice_locked"/);
+});
+
 test("shell-ball direct input starts fresh requests while explicit session reuse stays opt-in", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
   const sessionServiceSource = readFileSync(resolve(desktopRoot, "src/services/conversationSessionService.ts"), "utf8");
@@ -8348,6 +8354,7 @@ test("shell-ball clipboard prompts stay active for 10 seconds after clipboard re
 test("shell-ball app routes fresh clipboard prompts through the formal text submit path", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const submitSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBallSubmit.ts"), "utf8");
   const syncSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.windowSync.ts"), "utf8");
 
   assert.match(appSource, /const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;/);
@@ -8356,10 +8363,11 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(appSource, /if \(clipboardPrompt !== null\) \{/);
   assert.match(appSource, /void handleCoordinatorClipboardPrompt\(clipboardPrompt\.text\);/);
   assert.match(coordinatorSource, /const handleClipboardPrompt = useCallback\(async \(text: string\) => \{/);
-  assert.match(coordinatorSource, /submitTextInput\(\{/);
-  assert.match(coordinatorSource, /trigger: "hover_text_input"/);
-  assert.match(coordinatorSource, /inputMode: "text"/);
-  assert.match(coordinatorSource, /includeForegroundBrowserPageContext: true/);
+  assert.match(coordinatorSource, /submitShellBallInput\(\{/);
+  assert.match(submitSource, /export async function submitShellBallInput/);
+  assert.match(submitSource, /trigger: input\.trigger/);
+  assert.match(submitSource, /inputMode: input\.inputMode/);
+  assert.match(submitSource, /includeForegroundBrowserPageContext: true/);
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
@@ -8588,6 +8596,8 @@ test("shell-ball app injects the demo switcher only in dev mode", () => {
 });
 
 test("shell-ball inline input preserves readonly snapshots and only upgrades hidden idle input", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+
   assert.equal(
     resolveShellBallInlineInputMode({
       shouldRenderInlineInput: true,
@@ -8616,6 +8626,7 @@ test("shell-ball inline input preserves readonly snapshots and only upgrades hid
     }),
     "hidden",
   );
+  assert.match(appSource, /const shouldRenderInlineInput = snapshot\.visibility\.input;/);
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {

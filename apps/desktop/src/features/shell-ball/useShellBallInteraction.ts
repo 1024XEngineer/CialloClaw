@@ -2,15 +2,11 @@
  * Shell-ball interaction state owns the floating hover input, voice capture, and
  * lightweight submission gestures that sit on top of the task-centric backend.
  */
-import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
+import type { AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
 import { useLatest, useUnmount } from "ahooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import {
-  submitTextInput,
-  createTextInputSubmitParams,
-  type SubmitTextInputClientContext,
-} from "../../services/agentInputService";
+import type { SubmitTextInputClientContext } from "../../services/agentInputService";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
@@ -30,9 +26,12 @@ import {
   getShellBallSpeechRecognitionLanguage,
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
+import { submitShellBallInput } from "./shellBallSubmit";
 import { startTaskFromFiles } from "@/services/taskService";
 import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
+
+export { createShellBallInputSubmitParams } from "./shellBallSubmit";
 
 type TimeoutHandle = ReturnType<typeof globalThis.setTimeout>;
 
@@ -64,7 +63,7 @@ const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
  * UI such as local bubbles and delivery previews.
  */
 export type ShellBallInputSubmitResult = (
-  | NonNullable<Awaited<ReturnType<typeof submitTextInput>>>
+  | NonNullable<Awaited<ReturnType<typeof submitShellBallInput>>>
   | Awaited<ReturnType<typeof startTaskFromFiles>>
 ) & {
   clientContext?: SubmitTextInputClientContext;
@@ -162,32 +161,6 @@ export function appendShellBallDroppedText(input: {
 }
 
 /**
- * Builds the formal `agent.input.submit` payload used by shell-ball text and
- * voice submissions.
- *
- * @param input Trigger metadata together with the draft text to submit.
- * @returns The normalized RPC payload, or `null` when the draft is empty.
- */
-export function createShellBallInputSubmitParams(input: {
-  text: string;
-  trigger: "voice_commit" | "hover_text_input";
-  inputMode: "voice" | "text";
-  sessionId?: string;
-}): AgentInputSubmitParams | null {
-  return createTextInputSubmitParams({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    sessionId: input.sessionId,
-    options: {
-      confirm_required: false,
-      preferred_delivery: "bubble",
-    },
-  });
-}
-
-/**
  * Builds the formal `agent.task.start` payload used when shell-ball submission
  * includes file attachments.
  *
@@ -223,26 +196,6 @@ export function createShellBallTaskStartParams(input: {
       confirm_required: false,
     },
   };
-}
-
-async function submitShellBallInput(input: {
-  text: string;
-  trigger: "voice_commit" | "hover_text_input";
-  inputMode: "voice" | "text";
-  sessionId?: string;
-}): Promise<ShellBallInputSubmitResult | null> {
-  return submitTextInput({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    includeForegroundBrowserPageContext: true,
-    sessionId: input.sessionId,
-    options: {
-      confirm_required: false,
-      preferred_delivery: "bubble",
-    },
-  });
 }
 
 async function startShellBallFileTask(input: {
@@ -778,6 +731,11 @@ export function useShellBallInteraction() {
   function handleRegionEnter() {
     regionActiveRef.current = true;
     setRegionActive(true);
+    dispatch("pointer_enter_hotspot", {
+      regionActive: true,
+      hoverRetained: getHoverRetained(),
+    });
+    syncVisualState();
   }
 
   function handleRegionLeave() {
@@ -789,12 +747,11 @@ export function useShellBallInteraction() {
       setCurrentVoicePreview(null);
     }
 
-    if (controllerRef.current?.getState() === "hover_input" && inputFocusedRef.current) {
-      dispatch("pointer_leave_region", {
-        regionActive: false,
-        hoverRetained: true,
-      });
-    }
+    dispatch("pointer_leave_region", {
+      regionActive: false,
+      hoverRetained: getHoverRetained(),
+    });
+    syncVisualState();
   }
 
   function handleInputHoverChange(active: boolean) {
@@ -1203,6 +1160,23 @@ export function useShellBallInteraction() {
     controllerRef.current?.forceState(state, { regionActive: regionActiveRef.current });
     syncVisualState();
   }
+
+  useEffect(() => {
+    if (getShellBallInputBarMode(visualState) !== "hidden") {
+      return;
+    }
+
+    inputHoveredRef.current = false;
+
+    if (!inputFocusedRef.current) {
+      return;
+    }
+
+    // Hidden input modes should retire any stale textarea-focus bookkeeping so
+    // follow-up hover transitions do not inherit a no-longer-rendered field.
+    inputFocusedRef.current = false;
+    setInputFocused(false);
+  }, [visualState]);
 
   useEffect(() => {
     if (controllerRef.current === null) {

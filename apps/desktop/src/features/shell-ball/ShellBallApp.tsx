@@ -338,7 +338,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
-  const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
+  const shouldRenderInlineInput = snapshot.visibility.input;
   const inlineInputMode = resolveShellBallInlineInputMode({
     shouldRenderInlineInput,
     snapshotInputBarMode: snapshot.inputBarMode,

@@ -29,6 +29,7 @@ import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import type { ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
+import { submitShellBallInput } from "./shellBallSubmit";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromSelectedText } from "@/services/taskService";
@@ -1314,8 +1315,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
-   * Submits clipboard text through the formal shell-ball text input path while
-   * preserving the local bubble turn ordering used by hover-input submissions.
+   * Submits clipboard text through the shared shell-ball free-form input path
+   * while preserving the local bubble turn ordering used by hover-input submissions.
    *
    * @param text Clipboard text captured by the desktop clipboard prompt.
    * @returns A promise that resolves after the bubble timeline has been updated.
@@ -1348,16 +1349,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
 
     try {
-      const result = await submitTextInput({
+      const result = await submitShellBallInput({
         text: normalizedText,
-        source: "floating_ball",
         trigger: "hover_text_input",
         inputMode: "text",
-        includeForegroundBrowserPageContext: true,
-        options: {
-          confirm_required: false,
-          preferred_delivery: "bubble",
-        },
       });
 
       if (!isShellBallInputSubmitResult(result)) {
@@ -1733,23 +1728,34 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }, [snapshot.visibility.input]);
 
   useEffect(() => {
-    const hoverDrivenState =
-      input.visualState === "hover_input" || input.visualState === "voice_listening" || input.visualState === "voice_locked";
+    regionActiveRef.current = input.regionActive;
 
-    if (hoverDrivenState) {
-      regionActiveRef.current = true;
+    if (input.regionActive) {
       revealBubbleRegion();
       return;
     }
 
-    if (input.visualState === "idle") {
-      regionActiveRef.current = false;
+    const voicePreviewActiveState =
+      input.visualState === "voice_listening" || input.visualState === "voice_locked";
 
-      if (!inputFocusedRef.current) {
-        scheduleBubbleRegionHide();
-      }
+    if (voicePreviewActiveState) {
+      revealBubbleRegion();
+      return;
     }
-  }, [input.visualState, revealBubbleRegion, scheduleBubbleRegionHide]);
+
+    if (!helperWindowsVisibleRef.current || visibleBubbleCountRef.current === 0) {
+      clearBubbleVisibilityTimers();
+      applyBubbleVisibilityPhase("hidden");
+      return;
+    }
+
+    if (bubbleHoveredRef.current || inputFocusedRef.current || inputHoveredRef.current) {
+      revealBubbleRegion();
+      return;
+    }
+
+    scheduleBubbleRegionHide();
+  }, [applyBubbleVisibilityPhase, clearBubbleVisibilityTimers, input.regionActive, input.visualState, revealBubbleRegion, scheduleBubbleRegionHide]);
 
   useEffect(() => {
     return () => {
