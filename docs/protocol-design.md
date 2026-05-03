@@ -2023,6 +2023,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 8.2.6 `agent.task.steer`
 
+- **状态边界**：`agent.task.steer` 只用于可延迟消费 steering 的任务状态。`processing` 必须是可轮询的 `agent_loop` 执行路径；`waiting_auth` 与 `blocked` 可先记录到恢复执行；`waiting_input / confirming_intent / paused / terminal` 必须拒绝，让客户端改走 `agent.input.submit`、确认或控制链路。
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在任务运行中补充新的 follow-up 指令时
 - **系统处理**：把新的 steering 文本写入当前 task 的运行态，并允许 Agent Loop 在后续轮次主动消费；若当前 `processing` task 不是可轮询的 `agent_loop` 执行路径，则不得返回“已记录”假确认，应让普通输入创建 / 排队新 task，或等后续恢复执行路径消费已经排队的 steering。

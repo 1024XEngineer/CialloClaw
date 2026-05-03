@@ -1592,16 +1592,21 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 }
 
 func taskCanAcceptExplicitSteering(task runengine.TaskRecord) bool {
-	if taskIsTerminal(task.Status) {
-		return false
-	}
-	if task.Status == "processing" {
+	switch task.Status {
+	case "processing":
 		// Active processing tasks can only consume steering when the running
 		// agent loop polls between rounds. Other processing paths must finish or
 		// queue a separate task instead of pretending the guidance was consumed.
 		return taskCanConsumeActiveSteering(task)
+	case "waiting_auth", "blocked":
+		// Deferred execution paths can carry explicit steering until approval or
+		// queue release resumes the task. Pending-input states are intentionally
+		// rejected so callers re-enter agent.input.submit and merge the text into
+		// the formal continuation snapshot instead of hiding it in runtime notes.
+		return true
+	default:
+		return false
 	}
-	return true
 }
 
 // TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready

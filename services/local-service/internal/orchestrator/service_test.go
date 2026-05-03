@@ -12524,6 +12524,56 @@ func TestServiceTaskSteerRejectsActivePromptTask(t *testing.T) {
 	}
 }
 
+func TestServiceTaskSteerRejectsPendingInputTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name string
+		task runengine.CreateTaskInput
+	}{
+		{
+			name: "waiting input",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_waiting_input",
+				Title:       "Waiting input task",
+				SourceType:  "hover_input",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				RiskLevel:   "green",
+			},
+		},
+		{
+			name: "confirming intent",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_confirming_intent",
+				Title:       "Confirming intent task",
+				SourceType:  "hover_input",
+				Status:      "confirming_intent",
+				Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+				CurrentStep: "intent_confirmation",
+				RiskLevel:   "green",
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(testCase.task)
+
+			_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Use this as the formal follow-up."})
+			if !errors.Is(err, ErrTaskStatusInvalid) {
+				t.Fatalf("expected pending-input task to reject explicit steering, got %v", err)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 0 {
+				t.Fatalf("expected rejected pending-input steering to leave queue empty, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
 func TestServiceActiveExecutionStepNameTracksSteeringCapability(t *testing.T) {
 	promptService, _ := newTestServiceWithModelClient(t, stubModelClient{output: "prompt fallback"})
 	intent := map[string]any{"name": "agent_loop", "arguments": map[string]any{}}
