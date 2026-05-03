@@ -7960,6 +7960,27 @@ test("shell-ball coordinator does not resurrect hover presence from hover_input 
   assert.doesNotMatch(coordinatorSource, /input\.visualState === "hover_input" \|\| input\.visualState === "voice_listening" \|\| input\.visualState === "voice_locked"/);
 });
 
+test("shell-ball coordinator keeps thinking bubbles visible and re-arms hide timers for replacement replies", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(
+    coordinatorSource,
+    /function shouldKeepShellBallBubbleRegionVisibleForTaskState\(visualState: ShellBallVisualState\) \{[\s\S]*visualState === "confirming_intent" \|\| visualState === "processing" \|\| visualState === "waiting_auth";[\s\S]*\}/,
+  );
+  assert.match(
+    coordinatorSource,
+    /if \(shouldKeepShellBallBubbleRegionVisibleForTaskState\(visualStateRef\.current\)\) \{\s*applyBubbleVisibilityPhase\("visible"\);\s*return;\s*\}/,
+  );
+  assert.match(
+    coordinatorSource,
+    /const bubbleContentAdvanced =[\s\S]*visibleBubbleCount === previousVisibleBubbleCount[\s\S]*latestVisibleBubbleId !== null[\s\S]*latestVisibleBubbleId !== previousLatestVisibleBubbleId;/,
+  );
+  assert.match(
+    coordinatorSource,
+    /if \(visibleBubbleCount > previousVisibleBubbleCount \|\| bubbleContentAdvanced\) \{\s*revealBubbleRegion\(\);\s*scheduleBubbleRegionHide\(\);\s*\}/,
+  );
+});
+
 test("shell-ball direct input starts fresh requests while explicit session reuse stays opt-in", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
   const sessionServiceSource = readFileSync(resolve(desktopRoot, "src/services/conversationSessionService.ts"), "utf8");

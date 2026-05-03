@@ -166,6 +166,16 @@ type ShellBallBubbleTurnOrder = {
   turnPhase?: number;
 };
 
+function shouldKeepShellBallBubbleRegionVisibleForTaskState(visualState: ShellBallVisualState) {
+  // Active task turns should keep their bubble visible until the backend
+  // advances into a stable reply or another user-facing terminal state.
+  return visualState === "confirming_intent" || visualState === "processing" || visualState === "waiting_auth";
+}
+
+function getLatestVisibleShellBallBubbleId(items: ShellBallBubbleItem[]) {
+  return getShellBallVisibleBubbleItems(items).at(-1)?.bubble.bubble_id ?? null;
+}
+
 function createShellBallRequestMeta() {
   const now = new Date().toISOString();
   const traceId = typeof globalThis.crypto?.randomUUID === "function"
@@ -805,6 +815,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleVisibilityPhaseRef = useRef<ShellBallBubbleVisibilityPhase>(bubbleVisibilityPhase);
   const visibleBubbleCountRef = useRef(getShellBallVisibleBubbleItems(bubbleItems).length);
   const previousVisibleBubbleCountRef = useRef(visibleBubbleCountRef.current);
+  const latestVisibleBubbleIdRef = useRef(getLatestVisibleShellBallBubbleId(bubbleItems));
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const approvalPendingBubbleKeysRef = useRef(new Set<string>());
@@ -841,6 +852,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const syncAnchoredPinnedBubbleWindowsRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const handleBubbleActionRef = useRef<(payload: ShellBallBubbleActionPayload) => void>(() => {});
   const helperWindowsVisibleRef = useRef(input.helperWindowsVisible ?? true);
+  const visualStateRef = useRef(input.visualState);
   const getBallClientRect = input.getBallClientRect;
   const regionActiveRef = useRef(false);
   const bubbleHoveredRef = useRef(false);
@@ -849,6 +861,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleHideDelayTimeoutRef = useRef<number | null>(null);
   const bubbleHideCompleteTimeoutRef = useRef<number | null>(null);
   helperWindowsVisibleRef.current = helpersVisible;
+  visualStateRef.current = input.visualState;
   // Programmatic interaction-state changes can retire the input without a DOM
   // blur event, so keep the visibility timer ref aligned with the latest prop.
   inputFocusedRef.current = input.inputFocused;
@@ -1182,6 +1195,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
+    if (shouldKeepShellBallBubbleRegionVisibleForTaskState(visualStateRef.current)) {
+      applyBubbleVisibilityPhase("visible");
+      return;
+    }
+
     bubbleHideDelayTimeoutRef.current = window.setTimeout(() => {
       if (!helperWindowsVisibleRef.current || visibleBubbleCountRef.current === 0) {
         applyBubbleVisibilityPhase("hidden");
@@ -1193,9 +1211,19 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         return;
       }
 
+      if (shouldKeepShellBallBubbleRegionVisibleForTaskState(visualStateRef.current)) {
+        applyBubbleVisibilityPhase("visible");
+        return;
+      }
+
       applyBubbleVisibilityPhase("fading");
       bubbleHideCompleteTimeoutRef.current = window.setTimeout(() => {
         if (regionActiveRef.current || bubbleHoveredRef.current || inputFocusedRef.current || inputHoveredRef.current) {
+          applyBubbleVisibilityPhase("visible");
+          return;
+        }
+
+        if (shouldKeepShellBallBubbleRegionVisibleForTaskState(visualStateRef.current)) {
           applyBubbleVisibilityPhase("visible");
           return;
         }
@@ -1565,9 +1593,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   useEffect(() => {
     const visibleBubbleCount = getShellBallVisibleBubbleItems(bubbleItems).length;
     const previousVisibleBubbleCount = previousVisibleBubbleCountRef.current;
+    const latestVisibleBubbleId = getLatestVisibleShellBallBubbleId(bubbleItems);
+    const previousLatestVisibleBubbleId = latestVisibleBubbleIdRef.current;
 
     visibleBubbleCountRef.current = visibleBubbleCount;
     previousVisibleBubbleCountRef.current = visibleBubbleCount;
+    latestVisibleBubbleIdRef.current = latestVisibleBubbleId;
 
     if (!helperWindowsVisibleRef.current || visibleBubbleCount === 0) {
       clearBubbleVisibilityTimers();
@@ -1580,7 +1611,19 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
-    if (visibleBubbleCount > previousVisibleBubbleCount) {
+    if (shouldKeepShellBallBubbleRegionVisibleForTaskState(visualStateRef.current)) {
+      revealBubbleRegion();
+      return;
+    }
+
+    // Replacing a loading bubble with the first concrete reply keeps the
+    // visible-count flat, so detect the newest visible bubble id as well.
+    const bubbleContentAdvanced =
+      visibleBubbleCount === previousVisibleBubbleCount &&
+      latestVisibleBubbleId !== null &&
+      latestVisibleBubbleId !== previousLatestVisibleBubbleId;
+
+    if (visibleBubbleCount > previousVisibleBubbleCount || bubbleContentAdvanced) {
       revealBubbleRegion();
       scheduleBubbleRegionHide();
     }
@@ -1599,6 +1642,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
 
     if (regionActiveRef.current || bubbleHoveredRef.current || inputFocusedRef.current || inputHoveredRef.current) {
+      revealBubbleRegion();
+      return;
+    }
+
+    if (shouldKeepShellBallBubbleRegionVisibleForTaskState(visualStateRef.current)) {
       revealBubbleRegion();
       return;
     }
@@ -1741,7 +1789,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     const voicePreviewActiveState =
       input.visualState === "voice_listening" || input.visualState === "voice_locked";
 
-    if (voicePreviewActiveState) {
+    if (voicePreviewActiveState || shouldKeepShellBallBubbleRegionVisibleForTaskState(visualStateRef.current)) {
       revealBubbleRegion();
       return;
     }
