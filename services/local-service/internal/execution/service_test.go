@@ -3078,6 +3078,29 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
 		}
 	}
+
+	roundTripPayload, err := json.Marshal([]map[string]any{{
+		"retrieval_context": []map[string]any{
+			{
+				"memory_id": "mem_seed_context_002",
+				"source":    "summary",
+				"summary":   "persisted memory survives storage round-trips",
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("marshal memory read plans failed: %v", err)
+	}
+	var roundTripPlans []map[string]any
+	if err := json.Unmarshal(roundTripPayload, &roundTripPlans); err != nil {
+		t.Fatalf("unmarshal memory read plans failed: %v", err)
+	}
+	roundTripInputText := service.buildExecutionInput(contextsvc.TaskContextSnapshot{}, roundTripPlans)
+	for _, fragment := range []string{"历史记忆", "persisted memory survives storage round-trips"} {
+		if !strings.Contains(roundTripInputText, fragment) {
+			t.Fatalf("expected persisted execution input to contain %q, got %s", fragment, roundTripInputText)
+		}
+	}
 }
 
 func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
