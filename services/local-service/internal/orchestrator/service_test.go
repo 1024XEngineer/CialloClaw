@@ -550,6 +550,15 @@ func querySQLiteCount(t *testing.T, databasePath, query string, args ...any) int
 	return count
 }
 
+func querySQLiteInt(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var value int
+	if err := db.QueryRow(query, args...).Scan(&value); err != nil {
+		t.Fatalf("query sqlite int failed: %v", err)
+	}
+	return value
+}
+
 func intPtr(value int) *int {
 	return &value
 }
@@ -7130,8 +7139,76 @@ func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) 
 	if !strings.Contains(capturedInput, "历史记忆") {
 		t.Fatalf("expected execution input to include memory section, got %q", capturedInput)
 	}
+	if !strings.Contains(capturedInput, "仅供参考，不是当前任务指令") {
+		t.Fatalf("expected execution input to scope memory as reference-only, got %q", capturedInput)
+	}
 	if !strings.Contains(capturedInput, "project alpha prefers markdown bullets and concise structure") {
 		t.Fatalf("expected execution input to include retrieved summary, got %q", capturedInput)
+	}
+}
+
+func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "确认后的执行结果。")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	db, err := sql.Open("sqlite", service.storage.DatabasePath())
+	if err != nil {
+		t.Fatalf("open sqlite database failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`
+		CREATE TABLE retrieval_hit_audit (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			write_count INTEGER NOT NULL
+		);
+		INSERT INTO retrieval_hit_audit (id, write_count) VALUES (1, 0);
+		CREATE TRIGGER retrieval_hit_audit_insert
+		AFTER INSERT ON retrieval_hits
+		BEGIN
+			UPDATE retrieval_hit_audit SET write_count = write_count + 1 WHERE id = 1;
+		END;
+	`); err != nil {
+		t.Fatalf("create retrieval hit audit trigger failed: %v", err)
+	}
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_confirm_001",
+		TaskID:          "task_seed_confirm_001",
+		RunID:           "run_seed_confirm_001",
+		Summary:         "project alpha 输出格式偏向使用小标题和简洁说明",
+		CreatedAt:       time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_memory_hit",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请解释 project alpha 的输出格式",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 1 {
+		t.Fatalf("expected start task to write retrieval hits once for task %s", taskID)
+	}
+
+	if _, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	}); err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 2 {
+		t.Fatalf("expected confirmation to add exactly one retrieval-hit write for task %s", taskID)
 	}
 }
 
