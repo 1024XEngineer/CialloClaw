@@ -2387,6 +2387,13 @@ test("shell-ball window metrics compute safe frames and helper anchors", () => {
   assert.match(metricsSource, /const nextDockSide = resolveShellBallReleaseSnapTarget\(/);
   assert.match(metricsSource, /export function clampShellBallHostFrameToVisibleBounds\(/);
   assert.match(metricsSource, /clampShellBallHostFrameToVisibleBounds\(\{/);
+  assert.match(metricsSource, /type ShellBallBallDragSession = \{[\s\S]*originBounds: ShellBallWindowBounds;[\s\S]*\};/);
+  assert.match(metricsSource, /const originBounds = geometryRef\.current\?\.bounds;/);
+  assert.match(metricsSource, /ballDragSessionRef\.current = \{[\s\S]*pointerStart,[\s\S]*latestPointer: pointerStart,[\s\S]*frameStart,[\s\S]*originBounds,[\s\S]*\};/);
+  assert.match(metricsSource, /const effectiveFrame = frameToApply;/);
+  assert.doesNotMatch(metricsSource, /const effectiveFrame = bounds === undefined/);
+  assert.match(metricsSource, /const releaseBounds = dragSession\?\.originBounds \?\? frameContext\.bounds;/);
+  assert.match(metricsSource, /resolveShellBallReleaseSnapTarget\(\{[\s\S]*bounds: releaseBounds,/);
   assert.match(metricsSource, /commitEdgeDockState\(\{ side: null, revealed: false \}\);/);
   assert.match(metricsSource, /scheduleBallGeometryPublish\(\{ snapToBounds: true \}\);/);
   assert.match(metricsSource, /if \(ballDragSessionRef\.current !== null && !input\?\.snapToBounds\) \{/);

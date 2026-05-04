@@ -143,6 +143,7 @@ type ShellBallBallDragSession = {
   pointerStart: ShellBallPointerPosition;
   latestPointer: ShellBallPointerPosition;
   frameStart: ShellBallWindowFrame;
+  originBounds: ShellBallWindowBounds;
 };
 
 function resolveShellBallInitialGlobalAnchor(input: {
@@ -443,9 +444,10 @@ function resolveShellBallDockParkedInsets(input: {
 }
 
 /**
- * Keeps free dragging constrained by the mascot footprint instead of the full
- * transparent host window. This lets the shell move naturally until the mascot
- * itself reaches the monitor edge, which is where release-time docking begins.
+ * Clamps the transparent host window back into a recoverable on-screen position
+ * by using the mascot footprint instead of the full host frame. Free dragging
+ * may leave bounds temporarily, but release-time settling and non-drag layout
+ * paths still use this helper before the orb becomes stationary again.
  */
 export function clampShellBallHostFrameToVisibleBounds(input: {
   hostFrame: ShellBallWindowFrame;
@@ -1179,14 +1181,10 @@ export function useShellBallWindowMetrics({
           return;
         }
 
-        const bounds = geometryRef.current?.bounds;
-        const effectiveFrame = bounds === undefined
-          ? frameToApply
-          : clampShellBallHostFrameToVisibleBounds({
-              hostFrame: frameToApply,
-              bounds,
-              mascotFrame: measuredMascotFrameRef.current,
-            });
+        // Pointer-driven dragging keeps the orb at the raw pointer position,
+        // even when that temporarily leaves the origin monitor bounds. Release
+        // handling owns the later clamp-and-dock pass.
+        const effectiveFrame = frameToApply;
 
         if (geometryRef.current !== null) {
           geometryRef.current = {
@@ -1219,8 +1217,9 @@ export function useShellBallWindowMetrics({
     cancelBallDockAnimation();
     setBallDockSettling(false);
     const frameStart = geometryRef.current?.ballFrame;
+    const originBounds = geometryRef.current?.bounds;
 
-    if (frameStart === undefined) {
+    if (frameStart === undefined || originBounds === undefined) {
       return;
     }
 
@@ -1228,6 +1227,7 @@ export function useShellBallWindowMetrics({
       pointerStart,
       latestPointer: pointerStart,
       frameStart,
+      originBounds,
     };
     setBallDragActive(true);
 
@@ -1299,13 +1299,16 @@ export function useShellBallWindowMetrics({
       return;
     }
 
+    // Release-time settling stays anchored to the monitor where the drag
+    // started, even if the user temporarily drags the orb beyond that screen.
+    const releaseBounds = dragSession?.originBounds ?? frameContext.bounds;
     const clampedHostFrame = clampShellBallHostFrameToVisibleBounds({
       hostFrame: frameContext.currentFrame,
-      bounds: frameContext.bounds,
+      bounds: releaseBounds,
       mascotFrame: measuredMascotFrameRef.current,
     });
     const nextDockSide = resolveShellBallReleaseSnapTarget({
-      bounds: frameContext.bounds,
+      bounds: releaseBounds,
       hostFrame: clampedHostFrame,
       mascotFrame: measuredMascotFrameRef.current,
     });
@@ -1314,7 +1317,7 @@ export function useShellBallWindowMetrics({
       : { side: nextDockSide, revealed: false };
     const targetFrame = resolveManagedBallFrame({
       hostFrame: clampedHostFrame,
-      bounds: frameContext.bounds,
+      bounds: releaseBounds,
       edgeDockState: nextDockState,
     });
 
@@ -1340,7 +1343,7 @@ export function useShellBallWindowMetrics({
     setBallDockSettling(false);
     const geometry = commitBallGeometry({
       ballFrame: targetFrame,
-      bounds: frameContext.bounds,
+      bounds: releaseBounds,
       scaleFactor: frameContext.scaleFactor,
     });
     await emitBallGeometry(geometry);
