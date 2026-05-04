@@ -345,6 +345,8 @@ impl NamedPipeBridgeState {
         Ok(())
     }
 
+    // The desktop host keeps one shared stream open so subscribed windows keep
+    // receiving task and delivery notifications between regular RPC responses.
     fn ensure_session(self: &Arc<Self>) -> Result<BridgeSession, String> {
         let mut session_guard = self
             .session
@@ -358,7 +360,6 @@ impl NamedPipeBridgeState {
         let pipe_name = self.pipe_name()?;
 
         let stream = open_named_pipe_with_retry(&pipe_name, "shared")?;
-
         let reader = stream
             .try_clone()
             .map_err(|error| format!("failed to clone named pipe handle: {error}"))?;
@@ -430,12 +431,14 @@ impl NamedPipeBridgeState {
 /// host can keep it alive during runtime and terminate it during shutdown.
 struct LocalServiceSidecarState {
     child: Mutex<Option<CommandChild>>,
+    last_failure: Mutex<Option<String>>,
 }
 
 impl Default for LocalServiceSidecarState {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
+            last_failure: Mutex::new(None),
         }
     }
 }
@@ -454,6 +457,7 @@ impl LocalServiceSidecarState {
             .lock()
             .map_err(|_| "local service sidecar lock poisoned".to_string())?;
         *guard = Some(child);
+        self.clear_last_failure();
         Ok(())
     }
 
@@ -476,6 +480,25 @@ impl LocalServiceSidecarState {
         }
 
         Ok(())
+    }
+
+    fn record_failure(&self, failure: String) {
+        if let Ok(mut guard) = self.last_failure.lock() {
+            *guard = Some(failure);
+        }
+    }
+
+    fn clear_last_failure(&self) {
+        if let Ok(mut guard) = self.last_failure.lock() {
+            *guard = None;
+        }
+    }
+
+    fn last_failure(&self) -> Option<String> {
+        self.last_failure
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 }
 
@@ -617,10 +640,17 @@ fn start_local_service_sidecar(
     let tracked_state = Arc::clone(sidecar_state);
     tauri::async_runtime::spawn(async move {
         // Drain sidecar process events so stdout/stderr cannot block the child,
-        // and release the tracked handle once the process exits.
+        // and capture the most recent failure for readiness diagnostics.
         while let Some(event) = rx.recv().await {
             match event {
+                CommandEvent::Stderr(line) => {
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if !line.is_empty() {
+                        tracked_state.record_failure(format!("stderr: {line}"));
+                    }
+                }
                 CommandEvent::Terminated(payload) => {
+                    tracked_state.record_failure(format!("terminated: {payload:?}"));
                     append_local_service_log(
                         &sidecar_app_handle,
                         &format!("local service sidecar terminated: {:?}", payload),
@@ -629,6 +659,7 @@ fn start_local_service_sidecar(
                     break;
                 }
                 CommandEvent::Error(error) => {
+                    tracked_state.record_failure(format!("event error: {error}"));
                     append_local_service_log(
                         &sidecar_app_handle,
                         &format!("local service sidecar error: {error}"),
@@ -640,6 +671,38 @@ fn start_local_service_sidecar(
     });
 
     Ok(true)
+}
+
+/// ensure_local_service_ready keeps the packaged sidecar, user-scoped pipe, and
+/// desktop bridge aligned before formal RPC traffic is sent.
+fn ensure_local_service_ready(
+    app: &tauri::AppHandle,
+    sidecar_state: &Arc<LocalServiceSidecarState>,
+    bridge_state: &Arc<NamedPipeBridgeState>,
+) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data dir: {error}"))?;
+    let app_data_dir = resolve_required_path(app_data_dir, "app data dir")?;
+    let named_pipe_path = derive_local_service_pipe_name(&app_data_dir);
+    let sidecar_started = start_local_service_sidecar(app, sidecar_state, &named_pipe_path)?;
+    if !configure_sidecar_named_pipe(bridge_state, &named_pipe_path, sidecar_started)? {
+        return Ok(());
+    }
+
+    append_local_service_log(
+        app,
+        &format!("configured local service named pipe: {named_pipe_path}"),
+    );
+
+    wait_for_local_service_ready(app, bridge_state).map_err(|error| {
+        if let Some(last_failure) = sidecar_state.last_failure() {
+            format!("{error}; last sidecar failure: {last_failure}")
+        } else {
+            error
+        }
+    })
 }
 
 /// wait_for_local_service_ready blocks the renderer bootstrap until the named
@@ -676,6 +739,7 @@ fn wait_for_local_service_ready(
 #[tauri::command]
 async fn named_pipe_request(
     app: tauri::AppHandle,
+    sidecar_state: tauri::State<'_, Arc<LocalServiceSidecarState>>,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     payload: Value,
 ) -> Result<Value, String> {
@@ -693,7 +757,7 @@ async fn named_pipe_request(
             "named pipe request started: method={request_method} id={request_id} mode={request_mode}"
         ),
     );
-
+    ensure_local_service_ready(&app, sidecar_state.inner(), state.inner())?;
     let state = Arc::clone(state.inner());
     let result = tauri::async_runtime::spawn_blocking(move || state.request(payload))
         .await
@@ -721,10 +785,13 @@ async fn named_pipe_request(
 
 #[tauri::command]
 async fn named_pipe_subscribe(
+    app: tauri::AppHandle,
+    sidecar_state: tauri::State<'_, Arc<LocalServiceSidecarState>>,
     state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     topic: String,
     on_event: JsonChannel,
 ) -> Result<u32, String> {
+    ensure_local_service_ready(&app, sidecar_state.inner(), state.inner())?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || state.subscribe(topic, on_event))
         .await
@@ -2919,25 +2986,8 @@ fn main() {
 
             let sidecar_state = app.state::<Arc<LocalServiceSidecarState>>();
             let bridge_state = app.state::<Arc<NamedPipeBridgeState>>();
-            let app_data_dir = app.path().app_data_dir().map_err(|error| {
-                std::io::Error::other(format!("failed to resolve app data dir: {error}"))
-            })?;
-            let app_data_dir = resolve_required_path(app_data_dir, "app data dir")
+            ensure_local_service_ready(app.handle(), sidecar_state.inner(), bridge_state.inner())
                 .map_err(std::io::Error::other)?;
-            let named_pipe_path = derive_local_service_pipe_name(&app_data_dir);
-            let sidecar_started =
-                start_local_service_sidecar(app.handle(), sidecar_state.inner(), &named_pipe_path)
-                    .map_err(std::io::Error::other)?;
-            if configure_sidecar_named_pipe(bridge_state.inner(), &named_pipe_path, sidecar_started)
-                .map_err(std::io::Error::other)?
-            {
-                append_local_service_log(
-                    app.handle(),
-                    &format!("configured local service named pipe: {named_pipe_path}"),
-                );
-                wait_for_local_service_ready(app.handle(), bridge_state.inner())
-                    .map_err(std::io::Error::other)?;
-            }
             activity::install_mouse_activity_listener()
                 .map_err(|error| std::io::Error::other(error))?;
             install_shell_ball_clipboard_hooks(app.handle())
@@ -2983,7 +3033,7 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+        if matches!(event, RunEvent::Exit) {
             let sidecar_state = app_handle.state::<Arc<LocalServiceSidecarState>>();
             let _ = sidecar_state.stop();
         }

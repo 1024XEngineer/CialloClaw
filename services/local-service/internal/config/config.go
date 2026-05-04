@@ -1,5 +1,3 @@
-// Package config defines local-service configuration defaults and runtime path
-// resolution.
 package config
 
 import (
@@ -15,7 +13,6 @@ const (
 	defaultDatabaseFileName     = "cialloclaw.db"
 )
 
-// ModelConfig describes the runtime model configuration.
 type ModelConfig struct {
 	Provider             string
 	ModelID              string
@@ -30,21 +27,18 @@ type ModelConfig struct {
 	ContextKeepRecent    int
 }
 
-// RPCConfig describes the JSON-RPC transport configuration.
 type RPCConfig struct {
 	Transport        string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// LoadOptions captures runtime overrides provided by the desktop host.
 type LoadOptions struct {
 	DataDir          string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// Config contains the assembled local-service runtime configuration.
 type Config struct {
 	RPC           RPCConfig
 	DataDir       string
@@ -53,10 +47,6 @@ type Config struct {
 	Model         ModelConfig
 }
 
-// DefaultRuntimeRoot resolves the canonical local runtime root. The resolver
-// prefers explicit environment overrides, then platform user-scoped app-data
-// locations, and falls back to a relative directory only when no profile root
-// is available.
 func DefaultRuntimeRoot() string {
 	return defaultRuntimeRootFromValues(
 		runtime.GOOS,
@@ -67,8 +57,6 @@ func DefaultRuntimeRoot() string {
 	)
 }
 
-// DefaultWorkspaceRoot resolves the canonical workspace root used by the local
-// service runtime.
 func DefaultWorkspaceRoot() string {
 	if value := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT"); value != "" {
 		return value
@@ -76,8 +64,6 @@ func DefaultWorkspaceRoot() string {
 	return filepath.Join(DefaultRuntimeRoot(), defaultWorkspaceDirName)
 }
 
-// DefaultDatabasePath resolves the canonical SQLite database path used by the
-// local service runtime.
 func DefaultDatabasePath() string {
 	if value := cleanPathEnv("CIALLOCLAW_DATABASE_PATH"); value != "" {
 		return value
@@ -112,7 +98,6 @@ func defaultRuntimeRootFromValues(goos, runtimeOverride, localAppData, homeDir, 
 	return filepath.Join(defaultRuntimeDirectoryName)
 }
 
-// Load returns the assembled local-service configuration.
 func Load(options ...LoadOptions) Config {
 	loadOptions := LoadOptions{}
 	if len(options) > 0 {

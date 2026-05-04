@@ -66,9 +66,6 @@ func run(ctx context.Context, args []string) error {
 	return nil
 }
 
-// main starts the local JSON-RPC service and accepts host-provided runtime
-// path overrides so packaged desktop builds can keep mutable data outside the
-// installed application directory.
 func main() {
 	ctx, stop := notifyContextForMain(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

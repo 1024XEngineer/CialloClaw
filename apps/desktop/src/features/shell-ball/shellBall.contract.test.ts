@@ -7464,6 +7464,14 @@ test("shell-ball falls back to regular submit when active steer status races", (
   assert.match(coordinatorSource, /autoOpenShellBallDeliveryResult\(fallbackResult\.task\.task_id, fallbackResult\.delivery_result\)/);
 });
 
+test("shell-ball polling fallback only updates visual state for the active task", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /if \(activeShellBallTaskIdRef\.current === detail\.task\.task_id\) \{/);
+  assert.match(coordinatorSource, /activeShellBallTaskStatusRef\.current = detail\.task\.status;/);
+  assert.match(coordinatorSource, /syncShellBallVisualStateFromTaskStatus\(detail\.task\.status\);/);
+});
+
 test("shell-ball screenshot command routes through the formal screen task path", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 

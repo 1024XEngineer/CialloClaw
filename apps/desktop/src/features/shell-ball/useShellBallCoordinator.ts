@@ -2158,7 +2158,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               return;
             }
 
-            syncShellBallVisualStateFromTaskStatus(detail.task.status);
+            if (activeShellBallTaskIdRef.current === detail.task.task_id) {
+              activeShellBallTaskStatusRef.current = detail.task.status;
+              syncShellBallVisualStateFromTaskStatus(detail.task.status);
+            }
 
             if (detail.approval_request) {
               appendApprovalPendingBubble({
