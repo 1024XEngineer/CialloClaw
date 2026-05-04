@@ -2444,8 +2444,21 @@ test("task-entry services keep rpc transport failures visible and forward file d
         rememberConversationSessionFromTask() {},
         rememberConversationPageContextFromTask() {},
       },
+      "@/platform/desktopWindowContext": {
+        getActiveWindowContext() {
+          return Promise.resolve({
+            app_name: "Chrome",
+            browser_kind: "chrome",
+            process_id: 4412,
+            process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            title: "Build Dashboard",
+            url: "https://example.com/build?ticket=secret#fragment",
+          });
+        },
+      },
       "./pageContext": {
         compactPageContext,
+        mapDesktopWindowSnapshotToPageContext,
       },
       "./agentInputService": {
         submitTextInput(params: Record<string, unknown>) {
@@ -2479,8 +2492,12 @@ test("task-entry services keep rpc transport failures visible and forward file d
         files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
         page_context: {
           app_name: "Chrome",
+          browser_kind: "chrome",
+          process_id: 4412,
+          process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
           title: "Build Dashboard",
           url: "https://example.com/build",
+          window_title: "Build Dashboard",
         },
       });
       assert.deepEqual(startTaskCalls[0]?.options, {
@@ -2497,8 +2514,12 @@ test("task-entry services keep rpc transport failures visible and forward file d
         files: ["C:\\workspace\\logs.txt"],
         page_context: {
           app_name: "Chrome",
+          browser_kind: "chrome",
+          process_id: 4412,
+          process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
           title: "Build Dashboard",
           url: "https://example.com/build",
+          window_title: "Build Dashboard",
         },
       });
 
@@ -2591,8 +2612,14 @@ test("task-entry services keep rpc transport failures visible and forward file d
         rememberConversationSessionFromTask() {},
         rememberConversationPageContextFromTask() {},
       },
+      "@/platform/desktopWindowContext": {
+        getActiveWindowContext() {
+          return Promise.resolve(null);
+        },
+      },
       "./pageContext": {
         compactPageContext,
+        mapDesktopWindowSnapshotToPageContext,
       },
       "./agentInputService": {
         submitTextInput() {
