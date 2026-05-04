@@ -43,6 +43,15 @@ import (
 
 type taskInspectorFailingSettingsStore struct{}
 
+func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
+	if got := truncateText("已完成总结，正在定位文件", 8); got != "已完成总结，正在..." {
+		t.Fatalf("expected rune-safe chinese truncation, got %q", got)
+	}
+	if got := truncateText("定位完成📄打开结果", 5); got != "定位完成📄..." {
+		t.Fatalf("expected rune-safe emoji truncation, got %q", got)
+	}
+}
+
 func (taskInspectorFailingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
 	return errors.New("settings snapshot write failed")
 }

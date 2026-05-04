@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -7272,10 +7273,10 @@ func intValue(values map[string]any, key string, fallback int) int {
 // truncateText trims text to a fixed length for recommendation and memory
 // query surfaces.
 func truncateText(value string, maxLength int) string {
-	if len(value) <= maxLength {
+	if utf8.RuneCountInString(value) <= maxLength {
 		return value
 	}
-	return value[:maxLength] + "..."
+	return string([]rune(value)[:maxLength]) + "..."
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
