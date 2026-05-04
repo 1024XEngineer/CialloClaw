@@ -55,6 +55,8 @@ const (
 	executionSegmentInitial = "initial"
 	executionSegmentResume  = "resume"
 	executionSegmentRestart = "restart"
+	subjectPreviewMaxLength = 24
+	resultPreviewMaxLength  = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
@@ -625,7 +627,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 }
 
 func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
-	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), subjectPreviewMaxLength)
 }
 
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
@@ -733,9 +735,9 @@ func isClipScreenSourcePath(pathValue string) bool {
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
+		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
 	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
@@ -6388,9 +6390,9 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
 	}
 	if len(perceptionSummary) == 0 {
-		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, resultPreviewMaxLength))
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, resultPreviewMaxLength))
 }
 
 // resultSpecFromIntent returns the default result title, preview text, and

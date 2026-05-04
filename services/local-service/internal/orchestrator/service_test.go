@@ -44,13 +44,13 @@ import (
 type taskInspectorFailingSettingsStore struct{}
 
 func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
-	if got := truncateText("已完成总结，正在定位文件", 8); got != "已完成总结，正在..." {
+	if got := truncateText("已完成总结，正在定位文件", 8); got != "已完成总结..." {
 		t.Fatalf("expected grapheme-safe chinese truncation, got %q", got)
 	}
-	if got := truncateText("定位完成📄打开结果", 5); got != "定位完成📄..." {
+	if got := truncateText("定位完成📄打开结果", 8); got != "定位完成📄..." {
 		t.Fatalf("expected grapheme-safe emoji truncation, got %q", got)
 	}
-	if got := truncateText("完成e\u0301文档整理", 3); got != "完成e\u0301..." {
+	if got := truncateText("完成e\u0301文档整理", 6); got != "完成e\u0301..." {
 		t.Fatalf("expected grapheme-safe combining-mark truncation, got %q", got)
 	}
 }

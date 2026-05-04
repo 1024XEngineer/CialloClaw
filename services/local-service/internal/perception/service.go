@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	copyIntentThreshold        = 1
-	activeDwellThresholdMillis = 12000
-	switchBurstThreshold       = 3
+	copyIntentThreshold         = 1
+	activeDwellThresholdMillis  = 12000
+	switchBurstThreshold        = 3
+	opportunityPreviewMaxLength = 24
 )
 
 // SignalSnapshot captures normalized perception inputs behind the current
@@ -161,7 +162,7 @@ func IdentifyOpportunities(snapshot SignalSnapshot, unfinishedTasks []runengine.
 		target := firstNonEmpty(snapshot.PageTitle, snapshot.WindowTitle, snapshot.HoverTarget, "当前内容")
 		opportunities = append(opportunities, Opportunity{
 			IntentName: inferredPageIntent(snapshot),
-			Text:       fmt.Sprintf("你在这里停留了一段时间，要不要我先整理一下：%s", truncateText(target, 18)),
+			Text:       fmt.Sprintf("你在这里停留了一段时间，要不要我先整理一下：%s", truncateText(target, opportunityPreviewMaxLength)),
 			Reason:     "active_dwell",
 			Priority:   80,
 		})
@@ -178,7 +179,7 @@ func IdentifyOpportunities(snapshot SignalSnapshot, unfinishedTasks []runengine.
 		target := firstNonEmpty(snapshot.PageTitle, snapshot.WindowTitle, "当前页面")
 		opportunities = append(opportunities, Opportunity{
 			IntentName: inferredPageIntent(snapshot),
-			Text:       fmt.Sprintf("要不要我基于当前页面做一个轻量整理：%s", truncateText(target, 18)),
+			Text:       fmt.Sprintf("要不要我基于当前页面做一个轻量整理：%s", truncateText(target, opportunityPreviewMaxLength)),
 			Reason:     "page_context",
 			Priority:   60,
 		})
@@ -240,12 +241,12 @@ func rankOpportunities(opportunities []Opportunity) []Opportunity {
 func copyOpportunity(snapshot SignalSnapshot) (string, string) {
 	text := firstNonEmpty(snapshot.SelectionText, snapshot.ClipboardText, snapshot.VisibleText)
 	if shouldTranslate(text, snapshot.PageTitle, snapshot.ScreenSummary) {
-		return "translate", fmt.Sprintf("你刚复制了一段内容，要不要我先帮你翻译：%s", truncateText(text, 18))
+		return "translate", fmt.Sprintf("你刚复制了一段内容，要不要我先帮你翻译：%s", truncateText(text, opportunityPreviewMaxLength))
 	}
 	if utf8.RuneCountInString(text) >= 96 || strings.Contains(text, "\n") {
-		return "summarize", fmt.Sprintf("你刚复制了一段较长内容，要不要我先帮你提炼重点：%s", truncateText(text, 18))
+		return "summarize", fmt.Sprintf("你刚复制了一段较长内容，要不要我先帮你提炼重点：%s", truncateText(text, opportunityPreviewMaxLength))
 	}
-	return "rewrite", fmt.Sprintf("你刚复制了一段内容，要不要我先帮你改写整理：%s", truncateText(text, 18))
+	return "rewrite", fmt.Sprintf("你刚复制了一段内容，要不要我先帮你改写整理：%s", truncateText(text, opportunityPreviewMaxLength))
 }
 
 func inferredPageIntent(snapshot SignalSnapshot) string {

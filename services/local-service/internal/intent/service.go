@@ -10,7 +10,10 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
-const defaultAgentLoopIntent = "agent_loop"
+const (
+	defaultAgentLoopIntent  = "agent_loop"
+	subjectPreviewMaxLength = 24
+)
 
 // Suggestion is the minimum intent output required to create or continue a
 // task in the main pipeline.
@@ -283,15 +286,15 @@ func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
 	case len(snapshot.Files) > 0:
 		return filepath.Base(snapshot.Files[0])
 	case strings.TrimSpace(snapshot.SelectionText) != "":
-		return truncateText(snapshot.SelectionText, 18)
+		return truncateText(snapshot.SelectionText, subjectPreviewMaxLength)
 	case strings.TrimSpace(snapshot.Text) != "":
-		return truncateText(snapshot.Text, 18)
+		return truncateText(snapshot.Text, subjectPreviewMaxLength)
 	case strings.TrimSpace(snapshot.ErrorText) != "":
-		return truncateText(snapshot.ErrorText, 18)
+		return truncateText(snapshot.ErrorText, subjectPreviewMaxLength)
 	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, 18)
+		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, 18)
+		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
 	default:
 		return "当前内容"
 	}
@@ -300,9 +303,9 @@ func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
 func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
 	switch {
 	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, 18)
+		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, 18)
+		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
 	default:
 		return subjectText(snapshot)
 	}

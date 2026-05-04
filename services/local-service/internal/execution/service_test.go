@@ -3312,7 +3312,7 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if workspaceFSPath("workspace/docs/result.md") != "docs/result.md" || workspaceFSPath("../outside") != "" || workspaceFSPath("workspace") != "." || !isWindowsAbsolutePath("C:/workspace/result.md") {
 		t.Fatal("expected workspace path helpers to normalize and guard paths")
 	}
-	if len(extractHighlights("one. two? three!", 2)) != 2 || firstSentence("one. two") == "" || normalizeWhitespace("  a\n b  ") != "a b" || truncateText("hello world", 5) != "hello..." {
+	if len(extractHighlights("one. two? three!", 2)) != 2 || firstSentence("one. two") == "" || normalizeWhitespace("  a\n b  ") != "a b" || truncateText("hello world", 5) != "he..." {
 		t.Fatal("expected text helpers to normalize, extract, and truncate text")
 	}
 	if mapValue(nil, "missing") == nil || stringValue(map[string]any{"name": "  ok  "}, "name", "fallback") != "  ok  " || boolValue(map[string]any{"enabled": true}, "enabled") != true || len(stringSliceValue(map[string]any{"items": []any{" a ", 2, "b"}}, "items")) != 2 {
@@ -3342,13 +3342,13 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 }
 
 func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
-	if got := truncateText("根据当前环境，我具备以下主要功能", 10); got != "根据当前环境，我具备..." {
+	if got := truncateText("根据当前环境，我具备以下主要功能", 10); got != "根据当前环境，..." {
 		t.Fatalf("expected grapheme-safe chinese truncation, got %q", got)
 	}
-	if got := truncateText("处理完成📦继续执行", 5); got != "处理完成📦..." {
+	if got := truncateText("处理完成📦继续执行", 8); got != "处理完成📦..." {
 		t.Fatalf("expected grapheme-safe emoji truncation, got %q", got)
 	}
-	if got := truncateText("结果👨‍👩‍👧‍👦继续同步", 3); got != "结果👨‍👩‍👧‍👦..." {
+	if got := truncateText("结果👨‍👩‍👧‍👦继续同步", 6); got != "结果👨‍👩‍👧‍👦..." {
 		t.Fatalf("expected grapheme-safe ZWJ truncation, got %q", got)
 	}
 }
