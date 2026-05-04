@@ -312,14 +312,19 @@ export async function loadHydratedSettings(): Promise<DesktopSettings> {
 }
 
 /**
- * Loads the trusted runtime-default directory snapshot cached for desktop-only
- * control-panel affordances.
+ * Reads the freshly verified desktop runtime-default directories that
+ * currently define the active workspace scope for local open actions.
  *
- * @returns The hydrated runtime-default directory snapshot, when available.
+ * The returned value intentionally stays separate from the formal settings
+ * draft because pending `workspace_path` edits do not hot-switch the running
+ * desktop/runtime workspace until the backend restarts. Local-open consumers
+ * must not silently reuse stale cached runtime roots when the host bridge
+ * cannot confirm the current runtime workspace.
+ *
+ * @returns The latest freshly verified runtime-default directories, if available.
  */
 export async function loadDesktopRuntimeDefaultsSnapshot(): Promise<DesktopRuntimeDefaults | null> {
-  await hydrateDesktopRuntimeDefaults();
-  return loadRuntimeDefaults();
+  return hydrateDesktopRuntimeDefaults();
 }
 
 /**
