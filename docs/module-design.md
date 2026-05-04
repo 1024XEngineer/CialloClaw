@@ -1496,6 +1496,7 @@ flowchart TB
 - 为一次任务执行标记 `initial / resume / restart` 分段；
 - 隔离长任务的 steering message 和重试上下文；
 - 把执行尝试和人类复核后的继续执行放回同一主任务，而不是分叉出新的正式主对象；
+- `restart` 分段必须来自重启前的终态任务快照与重启后的新 `run_id`，`TaskControl` 完成状态迁移后必须立即启动执行，避免留下没有 executor 承接的 `processing` 快照；
 - 为后续真正的一等子任务能力预留边界。
 
 #### 关键中间产物
