@@ -6763,7 +6763,16 @@ test("shell-ball replays runtime notifications that arrive before submit resolve
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   let runtimeListener: ((payload: {
     task_id: string;
-    message: string;
+    event: {
+      event_id: string;
+      run_id: string;
+      task_id: string;
+      type: "loop.retrying";
+      level: "warn";
+      payload_json: string;
+      created_at: string;
+    };
+    stop_reason: string;
   }) => void) | null = null;
   let resolveSubmit: ((value: {
     task: {
@@ -6914,7 +6923,16 @@ test("shell-ball replays runtime notifications that arrive before submit resolve
 
       runtimeListener?.({
         task_id: "task-runtime-race",
-        message: "Added another instruction.",
+        event: {
+          event_id: "evt-shell-ball-runtime-race",
+          run_id: "run-shell-ball-runtime-race",
+          task_id: "task-runtime-race",
+          type: "loop.retrying",
+          level: "warn",
+          payload_json: "{}",
+          created_at: "2026-05-04T12:00:00.000Z",
+        },
+        stop_reason: "network timeout",
       });
 
       resolveSubmit?.({
@@ -6932,7 +6950,9 @@ test("shell-ball replays runtime notifications that arrive before submit resolve
   );
 
   assert.match(coordinatorSource, /const queuedRuntimeNotificationsRef = useRef\(new Map<string, QueuedRuntimeNotification\[]>\(\)\);/);
-  const runtimeBubble = reactRuntime.getBubbleItems().find((item) => item.bubble.task_id === "task-runtime-race" && item.bubble.text === "Added another instruction.");
+  const runtimeBubble = reactRuntime.getBubbleItems().find(
+    (item) => item.bubble.task_id === "task-runtime-race" && item.bubble.text === "Retrying the current task step after network timeout.",
+  );
   assert.ok(runtimeBubble);
 });
 
