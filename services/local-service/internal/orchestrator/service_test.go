@@ -379,11 +379,11 @@ func (s failingAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.
 	return s.base.WriteAuthorizationDecision(ctx, record, approvalStatus, updatedAt)
 }
 
-func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]storage.AuthorizationRecordRecord, int, error) {
+func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]storage.AuthorizationRecordRecord, int, error) {
 	if s.base == nil {
 		return nil, 0, nil
 	}
-	return s.base.ListAuthorizationRecords(ctx, taskID, limit, offset)
+	return s.base.ListAuthorizationRecords(ctx, taskID, runID, limit, offset)
 }
 
 type countingTaskRunStore struct {
@@ -3028,6 +3028,7 @@ func TestServiceTaskControlRestartRechecksAuthorization(t *testing.T) {
 		RiskLevel:   "green",
 	})
 	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
 
 	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
 	if err != nil {
@@ -3056,6 +3057,18 @@ func TestServiceTaskControlRestartRechecksAuthorization(t *testing.T) {
 	if modelCalls != 0 {
 		t.Fatalf("expected restart authorization gate to avoid model execution, got %d calls", modelCalls)
 	}
+	notifications, ok := service.runEngine.DrainNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected restart authorization notifications to remain available")
+	}
+	for _, notification := range notifications {
+		if notification.Method != "task.updated" {
+			continue
+		}
+		if status, _ := notification.Params["status"].(string); status == "processing" {
+			t.Fatalf("expected restart authorization gate to avoid transient processing notification, got %+v", notification.Params)
+		}
+	}
 }
 
 func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
@@ -3080,6 +3093,7 @@ func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
 		RiskLevel:   "green",
 	})
 	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
 
 	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
 	if err != nil {
@@ -3105,6 +3119,18 @@ func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
 	activeRecord, ok := service.runEngine.GetTask(activeTask.TaskID)
 	if !ok || activeRecord.Status != "processing" {
 		t.Fatalf("expected active session owner to keep running, got %+v ok=%v", activeRecord, ok)
+	}
+	notifications, ok := service.runEngine.DrainNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected queued restart notifications to remain available")
+	}
+	for _, notification := range notifications {
+		if notification.Method != "task.updated" {
+			continue
+		}
+		if status, _ := notification.Params["status"].(string); status == "processing" {
+			t.Fatalf("expected queued restart to avoid transient processing notification, got %+v", notification.Params)
+		}
 	}
 }
 
@@ -3225,6 +3251,17 @@ func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *test
 	}); err != nil {
 		t.Fatalf("write stored audit record failed: %v", err)
 	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_restart_detail_previous",
+		TaskID:                task.TaskID,
+		RunID:                 previousRunID,
+		ApprovalID:            "appr_restart_detail_previous",
+		Decision:              "allow_once",
+		Operator:              "user",
+		CreatedAt:             "2026-04-22T09:00:02Z",
+	}); err != nil {
+		t.Fatalf("write stored authorization record failed: %v", err)
+	}
 
 	restartedTask, err := service.runEngine.ControlTask(task.TaskID, "restart", nil)
 	if err != nil {
@@ -3249,6 +3286,9 @@ func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *test
 	}
 	if detailResult["audit_record"] != nil {
 		t.Fatalf("expected restart detail to hide previous audit record, got %+v", detailResult["audit_record"])
+	}
+	if detailResult["authorization_record"] != nil {
+		t.Fatalf("expected restart detail to hide previous authorization record, got %+v", detailResult["authorization_record"])
 	}
 	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
 	if runtimeSummary["latest_failure_code"] != nil || runtimeSummary["latest_failure_summary"] != nil {
@@ -4411,7 +4451,7 @@ func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
 		t.Fatalf("security respond failed: %v", err)
 	}
 
-	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list authorization records failed: %v", err)
 	}
@@ -4517,7 +4557,7 @@ func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *test
 		t.Fatalf("expected repeated out-of-phase respond to return ErrTaskStatusInvalid, got %v", err)
 	}
 
-	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list authorization records failed: %v", err)
 	}
@@ -4576,7 +4616,7 @@ func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *
 		t.Fatalf("security respond for restore apply failed: %v", err)
 	}
 
-	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list authorization history failed: %v", err)
 	}

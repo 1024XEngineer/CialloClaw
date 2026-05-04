@@ -455,6 +455,7 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_001",
 		TaskID:                "task_approval_001",
+		RunID:                 "run_approval_001",
 		ApprovalID:            "appr_001",
 		Decision:              "allow_once",
 		Operator:              "user",
@@ -471,7 +472,7 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	if approvalItems[0].OperationName != "screen_capture" || approvalItems[0].Status != "pending" {
 		t.Fatalf("unexpected approval record: %+v", approvalItems[0])
 	}
-	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", "", 10, 0)
 	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
 		t.Fatalf("unexpected authorization records total=%d len=%d err=%v", authorizationTotal, len(authorizationItems), err)
 	}
@@ -495,6 +496,7 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_002",
 		TaskID:                "task_approval_001",
+		RunID:                 "run_approval_002",
 		ApprovalID:            "appr_001",
 		Decision:              "deny_once",
 		Operator:              "user",
@@ -504,12 +506,19 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	if err != nil {
 		t.Fatalf("write second authorization record failed: %v", err)
 	}
-	updatedAuthorizationItems, updatedAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	updatedAuthorizationItems, updatedAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", "", 10, 0)
 	if err != nil || updatedAuthorizationTotal != 2 || len(updatedAuthorizationItems) != 2 {
 		t.Fatalf("expected full authorization history total=%d len=%d err=%v items=%+v", updatedAuthorizationTotal, len(updatedAuthorizationItems), err, updatedAuthorizationItems)
 	}
 	if updatedAuthorizationItems[0].AuthorizationRecordID != "auth_002" || updatedAuthorizationItems[1].AuthorizationRecordID != "auth_001" {
 		t.Fatalf("expected authorization history ordering to preserve both records, got %+v", updatedAuthorizationItems)
+	}
+	filteredAuthorizationItems, filteredAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", "run_approval_001", 10, 0)
+	if err != nil || filteredAuthorizationTotal != 1 || len(filteredAuthorizationItems) != 1 {
+		t.Fatalf("expected run-scoped authorization history total=%d len=%d err=%v items=%+v", filteredAuthorizationTotal, len(filteredAuthorizationItems), err, filteredAuthorizationItems)
+	}
+	if filteredAuthorizationItems[0].AuthorizationRecordID != "auth_001" {
+		t.Fatalf("expected run-scoped authorization history to keep the matching attempt, got %+v", filteredAuthorizationItems)
 	}
 }
 
@@ -608,6 +617,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	if err := service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_atomic_001",
 		TaskID:                "task_atomic_001",
+		RunID:                 "run_atomic_001",
 		ApprovalID:            "appr_atomic_001",
 		Decision:              "allow_once",
 		Operator:              "user",
@@ -628,6 +638,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	err = service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_atomic_missing",
 		TaskID:                "task_atomic_missing",
+		RunID:                 "run_atomic_missing",
 		ApprovalID:            "appr_missing",
 		Decision:              "deny_once",
 		Operator:              "user",
@@ -637,7 +648,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 		t.Fatalf("expected missing approval to fail atomic authorization write, got %v", err)
 	}
 
-	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "", 10, 0)
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "", "", 10, 0)
 	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
 		t.Fatalf("expected failed atomic authorization write to leave history unchanged total=%d len=%d err=%v items=%+v", authorizationTotal, len(authorizationItems), err, authorizationItems)
 	}

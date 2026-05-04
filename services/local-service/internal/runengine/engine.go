@@ -1117,33 +1117,11 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		if !record.isFinished() {
 			return TaskRecord{}, ErrTaskStatusInvalid
 		}
-		// Restart begins a fresh execution attempt for the same task, so it must
-		// allocate a new run identifier before any loop/runtime rows are emitted.
-		record.RunID = e.nextIdentifier("run")
-		record.ExecutionAttempt++
+		// The generic engine path still reopens restart directly into processing.
+		// The orchestrator uses PrepareRestart to stage the fresh run in memory
+		// until queue/governance preflight decides the first persisted state.
+		e.prepareRestartRecordLocked(record, now, bubbleMessage)
 		record.Status = "processing"
-		record.FinishedAt = nil
-		record.CurrentStep = "generate_output"
-		record.DeliveryResult = nil
-		record.Artifacts = nil
-		record.Citations = nil
-		record.AuditRecords = nil
-		record.BubbleMessage = nil
-		record.ApprovalRequest = nil
-		record.PendingExecution = nil
-		record.Authorization = nil
-		record.ImpactScope = nil
-		record.StorageWritePlan = nil
-		record.ArtifactPlans = nil
-		record.MemoryReadPlans = nil
-		record.MemoryWritePlans = nil
-		record.MirrorReferences = nil
-		record.LatestToolCall = nil
-		record.LoopStopReason = ""
-		record.SecuritySummary = mergePreservedSecuritySummary(
-			buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
-			record.SecuritySummary,
-		)
 		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
 	default:
 		return TaskRecord{}, ErrTaskStatusInvalid
@@ -1162,6 +1140,73 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 	e.persistTaskLocked(record)
 
 	return record.clone(), nil
+}
+
+// PrepareRestart stages a fresh restart attempt in memory without persisting a
+// public task.updated snapshot yet. The orchestrator uses this to run session
+// queue and governance preflight first, so the first durable state for the new
+// run_id matches the actual execution gate outcome.
+func (e *Engine) PrepareRestart(taskID string, bubbleMessage map[string]any) (TaskRecord, TaskRecord, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, TaskRecord{}, ErrTaskNotFound
+	}
+	if !record.isFinished() {
+		return TaskRecord{}, TaskRecord{}, ErrTaskStatusInvalid
+	}
+
+	previous := record.clone()
+	e.prepareRestartRecordLocked(record, e.now(), bubbleMessage)
+	return previous, record.clone(), nil
+}
+
+// RestorePreparedTask replaces the in-memory runtime view with a previous task
+// snapshot when restart preflight fails before any durable transition lands.
+func (e *Engine) RestorePreparedTask(task TaskRecord) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[task.TaskID]
+	if !ok {
+		return false
+	}
+	*record = task.clone()
+	return true
+}
+
+func (e *Engine) prepareRestartRecordLocked(record *TaskRecord, now time.Time, bubbleMessage map[string]any) {
+	// Restart begins a fresh execution attempt for the same task, so it must
+	// allocate a new run identifier before any loop/runtime rows are emitted.
+	record.RunID = e.nextIdentifier("run")
+	record.ExecutionAttempt++
+	record.FinishedAt = nil
+	record.CurrentStep = "generate_output"
+	record.UpdatedAt = now
+	record.DeliveryResult = nil
+	record.Artifacts = nil
+	record.Citations = nil
+	record.AuditRecords = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.ApprovalRequest = nil
+	record.PendingExecution = nil
+	record.Authorization = nil
+	record.ImpactScope = nil
+	record.StorageWritePlan = nil
+	record.ArtifactPlans = nil
+	record.MemoryReadPlans = nil
+	record.MemoryWritePlans = nil
+	record.MirrorReferences = nil
+	record.LatestToolCall = nil
+	record.LoopStopReason = ""
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+		record.SecuritySummary,
+	)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = nil
 }
 
 // MarkWaitingApproval is the shorthand entrypoint for moving a task into the

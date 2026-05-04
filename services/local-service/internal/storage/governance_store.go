@@ -118,14 +118,18 @@ func (s *inMemoryAuthorizationRecordStore) WriteAuthorizationDecision(_ context.
 	return nil
 }
 
-func (s *inMemoryAuthorizationRecordStore) ListAuthorizationRecords(_ context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
+func (s *inMemoryAuthorizationRecordStore) ListAuthorizationRecords(_ context.Context, taskID, runID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 	items := make([]AuthorizationRecordRecord, 0)
 	for _, record := range s.state.authorizationRecords {
-		if taskID == "" || record.TaskID == taskID {
-			items = append(items, record)
+		if taskID != "" && record.TaskID != taskID {
+			continue
 		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
@@ -512,9 +516,9 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationRecord(ctx context.Co
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR REPLACE INTO authorization_records (
-			authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, record.AuthorizationRecordID, record.TaskID, record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt)
+			authorization_record_id, task_id, run_id, approval_id, decision, operator, remember_rule, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.AuthorizationRecordID, record.TaskID, nullableRuntimeString(record.RunID), record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("write authorization record: %w", err)
 	}
@@ -558,10 +562,10 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.
 		return ErrApprovalRequestNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT OR REPLACE INTO authorization_records (
-			authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, record.AuthorizationRecordID, record.TaskID, record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt); err != nil {
+			INSERT OR REPLACE INTO authorization_records (
+				authorization_record_id, task_id, run_id, approval_id, decision, operator, remember_rule, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, record.AuthorizationRecordID, record.TaskID, nullableRuntimeString(record.RunID), record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt); err != nil {
 		return fmt.Errorf("write authorization record: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -571,22 +575,32 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.
 	return nil
 }
 
-func (s *SQLiteAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
+func (s *SQLiteAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM authorization_records`
-	query := `SELECT authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at FROM authorization_records`
-	args := []any{}
+	query := `SELECT authorization_record_id, task_id, COALESCE(run_id, ''), approval_id, decision, operator, remember_rule, created_at FROM authorization_records`
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
 	if taskID != "" {
-		countQuery += ` WHERE task_id = ?`
-		query += ` WHERE task_id = ?`
-		args = append(args, taskID)
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
 	}
 	query += ` ORDER BY created_at DESC, authorization_record_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, firstArg(taskID)...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count authorization records: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -598,7 +612,7 @@ func (s *SQLiteAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Co
 	for rows.Next() {
 		var record AuthorizationRecordRecord
 		var rememberRule int
-		if err := rows.Scan(&record.AuthorizationRecordID, &record.TaskID, &record.ApprovalID, &record.Decision, &record.Operator, &rememberRule, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.AuthorizationRecordID, &record.TaskID, &record.RunID, &record.ApprovalID, &record.Decision, &record.Operator, &rememberRule, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan authorization record: %w", err)
 		}
 		record.RememberRule = rememberRule != 0
@@ -628,6 +642,7 @@ func (s *SQLiteAuthorizationRecordStore) initialize(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS authorization_records (
 			authorization_record_id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
+			run_id TEXT,
 			approval_id TEXT NOT NULL,
 			decision TEXT NOT NULL,
 			operator TEXT NOT NULL,
@@ -637,8 +652,14 @@ func (s *SQLiteAuthorizationRecordStore) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create authorization_records table: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE authorization_records ADD COLUMN run_id TEXT;`); err != nil && !isSQLiteDuplicateColumnError(err) {
+		return fmt.Errorf("add authorization_records run_id column: %w", err)
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_authorization_records_task_time ON authorization_records(task_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create authorization_records index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_authorization_records_task_run_time ON authorization_records(task_id, run_id, created_at DESC);`); err != nil {
+		return fmt.Errorf("create authorization_records task run index: %w", err)
 	}
 	return nil
 }

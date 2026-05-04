@@ -339,6 +339,7 @@
 - `approval_requests.risk_level`：表达单次待授权动作的风险等级。
 - `approval_requests.impact_scope_json`：用于展示影响范围和边界命中结果，是前端“为什么要确认”的核心依据。
 - `authorization_records.decision`：记录 allow_once / deny_once 等正式决策，不得只在任务状态上体现。
+- `authorization_records.run_id`：标记授权决策属于哪个执行尝试；同一 `task_id` 发生 `restart` 后，任务详情必须优先读取当前 `run_id` 的授权记录，不能把上一轮尝试的 allow / deny 结果继续展示为当前授权状态。
 - `audit_records.action / target / result`：记录真实发生的关键动作与执行结果。
 - `audit_records.run_id`：标记审计记录来自哪个执行尝试；同一任务重启后，当前任务详情和失败摘要必须只读取当前 `run_id` 的审计记录，避免延续上一轮失败结论。
 - `recovery_points.objects_json`：用于定义恢复 / 回滚涉及的对象集合，是恢复锚点而不是普通日志。
@@ -642,6 +643,7 @@ CREATE INDEX idx_approval_requests_task_status ON approval_requests(task_id, sta
 CREATE TABLE authorization_records (
     authorization_record_id TEXT PRIMARY KEY,    -- 授权记录ID
     task_id TEXT NOT NULL,                       -- 所属task
+    run_id TEXT,                                 -- 所属run
     approval_id TEXT NOT NULL,                   -- 授权请求ID
     decision TEXT NOT NULL,                      -- allow_once / deny_once
     operator TEXT NOT NULL,                      -- 操作者
@@ -651,6 +653,7 @@ CREATE TABLE authorization_records (
     FOREIGN KEY(approval_id) REFERENCES approval_requests(approval_id)
 );
 CREATE INDEX idx_authorization_records_task_time ON authorization_records(task_id, created_at DESC);
+CREATE INDEX idx_authorization_records_task_run_time ON authorization_records(task_id, run_id, created_at DESC);
 ```
 
 ### 7.14 audit_records

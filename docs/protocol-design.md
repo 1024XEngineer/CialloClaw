@@ -1574,7 +1574,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 补充约束：
 
 - `approval_request` 是任务详情里的单个安全锚点，只在当前任务处于 `waiting_auth` 且仍持有活跃正式授权对象时返回；否则返回 `null`。
-- `authorization_record` 返回当前任务最近一条正式授权记录；若任务还没有进入授权决策阶段则返回 `null`。
+- `authorization_record` 返回当前任务当前执行尝试最近一条正式授权记录；若当前尝试还没有进入授权决策阶段则返回 `null`，不能把重启前旧尝试的 allow / deny 结果继续作为当前授权状态返回。
 - `audit_record` 返回当前任务最近一条正式审计记录；若当前任务还没有正式审计记录则返回 `null`。
 - 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。

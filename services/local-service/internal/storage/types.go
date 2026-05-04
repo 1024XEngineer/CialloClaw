@@ -512,6 +512,7 @@ type ApprovalRequestRecord struct {
 type AuthorizationRecordRecord struct {
 	AuthorizationRecordID string
 	TaskID                string
+	RunID                 string
 	ApprovalID            string
 	Decision              string
 	Operator              string
@@ -533,5 +534,5 @@ type AuthorizationRecordStore interface {
 	// WriteAuthorizationDecision persists one authorization_records row and its
 	// linked approval_requests status transition inside a single storage boundary.
 	WriteAuthorizationDecision(ctx context.Context, record AuthorizationRecordRecord, approvalStatus string, updatedAt string) error
-	ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error)
+	ListAuthorizationRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]AuthorizationRecordRecord, int, error)
 }

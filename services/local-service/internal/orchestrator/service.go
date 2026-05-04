@@ -828,11 +828,11 @@ func (s *Service) persistApprovalRequestState(taskID string, approvalRequest map
 	return nil
 }
 
-func (s *Service) persistAuthorizationState(taskID string, authorizationRecord map[string]any) error {
+func (s *Service) persistAuthorizationState(task runengine.TaskRecord, authorizationRecord map[string]any) error {
 	if s.storage == nil {
 		return nil
 	}
-	if err := s.persistAuthorizationDecision(taskID, authorizationRecord); err != nil {
+	if err := s.persistAuthorizationDecision(task, authorizationRecord); err != nil {
 		return fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 	}
 	return nil
@@ -863,7 +863,7 @@ func (s *Service) persistApprovalRequest(taskID string, approvalRequest map[stri
 	return s.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), record)
 }
 
-func (s *Service) persistAuthorizationDecision(taskID string, authorizationRecord map[string]any) error {
+func (s *Service) persistAuthorizationDecision(task runengine.TaskRecord, authorizationRecord map[string]any) error {
 	if s == nil || s.storage == nil || len(authorizationRecord) == 0 {
 		return nil
 	}
@@ -875,7 +875,8 @@ func (s *Service) persistAuthorizationDecision(taskID string, authorizationRecor
 	createdAt := stringValue(authorizationRecord, "created_at", time.Now().Format(dateTimeLayout))
 	record := storage.AuthorizationRecordRecord{
 		AuthorizationRecordID: recordID,
-		TaskID:                firstNonEmptyString(stringValue(authorizationRecord, "task_id", ""), taskID),
+		TaskID:                firstNonEmptyString(stringValue(authorizationRecord, "task_id", ""), task.TaskID),
+		RunID:                 firstNonEmptyString(stringValue(authorizationRecord, "run_id", ""), task.RunID),
 		ApprovalID:            approvalID,
 		Decision:              stringValue(authorizationRecord, "decision", ""),
 		Operator:              stringValue(authorizationRecord, "operator", "user"),
@@ -1151,7 +1152,7 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest
 	}
-	storageAuthorizationRecord := s.latestAuthorizationRecordFromStorage(task.TaskID)
+	storageAuthorizationRecord := s.latestAttemptAuthorizationRecordFromStorage(task)
 	authorizationRecord := selectTaskDetailAuthorizationRecord(task.TaskID, task.Authorization, storageAuthorizationRecord)
 	authorizationRecordValue := any(nil)
 	if authorizationRecord != nil {
@@ -1208,6 +1209,10 @@ func mergeRuntimeTaskDetail(structuredTask, runtimeTask runengine.TaskRecord) ru
 		merged.DeliveryResult = cloneMap(runtimeTask.DeliveryResult)
 		merged.Artifacts = cloneMapSlice(runtimeTask.Artifacts)
 		merged.Citations = cloneMapSlice(runtimeTask.Citations)
+		merged.ApprovalRequest = cloneMap(runtimeTask.ApprovalRequest)
+		merged.Authorization = cloneMap(runtimeTask.Authorization)
+		merged.ImpactScope = cloneMap(runtimeTask.ImpactScope)
+		merged.PendingExecution = cloneMap(runtimeTask.PendingExecution)
 		merged.AuditRecords = cloneMapSlice(runtimeTask.AuditRecords)
 		merged.LatestToolCall = cloneMap(runtimeTask.LatestToolCall)
 		merged.LoopStopReason = runtimeTask.LoopStopReason
@@ -1920,18 +1925,38 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 		}
 	}
 	bubble := s.delivery.BuildBubbleMessage(taskID, "status", controlBubbleText(action), currentTimeFromTask(s.runEngine, taskID))
-	updatedTask, err := s.runEngine.ControlTask(taskID, action, bubble)
-	if err != nil {
-		switch {
-		case errors.Is(err, runengine.ErrTaskNotFound):
-			return nil, ErrTaskNotFound
-		case errors.Is(err, runengine.ErrTaskStatusInvalid):
-			return nil, ErrTaskStatusInvalid
-		case errors.Is(err, runengine.ErrTaskAlreadyFinished):
-			return nil, ErrTaskAlreadyFinished
-		default:
-			return nil, err
+	updatedTask := runengine.TaskRecord{}
+	if action == "restart" {
+		preRestartTask, preparedRestartTask, restartErr := s.runEngine.PrepareRestart(taskID, bubble)
+		if restartErr != nil {
+			switch {
+			case errors.Is(restartErr, runengine.ErrTaskNotFound):
+				return nil, ErrTaskNotFound
+			case errors.Is(restartErr, runengine.ErrTaskStatusInvalid):
+				return nil, ErrTaskStatusInvalid
+			case errors.Is(restartErr, runengine.ErrTaskAlreadyFinished):
+				return nil, ErrTaskAlreadyFinished
+			default:
+				return nil, restartErr
+			}
 		}
+		previousTask = preRestartTask
+		updatedTask = preparedRestartTask
+	} else {
+		nextTask, err := s.runEngine.ControlTask(taskID, action, bubble)
+		if err != nil {
+			switch {
+			case errors.Is(err, runengine.ErrTaskNotFound):
+				return nil, ErrTaskNotFound
+			case errors.Is(err, runengine.ErrTaskStatusInvalid):
+				return nil, ErrTaskStatusInvalid
+			case errors.Is(err, runengine.ErrTaskAlreadyFinished):
+				return nil, ErrTaskAlreadyFinished
+			default:
+				return nil, err
+			}
+		}
+		updatedTask = nextTask
 	}
 	if action == "resume" && wasHumanLoop {
 		if traceResumedTask, traceBubble, _, resumed, resumeErr := s.resumeHumanLoopTask(updatedTask, reviewDecision); resumeErr != nil {
@@ -1944,6 +1969,7 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	if action == "restart" {
 		restartedTask, restartBubble, restartErr := s.advanceRestartedTaskAttempt(previousTask, updatedTask)
 		if restartErr != nil {
+			_ = s.runEngine.RestorePreparedTask(previousTask)
 			return nil, restartErr
 		}
 		updatedTask = restartedTask
@@ -2801,13 +2827,14 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	authorizationRecord := map[string]any{
 		"authorization_record_id": fmt.Sprintf("auth_%s_%d", task.TaskID, time.Now().UnixNano()),
 		"task_id":                 task.TaskID,
+		"run_id":                  task.RunID,
 		"approval_id":             approvalID,
 		"decision":                decision,
 		"remember_rule":           rememberRule,
 		"operator":                "user",
 		"created_at":              time.Now().Format(dateTimeLayout),
 	}
-	if err := s.persistAuthorizationState(task.TaskID, authorizationRecord); err != nil {
+	if err := s.persistAuthorizationState(task, authorizationRecord); err != nil {
 		return nil, err
 	}
 	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
@@ -4682,7 +4709,7 @@ func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	if s == nil || s.storage == nil || task == nil {
 		return
 	}
-	if authorizationRecord := s.latestAuthorizationRecordFromStorage(task.TaskID); authorizationRecord != nil {
+	if authorizationRecord := s.latestAttemptAuthorizationRecordFromStorage(*task); authorizationRecord != nil {
 		task.Authorization = authorizationRecord
 	}
 	if deliveryResult := s.latestAttemptDeliveryResultFromStorage(*task); len(deliveryResult) > 0 {
@@ -4882,15 +4909,15 @@ func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel st
 	return nil
 }
 
-func (s *Service) latestAuthorizationRecordFromStorage(taskID string) map[string]any {
-	if s == nil || s.storage == nil || s.storage.AuthorizationRecordStore() == nil || strings.TrimSpace(taskID) == "" {
+func (s *Service) latestAttemptAuthorizationRecordFromStorage(task runengine.TaskRecord) map[string]any {
+	if s == nil || s.storage == nil || s.storage.AuthorizationRecordStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	items, _, err := s.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 1, 0)
+	items, _, err := s.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), task.TaskID, taskAttemptRunIDFilter(task), 1, 0)
 	if err != nil || len(items) == 0 {
 		return nil
 	}
-	return normalizeTaskDetailAuthorizationRecord(taskID, authorizationRecordRecordToMap(items[0]))
+	return normalizeTaskDetailAuthorizationRecord(task.TaskID, authorizationRecordRecordToMap(items[0]))
 }
 
 func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string]any {
@@ -4918,6 +4945,7 @@ func authorizationRecordRecordToMap(record storage.AuthorizationRecordRecord) ma
 	return map[string]any{
 		"authorization_record_id": record.AuthorizationRecordID,
 		"task_id":                 record.TaskID,
+		"run_id":                  record.RunID,
 		"approval_id":             record.ApprovalID,
 		"decision":                record.Decision,
 		"remember_rule":           record.RememberRule,
