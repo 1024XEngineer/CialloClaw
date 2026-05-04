@@ -28,6 +28,7 @@ import {
   type ControlPanelAboutSnapshot,
 } from "@/services/controlPanelAboutService";
 import {
+  buildControlPanelRestoreDefaultsData,
   ControlPanelSaveError,
   loadControlPanelData,
   runControlPanelInspection,
@@ -215,6 +216,21 @@ function normalizeIntervalNumberInput(rawValue: string, fallbackValue: number) {
   }
 
   return parsedValue;
+}
+
+function normalizeDisplayPath(rawPath: string) {
+  // Runtime path payloads are display-only here, so trim Windows extended-path
+  // prefixes away instead of leaking host-internal `//?/` forms into the UI.
+  const trimmed = rawPath.trim();
+  if (trimmed.startsWith("//?/UNC/")) {
+    return `//${trimmed.slice("//?/UNC/".length)}`;
+  }
+
+  if (trimmed.startsWith("//?/")) {
+    return trimmed.slice("//?/".length);
+  }
+
+  return trimmed;
 }
 
 function getFloatingBallSizeSliderValue(size: string) {
@@ -628,6 +644,7 @@ export function ControlPanelApp() {
   // About actions only affect local clipboard/help affordances, so their
   // feedback must stay in local UI state instead of polluting formal settings.
   const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
+  const [isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming] = useState(false);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -807,9 +824,25 @@ export function ControlPanelApp() {
     })();
   }, [onboardingSession]);
 
+  const controlPanelAppearance = draft ? resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance) : systemAppearance;
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return undefined;
+    }
+
+    // Tooltip popups render through a portal, so the window appearance needs a
+    // document-level marker instead of relying on the local shell subtree.
+    document.body.dataset.controlPanelAppearance = controlPanelAppearance;
+
+    return () => {
+      delete document.body.dataset.controlPanelAppearance;
+    };
+  }, [controlPanelAppearance]);
+
   if (!draft || !panelData) {
     return (
-      <main className="app-shell control-panel-shell" data-appearance={systemAppearance}>
+      <main className="app-shell control-panel-shell" data-appearance={controlPanelAppearance}>
         <div className="control-panel-shell__loading">
           <div className="control-panel-shell__loading-stack">
             <Text size="2" className="control-panel-shell__loading-copy">
@@ -832,10 +865,12 @@ export function ControlPanelApp() {
   const modelSettingsDirty = !isEqual(draft.settings.models, panelData.settings.models) || draft.providerApiKeyInput.trim() !== "";
   const hasChanges = inspectorDirty || settingsDirty;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
-  const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
   const onboardingReplayDisabled = isSaving || isRunningInspection || isReplayingOnboarding;
+  const localDataPath = normalizeDisplayPath(aboutSnapshot.localDataPath ?? "");
+  const localDataPathLabel = localDataPath || "当前本地存储目录暂不可用";
+  const restoreDefaultsDisabled = isSaving || isRunningInspection || isValidatingModel || isReplayingOnboarding;
 
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
@@ -883,6 +918,20 @@ export function ControlPanelApp() {
     setDraft(panelData);
     setSaveFeedback("已恢复为上次载入的设置快照。");
     setModelValidationFeedback(null);
+    setIsRestoreDefaultsConfirming(false);
+  };
+
+  const handlePrepareRestoreDefaults = () => {
+    if (restoreDefaultsDisabled) {
+      return;
+    }
+
+    setIsRestoreDefaultsConfirming(true);
+    setSaveFeedback(null);
+  };
+
+  const handleCancelRestoreDefaults = () => {
+    setIsRestoreDefaultsConfirming(false);
   };
 
   const handleValidateModel = async (options: ControlPanelModelValidationOptions = {}) => {
@@ -988,6 +1037,59 @@ export function ControlPanelApp() {
       setSaveFeedback(errorMessage);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleRestoreDefaults = async () => {
+    if (restoreDefaultsDisabled) {
+      return;
+    }
+
+    const persistedPanelData = panelData;
+    if (!persistedPanelData) {
+      return;
+    }
+
+    const restoreDraft = buildControlPanelRestoreDefaultsData(draft, persistedPanelData);
+
+    setIsSaving(true);
+    try {
+      const result = await saveControlPanelData(restoreDraft, {
+        confirmedInspector: persistedPanelData.inspector,
+        saveInspector: true,
+        saveSettings: true,
+        validateModel: false,
+      });
+      const nextPanelData = applyControlPanelSaveResult(restoreDraft, result);
+      const nextDraft = applyControlPanelSaveResult(restoreDraft, result);
+      setLoadError(null);
+      setPanelData(nextPanelData);
+      setDraft(nextDraft);
+      setSaveFeedback(`已恢复默认设置。${getApplyModeCopy(result.applyMode, result.needRestart)}`);
+      if (result.modelValidation) {
+        setModelValidationFeedback({
+          message: result.modelValidation.message,
+          tone: result.modelValidation.ok ? "neutral" : "warning",
+        });
+      } else {
+        setModelValidationFeedback(null);
+      }
+    } catch (error) {
+      if (error instanceof ControlPanelSaveError && error.partialResult) {
+        const nextPanelData = applyControlPanelSaveResult(restoreDraft, error.partialResult);
+        const nextDraft = applyControlPanelSaveResult(restoreDraft, error.partialResult);
+        setPanelData(nextPanelData);
+        setDraft(nextDraft);
+      }
+
+      const errorMessage = error instanceof Error ? error.message : "恢复默认设置失败。";
+      if (shouldSurfaceRpcErrorBanner(errorMessage)) {
+        setLoadError(errorMessage);
+      }
+      setSaveFeedback(errorMessage);
+    } finally {
+      setIsSaving(false);
+      setIsRestoreDefaultsConfirming(false);
     }
   };
 
@@ -1586,31 +1688,11 @@ export function ControlPanelApp() {
               </SettingsCard>
             </div>
 
-            <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
+            <SettingsCard title="模型与安全摘要" description="查看当前模型路由、API Key 状态与安全摘要。">
               <InfoRow label="当前模型" value={draft.settings.models.model} />
               <InfoRow label="API Key 状态" value={providerApiKeyStatus} />
               <InfoRow label="安全状态" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.security_status} />
               <InfoRow label="待确认授权" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.pending_authorizations} />
-              <InfoRow
-                label="今日成本"
-                value={hasRpcLoadError ? "暂不可用" : `¥${draft.securitySummary.token_cost_summary.today_cost.toFixed(2)}`}
-              />
-              <InfoRow
-                label="单任务上限"
-                value={
-                  hasRpcLoadError
-                    ? "暂不可用"
-                    : `${draft.securitySummary.token_cost_summary.single_task_limit.toLocaleString("zh-CN")} tokens`
-                }
-              />
-              <InfoRow
-                label="当日上限"
-                value={
-                  hasRpcLoadError
-                    ? "暂不可用"
-                    : `${draft.securitySummary.token_cost_summary.daily_limit.toLocaleString("zh-CN")} tokens`
-                }
-              />
             </SettingsCard>
           </>
         );
@@ -1618,6 +1700,24 @@ export function ControlPanelApp() {
       case "about":
         return (
           <>
+            <SettingsCard title="本地存储位置" description="这里展示桌面端当前用户目录下的正式 data 存储位置。">
+              <InfoRow label="数据目录" value={<code className="control-panel-shell__about-link">{localDataPathLabel}</code>} />
+
+              <ControlLine label="定位操作" hint="优先在系统资源管理器中打开 data 目录；目录不存在时会由宿主按需创建。" className="control-panel-shell__row--stacked">
+                <div className="control-panel-shell__about-actions">
+                  <Button
+                    type="button"
+                    variant="soft"
+                    className="control-panel-shell__button control-panel-shell__button--secondary control-panel-shell__about-button"
+                    onClick={() => void handleAboutAction("open_data_directory")}
+                    disabled={localDataPath.length === 0}
+                  >
+                    打开目录
+                  </Button>
+                </div>
+              </ControlLine>
+            </SettingsCard>
+
             <SettingsCard title="帮助与反馈" description="集中展示应用内帮助入口与可扩展的反馈渠道。">
               <InfoRow label="帮助入口" value="应用内新手引导" />
 
@@ -1639,7 +1739,12 @@ export function ControlPanelApp() {
 
               <ControlLine label="分享操作" hint="优先复制仓库地址；若当前环境不支持剪贴板，会直接显示链接。" className="control-panel-shell__row--stacked">
                 <div className="control-panel-shell__about-actions">
-                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("share")}>
+                  <Button
+                    type="button"
+                    variant="soft"
+                    className="control-panel-shell__button control-panel-shell__button--secondary control-panel-shell__about-button"
+                    onClick={() => void handleAboutAction("share")}
+                  >
                     复制链接
                   </Button>
                 </div>
@@ -1651,6 +1756,55 @@ export function ControlPanelApp() {
               <InfoRow label="应用版本" value={aboutSnapshot.appVersion} />
             </SettingsCard>
 
+            <SettingsCard title="恢复默认设置" description="将桌面端可重置的设置恢复到默认值。">
+              {isRestoreDefaultsConfirming ? (
+                <div className="control-panel-shell__about-confirm">
+                  <Text as="p" size="2" className="control-panel-shell__about-note">
+                    会重置通用设置、悬浮球、记忆设置、任务巡检与预算自动降级。
+                  </Text>
+                  <Text as="p" size="2" className="control-panel-shell__about-note">
+                    不会删除任务历史、记忆内容、本地文件，也不会改动当前已保存的 workspace 路径、任务来源、模型路由或已保存 API Key。
+                  </Text>
+                  <Text as="p" size="2" className="control-panel-shell__about-note">
+                    确认后会立即提交默认设置；若存在需要延后生效的设置，仍按后端当前 `apply_mode` 规则生效。
+                  </Text>
+                  <div className="control-panel-shell__about-actions">
+                    <Button
+                      type="button"
+                      className="control-panel-shell__button control-panel-shell__button--primary control-panel-shell__about-button"
+                      onClick={() => void handleRestoreDefaults()}
+                      disabled={restoreDefaultsDisabled}
+                    >
+                      确认恢复默认设置
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="soft"
+                      className="control-panel-shell__button control-panel-shell__button--ghost control-panel-shell__about-button"
+                      onClick={handleCancelRestoreDefaults}
+                      disabled={restoreDefaultsDisabled}
+                    >
+                      取消
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <ControlLine label="恢复操作" hint="先进入确认步骤，再查看本次会恢复哪些设置。" className="control-panel-shell__row--stacked">
+                  <div className="control-panel-shell__about-actions">
+                    <Button
+                      type="button"
+                      variant="soft"
+                      className="control-panel-shell__button control-panel-shell__button--secondary control-panel-shell__about-button"
+                      onClick={handlePrepareRestoreDefaults}
+                      disabled={restoreDefaultsDisabled}
+                    >
+                      恢复默认设置
+                    </Button>
+                  </div>
+                </ControlLine>
+              )}
+            </SettingsCard>
+
           </>
         );
 
@@ -1658,7 +1812,7 @@ export function ControlPanelApp() {
   };
 
   return (
-    <main className="app-shell control-panel-shell" data-appearance={resolvedAppearance}>
+    <main className="app-shell control-panel-shell" data-appearance={controlPanelAppearance}>
       <div className="control-panel-shell__titlebar" aria-label="控制面板窗口操作" onPointerDown={handleTopbarPointerDown}>
         <div className="control-panel-shell__titlebar-copy">
           <Heading size="5" className="control-panel-shell__titlebar-title">

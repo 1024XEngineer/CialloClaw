@@ -33,6 +33,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -54,6 +55,8 @@ const (
 	executionSegmentInitial = "initial"
 	executionSegmentResume  = "resume"
 	executionSegmentRestart = "restart"
+	subjectPreviewMaxLength = 24
+	resultPreviewMaxLength  = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
@@ -624,7 +627,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 }
 
 func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
-	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), subjectPreviewMaxLength)
 }
 
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
@@ -732,9 +735,9 @@ func isClipScreenSourcePath(pathValue string) bool {
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
+		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
 	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
@@ -6387,9 +6390,9 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
 	}
 	if len(perceptionSummary) == 0 {
-		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, resultPreviewMaxLength))
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, resultPreviewMaxLength))
 }
 
 // resultSpecFromIntent returns the default result title, preview text, and
@@ -7272,10 +7275,7 @@ func intValue(values map[string]any, key string, fallback int) int {
 // truncateText trims text to a fixed length for recommendation and memory
 // query surfaces.
 func truncateText(value string, maxLength int) string {
-	if len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength] + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC

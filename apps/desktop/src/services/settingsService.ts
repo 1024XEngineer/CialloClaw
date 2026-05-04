@@ -51,11 +51,16 @@ type StoredDesktopSettings = {
 };
 
 function loadRuntimeDefaults(): DesktopRuntimeDefaults | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
   const stored = loadStoredValue<DesktopRuntimeDefaults>(RUNTIME_DEFAULTS_KEY);
   if (!stored || typeof stored.workspace_path !== "string") {
     return null;
   }
 
+  const dataPath = typeof stored.data_path === "string" ? stored.data_path.trim() : "";
   const workspacePath = stored.workspace_path.trim();
   const taskSources = Array.isArray(stored.task_sources)
     ? stored.task_sources
@@ -69,6 +74,7 @@ function loadRuntimeDefaults(): DesktopRuntimeDefaults | null {
   }
 
   return {
+    data_path: dataPath,
     workspace_path: workspacePath,
     task_sources: taskSources,
   };
@@ -135,6 +141,16 @@ function createDefaultSettings(): DesktopSettings {
       },
     },
   };
+}
+
+/**
+ * Builds the default desktop settings snapshot using the latest cached runtime
+ * defaults so local reset flows stay aligned with the packaged host baseline.
+ *
+ * @returns The default desktop settings snapshot.
+ */
+export function buildDefaultDesktopSettingsSnapshot(): DesktopSettings {
+  return createDefaultSettings();
 }
 
 // The desktop control panel keeps a flat local `models` view while the formal
@@ -244,6 +260,7 @@ export async function hydrateDesktopRuntimeDefaults() {
   }
 
   const normalizedRuntimeDefaults: DesktopRuntimeDefaults = {
+    data_path: typeof runtimeDefaults.data_path === "string" ? runtimeDefaults.data_path.trim() : "",
     workspace_path: runtimeDefaults.workspace_path.trim(),
     task_sources: runtimeDefaults.task_sources
       .filter((source): source is string => typeof source === "string")
@@ -292,6 +309,17 @@ export async function hydrateDesktopRuntimeDefaults() {
 export async function loadHydratedSettings(): Promise<DesktopSettings> {
   await hydrateDesktopRuntimeDefaults();
   return loadSettings();
+}
+
+/**
+ * Loads the trusted runtime-default directory snapshot cached for desktop-only
+ * control-panel affordances.
+ *
+ * @returns The hydrated runtime-default directory snapshot, when available.
+ */
+export async function loadDesktopRuntimeDefaultsSnapshot(): Promise<DesktopRuntimeDefaults | null> {
+  await hydrateDesktopRuntimeDefaults();
+  return loadRuntimeDefaults();
 }
 
 /**
