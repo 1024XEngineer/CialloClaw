@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -25,6 +24,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -2406,10 +2406,7 @@ func normalizeWhitespace(inputText string) string {
 }
 
 func truncateText(inputText string, maxLength int) string {
-	if maxLength <= 0 || utf8.RuneCountInString(inputText) <= maxLength {
-		return inputText
-	}
-	return string([]rune(inputText)[:maxLength]) + "..."
+	return textutil.TruncateGraphemes(inputText, maxLength)
 }
 
 func mapValue(values map[string]any, key string) map[string]any {

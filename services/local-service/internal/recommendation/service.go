@@ -10,6 +10,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
 const (
@@ -523,12 +524,7 @@ func intentPayload(name string) map[string]any {
 }
 
 func truncateText(value string, maxLength int) string {
-	if utf8.RuneCountInString(value) <= maxLength {
-		return value
-	}
-
-	runes := []rune(value)
-	return string(runes[:maxLength]) + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 func fallbackString(primary, fallback string) string {

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -34,6 +33,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -7273,10 +7273,7 @@ func intValue(values map[string]any, key string, fallback int) int {
 // truncateText trims text to a fixed length for recommendation and memory
 // query surfaces.
 func truncateText(value string, maxLength int) string {
-	if utf8.RuneCountInString(value) <= maxLength {
-		return value
-	}
-	return string([]rune(value)[:maxLength]) + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC

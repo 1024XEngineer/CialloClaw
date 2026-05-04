@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
 const defaultAgentLoopIntent = "agent_loop"
@@ -384,11 +385,7 @@ func isLongContent(text string) bool {
 }
 
 func truncateText(value string, maxLength int) string {
-	if utf8.RuneCountInString(value) <= maxLength {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:maxLength]) + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // stringValue safely reads a string field from an intent payload.

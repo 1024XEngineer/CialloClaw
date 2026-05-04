@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
 const (
@@ -374,9 +375,5 @@ func dedupeStrings(values []string) []string {
 }
 
 func truncateText(value string, maxLength int) string {
-	if utf8.RuneCountInString(value) <= maxLength {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:maxLength]) + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }

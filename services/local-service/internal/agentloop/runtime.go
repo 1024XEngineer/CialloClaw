@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -599,13 +600,7 @@ func invocationRecordMap(record *model.InvocationRecord) map[string]any {
 
 func truncateText(value string, limit int) string {
 	trimmed := strings.TrimSpace(value)
-	if limit <= 0 || len(trimmed) <= limit {
-		return trimmed
-	}
-	if limit <= 3 {
-		return trimmed[:limit]
-	}
-	return trimmed[:limit-3] + "..."
+	return textutil.TruncateGraphemes(trimmed, limit)
 }
 
 func singleLineSummary(value string) string {
