@@ -18,6 +18,7 @@ import {
 } from "@/rpc/methods";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import {
+  buildDefaultDesktopSettingsSnapshot,
   hydrateDesktopRuntimeDefaults,
   hydrateDesktopSettings,
   loadSettings,
@@ -169,6 +170,57 @@ function mergeProtocolSettings(
           }
         : base.models,
     }),
+  };
+}
+
+/**
+ * Builds a restore-defaults draft while preserving workspace-bound task
+ * sources, the active model route, and any already-saved provider secret state
+ * that lives outside the ordinary settings snapshot.
+ *
+ * @param currentDraft The current control-panel draft.
+ * @param persisted The last persisted control-panel snapshot.
+ * @returns A draft aligned with desktop defaults and persisted boundary fields.
+ */
+export function buildControlPanelRestoreDefaultsData(currentDraft: ControlPanelData, persisted: ControlPanelData): ControlPanelData {
+  const defaultSettings = buildDefaultDesktopSettingsSnapshot().settings;
+  const preservedTaskSources = persisted.inspector.task_sources;
+  const preservedModels = persisted.settings.models;
+
+  return {
+    ...currentDraft,
+    inspector: {
+      task_sources: preservedTaskSources,
+      inspection_interval: defaultSettings.task_automation.inspection_interval,
+      inspect_on_file_change: defaultSettings.task_automation.inspect_on_file_change,
+      inspect_on_startup: defaultSettings.task_automation.inspect_on_startup,
+      remind_before_deadline: defaultSettings.task_automation.remind_before_deadline,
+      remind_when_stale: defaultSettings.task_automation.remind_when_stale,
+    },
+    providerApiKeyInput: "",
+    settings: {
+      ...defaultSettings,
+      general: {
+        ...defaultSettings.general,
+        download: {
+          ...defaultSettings.general.download,
+          workspace_path: persisted.settings.general.download.workspace_path,
+        },
+      },
+      task_automation: {
+        ...defaultSettings.task_automation,
+        task_sources: preservedTaskSources,
+      },
+      models: {
+        ...defaultSettings.models,
+        provider: preservedModels.provider,
+        provider_api_key_configured: preservedModels.provider_api_key_configured,
+        stronghold: preservedModels.stronghold,
+        base_url: preservedModels.base_url,
+        model: preservedModels.model,
+      },
+    },
+    warnings: [],
   };
 }
 

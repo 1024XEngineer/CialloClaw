@@ -301,6 +301,11 @@ function loadSettingsServiceModule(desktopHost?: DashboardContractDesktopHostOve
     delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
+      loadDesktopRuntimeDefaultsSnapshot: () => Promise<{
+        data_path: string;
+        workspace_path: string;
+        task_sources: string[];
+      } | null>;
       loadHydratedSettings: () => Promise<{
         settings: {
           general: {
@@ -394,6 +399,248 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildControlPanelRestoreDefaultsData: (data: {
+        source: "rpc";
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        providerApiKeyInput: string;
+        securitySummary: {
+          security_status: string;
+          pending_authorizations: number;
+          latest_restore_point: null;
+          token_cost_summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          };
+        };
+        warnings?: string[];
+      }, persisted: {
+        source: "rpc";
+        providerApiKeyInput: string;
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        securitySummary: {
+          security_status: string;
+          pending_authorizations: number;
+          latest_restore_point: null;
+          token_cost_summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          };
+        };
+        warnings?: string[];
+      }) => {
+        source: "rpc";
+        providerApiKeyInput: string;
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        warnings?: string[];
+      };
       loadControlPanelData: () => Promise<{
         source: "rpc";
         settings: {
@@ -516,10 +763,14 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
   }, rpcMethods);
 }
 
-function loadControlPanelAboutServiceModule() {
+function loadControlPanelAboutServiceModule(desktopHost?: DashboardContractDesktopHostOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/controlPanelAboutService.ts");
+    const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[settingsModulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
       getControlPanelAboutFeedbackChannels: () => Array<
@@ -544,11 +795,17 @@ function loadControlPanelAboutServiceModule() {
       getControlPanelAboutFallbackSnapshot: () => {
         appName: string;
         appVersion: string;
+        localDataPath: string | null;
       };
+      loadControlPanelAboutSnapshot: () => Promise<{
+        appName: string;
+        appVersion: string;
+        localDataPath: string | null;
+      }>;
       copyControlPanelAboutValue: (value: string, successMessage: string) => Promise<string>;
-      runControlPanelAboutAction: (action: "share") => Promise<string>;
+      runControlPanelAboutAction: (action: "open_data_directory" | "share") => Promise<string>;
     };
-  });
+  }, undefined, undefined, desktopHost);
 }
 
 function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
@@ -1789,6 +2046,56 @@ test("settings service hydrates runtime defaults before loading fallback snapsho
   }
 });
 
+test("settings service exposes the trusted runtime data directory snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const settingsService = loadSettingsServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          data_path: "/Users/runtime/CialloClaw/data",
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+
+    const runtimeDefaults = await settingsService.loadDesktopRuntimeDefaultsSnapshot();
+
+    assert.deepEqual(runtimeDefaults, {
+      data_path: "/Users/runtime/CialloClaw/data",
+      workspace_path: "/Users/runtime/CialloClaw/workspace",
+      task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("settings service loadHydratedSettings keeps existing snapshot when host hydration fails", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
@@ -2265,6 +2572,7 @@ test("control panel about service exposes fallback metadata and feedback channel
   assert.deepEqual(fallback, {
     appName: "CialloClaw",
     appVersion: "0.1.0",
+    localDataPath: null,
   });
   assert.deepEqual(feedbackChannels, [
     {
@@ -2295,11 +2603,66 @@ test("control panel about service exposes fallback metadata and feedback channel
   ]);
 });
 
-test("control panel about helpers copy feedback and share links", async () => {
-  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
+test("control panel about snapshot reuses the trusted runtime data directory", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadControlPanelAboutSnapshot } = loadControlPanelAboutServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          data_path: "/Users/runtime/CialloClaw/data",
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+
+    const snapshot = await loadControlPanelAboutSnapshot();
+
+    assert.equal(snapshot.appName, "CialloClaw");
+    assert.equal(snapshot.appVersion, "0.1.0");
+    assert.equal(snapshot.localDataPath, "/Users/runtime/CialloClaw/data");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel about helpers open the data directory and share links", async () => {
   const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
   const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const copiedValues: string[] = [];
+  const invokedCommands: string[] = [];
+
+  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule({
+    invoke: async (command) => {
+      invokedCommands.push(command);
+      return undefined;
+    },
+  });
 
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
@@ -2312,12 +2675,22 @@ test("control panel about helpers copy feedback and share links", async () => {
     },
   });
 
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      __TAURI_INTERNALS__: {},
+    },
+  });
+
   try {
     const feedbackCopy = await copyControlPanelAboutValue("https://github.com/1024XEngineer/CialloClaw/issues", "已复制反馈渠道链接。");
+    const openFeedback = await runControlPanelAboutAction("open_data_directory");
     const shareFeedback = await runControlPanelAboutAction("share");
 
     assert.equal(feedbackCopy, "已复制反馈渠道链接。");
+    assert.equal(openFeedback, "已在系统中打开本地存储目录。");
     assert.equal(shareFeedback, "已复制分享链接。");
+    assert.deepEqual(invokedCommands, ["desktop_open_runtime_data_path"]);
     assert.deepEqual(copiedValues, [
       "https://github.com/1024XEngineer/CialloClaw/issues",
       "https://github.com/1024XEngineer/CialloClaw",
@@ -2344,8 +2717,13 @@ test("control panel app wires the about navigation without update-only fields", 
   assert.match(controlPanelAppSource, /type ControlPanelSectionId = .*"about"/);
   assert.match(controlPanelAppSource, /navLabel: "关于"/);
   assert.match(controlPanelAppSource, /case "about":/);
+  assert.match(controlPanelAppSource, /title="本地存储位置"/);
   assert.match(controlPanelAppSource, /title="帮助与反馈"/);
   assert.match(controlPanelAppSource, /title="版本信息"/);
+  assert.match(controlPanelAppSource, /title="恢复默认设置"/);
+  assert.match(controlPanelAppSource, /数据目录/);
+  assert.match(controlPanelAppSource, /打开目录/);
+  assert.match(controlPanelAppSource, /恢复默认设置/);
   assert.match(controlPanelAppSource, /应用内新手引导/);
   assert.match(controlPanelAppSource, /反馈渠道/);
   assert.match(controlPanelAppSource, /CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS/);
@@ -2369,9 +2747,180 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const \[aboutActionFeedback, setAboutActionFeedback\] = useState<string \| null>\(null\);/);
   assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
   assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /const localDataPath = normalizeDisplayPath\(aboutSnapshot\.localDataPath \?\? ""\);/);
+  assert.match(controlPanelAppSource, /handleAboutAction\("open_data_directory"\)/);
+  assert.match(controlPanelAppSource, /const \[isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming\] = useState\(false\);/);
+  assert.match(controlPanelAppSource, /const restoreDraft = buildControlPanelRestoreDefaultsData\(draft, persistedPanelData\);/);
+  assert.match(controlPanelAppSource, /validateModel: false/);
+  assert.match(controlPanelAppSource, /不会删除任务历史、记忆内容、本地文件/);
+  assert.match(controlPanelAppSource, /恢复默认设置/);
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
   assert.match(controlPanelAppSource, /const settings = \(await loadHydratedSettings\(\)\)\.settings;/);
   assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
+});
+
+test("control panel keeps budget rows in the safety page instead of duplicating them", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /title="模型与安全摘要"/);
+  assert.match(controlPanelAppSource, /label="安全状态"/);
+  assert.match(controlPanelAppSource, /label="待确认授权"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="今日成本"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="单任务上限"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="当日上限"/);
+});
+
+test("control panel restore-default helper preserves the persisted workspace, task-source, and model-route boundaries", () => {
+  const { buildControlPanelRestoreDefaultsData } = loadControlPanelServiceModule();
+
+  const persisted: Parameters<typeof buildControlPanelRestoreDefaultsData>[1] = {
+    source: "rpc",
+    providerApiKeyInput: "",
+    settings: {
+      general: {
+        language: "en-US",
+        auto_launch: false,
+        theme_mode: "dark",
+        voice_notification_enabled: false,
+        voice_type: "custom_voice",
+        download: {
+          workspace_path: "D:/SavedWorkspace",
+          ask_before_save_each_file: false,
+        },
+      },
+      floating_ball: {
+        auto_snap: false,
+        idle_translucent: false,
+        position_mode: "fixed",
+        size: "large",
+      },
+      memory: {
+        enabled: false,
+        lifecycle: "7d",
+        work_summary_interval: {
+          unit: "hour",
+          value: 4,
+        },
+        profile_refresh_interval: {
+          unit: "day",
+          value: 3,
+        },
+      },
+      task_automation: {
+        task_sources: ["D:/saved-todos"],
+        inspection_interval: {
+          unit: "hour",
+          value: 2,
+        },
+        inspect_on_file_change: false,
+        inspect_on_startup: false,
+        remind_before_deadline: false,
+        remind_when_stale: true,
+      },
+      models: {
+        provider: "anthropic",
+        provider_api_key_configured: true,
+        budget_auto_downgrade: false,
+        base_url: "https://api.anthropic.com",
+        model: "claude-3-7-sonnet",
+        stronghold: {
+          backend: "stronghold",
+          available: true,
+          fallback: false,
+          initialized: true,
+          formal_store: true,
+        },
+      },
+    },
+    inspector: {
+      task_sources: ["D:/saved-todos"],
+      inspection_interval: {
+        unit: "hour",
+        value: 2,
+      },
+      inspect_on_file_change: false,
+      inspect_on_startup: false,
+      remind_before_deadline: false,
+      remind_when_stale: true,
+    },
+    securitySummary: {
+      security_status: "normal",
+      pending_authorizations: 0,
+      latest_restore_point: null,
+      token_cost_summary: {
+        current_task_tokens: 0,
+        current_task_cost: 0,
+        today_tokens: 0,
+        today_cost: 0,
+        single_task_limit: 50000,
+        daily_limit: 300000,
+        budget_auto_downgrade: false,
+      },
+    },
+    warnings: ["stale warning"],
+  };
+
+  const draft: Parameters<typeof buildControlPanelRestoreDefaultsData>[0] = {
+    ...persisted,
+    providerApiKeyInput: "sk-unsaved-secret",
+    settings: {
+      ...persisted.settings,
+      general: {
+        ...persisted.settings.general,
+        download: {
+          ...persisted.settings.general.download,
+          workspace_path: "D:/UnsavedWorkspace",
+        },
+      },
+      task_automation: {
+        ...persisted.settings.task_automation,
+        task_sources: ["D:/unsaved-todos"],
+      },
+      models: {
+        ...persisted.settings.models,
+        provider: "openai-compatible",
+        base_url: "https://draft.example.com/v1",
+        model: "draft-model",
+      },
+    },
+    inspector: {
+      ...persisted.inspector,
+      task_sources: ["D:/unsaved-todos"],
+    },
+  };
+
+  const restored = buildControlPanelRestoreDefaultsData(
+    draft,
+    persisted,
+  );
+
+  assert.equal(restored.providerApiKeyInput, "");
+  assert.equal(restored.settings.general.language, "zh-CN");
+  assert.equal(restored.settings.general.download.workspace_path, "D:/SavedWorkspace");
+  assert.equal(restored.settings.general.download.ask_before_save_each_file, true);
+  assert.equal(restored.settings.floating_ball.size, "medium");
+  assert.equal(restored.settings.memory.enabled, true);
+  assert.equal(restored.settings.memory.lifecycle, "30d");
+  assert.equal(restored.settings.models.provider, "anthropic");
+  assert.equal(restored.settings.models.base_url, "https://api.anthropic.com");
+  assert.equal(restored.settings.models.model, "claude-3-7-sonnet");
+  assert.equal(restored.settings.models.budget_auto_downgrade, true);
+  assert.equal(restored.settings.models.provider_api_key_configured, true);
+  assert.deepEqual(restored.settings.models.stronghold, {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  });
+  assert.deepEqual(restored.settings.task_automation.task_sources, ["D:/saved-todos"]);
+  assert.deepEqual(restored.inspector.task_sources, ["D:/saved-todos"]);
+  assert.deepEqual(restored.inspector.inspection_interval, { unit: "minute", value: 15 });
+  assert.equal(restored.inspector.inspect_on_startup, true);
+  assert.equal(restored.inspector.inspect_on_file_change, true);
+  assert.equal(restored.inspector.remind_before_deadline, true);
+  assert.equal(restored.inspector.remind_when_stale, false);
+  assert.deepEqual(restored.warnings, []);
 });
 
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {

@@ -1,8 +1,12 @@
-export type ControlPanelAboutAction = "share";
+import { openDesktopRuntimeDataDirectory } from "@/platform/desktopRuntimeDefaults";
+import { loadDesktopRuntimeDefaultsSnapshot } from "@/services/settingsService";
+
+export type ControlPanelAboutAction = "open_data_directory" | "share";
 
 export type ControlPanelAboutSnapshot = {
   appName: string;
   appVersion: string;
+  localDataPath: string | null;
 };
 
 export type ControlPanelAboutFeedbackChannel =
@@ -69,6 +73,7 @@ const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
 const CONTROL_PANEL_ABOUT_FALLBACK_SNAPSHOT: ControlPanelAboutSnapshot = {
   appName: "CialloClaw",
   appVersion: "0.1.0",
+  localDataPath: null,
 };
 
 /**
@@ -99,6 +104,8 @@ export function getControlPanelAboutFeedbackChannels(): ControlPanelAboutFeedbac
  * @returns Desktop metadata for the about section.
  */
 export async function loadControlPanelAboutSnapshot(): Promise<ControlPanelAboutSnapshot> {
+  const runtimeDefaults = await loadDesktopRuntimeDefaultsSnapshot().catch(() => null);
+
   try {
     const appApi = await import("@tauri-apps/api/app");
     const [appName, appVersion] = await Promise.all([appApi.getName(), appApi.getVersion()]);
@@ -106,9 +113,13 @@ export async function loadControlPanelAboutSnapshot(): Promise<ControlPanelAbout
     return {
       appName,
       appVersion,
+      localDataPath: runtimeDefaults?.data_path || null,
     };
   } catch {
-    return getControlPanelAboutFallbackSnapshot();
+    return {
+      ...getControlPanelAboutFallbackSnapshot(),
+      localDataPath: runtimeDefaults?.data_path || null,
+    };
   }
 }
 
@@ -141,6 +152,13 @@ export async function copyControlPanelAboutValue(value: string, successMessage: 
  */
 export async function runControlPanelAboutAction(action: ControlPanelAboutAction): Promise<string> {
   switch (action) {
+    case "open_data_directory":
+      try {
+        await openDesktopRuntimeDataDirectory();
+        return "已在系统中打开本地存储目录。";
+      } catch (error) {
+        return `打开本地存储目录失败：${error instanceof Error ? error.message : "请重试。"}`;
+      }
     case "share":
       return copyControlPanelAboutValue(CONTROL_PANEL_ABOUT_URLS.share, "已复制分享链接。");
   }

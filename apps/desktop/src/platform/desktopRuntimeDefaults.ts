@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type DesktopRuntimeDefaults = {
+  data_path: string;
   workspace_path: string;
   task_sources: string[];
 };
@@ -22,4 +23,15 @@ export async function readDesktopRuntimeDefaults() {
   }
 
   return invoke<DesktopRuntimeDefaults>("desktop_get_runtime_defaults");
+}
+
+/**
+ * Opens the trusted runtime data directory through the desktop host.
+ */
+export async function openDesktopRuntimeDataDirectory() {
+  if (!canUseDesktopRuntimeDefaults()) {
+    throw new Error("desktop runtime defaults are unavailable");
+  }
+
+  return invoke<void>("desktop_open_runtime_data_path");
 }

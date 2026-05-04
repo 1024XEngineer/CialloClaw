@@ -50,8 +50,23 @@ type JsonChannel = Channel<Value>;
 
 #[derive(Clone, Serialize)]
 struct DesktopRuntimeDefaultsPayload {
+    data_path: String,
     workspace_path: String,
     task_sources: Vec<String>,
+}
+
+fn format_runtime_defaults_path(path: &std::path::Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+
+    if let Some(stripped) = normalized.strip_prefix("//?/UNC/") {
+        return format!("//{stripped}");
+    }
+
+    if let Some(stripped) = normalized.strip_prefix("//?/") {
+        return stripped.to_string();
+    }
+
+    normalized
 }
 
 const NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
@@ -452,6 +467,21 @@ async fn desktop_reveal_local_path(
 }
 
 #[tauri::command]
+async fn desktop_open_runtime_data_path(
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
+) -> Result<(), String> {
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        local_path::open_trusted_directory(
+            runtime_paths_state.data_dir().as_path(),
+            runtime_paths_state.runtime_root().as_path(),
+        )
+    })
+    .await
+    .map_err(|error| format!("desktop runtime data open task failed: {error}"))?
+}
+
+#[tauri::command]
 async fn desktop_load_source_notes(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
@@ -566,16 +596,12 @@ fn desktop_sync_settings_snapshot(
 fn desktop_get_runtime_defaults(
     runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
 ) -> DesktopRuntimeDefaultsPayload {
+    let task_source = runtime_paths_state.workspace_root().join("todos");
+
     DesktopRuntimeDefaultsPayload {
-        workspace_path: runtime_paths_state
-            .workspace_root()
-            .to_string_lossy()
-            .replace('\\', "/"),
-        task_sources: vec![runtime_paths_state
-            .workspace_root()
-            .join("todos")
-            .to_string_lossy()
-            .replace('\\', "/")],
+        data_path: format_runtime_defaults_path(runtime_paths_state.data_dir().as_path()),
+        workspace_path: format_runtime_defaults_path(runtime_paths_state.workspace_root().as_path()),
+        task_sources: vec![format_runtime_defaults_path(task_source.as_path())],
     }
 }
 
@@ -851,15 +877,16 @@ fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
 #[cfg(test)]
 mod desktop_settings_snapshot_tests {
     use super::{
-        build_local_path_roots, build_source_note_roots, read_task_sources_from_settings_snapshot,
-        read_trusted_source_note_sources, read_workspace_root_from_settings_snapshot,
-        resolve_workspace_root_from_snapshot, source_note_sources_drift,
-        DesktopSettingsSnapshotState, NamedPipeBridgeState,
+        build_local_path_roots, build_source_note_roots, format_runtime_defaults_path,
+        read_task_sources_from_settings_snapshot, read_trusted_source_note_sources,
+        read_workspace_root_from_settings_snapshot, resolve_workspace_root_from_snapshot,
+        source_note_sources_drift, DesktopSettingsSnapshotState, NamedPipeBridgeState,
     };
     use crate::runtime_paths::DesktopRuntimePaths;
     use serde_json::json;
     use std::env;
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[test]
@@ -876,6 +903,18 @@ mod desktop_settings_snapshot_tests {
         assert_eq!(
             read_workspace_root_from_settings_snapshot(&snapshot),
             Some(workspace_root)
+        );
+    }
+
+    #[test]
+    fn format_runtime_defaults_path_strips_windows_extended_prefixes() {
+        assert_eq!(
+            format_runtime_defaults_path(PathBuf::from(r"\\?\C:\Users\Administrator\AppData\Local\CialloClaw\data").as_path()),
+            "C:/Users/Administrator/AppData/Local/CialloClaw/data"
+        );
+        assert_eq!(
+            format_runtime_defaults_path(PathBuf::from(r"\\?\UNC\fileserver\share\CialloClaw\data").as_path()),
+            "//fileserver/share/CialloClaw/data"
         );
     }
 
@@ -2298,6 +2337,7 @@ fn main() {
             desktop_promote_onboarding,
             desktop_open_local_path,
             desktop_reveal_local_path,
+            desktop_open_runtime_data_path,
             desktop_sync_settings_snapshot,
             desktop_get_runtime_defaults,
             desktop_load_source_notes,
