@@ -619,6 +619,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.page`               | 当前页面上下文                 |
 | `context.page.title`         | 当前页面标题                   |
 | `context.page.url`           | 当前页面 URL                   |
+| `context.page.browser_kind`  | 当前浏览器分类，取值为 `chrome / edge / other_browser / non_browser` |
+| `context.page.process_path`  | 当前宿主进程路径               |
+| `context.page.process_id`    | 当前宿主进程 ID                |
 | `context.page.app_name`      | 当前宿主应用名                 |
 | `context.page.window_title`  | 当前窗口标题                   |
 | `context.page.visible_text`  | 当前页面可见文本摘录           |
@@ -634,6 +637,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 补充约束：
 
+- 为保持既有协议字面量兼容性，非 Chrome / Edge 的浏览器宿主继续使用 `other_browser`；当前它仅表示“浏览器宿主存在，但不在 Chromium takeover v1 的正式支持范围内”。
+- 正式 `context.page.url` / `input.page_context.url` 进入任务或 RPC 载荷前应统一去除凭据、query 与 hash，避免把易变或敏感 URL 片段冻结进正式上下文。
+- `floating_ball` 来源的普通文本/语音提交（`hover_text_input`、`voice_commit`）应尽力补齐当前前台窗口的 `context.page` 附着提示；`dashboard / tray_panel` 的普通文本输入则仍按显式视觉上下文请求决定是否补齐前台页面信息。
 - 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
@@ -766,6 +772,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
 | `input.page_context.title` | 当前页面标题，可用于页面级任务标题与上下文冻结 |
 | `input.page_context.url`   | 当前页面 URL |
+| `input.page_context.browser_kind` | 当前浏览器分类，取值为 `chrome / edge / other_browser / non_browser` |
+| `input.page_context.process_path` | 当前宿主进程路径 |
+| `input.page_context.process_id` | 当前宿主进程 ID |
 | `input.page_context.app_name` | 当前宿主应用名 |
 | `input.page_context.window_title` | 当前窗口标题 |
 | `input.page_context.visible_text` | 当前页面可见文本摘录 |

@@ -12,15 +12,18 @@ import {
   recordMirrorConversationSuccess,
 } from "./mirrorMemoryService";
 import {
+  compactPageContext,
+  mapDesktopWindowSnapshotToPageContext,
+  sanitizePageContextUrl,
+  type DesktopWindowPageContextSnapshot,
+} from "./pageContext";
+import {
   getCurrentConversationSessionId,
   rememberConversationPageContextFromTask,
   rememberConversationSessionFromTask,
 } from "./conversationSessionService";
 
-type DesktopWindowContextSnapshot = {
-  app_name: string;
-  title: string | null;
-  url: string | null;
+type DesktopWindowContextSnapshot = DesktopWindowPageContextSnapshot & {
   window_switch_count?: number | null;
   page_switch_count?: number | null;
 };
@@ -90,7 +93,9 @@ function mergeContextRecord<T extends object>(primary: T | undefined, fallback: 
 }
 
 function createBaseInputContext(input: SubmitTextInputParams): InputContext {
-  const mergedPageContext = mergeContextRecord<PageContext>(input.pageContext, input.context?.page);
+  const mergedPageContext = compactPageContext(
+    mergeContextRecord<PageContext>(input.pageContext, input.context?.page),
+  );
 
   return {
     ...(input.context ?? {}),
@@ -100,18 +105,7 @@ function createBaseInputContext(input: SubmitTextInputParams): InputContext {
 }
 
 function mapDesktopWindowPageContext(snapshot: DesktopWindowContextSnapshot | null): PageContext | undefined {
-  if (!snapshot) {
-    return undefined;
-  }
-
-  const sanitizedUrl = sanitizeDesktopContextUrl(snapshot.url);
-
-  return compactContextRecord<PageContext>({
-    app_name: snapshot.app_name,
-    title: snapshot.title ?? undefined,
-    url: sanitizedUrl,
-    window_title: snapshot.title ?? undefined,
-  });
+  return mapDesktopWindowSnapshotToPageContext(snapshot);
 }
 
 function mapDesktopWindowScreenContext(snapshot: DesktopWindowContextSnapshot | null): ScreenContext | undefined {
@@ -171,7 +165,7 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
 
   const appName = snapshot.app_name.trim();
   const title = snapshot.title?.trim() ?? "";
-  const url = sanitizeDesktopContextUrl(snapshot.url) ?? "";
+  const url = sanitizePageContextUrl(snapshot.url) ?? "";
 
   if (title !== "" && url !== "") {
     return `Foreground ${appName || "desktop"} page "${title}" is active at ${url}.`;
@@ -192,27 +186,13 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
   return undefined;
 }
 
-function sanitizeDesktopContextUrl(rawUrl: string | null | undefined): string | undefined {
-  const normalizedUrl = rawUrl?.trim() ?? "";
-
-  if (normalizedUrl === "") {
-    return undefined;
-  }
-
-  try {
-    const parsedUrl = new URL(normalizedUrl);
-    parsedUrl.username = "";
-    parsedUrl.password = "";
-    parsedUrl.search = "";
-    parsedUrl.hash = "";
-    return parsedUrl.toString();
-  } catch {
-    return normalizedUrl.split(/[?#]/u, 1)[0]?.trim() || undefined;
-  }
-}
-
 function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
   return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
+}
+
+function shouldAttachForegroundPageContext(params: AgentInputSubmitParams): boolean {
+  return params.source === "floating_ball"
+    && (params.trigger === "hover_text_input" || params.trigger === "voice_commit");
 }
 
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
@@ -267,16 +247,23 @@ export type SubmitTextInputResult = AgentInputSubmitResult;
 
 async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
   const enrichVisualContext = shouldEnrichVisualContext(params);
+  const attachForegroundPageContext = shouldAttachForegroundPageContext(params);
+  const shouldReadForegroundWindowContext = enrichVisualContext || attachForegroundPageContext;
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
-    // Fetch the foreground window snapshot only for explicit visual requests.
-    // Ordinary text submits should not pay the host-side URL lookup cost.
-    enrichVisualContext ? readDesktopWindowContext() : Promise.resolve(null),
+    // Explicit visual requests still need both page and screen fallbacks, while
+    // shell-ball near-field text/voice submits should also inherit the current
+    // foreground page attach hints for real-browser takeover planning.
+    shouldReadForegroundWindowContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
   ]);
-  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
+  const fallbackPageContext = shouldReadForegroundWindowContext
+    ? mapDesktopWindowPageContext(windowContext)
+    : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
   const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
-  const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
+  const mergedPageContext = compactPageContext(
+    mergeContextRecord<PageContext>(params.context.page, fallbackPageContext),
+  );
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
 
