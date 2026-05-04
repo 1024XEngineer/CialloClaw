@@ -144,11 +144,21 @@ func (s *Service) resolveTaskContinuationContext(explicitSessionID string) taskC
 // user inside a blocked state.
 func canContinueTask(task runengine.TaskRecord) bool {
 	switch task.Status {
-	case "confirming_intent", "processing", "waiting_input":
+	case "confirming_intent", "waiting_input":
 		return true
+	case "processing":
+		return taskCanConsumeActiveSteering(task)
 	default:
 		return false
 	}
+}
+
+func taskCanConsumeActiveSteering(task runengine.TaskRecord) bool {
+	// CurrentStep carries the execution mode that was actually started. The
+	// intent can remain agent_loop even when runtime capabilities force prompt
+	// fallback, and prompt fallback cannot poll active steering.
+	return strings.TrimSpace(stringValue(task.Intent, "name", "")) == "agent_loop" &&
+		strings.TrimSpace(task.CurrentStep) == "agent_loop"
 }
 
 func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) taskContinuationDecision {
@@ -714,8 +724,14 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}
 
 	confirmRequired := pendingContinuationRequiresConfirm(task, continuationSnapshot, options)
-	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, confirmRequired)
+	suggestion := s.intent.Suggest(mergedSnapshot, pendingContinuationIntent(task, explicitIntent), confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, confirmRequired)
+	if confirmRequired {
+		// A pending confirmation gate belongs to the task lifecycle. Follow-up
+		// input may enrich the task snapshot, but it must not unlock intent
+		// shortcuts that normally skip confirmation for fresh starts.
+		suggestion.RequiresConfirm = true
+	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      continuationSnapshot,
@@ -769,13 +785,26 @@ func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot cont
 	if options.ForceConfirmRequired {
 		return true
 	}
+	if task.Status == "confirming_intent" {
+		return true
+	}
 	if !isStructuredSupplementInput(snapshot) {
 		return false
 	}
 	// Structured evidence may resume a waiting task only after intent ownership
 	// is already known; otherwise attaching evidence is still separate from
 	// permission to execute a newly inferred task.
-	return task.Status == "confirming_intent" || !taskHasConfirmedIntent(task)
+	return !taskHasConfirmedIntent(task)
+}
+
+func pendingContinuationIntent(task runengine.TaskRecord, explicitIntent map[string]any) map[string]any {
+	if len(explicitIntent) > 0 {
+		return explicitIntent
+	}
+	if task.Status == "confirming_intent" && len(task.Intent) > 0 {
+		return cloneMap(task.Intent)
+	}
+	return nil
 }
 
 func taskHasConfirmedIntent(task runengine.TaskRecord) bool {
@@ -845,10 +874,7 @@ func buildTaskContinuationBubbleText(snapshot contextsvc.TaskContextSnapshot, de
 	if strings.TrimSpace(subject) == "" {
 		subject = "已把补充内容挂回当前任务。"
 	}
-	if strings.TrimSpace(decision.Reason) == "" {
-		return subject
-	}
-	return subject + " " + truncateText(decision.Reason, 80)
+	return subject
 }
 
 func continuationSubject(snapshot contextsvc.TaskContextSnapshot) string {

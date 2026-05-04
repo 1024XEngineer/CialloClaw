@@ -4195,7 +4195,7 @@ test("shell-ball runtime observation helper keeps runtime hints lightweight", ()
       task_id: "task-runtime-observation",
       message: "Added another instruction.",
     }),
-    "Added another instruction.",
+    null,
   );
   assert.equal(
     createShellBallRuntimeObservationReply({
@@ -5318,7 +5318,7 @@ test("shell-ball replays approval.pending notifications that arrive before submi
       const { handlePrimaryAction } = useShellBallCoordinator({
         visualState: "hover_input",
         regionActive: false,
-        inputValue: "截屏",
+        inputValue: "继续处理当前任务",
         inputFocused: true,
         finalizedSpeechPayload: null,
         voicePreview: null,
@@ -7408,6 +7408,42 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
+test("shell-ball routes active resumable text follow-ups through task steer", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /import \{ getTaskDetail, respondSecurityDetailed, steerTask \} from "@\/rpc\/methods";/);
+  assert.match(coordinatorSource, /const activeShellBallTaskIntentNameRef = useRef<string \| null>\(null\);/);
+  assert.match(coordinatorSource, /const activeShellBallTaskStatusRef = useRef<TaskUpdatedNotification\["status"\] \| null>\(null\);/);
+  assert.match(coordinatorSource, /function isShellBallActiveTaskSteerable\(/);
+  assert.match(coordinatorSource, /shouldRouteShellBallSubmitToActiveSteering\(\{/);
+  assert.match(coordinatorSource, /input\.activeTaskStatus === "processing"[\s\S]*input\.activeTaskIntentName === "agent_loop"/);
+  assert.match(coordinatorSource, /input\.activeTaskStatus === "waiting_auth"/);
+  assert.match(coordinatorSource, /input\.activeTaskStatus === "blocked"/);
+  assert.match(coordinatorSource, /input\.files\.length === 0/);
+  assert.match(coordinatorSource, /activeTaskIntentName: activeShellBallTaskIntentNameRef\.current/);
+  assert.match(coordinatorSource, /activeTaskStatus: activeShellBallTaskStatusRef\.current/);
+  assert.match(coordinatorSource, /const result = await steerTask\(\{/);
+  assert.match(coordinatorSource, /request_meta: createShellBallRequestMeta\(\)/);
+  assert.match(coordinatorSource, /task_id: activeShellBallTaskId/);
+  assert.match(coordinatorSource, /message: submittedText/);
+});
+
+test("shell-ball falls back to regular submit when active steer status races", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /import \{ JsonRpcClientError \} from "@\/rpc\/client";/);
+  assert.match(coordinatorSource, /ERROR_CODES/);
+  assert.match(coordinatorSource, /function isTaskStatusInvalidRpcError\(error: unknown\)/);
+  assert.match(coordinatorSource, /error instanceof JsonRpcClientError && error\.code === ERROR_CODES\.TASK_STATUS_INVALID/);
+  assert.match(coordinatorSource, /if \(isTaskStatusInvalidRpcError\(error\)\) \{/);
+  assert.match(coordinatorSource, /const fallbackResult = await submitTextInput\(\{/);
+  assert.match(coordinatorSource, /text: submittedText/);
+  assert.match(coordinatorSource, /trigger: "hover_text_input"/);
+  assert.match(coordinatorSource, /preferred_delivery: "bubble"/);
+  assert.match(coordinatorSource, /task_id: fallbackResult\.task\.task_id/);
+  assert.match(coordinatorSource, /autoOpenShellBallDeliveryResult\(fallbackResult\.task\.task_id, fallbackResult\.delivery_result\)/);
+});
+
 test("shell-ball screenshot command routes through the formal screen task path", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
@@ -7446,6 +7482,8 @@ test("shell-ball coordinator subscribes to formal task, approval, and runtime up
   assert.match(coordinatorSource, /syncShellBallVisualStateFromTaskStatus\(payload\.status\)/);
   assert.match(coordinatorSource, /appendApprovalPendingBubble\(\{/);
   assert.match(coordinatorSource, /approvalRequest: payload\.approval_request,/);
+  assert.match(coordinatorSource, /activeShellBallTaskStatusRef\.current = "waiting_auth";\s*syncShellBallVisualStateFromTaskStatus\("waiting_auth"\);/);
+  assert.match(coordinatorSource, /approvalRequest: payload\.approval_request/);
 });
 
 test("desktop tauri setup enables mouse activity tracking for dwell context", () => {

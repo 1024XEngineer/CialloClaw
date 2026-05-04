@@ -1591,6 +1591,9 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !taskCanAcceptExplicitSteering(task) {
+		return nil, ErrTaskStatusInvalid
+	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已记录新的补充要求，后续执行会纳入该指令。", time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.AppendSteeringMessage(task.TaskID, message, bubble)
 	if !changed {
@@ -1600,6 +1603,24 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 		"task":           taskMap(updatedTask),
 		"bubble_message": bubble,
 	}, nil
+}
+
+func taskCanAcceptExplicitSteering(task runengine.TaskRecord) bool {
+	switch task.Status {
+	case "processing":
+		// Active processing tasks can only consume steering when the running
+		// agent loop polls between rounds. Other processing paths must finish or
+		// queue a separate task instead of pretending the guidance was consumed.
+		return taskCanConsumeActiveSteering(task)
+	case "waiting_auth", "blocked":
+		// Deferred execution paths can carry explicit steering until approval or
+		// queue release resumes the task. Pending-input states are intentionally
+		// rejected so callers re-enter agent.input.submit and merge the text into
+		// the formal continuation snapshot instead of hiding it in runtime notes.
+		return true
+	default:
+		return false
+	}
 }
 
 // TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready
@@ -3186,7 +3207,7 @@ func (s *Service) drainSessionQueue(sessionID string) error {
 			"前序任务已完成，当前会话中的下一个任务开始执行。",
 			nextTask.UpdatedAt.Format(dateTimeLayout),
 		)
-		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, executionStepName(nextTask.Intent), bubble)
+		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, s.activeExecutionStepName(nextTask.Intent), bubble)
 		if !changed {
 			return ErrTaskNotFound
 		}
@@ -7308,7 +7329,7 @@ func truncateText(value string, maxLength int) string {
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
 // payloads.
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, executionStepName(taskIntent), "开始生成正式结果")
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
@@ -7981,6 +8002,17 @@ func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
 
 func executionStepName(taskIntent map[string]any) string {
 	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
+	}
+	return "generate_output"
+}
+
+// activeExecutionStepName records the execution step that can actually consume
+// live follow-up steering. Agent-loop intent may still fall back to prompt
+// generation, so processing tasks must not advertise a pollable loop unless the
+// executor confirms that runtime mode.
+func (s *Service) activeExecutionStepName(taskIntent map[string]any) string {
+	if s != nil && s.executor != nil && s.executor.CanConsumeActiveSteering(taskIntent) {
 		return "agent_loop"
 	}
 	return "generate_output"

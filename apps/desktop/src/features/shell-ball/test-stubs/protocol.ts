@@ -41,6 +41,9 @@ export const REQUEST_TRIGGERS = [
   "error_detected",
   "recommendation_click",
 ] as const;
+export const ERROR_CODES = {
+  TASK_STATUS_INVALID: 1001004,
+} as const;
 export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 export const INPUT_MODES = ["voice", "text"] as const;
 export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal", "screen_capture"] as const;

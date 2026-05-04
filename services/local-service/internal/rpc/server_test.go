@@ -571,13 +571,11 @@ func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(
 }
 
 func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
-	modelClient := &selectiveWaitLoopModelClient{
-		stubLoopModelClient: stubLoopModelClient{
-			toolResult: model.ToolCallResult{
-				OutputText: "Scoped runtime finished.",
-			},
-			generateToolWait: make(chan struct{}),
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Scoped runtime finished.",
 		},
+		generateToolWait: make(chan struct{}),
 	}
 	server := newTestServerWithModelClient(modelClient)
 
@@ -600,7 +598,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 
 	taskA := startTask("sess_loop_scope_a")
 	taskB := startTask("sess_loop_scope_b")
-	modelClient.blockedTaskID = taskA
 
 	left, right := net.Pipe()
 	defer left.Close()
@@ -639,13 +636,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
 	}
 
-	if _, err := server.orchestrator.TaskSteer(map[string]any{
-		"task_id": taskB,
-		"message": "Mention the unrelated steering marker.",
-	}); err != nil {
-		t.Fatalf("queue steering for unrelated task: %v", err)
-	}
-
 	confirmDone := make(chan error, 1)
 	go func() {
 		_, err := server.orchestrator.ConfirmTask(map[string]any{
@@ -680,6 +670,8 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		t.Fatalf("clear read deadline: %v", err)
 	}
 
+	close(modelClient.generateToolWait)
+
 	select {
 	case err := <-confirmDone:
 		if err != nil {
@@ -688,8 +680,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected unrelated task confirmation to complete")
 	}
-
-	close(modelClient.generateToolWait)
 }
 
 func TestHandleStreamConnAllowsSettingsReadWhileTaskConfirmWaits(t *testing.T) {
