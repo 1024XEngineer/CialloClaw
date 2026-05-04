@@ -473,10 +473,9 @@ func (s *Service) Backend() string {
 
 // DatabasePath returns the backing database path.
 func (s *Service) DatabasePath() string {
-	if s.adapter == nil {
+	if s == nil || s.adapter == nil {
 		return ""
 	}
-
 	return strings.TrimSpace(s.adapter.DatabasePath())
 }
 
@@ -594,6 +593,14 @@ func (s *Service) TodoStore() TodoStore {
 // SettingsStore returns the configured ordinary settings persistence store.
 func (s *Service) SettingsStore() SettingsStore {
 	return s.settingsStore
+}
+
+// SecretStorePath returns the current Stronghold-compatible secret store path.
+func (s *Service) SecretStorePath() string {
+	if s == nil || s.adapter == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.adapter.SecretStorePath())
 }
 
 // SecretStore returns the configured secret store.

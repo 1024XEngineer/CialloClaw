@@ -3053,6 +3053,87 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 }
 ```
 
+
+### 8.4.4 `agent.settings.runtime_paths.get`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：控制面板需要展示本地运行根目录、数据库、密钥库与工作区路径时
+- **系统处理**：返回当前正在生效的运行路径快照，不依赖前端拼接或推断
+- **入参**：无业务入参
+- **出参**：运行根目录、数据库路径、密钥库路径、工作区路径
+
+补充约束：
+
+- `workspace_path` 必须返回当前运行实例真实使用的工作区路径，而不是仅返回尚未重启生效的设置草稿。
+- `runtime_root / database_path / secret_store_path` 用于“查看与定位”，不等价于任何清理或重置动作授权。
+
+### agent.settings.runtime_paths.get 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_settings_runtime_paths_001",
+  "result": {
+    "data": {
+      "runtime_root": "D:/Users/demo/AppData/Local/CialloClaw",
+      "database_path": "D:/Users/demo/AppData/Local/CialloClaw/data/cialloclaw.db",
+      "secret_store_path": "D:/Users/demo/AppData/Local/CialloClaw/data/cialloclaw.stronghold.db",
+      "workspace_path": "D:/Users/demo/AppData/Local/CialloClaw/workspace"
+    },
+    "meta": {
+      "server_time": "2026-04-21T10:08:00Z"
+    },
+    "warnings": []
+  }
+}
+```
+
+### 8.4.5 `agent.log.execution.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：控制面板或排障视图需要查看全局执行日志时
+- **系统处理**：
+  - 聚合 `events / tool_calls / audit_records` 正式读模型
+  - 按时间倒序返回统一日志结构
+- **入参**：可选 `task_id`、可选 `source`、分页参数
+- **出参**：执行日志列表、分页信息
+
+补充约束：
+
+- `source` 当前支持 `event / tool_call / audit`。
+- 返回顺序固定为 `created_at DESC, log_id DESC`。
+- 本接口是查询面，不承接任何恢复、重放或再次执行动作。
+
+### agent.log.execution.list 出参关键字段
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `data.items[].log_id` | 统一日志 ID，例如 `event:...`、`tool_call:...`、`audit:...` |
+| `data.items[].task_id` | 关联任务 ID；无则为 `null` |
+| `data.items[].run_id` | 关联运行 ID；无则为 `null` |
+| `data.items[].source` | 日志来源 |
+| `data.items[].kind` | 事件类型、工具名或审计动作 |
+| `data.items[].level` | 归一化级别 |
+| `data.items[].summary` | 摘要 |
+| `data.items[].detail` | 原始细节或兼容摘要 |
+| `data.items[].status` | 来源对象状态；无则为 `null` |
+| `data.items[].error_code` | 归一化错误码；无则为 `null` |
+
+### 8.4.6 `agent.log.error.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：控制面板需要只查看失败、错误或异常信号时
+- **系统处理**：
+  - 复用 `agent.log.execution.list` 的统一读模型
+  - 仅保留失败工具调用、错误事件与失败审计记录
+- **入参**：与 `agent.log.execution.list` 相同
+- **出参**：错误日志列表、分页信息
+
+补充约束：
+
+- `agent.log.error.list` 是 `agent.log.execution.list` 的错误子集视图，不会返回正常成功日志。
+- 若调用方同时传入 `task_id` 与 `source`，后端先按来源过滤，再做错误子集裁剪。
+
 ---
 
 ### 8.3.5 `agent.security.summary.get`

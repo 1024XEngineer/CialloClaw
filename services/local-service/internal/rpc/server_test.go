@@ -1579,7 +1579,14 @@ func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(
 		{name: "security.respond", invoke: func() (any, *rpcError) {
 			return server.handleAgentSecurityRespond(map[string]any{"task_id": "missing", "decision": "approve"})
 		}},
+		{name: "settings.runtime_paths.get", invoke: func() (any, *rpcError) { return server.handleAgentSettingsRuntimePathsGet(map[string]any{}) }},
 		{name: "settings.model.validate", invoke: func() (any, *rpcError) { return server.handleAgentSettingsModelValidate(map[string]any{}) }},
+		{name: "log.execution.list", invoke: func() (any, *rpcError) {
+			return server.handleAgentLogExecutionList(map[string]any{"limit": 20, "offset": 0})
+		}},
+		{name: "log.error.list", invoke: func() (any, *rpcError) {
+			return server.handleAgentLogErrorList(map[string]any{"limit": 20, "offset": 0})
+		}},
 	}
 	for _, call := range handlerCalls {
 		data, rpcErr := call.invoke()

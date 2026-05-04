@@ -79,7 +79,10 @@ export const RPC_METHODS_STABLE = {
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
+  AGENT_SETTINGS_RUNTIME_PATHS_GET: "agent.settings.runtime_paths.get",
   AGENT_SETTINGS_MODEL_VALIDATE: "agent.settings.model.validate",
+  AGENT_LOG_EXECUTION_LIST: "agent.log.execution.list",
+  AGENT_LOG_ERROR_LIST: "agent.log.error.list",
   AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
   AGENT_PLUGIN_LIST: "agent.plugin.list",
   AGENT_PLUGIN_DETAIL_GET: "agent.plugin.detail.get",
@@ -878,6 +881,66 @@ export interface AgentSettingsModelValidateResult {
   model: string;
   text_generation_ready: boolean;
   tool_calling_ready: boolean;
+}
+
+// AgentSettingsRuntimePathsGetParams defines the runtime-path lookup payload for
+// control-panel style diagnostics.
+export interface AgentSettingsRuntimePathsGetParams {
+  request_meta: RequestMeta;
+}
+
+// AgentSettingsRuntimePathsGetResult defines the resolved runtime path snapshot.
+export interface AgentSettingsRuntimePathsGetResult {
+  runtime_root: string;
+  database_path: string;
+  secret_store_path: string;
+  workspace_path: string;
+}
+
+// ExecutionLogRecord defines one normalized runtime log line aggregated from
+// events, tool calls, and audit records.
+export interface ExecutionLogRecord {
+  log_id: string;
+  task_id: string | null;
+  run_id: string | null;
+  source: "event" | "tool_call" | "audit";
+  kind: string;
+  level: string;
+  summary: string;
+  detail: string;
+  status: string | null;
+  error_code: string | null;
+  created_at: string;
+}
+
+// AgentLogExecutionListParams defines the execution-log query filters.
+export interface AgentLogExecutionListParams {
+  request_meta: RequestMeta;
+  task_id?: string;
+  source?: ExecutionLogRecord["source"];
+  limit: number;
+  offset: number;
+}
+
+// AgentLogExecutionListResult defines the normalized execution-log list result.
+export interface AgentLogExecutionListResult {
+  items: ExecutionLogRecord[];
+  page: JsonRpcPage;
+}
+
+// AgentLogErrorListParams defines the error-log query filters.
+export interface AgentLogErrorListParams {
+  request_meta: RequestMeta;
+  task_id?: string;
+  source?: ExecutionLogRecord["source"];
+  limit: number;
+  offset: number;
+}
+
+// AgentLogErrorListResult defines the normalized error-log list result.
+export interface AgentLogErrorListResult {
+  items: ExecutionLogRecord[];
+  page: JsonRpcPage;
 }
 
 // AgentPluginRuntimeListParams defines the stable plugin runtime query params.
