@@ -7085,7 +7085,7 @@ func TestServiceStartTaskHitsRealMemoryAndRecordsRetrievalHit(t *testing.T) {
 	}
 }
 
-func TestServiceStartTaskDoesNotInjectRetrievedMemoryIntoExecutionInput(t *testing.T) {
+func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) {
 	var capturedInput string
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -7136,11 +7136,11 @@ func TestServiceStartTaskDoesNotInjectRetrievedMemoryIntoExecutionInput(t *testi
 		t.Fatalf("start task failed: %v", err)
 	}
 
-	if strings.Contains(capturedInput, "历史记忆") {
-		t.Fatalf("expected execution input to exclude retrieved memory section, got %q", capturedInput)
+	if !strings.Contains(capturedInput, "历史记忆") {
+		t.Fatalf("expected execution input to include retrieved memory section, got %q", capturedInput)
 	}
-	if strings.Contains(capturedInput, "project alpha prefers markdown bullets and concise structure") {
-		t.Fatalf("expected execution input to exclude retrieved summary text, got %q", capturedInput)
+	if !strings.Contains(capturedInput, "project alpha prefers markdown bullets and concise structure") {
+		t.Fatalf("expected execution input to include retrieved summary text, got %q", capturedInput)
 	}
 }
 

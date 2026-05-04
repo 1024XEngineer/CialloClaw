@@ -7372,6 +7372,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
+		MemoryReadPlans:      cloneMapSlice(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,

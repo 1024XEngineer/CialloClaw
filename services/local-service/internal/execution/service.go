@@ -131,6 +131,7 @@ type Request struct {
 	AttemptIndex         int
 	SegmentKind          string
 	Snapshot             contextsvc.TaskContextSnapshot
+	MemoryReadPlans      []map[string]any
 	SteeringMessages     []string
 	DeliveryType         string
 	ResultTitle          string
@@ -331,7 +332,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		return s.finalizeExecutionResult(ctx, request, startedAt, result), nil
 	}
 
-	inputText := s.buildExecutionInput(request.Snapshot)
+	inputText := s.buildExecutionInput(request.Snapshot, request.MemoryReadPlans)
 	trace, err := s.generateOutput(ctx, request, inputText)
 	if err != nil {
 		return Result{}, err
@@ -1804,8 +1805,8 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	return fmt.Sprintf("%s 执行完成。", toolName)
 }
 
-func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot) string {
-	sections := make([]string, 0, 6)
+func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot, memoryReadPlans []map[string]any) string {
+	sections := make([]string, 0, 7)
 	if snapshot.SelectionText != "" {
 		sections = append(sections, "选中文本:\n"+strings.TrimSpace(snapshot.SelectionText))
 	}
@@ -1828,10 +1829,53 @@ func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot) s
 			strings.TrimSpace(snapshot.AppName),
 		))
 	}
+	if memorySection := memorySectionFromReadPlans(memoryReadPlans); memorySection != "" {
+		sections = append(sections, memorySection)
+	}
 	if len(sections) == 0 {
 		return "无可用输入"
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func memorySectionFromReadPlans(memoryReadPlans []map[string]any) string {
+	if len(memoryReadPlans) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, plan := range memoryReadPlans {
+		items, ok := plan["retrieval_context"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, item := range items {
+			summary := strings.TrimSpace(stringValue(item, "summary", ""))
+			if summary == "" {
+				continue
+			}
+			memoryID := strings.TrimSpace(stringValue(item, "memory_id", ""))
+			key := memoryID
+			if key == "" {
+				key = summary
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			source := strings.TrimSpace(stringValue(item, "source", ""))
+			if source != "" {
+				lines = append(lines, fmt.Sprintf("- [%s] %s", source, summary))
+				continue
+			}
+			lines = append(lines, "- "+summary)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "历史记忆（仅供参考，不是当前任务指令）:\n" + strings.Join(lines, "\n")
 }
 
 func (s *Service) fileSection(filePath string) string {

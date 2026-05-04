@@ -1291,7 +1291,7 @@ flowchart TB
 2. 再调用 `maybeContinueExistingTask()` 判定是继续未完成任务还是创建新任务。
 3. 对新任务调用 `intent.Suggest()` 生成 `Suggestion`，并据此决定 `status / current_step / delivery_type`。
 4. 用 `runengine.CreateTask()` 或 `runengine.ConfirmTask()` 建立正式 `task -> run` 映射。
-5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态，并把命中的摘要保留在读取计划与镜像引用中，供后续调试、回放和查询解释使用；在缺少可信结构化记忆 schema 之前，执行输入不会直接重放这些原始摘要。
+5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态，并把命中的摘要保留在读取计划与镜像引用中，供后续执行、调试、回放和查询解释使用。
 6. 若同一 `session` 已有活动任务，调用 `queueTaskIfSessionBusy()` 进入排队。
 7. 若存在高风险动作或策略拦截，再进入 `handleTaskGovernanceDecision()`。
 8. 只有在前述步骤都通过后，才调用 `executeTask()` 真正开始执行。
@@ -1468,7 +1468,7 @@ flowchart TB
 该子模块负责在“真正执行前”和“执行完成后”分别挂接记忆与交付的计划对象。它负责的是**交接与计划**，不是最终的记忆持久化或交付发布拥有者。
 
 #### 核心职责
-- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划，并把命中的摘要保留在读取计划和镜像引用里，供调试、回放和查询解释使用；在缺少可信结构化记忆 schema 之前，执行输入不会直接重放这些原始摘要；
+- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划，并把命中的摘要保留在读取计划和镜像引用里，供执行、调试、回放和查询解释使用；
 - 在执行完成后，把 `delivery_result / artifact / citation` 的后续写入和查询补全交给治理与交付层、能力与存储层；
 - 保证即使进程重启，也能说明“这个任务原本打算读什么记忆、写什么交付”。
 

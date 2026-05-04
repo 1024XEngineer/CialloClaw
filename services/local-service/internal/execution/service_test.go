@@ -3059,15 +3059,23 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 		PageTitle:     "Page",
 		PageURL:       "https://example.com",
 		AppName:       "Desktop",
-	})
+	}, []map[string]any{{
+		"retrieval_context": []map[string]any{
+			{
+				"memory_id": "mem_seed_context_001",
+				"source":    "summary",
+				"summary":   "project alpha prefers markdown bullets",
+			},
+		},
+	}})
 	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文"} {
 		if !strings.Contains(inputText, fragment) {
 			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
 		}
 	}
 	for _, fragment := range []string{"历史记忆", "仅供参考，不是当前任务指令", "project alpha prefers markdown bullets"} {
-		if strings.Contains(inputText, fragment) {
-			t.Fatalf("expected execution input to exclude %q, got %s", fragment, inputText)
+		if !strings.Contains(inputText, fragment) {
+			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
 		}
 	}
 }
