@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -33,9 +33,13 @@ use once_cell::sync::Lazy;
 use std::collections::HashSet;
 
 #[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
+#[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{PtInRect, ScreenToClient},
+    Storage::FileSystem::{GetFileType, FILE_TYPE_PIPE},
     System::{
         DataExchange::{
             CloseClipboard, GetClipboardData, GetClipboardSequenceNumber,
@@ -43,6 +47,7 @@ use windows::Win32::{
         },
         Memory::{GlobalLock, GlobalUnlock},
         Ole::CF_UNICODETEXT,
+        Pipes::PeekNamedPipe,
     },
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_DELETE, VK_SHIFT},
     UI::WindowsAndMessaging::*,
@@ -76,6 +81,7 @@ const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const LOCAL_SERVICE_REQUEST_TIMEOUT: Duration = Duration::from_secs(100);
 const LOCAL_SERVICE_PIPE_BUSY_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
 const LOCAL_SERVICE_PIPE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(40);
+const LOCAL_SERVICE_ISOLATED_POLL_DELAY: Duration = Duration::from_millis(20);
 const LOCAL_SERVICE_LOG_MAX_BYTES: u64 = 256 * 1024;
 static LOCAL_SERVICE_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static DESKTOP_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
@@ -279,7 +285,10 @@ impl NamedPipeBridgeState {
     /// delay unrelated settings fetches behind the same pipe connection.
     /// Notifications observed on the isolated request are still forwarded into
     /// the shared desktop subscription fan-out so dashboard and security surfaces
-    /// stay in sync when a shell-ball submit uses the isolated path.
+    /// stay in sync when a shell-ball submit uses the isolated path. The host
+    /// polls the isolated pipe handle directly so timeout exits do not strand a
+    /// detached blocking thread or a still-open pipe handle in the desktop
+    /// process.
     fn request_via_isolated_connection(
         self: &Arc<Self>,
         payload: Value,
@@ -287,30 +296,7 @@ impl NamedPipeBridgeState {
     ) -> Result<Value, String> {
         let pipe_name = self.pipe_name()?;
         let request_id = extract_request_id(&payload)?;
-        let (response_tx, response_rx) = mpsc::channel();
-
-        let state = Arc::clone(self);
-        std::thread::spawn(move || {
-            let result = send_isolated_named_pipe_request(&state, &pipe_name, &request_id, payload);
-            let _ = response_tx.send(result);
-        });
-
-        match timeout {
-            Some(timeout) => response_rx
-                .recv_timeout(timeout)
-                .map_err(|error| match error {
-                    mpsc::RecvTimeoutError::Timeout => format!(
-                        "isolated named pipe response wait timed out after {}ms",
-                        timeout.as_millis()
-                    ),
-                    mpsc::RecvTimeoutError::Disconnected => {
-                        "isolated named pipe response wait failed: channel disconnected".to_string()
-                    }
-                })?,
-            None => response_rx
-                .recv()
-                .map_err(|error| format!("isolated named pipe response wait failed: {error}"))?,
-        }
+        send_isolated_named_pipe_request(self, &pipe_name, &request_id, payload, timeout)
     }
 
     fn subscribe(self: &Arc<Self>, topic: String, channel: JsonChannel) -> Result<u32, String> {
@@ -573,12 +559,16 @@ fn append_local_service_log(app: &tauri::AppHandle, message: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
-    let sanitized_message = if message.len() > 1_024 {
-        format!("{}…", &message[..1_024])
-    } else {
-        message.to_string()
-    };
+    let sanitized_message = truncate_log_message(message, 1_024);
     let _ = writeln!(file, "[{timestamp}] {sanitized_message}");
+}
+
+fn truncate_log_message(message: &str, max_chars: usize) -> String {
+    let Some((truncated_at, _)) = message.char_indices().nth(max_chars) else {
+        return message.to_string();
+    };
+
+    format!("{}…", &message[..truncated_at])
 }
 
 /// start_local_service_sidecar boots the bundled Go service before the desktop
@@ -1508,7 +1498,8 @@ mod named_pipe_routing_tests {
     use super::{
         classify_isolated_named_pipe_message, configure_sidecar_named_pipe,
         requires_shared_named_pipe_request, should_use_isolated_named_pipe_payload,
-        IsolatedNamedPipeMessage, NamedPipeBridgeState, DEFAULT_NAMED_PIPE_PATH,
+        truncate_log_message, IsolatedNamedPipeMessage, NamedPipeBridgeState,
+        DEFAULT_NAMED_PIPE_PATH,
     };
     use serde_json::json;
 
@@ -1633,6 +1624,18 @@ mod named_pipe_routing_tests {
             }
             _ => panic!("expected isolated notification to be forwarded"),
         }
+    }
+
+    #[test]
+    fn truncate_log_message_keeps_multibyte_boundaries_intact() {
+        let truncated = truncate_log_message("路径/诊断/emoji🙂tail", 9);
+
+        assert_eq!(truncated, "路径/诊断/emoji…");
+    }
+
+    #[test]
+    fn truncate_log_message_keeps_short_messages_unchanged() {
+        assert_eq!(truncate_log_message("ready", 32), "ready");
     }
 }
 
@@ -1765,6 +1768,7 @@ fn send_isolated_named_pipe_request(
     pipe_name: &str,
     request_id: &str,
     payload: Value,
+    timeout: Option<Duration>,
 ) -> Result<Value, String> {
     let stream = open_named_pipe_with_retry(pipe_name, "isolated")?;
     let reader = stream
@@ -1781,24 +1785,120 @@ fn send_isolated_named_pipe_request(
         .flush()
         .map_err(|error| format!("failed to flush isolated named pipe payload: {error}"))?;
 
-    let mut responses =
-        serde_json::Deserializer::from_reader(BufReader::new(reader)).into_iter::<Value>();
-    while let Some(result) = responses.next() {
-        let message = result
-            .map_err(|error| format!("failed to decode isolated named pipe response: {error}"))?;
+    read_isolated_named_pipe_response(state, reader, request_id, timeout)
+}
 
-        match classify_isolated_named_pipe_message(request_id, message) {
-            IsolatedNamedPipeMessage::ForwardedNotification { topic, message } => {
-                state.dispatch_notification(&topic, &message);
+fn read_isolated_named_pipe_response(
+    state: &Arc<NamedPipeBridgeState>,
+    mut reader: std::fs::File,
+    request_id: &str,
+    timeout: Option<Duration>,
+) -> Result<Value, String> {
+    // Isolated control-path requests are line-delimited JSON-RPC envelopes.
+    // Polling line reads here lets the desktop host honor caller timeouts
+    // without leaving a detached blocking pipe thread behind after a stall.
+    let started_at = Instant::now();
+    let mut buffered_bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+
+    loop {
+        #[cfg(windows)]
+        let available_bytes = wait_for_isolated_named_pipe_bytes(&reader, started_at, timeout)?;
+
+        #[cfg(not(windows))]
+        let available_bytes = chunk.len();
+
+        let bytes_to_read = available_bytes.max(1).min(chunk.len());
+        let bytes_read = reader
+            .read(&mut chunk[..bytes_to_read])
+            .map_err(|error| format!("failed to read isolated named pipe response: {error}"))?;
+
+        if bytes_read == 0 {
+            return Err("isolated named pipe response stream ended before the matching json-rpc envelope was returned".to_string());
+        }
+
+        buffered_bytes.extend_from_slice(&chunk[..bytes_read]);
+
+        while let Some(line_end_index) = buffered_bytes.iter().position(|byte| *byte == b'\n') {
+            let mut envelope = buffered_bytes
+                .drain(..=line_end_index)
+                .collect::<Vec<u8>>();
+
+            if matches!(envelope.last(), Some(b'\n')) {
+                envelope.pop();
             }
-            IsolatedNamedPipeMessage::MatchedResponse(message) => {
-                return Ok(message);
+            if matches!(envelope.last(), Some(b'\r')) {
+                envelope.pop();
             }
-            IsolatedNamedPipeMessage::Ignored => {}
+            if envelope.is_empty() {
+                continue;
+            }
+
+            let message = serde_json::from_slice::<Value>(&envelope)
+                .map_err(|error| format!("failed to decode isolated named pipe response: {error}"))?;
+
+            match classify_isolated_named_pipe_message(request_id, message) {
+                IsolatedNamedPipeMessage::ForwardedNotification { topic, message } => {
+                    state.dispatch_notification(&topic, &message);
+                }
+                IsolatedNamedPipeMessage::MatchedResponse(message) => {
+                    return Ok(message);
+                }
+                IsolatedNamedPipeMessage::Ignored => {}
+            }
         }
     }
+}
 
-    Err("isolated named pipe response stream ended before the matching json-rpc envelope was returned".to_string())
+#[cfg(windows)]
+fn wait_for_isolated_named_pipe_bytes(
+    reader: &std::fs::File,
+    started_at: Instant,
+    timeout: Option<Duration>,
+) -> Result<usize, String> {
+    loop {
+        if let Some(timeout) = timeout {
+            if started_at.elapsed() >= timeout {
+                return Err(format!(
+                    "isolated named pipe response wait timed out after {}ms",
+                    timeout.as_millis()
+                ));
+            }
+        }
+
+        let mut available_bytes = 0_u32;
+        let pipe_handle = HANDLE(reader.as_raw_handle() as *mut _);
+        let file_type = unsafe { GetFileType(pipe_handle) };
+        if file_type != FILE_TYPE_PIPE {
+            return Ok(1);
+        }
+
+        // The desktop host only reads when the pipe has buffered bytes ready.
+        // That keeps the request on the caller thread while still allowing a
+        // hard timeout exit instead of waiting forever inside ReadFile.
+        let peek_result = unsafe {
+            PeekNamedPipe(
+                pipe_handle,
+                None,
+                0,
+                None,
+                Some(&mut available_bytes),
+                None,
+            )
+        };
+
+        match peek_result {
+            Ok(()) if available_bytes > 0 => return Ok(available_bytes as usize),
+            Ok(()) => {
+                thread::sleep(LOCAL_SERVICE_ISOLATED_POLL_DELAY);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect isolated named pipe response availability: {error}"
+                ));
+            }
+        }
+    }
 }
 
 /// open_named_pipe_with_retry tolerates transient `ERROR_PIPE_BUSY` windows that
