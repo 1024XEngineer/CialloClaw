@@ -3051,8 +3051,11 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 		t.Fatalf("expected no-filesystem branch, got %s", section)
 	}
 	service, _ = newTestExecutionService(t, "unused")
-	inputText := service.buildExecutionInput(contextsvc.TaskContextSnapshot{SelectionText: "选中文本", Text: "输入文本", ErrorText: "错误信息", Files: []string{"notes/demo.txt"}, PageTitle: "Page", PageURL: "https://example.com", AppName: "Desktop"})
-	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文"} {
+	inputText := service.buildExecutionInput(
+		contextsvc.TaskContextSnapshot{SelectionText: "选中文本", Text: "输入文本", ErrorText: "错误信息", Files: []string{"notes/demo.txt"}, PageTitle: "Page", PageURL: "https://example.com", AppName: "Desktop"},
+		[]string{"[sqlite_fts5+sqlite_vec] project alpha prefers markdown bullets"},
+	)
+	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文", "历史记忆", "project alpha prefers markdown bullets"} {
 		if !strings.Contains(inputText, fragment) {
 			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
 		}

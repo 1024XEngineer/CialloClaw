@@ -7076,6 +7076,65 @@ func TestServiceStartTaskHitsRealMemoryAndRecordsRetrievalHit(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) {
+	var capturedInput string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			capturedInput = request.Input
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_memory_context",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "已结合历史记忆输出结果。",
+				Usage: model.TokenUsage{
+					InputTokens:  12,
+					OutputTokens: 18,
+					TotalTokens:  30,
+				},
+				LatencyMS: 21,
+			}, nil
+		},
+	})
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_context_001",
+		TaskID:          "task_seed_context_001",
+		RunID:           "run_seed_context_001",
+		Summary:         "project alpha prefers markdown bullets and concise structure",
+		CreatedAt:       time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_memory_context",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请按 project alpha markdown bullets 总结这段内容",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	if !strings.Contains(capturedInput, "历史记忆") {
+		t.Fatalf("expected execution input to include memory section, got %q", capturedInput)
+	}
+	if !strings.Contains(capturedInput, "project alpha prefers markdown bullets and concise structure") {
+		t.Fatalf("expected execution input to include retrieved summary, got %q", capturedInput)
+	}
+}
+
 func TestServiceMirrorOverviewFallsBackToStoredFinishedTasks(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "stored mirror overview")
 	if service.storage == nil {

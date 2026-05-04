@@ -5975,9 +5975,9 @@ func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any
 	return merged
 }
 
-func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, error) {
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
 	if s.memory == nil {
-		return nil, memory.ErrStoreNotConfigured
+		return nil, nil, memory.ErrStoreNotConfigured
 	}
 	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
 		TaskID: taskID,
@@ -5986,13 +5986,13 @@ func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot
 		Limit:  memory.DefaultSearchLimit,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	persistedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
 	if err := s.memory.WriteRetrievalHits(context.Background(), persistedHits); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return mirrorReferencesFromRetrievalHits(persistedHits), nil
+	return mirrorReferencesFromRetrievalHits(persistedHits), persistedHits, nil
 }
 
 func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
@@ -6179,24 +6179,118 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 // debug, or storage-backed views can explain what memory lookup the task was
 // supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
-	readPlans := []map[string]any{
-		{
-			"kind":           "retrieval",
-			"backend":        s.memory.RetrievalBackend(),
-			"task_id":        taskID,
-			"run_id":         runID,
-			"query":          memoryQueryFromSnapshot(snapshot),
-			"reason":         "任务开始前准备记忆召回",
-			"intent_name":    stringValue(taskIntent, "name", "summarize"),
-			"selection_text": snapshot.SelectionText,
-			"input_text":     snapshot.Text,
-			"source_type":    snapshot.Trigger,
-		},
+	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
+	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
+	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
+	if err == nil {
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
+	}
+	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
+	readPlan := map[string]any{
+		"kind":           "retrieval",
+		"task_id":        taskID,
+		"run_id":         runID,
+		"query":          memoryQueryFromSnapshot(snapshot),
+		"reason":         "任务开始前准备记忆召回",
+		"intent_name":    stringValue(taskIntent, "name", "summarize"),
+		"selection_text": snapshot.SelectionText,
+		"input_text":     snapshot.Text,
+		"source_type":    snapshot.Trigger,
+	}
+	if memoryService != nil {
+		readPlan["backend"] = memoryService.RetrievalBackend()
+	}
+	if contextItems := retrievalContextItems(hits); len(contextItems) > 0 {
+		readPlan["retrieval_context"] = contextItems
 	}
 
-	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
-	references, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
-	s.syncTaskReadMirrorReferences(taskID, references, err)
+	return []map[string]any{readPlan}
+}
+
+func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	items := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
+		summary := strings.TrimSpace(hit.Summary)
+		if summary == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"memory_id": hit.MemoryID,
+			"source":    hit.Source,
+			"summary":   summary,
+			"score":     hit.Score,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+func memoryContextFromReadPlans(readPlans []map[string]any) []string {
+	if len(readPlans) == 0 {
+		return nil
+	}
+
+	contextItems := make([]string, 0, len(readPlans))
+	seen := make(map[string]struct{})
+	for _, plan := range readPlans {
+		rawItems, ok := plan["retrieval_context"].([]map[string]any)
+		if !ok {
+			if genericItems, ok := plan["retrieval_context"].([]any); ok {
+				for _, item := range genericItems {
+					candidate, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					summary := strings.TrimSpace(stringValue(candidate, "summary", ""))
+					if summary == "" {
+						continue
+					}
+					if _, exists := seen[summary]; exists {
+						continue
+					}
+					seen[summary] = struct{}{}
+					contextItems = append(contextItems, formatRetrievedMemorySummary(candidate))
+				}
+			}
+			continue
+		}
+		for _, item := range rawItems {
+			summary := strings.TrimSpace(stringValue(item, "summary", ""))
+			if summary == "" {
+				continue
+			}
+			if _, exists := seen[summary]; exists {
+				continue
+			}
+			seen[summary] = struct{}{}
+			contextItems = append(contextItems, formatRetrievedMemorySummary(item))
+		}
+	}
+	if len(contextItems) == 0 {
+		return nil
+	}
+	return contextItems
+}
+
+func formatRetrievedMemorySummary(item map[string]any) string {
+	summary := strings.TrimSpace(stringValue(item, "summary", ""))
+	if summary == "" {
+		return ""
+	}
+	source := strings.TrimSpace(stringValue(item, "source", ""))
+	if source == "" {
+		return summary
+	}
+	return fmt.Sprintf("[%s] %s", source, summary)
 }
 
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
@@ -7338,6 +7432,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
+		MemoryContext:        memoryContextFromReadPlans(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,

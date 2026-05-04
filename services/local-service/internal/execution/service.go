@@ -131,6 +131,7 @@ type Request struct {
 	AttemptIndex         int
 	SegmentKind          string
 	Snapshot             contextsvc.TaskContextSnapshot
+	MemoryContext        []string
 	SteeringMessages     []string
 	DeliveryType         string
 	ResultTitle          string
@@ -331,7 +332,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		return s.finalizeExecutionResult(ctx, request, startedAt, result), nil
 	}
 
-	inputText := s.buildExecutionInput(request.Snapshot)
+	inputText := s.buildExecutionInput(request.Snapshot, request.MemoryContext)
 	trace, err := s.generateOutput(ctx, request, inputText)
 	if err != nil {
 		return Result{}, err
@@ -1804,8 +1805,8 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	return fmt.Sprintf("%s 执行完成。", toolName)
 }
 
-func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot) string {
-	sections := make([]string, 0, 6)
+func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot, memoryContext []string) string {
+	sections := make([]string, 0, 7)
 	if snapshot.SelectionText != "" {
 		sections = append(sections, "选中文本:\n"+strings.TrimSpace(snapshot.SelectionText))
 	}
@@ -1828,10 +1829,35 @@ func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot) s
 			strings.TrimSpace(snapshot.AppName),
 		))
 	}
+	if section := memoryContextSection(memoryContext); section != "" {
+		sections = append(sections, section)
+	}
 	if len(sections) == 0 {
 		return "无可用输入"
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func memoryContextSection(memoryContext []string) string {
+	if len(memoryContext) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(memoryContext))
+	for _, item := range memoryContext {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, "- "+trimmed)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+
+	// Retrieved summaries stay clearly scoped as historical hints so execution
+	// can reuse prior context without confusing them with the user's live input.
+	return "历史记忆:\n" + strings.Join(lines, "\n")
 }
 
 func (s *Service) fileSection(filePath string) string {
