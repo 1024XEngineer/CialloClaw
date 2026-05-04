@@ -3817,7 +3817,13 @@ func taskUsesAttemptScopedFormalReads(task runengine.TaskRecord) bool {
 	}
 	primaryRunID := strings.TrimSpace(task.PrimaryRunID)
 	if primaryRunID != "" {
-		return runID != primaryRunID
+		if runID != primaryRunID {
+			return true
+		}
+		// Legacy task_run snapshots may collapse the original primary run onto the
+		// current run_id during reload. Keep the execution-attempt fallback active
+		// for that shape so restart attempts do not reopen task-scoped formal reads.
+		return task.ExecutionAttempt > 1
 	}
 	return task.ExecutionAttempt > 1
 }

@@ -14927,6 +14927,9 @@ func TestTaskUsesAttemptScopedFormalReadsFallsBackToPrimaryRunID(t *testing.T) {
 	if taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_primary", PrimaryRunID: "run_primary"}) {
 		t.Fatal("expected primary attempt to keep task-scoped reads")
 	}
+	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_restart", PrimaryRunID: "run_restart", ExecutionAttempt: 2}) {
+		t.Fatal("expected legacy restart snapshots to keep attempt-scoped reads when primary_run_id collapses to run_id")
+	}
 	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_restart", ExecutionAttempt: 2}) {
 		t.Fatal("expected execution attempt fallback to keep restart-scoped reads for legacy snapshots")
 	}
