@@ -1050,6 +1050,62 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsGlobalSecurityAuditList(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "audit-global.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	seed := []audit.Record{
+		{
+			AuditID:   "audit_002",
+			TaskID:    "task_002",
+			Type:      "command",
+			Action:    "run_command",
+			Summary:   "second audit record",
+			Target:    "workspace/beta.md",
+			Result:    "success",
+			CreatedAt: "2026-04-08T10:02:00Z",
+		},
+		{
+			AuditID:   "audit_001",
+			TaskID:    "task_001",
+			Type:      "file",
+			Action:    "write_file",
+			Summary:   "first audit record",
+			Target:    "workspace/alpha.md",
+			Result:    "success",
+			CreatedAt: "2026-04-08T10:01:00Z",
+		},
+	}
+	for _, record := range seed {
+		if err := storageService.AuditWriter().WriteAuditRecord(context.Background(), record); err != nil {
+			t.Fatalf("write audit record: %v", err)
+		}
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-security-audit-list-all"`),
+		Method:  "agent.security.audit.list",
+		Params: mustMarshal(t, map[string]any{
+			"limit":  20,
+			"offset": 0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two audit items, got %d", len(items))
+	}
+	if items[0]["audit_id"] != "audit_002" || items[1]["audit_id"] != "audit_001" {
+		t.Fatalf("expected global audit order, got %+v", items)
+	}
+}
+
 func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore.db")))

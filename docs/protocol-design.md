@@ -3414,21 +3414,21 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 用户在安全卫士中查看审计明细时
   - 任务详情需要展示审计区时
 - **系统处理**：
-  - 按任务范围拉取审计记录
+  - 按指定任务范围或全局范围拉取审计记录
   - 返回稳定分页结构供前端展示
-- **入参**：任务 ID、分页参数
+- **入参**：可选任务 ID、分页参数
 - **出参**：审计记录列表、分页信息
 
 补充约束：
 
-- 必须传入 `task_id`
-- 接口当前只返回指定任务的审计记录
+- 传入 `task_id` 时只返回指定任务的审计记录
+- 未传入 `task_id` 时返回全局审计记录
 
 ### agent.security.audit.list 入参说明
 
 | 字段      | 中文说明                 |
 | --------- | ------------------------ |
-| `task_id` | 必填的任务 ID            |
+| `task_id` | 可选任务 ID；为空时查询全部任务 |
 | `limit`   | 每页条数                 |
 | `offset`  | 分页偏移                 |
 
@@ -3457,6 +3457,24 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | ------------ | ------------ |
 | `data.items` | 审计记录列表 |
 | `data.page`  | 分页信息     |
+
+### agent.security.audit.list 全局查询示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_audit_list_all_001",
+  "method": "agent.security.audit.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_audit_list_all_001",
+      "client_time": "2026-04-07T11:07:00+08:00"
+    },
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
 
 ### agent.security.audit.list 出参示例
 

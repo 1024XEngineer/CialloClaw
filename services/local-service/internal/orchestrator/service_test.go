@@ -8334,11 +8334,50 @@ func TestServiceSecurityAuditListFallsBackToStoredAuditRecords(t *testing.T) {
 	}
 }
 
-func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
+func TestServiceSecurityAuditListSupportsGlobalQueryWhenTaskIDMissing(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
-	_, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
-	if err == nil || err.Error() != "task_id is required" {
-		t.Fatalf("expected task_id required error, got %v", err)
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	seed := []audit.Record{
+		{
+			AuditID:   "audit_global_002",
+			TaskID:    "task_two",
+			Type:      "command",
+			Action:    "run_command",
+			Summary:   "second audit record",
+			Target:    "workspace/beta.md",
+			Result:    "success",
+			CreatedAt: "2026-04-08T10:02:00Z",
+		},
+		{
+			AuditID:   "audit_global_001",
+			TaskID:    "task_one",
+			Type:      "file",
+			Action:    "write_file",
+			Summary:   "first audit record",
+			Target:    "workspace/alpha.md",
+			Result:    "success",
+			CreatedAt: "2026-04-08T10:01:00Z",
+		},
+	}
+	for _, record := range seed {
+		if err := service.storage.AuditWriter().WriteAuditRecord(context.Background(), record); err != nil {
+			t.Fatalf("write audit record failed: %v", err)
+		}
+	}
+
+	result, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security audit list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two audit items, got %+v", items)
+	}
+	if items[0]["audit_id"] != "audit_global_002" || items[1]["audit_id"] != "audit_global_001" {
+		t.Fatalf("expected global audit records in descending order, got %+v", items)
 	}
 }
 

@@ -679,7 +679,8 @@ export interface AgentSecurityPendingListParams {
   offset: number;
 }
 
-// AgentSecurityPendingListResult 定义当前模块的接口约束。
+// AgentSecurityPendingListResult defines the result for
+// `agent.security.pending.list`.
 export interface AgentSecurityPendingListResult {
   items: ApprovalRequest[];
   page: JsonRpcPage;
@@ -689,7 +690,7 @@ export interface AgentSecurityPendingListResult {
 // `agent.security.audit.list`.
 export interface AgentSecurityAuditListParams {
   request_meta: RequestMeta;
-  task_id: string;
+  task_id?: string;
   limit: number;
   offset: number;
 }
@@ -701,7 +702,8 @@ export interface AgentSecurityAuditListResult {
   page: JsonRpcPage;
 }
 
-// AgentSecurityRestorePointsListParams 定义当前模块的接口约束。
+// AgentSecurityRestorePointsListParams defines the parameters for
+// `agent.security.restore_points.list`.
 export interface AgentSecurityRestorePointsListParams {
   request_meta: RequestMeta;
   task_id?: string;
@@ -709,7 +711,8 @@ export interface AgentSecurityRestorePointsListParams {
   offset: number;
 }
 
-// AgentSecurityRestorePointsListResult 定义当前模块的接口约束。
+// AgentSecurityRestorePointsListResult defines the result for
+// `agent.security.restore_points.list`.
 export interface AgentSecurityRestorePointsListResult {
   items: RecoveryPoint[];
   page: JsonRpcPage;
