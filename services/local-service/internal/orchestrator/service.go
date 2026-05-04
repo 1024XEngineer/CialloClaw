@@ -7621,8 +7621,11 @@ func (s *Service) attachFormalCitations(sourceTask runengine.TaskRecord, persist
 	return persistedTask
 }
 
-// persistFormalCitations keeps the first-class citation chain queryable even
-// after task_run compatibility snapshots have been compacted away.
+// persistFormalCitations keeps the current first-class citation chain queryable
+// even after task_run compatibility snapshots have been compacted away. The
+// persisted citation set is intentionally task-scoped replacement today, so a
+// restarted attempt publishes its own chain instead of retaining every prior
+// attempt's citation history.
 func (s *Service) persistFormalCitations(taskID string, citations []map[string]any) {
 	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
 		return
