@@ -139,11 +139,21 @@ func (s *Service) resolveTaskContinuationContext(explicitSessionID string) taskC
 // user inside a blocked state.
 func canContinueTask(task runengine.TaskRecord) bool {
 	switch task.Status {
-	case "confirming_intent", "processing", "waiting_input":
+	case "confirming_intent", "waiting_input":
 		return true
+	case "processing":
+		return taskCanConsumeActiveSteering(task)
 	default:
 		return false
 	}
+}
+
+func taskCanConsumeActiveSteering(task runengine.TaskRecord) bool {
+	// CurrentStep carries the execution mode that was actually started. The
+	// intent can remain agent_loop even when runtime capabilities force prompt
+	// fallback, and prompt fallback cannot poll active steering.
+	return strings.TrimSpace(stringValue(task.Intent, "name", "")) == "agent_loop" &&
+		strings.TrimSpace(task.CurrentStep) == "agent_loop"
 }
 
 func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) taskContinuationDecision {
@@ -843,10 +853,7 @@ func buildTaskContinuationBubbleText(snapshot contextsvc.TaskContextSnapshot, de
 	if strings.TrimSpace(subject) == "" {
 		subject = "已把补充内容挂回当前任务。"
 	}
-	if strings.TrimSpace(decision.Reason) == "" {
-		return subject
-	}
-	return subject + " " + truncateText(decision.Reason, 80)
+	return subject
 }
 
 func continuationSubject(snapshot contextsvc.TaskContextSnapshot) string {

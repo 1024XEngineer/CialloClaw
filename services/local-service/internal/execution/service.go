@@ -109,6 +109,18 @@ func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Servi
 	return s
 }
 
+// CanConsumeActiveSteering reports whether an in-flight task with this intent
+// can drain follow-up guidance before execution finishes. Agent-loop intent is
+// not enough on its own because prompt fallback paths and loop runs without a
+// poller have no live steering consumption point.
+func (s *Service) CanConsumeActiveSteering(taskIntent map[string]any) bool {
+	if s == nil || s.steeringPoller == nil || !isAgentLoopIntent(taskIntent) {
+		return false
+	}
+	modelService := s.currentModel()
+	return modelService != nil && modelService.SupportsToolCalling() && s.loop != nil
+}
+
 // Request carries the minimum execution input for one task attempt.
 type Request struct {
 	TaskID               string
@@ -1860,9 +1872,16 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		return trace, nil
 	}
 
-	trace, err := s.generateOutputWithPrompt(ctx, request, inputText)
+	promptInputText := inputText
+	if len(request.SteeringMessages) > 0 {
+		// Prompt-only execution does not have a live loop poller, so queued
+		// steering must be folded into this generation request before the task
+		// resumes from authorization or a session queue.
+		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+	}
+	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
-		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, promptInputText, err); fallbackOK {
 			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
 			return fallbackTrace, nil
 		}

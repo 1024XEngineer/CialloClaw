@@ -17,6 +17,7 @@ func TestResolveTaskContinuationContextUsesSingleActiveSession(t *testing.T) {
 		Title:       "Analyze the current failure",
 		SourceType:  "hover_input",
 		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
 		CurrentStep: "agent_loop",
 		RiskLevel:   "yellow",
 	})
@@ -156,16 +157,78 @@ func TestTaskContinuationInputSummaryUsesConfirmationPolicy(t *testing.T) {
 	}
 }
 
-func TestCanContinueTaskOnlyAllowsExplicitFollowUpAndProcessingStates(t *testing.T) {
-	for _, status := range []string{"waiting_input", "confirming_intent", "processing"} {
+func TestCanContinueTaskOnlyAllowsExplicitFollowUpAndLoopProcessingStates(t *testing.T) {
+	for _, status := range []string{"waiting_input", "confirming_intent"} {
 		if !canContinueTask(runengine.TaskRecord{Status: status}) {
 			t.Fatalf("expected %s to remain continuation-eligible", status)
 		}
+	}
+	if !canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "agent_loop"}, CurrentStep: "agent_loop"}) {
+		t.Fatal("expected agent-loop processing task to remain continuation-eligible")
+	}
+	if canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "agent_loop"}, CurrentStep: "generate_output"}) {
+		t.Fatal("expected agent-loop prompt fallback to be excluded from continuation eligibility")
+	}
+	if canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "summarize"}}) {
+		t.Fatal("expected prompt-path processing task to be excluded from continuation eligibility")
 	}
 	for _, status := range []string{"waiting_auth", "paused", "blocked", "failed", "completed"} {
 		if canContinueTask(runengine.TaskRecord{Status: status}) {
 			t.Fatalf("expected %s to be excluded from continuation eligibility", status)
 		}
+	}
+}
+
+func TestPendingContinuationRequiresConfirmAndIntentPreserveConfirmationTasks(t *testing.T) {
+	task := runengine.TaskRecord{
+		Status: "confirming_intent",
+		Intent: map[string]any{"name": "summarize", "arguments": map[string]any{"style": "bullet_points"}},
+	}
+	snapshot := contextsvc.TaskContextSnapshot{
+		Trigger:   "hover_text_input",
+		InputType: "text",
+		Text:      "Please focus on the outage timeline.",
+	}
+
+	if !pendingContinuationRequiresConfirm(task, snapshot, taskContinuationOptions{}) {
+		t.Fatal("expected confirming_intent continuations to keep confirmation required")
+	}
+	if !pendingContinuationRequiresConfirm(task, snapshot, taskContinuationOptions{ForceConfirmRequired: true}) {
+		t.Fatal("expected explicit force confirm option to remain true")
+	}
+
+	intent := pendingContinuationIntent(task, nil)
+	if stringValue(intent, "name", "") != "summarize" {
+		t.Fatalf("expected confirmation-stage continuation to preserve task intent, got %+v", intent)
+	}
+	intent["name"] = "mutated"
+	if stringValue(task.Intent, "name", "") != "summarize" {
+		t.Fatalf("expected continuation intent clone to avoid mutating task intent, got %+v", task.Intent)
+	}
+
+	explicitIntent := map[string]any{"name": "rewrite"}
+	if got := pendingContinuationIntent(task, explicitIntent); stringValue(got, "name", "") != "rewrite" {
+		t.Fatalf("expected explicit continuation intent to win, got %+v", got)
+	}
+}
+
+func TestBuildTaskContinuationBubbleTextOmitsInternalReason(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{
+		Trigger:   "hover_text_input",
+		InputType: "text",
+		Text:      "Use markdown headings in the next reply.",
+	}
+	decision := taskContinuationDecision{
+		Decision: "continue",
+		Reason:   "internal classifier detail should stay hidden",
+	}
+
+	bubble := buildTaskContinuationBubbleText(snapshot, decision)
+	if !strings.Contains(bubble, "已把补充说明挂回当前任务。") {
+		t.Fatalf("expected continuation subject to stay visible, got %q", bubble)
+	}
+	if strings.Contains(bubble, decision.Reason) {
+		t.Fatalf("expected internal continuation reason to stay hidden, got %q", bubble)
 	}
 }
 

@@ -1454,7 +1454,8 @@ flowchart TB
 #### 运行控制器如何承接
 - 若 lane 忙，则运行控制器把任务转入 `blocked + session_queue`；
 - 当前序任务完成后，通过 `NextQueuedTaskForSession()` 和 `ResumeQueuedTask()` 恢复；
-- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`。
+- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`；正在 `processing` 的任务只有在当前执行是可轮询的 `agent_loop` 时才接受运行中 steering，普通 prompt 执行中的 follow-up 应排队为后续 task，避免返回“已挂回”但没有消费点。
+- 非 `agent_loop` 的恢复执行路径必须在重新生成 prompt 前合并已排队 steering，确保等待授权或 session queue 期间记录的补充要求不会被静默忽略。
 
 #### 异常处理
 - 候选任务状态不允许续接：直接新开任务；
