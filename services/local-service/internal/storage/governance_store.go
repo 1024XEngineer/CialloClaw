@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -836,14 +834,11 @@ func (s *SQLiteRecoveryPointStore) initialize(ctx context.Context) error {
 }
 
 func openSQLiteDatabase(databasePath string) (*sql.DB, error) {
-	databasePath = filepath.Clean(databasePath)
-	if databasePath == "" {
-		return nil, ErrDatabasePathRequired
+	cleanedPath, err := prepareSQLiteDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("prepare sqlite directory: %w", err)
-	}
-	db, err := sql.Open(sqliteDriverName, databasePath)
+	db, err := sql.Open(sqliteDriverName, cleanedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
