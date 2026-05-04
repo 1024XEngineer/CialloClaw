@@ -6233,65 +6233,6 @@ func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
 	return items
 }
 
-func memoryContextFromReadPlans(readPlans []map[string]any) []string {
-	if len(readPlans) == 0 {
-		return nil
-	}
-
-	contextItems := make([]string, 0, len(readPlans))
-	seen := make(map[string]struct{})
-	for _, plan := range readPlans {
-		rawItems, ok := plan["retrieval_context"].([]map[string]any)
-		if !ok {
-			if genericItems, ok := plan["retrieval_context"].([]any); ok {
-				for _, item := range genericItems {
-					candidate, ok := item.(map[string]any)
-					if !ok {
-						continue
-					}
-					summary := strings.TrimSpace(stringValue(candidate, "summary", ""))
-					if summary == "" {
-						continue
-					}
-					if _, exists := seen[summary]; exists {
-						continue
-					}
-					seen[summary] = struct{}{}
-					contextItems = append(contextItems, formatRetrievedMemorySummary(candidate))
-				}
-			}
-			continue
-		}
-		for _, item := range rawItems {
-			summary := strings.TrimSpace(stringValue(item, "summary", ""))
-			if summary == "" {
-				continue
-			}
-			if _, exists := seen[summary]; exists {
-				continue
-			}
-			seen[summary] = struct{}{}
-			contextItems = append(contextItems, formatRetrievedMemorySummary(item))
-		}
-	}
-	if len(contextItems) == 0 {
-		return nil
-	}
-	return contextItems
-}
-
-func formatRetrievedMemorySummary(item map[string]any) string {
-	summary := strings.TrimSpace(stringValue(item, "summary", ""))
-	if summary == "" {
-		return ""
-	}
-	source := strings.TrimSpace(stringValue(item, "source", ""))
-	if source == "" {
-		return summary
-	}
-	return fmt.Sprintf("[%s] %s", source, summary)
-}
-
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
 // handoffs after a task finishes. Keeping these side effects in one post-
 // delivery step prevents runtime execution from mixing formal delivery with
@@ -7431,7 +7372,6 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
-		MemoryContext:        memoryContextFromReadPlans(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,
