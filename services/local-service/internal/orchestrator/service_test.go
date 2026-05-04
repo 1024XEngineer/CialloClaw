@@ -7136,11 +7136,14 @@ func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) 
 		t.Fatalf("start task failed: %v", err)
 	}
 
-	if !strings.Contains(capturedInput, "历史记忆") {
+	if !strings.Contains(capturedInput, "历史记忆参考数据") {
 		t.Fatalf("expected execution input to include retrieved memory section, got %q", capturedInput)
 	}
-	if !strings.Contains(capturedInput, "project alpha prefers markdown bullets and concise structure") {
+	if !strings.Contains(capturedInput, "\"summary\": \"project alpha prefers markdown bullets and concise structure\"") {
 		t.Fatalf("expected execution input to include retrieved summary text, got %q", capturedInput)
+	}
+	if strings.Contains(capturedInput, "- [summary] project alpha prefers markdown bullets and concise structure") {
+		t.Fatalf("expected retrieved memory to stay structured instead of raw prompt bullets, got %q", capturedInput)
 	}
 }
 
