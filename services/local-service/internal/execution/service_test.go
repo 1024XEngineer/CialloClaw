@@ -3341,6 +3341,15 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	}
 }
 
+func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
+	if got := truncateText("根据当前环境，我具备以下主要功能", 10); got != "根据当前环境，我具备..." {
+		t.Fatalf("expected rune-safe chinese truncation, got %q", got)
+	}
+	if got := truncateText("处理完成📦继续执行", 5); got != "处理完成📦..." {
+		t.Fatalf("expected rune-safe emoji truncation, got %q", got)
+	}
+}
+
 func mustPathPolicy(t *testing.T) *platform.LocalPathPolicy {
 	t.Helper()
 	policy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "workspace"))

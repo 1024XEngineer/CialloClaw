@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -2405,10 +2406,10 @@ func normalizeWhitespace(inputText string) string {
 }
 
 func truncateText(inputText string, maxLength int) string {
-	if maxLength <= 0 || len(inputText) <= maxLength {
+	if maxLength <= 0 || utf8.RuneCountInString(inputText) <= maxLength {
 		return inputText
 	}
-	return inputText[:maxLength] + "..."
+	return string([]rune(inputText)[:maxLength]) + "..."
 }
 
 func mapValue(values map[string]any, key string) map[string]any {
