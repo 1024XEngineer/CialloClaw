@@ -32,6 +32,7 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
+const SHELL_BALL_CACHED_WINDOW_CONTEXT_MAX_AGE_MS: u64 = 1200;
 const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
     "shell-ball",
     "shell-ball-bubble",
@@ -54,6 +55,7 @@ static WINDOW_CONTEXT_ACTIVITY_STATE: Lazy<Mutex<WindowContextActivityState>> =
 struct CachedWindowContext {
     hwnd: isize,
     context: ActiveWindowContextPayload,
+    observed_at: Instant,
 }
 
 #[derive(Default)]
@@ -304,6 +306,7 @@ fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
         *cached_context = Some(CachedWindowContext {
             hwnd: hwnd.0 as isize,
             context: context.clone(),
+            observed_at: Instant::now(),
         });
     }
 }
@@ -317,8 +320,16 @@ fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
 }
 
 fn read_cached_window_context_for_shell_ball() -> Option<ActiveWindowContextPayload> {
-    let cached_context = read_cached_window_context()?;
-    if !should_refresh_cached_shell_ball_window_context(&cached_context) {
+    let cached = LAST_EXTERNAL_WINDOW_CONTEXT
+        .lock()
+        .ok()
+        .and_then(|cached| cached.clone())?;
+    let cached_context = with_window_context_activity_counts(cached.context.clone());
+
+    // Shell-ball submits often arrive in bursts. Reuse a very recent external
+    // browser snapshot, but force a refresh once that snapshot is old enough to
+    // miss same-window navigation updates.
+    if !should_refresh_cached_shell_ball_window_context(&cached) {
         return Some(cached_context);
     }
 
@@ -473,8 +484,17 @@ fn should_refresh_window_context_url(context: &ActiveWindowContextPayload) -> bo
     )
 }
 
-fn should_refresh_cached_shell_ball_window_context(context: &ActiveWindowContextPayload) -> bool {
-    should_refresh_window_context_url(context) && context.url.is_none()
+fn should_refresh_cached_shell_ball_window_context(cached: &CachedWindowContext) -> bool {
+    if !should_refresh_window_context_url(&cached.context) {
+        return false;
+    }
+
+    if cached.context.url.is_none() {
+        return true;
+    }
+
+    cached.observed_at.elapsed()
+        >= Duration::from_millis(SHELL_BALL_CACHED_WINDOW_CONTEXT_MAX_AGE_MS)
 }
 
 fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> String {
@@ -574,10 +594,13 @@ fn get_query_process_image_name(process: HANDLE) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::{
         classify_browser_kind, should_refresh_cached_shell_ball_window_context,
-        should_refresh_window_context_url, ActiveWindowContextPayload, BROWSER_KIND_CHROME,
-        BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER, BROWSER_KIND_OTHER_BROWSER,
+        should_refresh_window_context_url, ActiveWindowContextPayload, CachedWindowContext,
+        BROWSER_KIND_CHROME, BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER,
+        BROWSER_KIND_OTHER_BROWSER, SHELL_BALL_CACHED_WINDOW_CONTEXT_MAX_AGE_MS,
     };
 
     fn build_context(browser_kind: &str) -> ActiveWindowContextPayload {
@@ -590,6 +613,21 @@ mod tests {
             browser_kind: browser_kind.to_string(),
             window_switch_count: None,
             page_switch_count: None,
+        }
+    }
+
+    fn build_cached_context(
+        browser_kind: &str,
+        url: Option<&str>,
+        elapsed_ms: u64,
+    ) -> CachedWindowContext {
+        let mut context = build_context(browser_kind);
+        context.url = url.map(ToString::to_string);
+
+        CachedWindowContext {
+            hwnd: 42,
+            context,
+            observed_at: Instant::now() - Duration::from_millis(elapsed_ms),
         }
     }
 
@@ -620,17 +658,29 @@ mod tests {
 
     #[test]
     fn shell_ball_cached_context_refresh_only_when_browser_url_is_missing() {
-        let mut browser_with_url = build_context(BROWSER_KIND_CHROME);
-        browser_with_url.url = Some("https://example.com/build".to_string());
-
         assert!(!should_refresh_cached_shell_ball_window_context(
-            &browser_with_url
+            &build_cached_context(
+                BROWSER_KIND_CHROME,
+                Some("https://example.com/build"),
+                SHELL_BALL_CACHED_WINDOW_CONTEXT_MAX_AGE_MS / 2,
+            )
         ));
         assert!(should_refresh_cached_shell_ball_window_context(
-            &build_context(BROWSER_KIND_EDGE,)
+            &build_cached_context(BROWSER_KIND_EDGE, None, 0,)
+        ));
+        assert!(should_refresh_cached_shell_ball_window_context(
+            &build_cached_context(
+                BROWSER_KIND_CHROME,
+                Some("https://example.com/build"),
+                SHELL_BALL_CACHED_WINDOW_CONTEXT_MAX_AGE_MS + 1,
+            )
         ));
         assert!(!should_refresh_cached_shell_ball_window_context(
-            &build_context(BROWSER_KIND_NON_BROWSER,)
+            &build_cached_context(
+                BROWSER_KIND_NON_BROWSER,
+                None,
+                SHELL_BALL_CACHED_WINDOW_CONTEXT_MAX_AGE_MS + 1,
+            )
         ));
     }
 }
