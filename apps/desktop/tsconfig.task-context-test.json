@@ -1,0 +1,31 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "./.cache/task-context-tests",
+    "rootDir": "./src",
+    "strict": false,
+    "noImplicitAny": false,
+    "paths": {
+      "@/platform/desktopWindowContext": ["./src/services/test-stubs/desktopWindowContext.ts"],
+      "@/rpc/methods": ["./src/services/test-stubs/rpcMethods.ts"],
+      "@/stores/taskStore": ["./src/services/test-stubs/taskStore.ts"],
+      "@/*": ["./src/*"],
+      "@cialloclaw/protocol": ["./src/features/shell-ball/test-stubs/protocol.ts"]
+    }
+  },
+  "include": [
+    "src/features/shell-ball/test-stubs/protocol.ts",
+    "src/services/test-stubs/desktopWindowContext.ts",
+    "src/services/test-stubs/rpcMethods.ts",
+    "src/services/test-stubs/taskStore.ts",
+    "src/services/agentInputService.ts",
+    "src/services/conversationSessionService.ts",
+    "src/services/mirrorMemoryService.ts",
+    "src/services/pageContext.ts",
+    "src/services/taskService.ts",
+    "src/services/settingsService.ts"
+  ]
+}

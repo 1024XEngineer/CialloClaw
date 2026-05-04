@@ -63,26 +63,20 @@ function hasTaskSpecificPageContextAnchor(pageContext: PageContext | undefined) 
 }
 
 function pageContextAnchorsMatch(left: PageContext | undefined, right: PageContext | undefined) {
-  if (!left || !right) {
+  if (!left?.url || !right?.url) {
     return false;
   }
 
-  if (left.url && right.url) {
-    return left.url === right.url;
-  }
+  return left.url === right.url;
+}
 
-  if (left.hover_target && right.hover_target) {
-    return left.hover_target === right.hover_target;
-  }
-
-  const leftApp = left.app_name?.toLowerCase();
-  const rightApp = right.app_name?.toLowerCase();
-  if (!leftApp || !rightApp || leftApp !== rightApp) {
-    return false;
-  }
-
-  return (left.title && right.title && left.title === right.title)
-    || (left.window_title && right.window_title && left.window_title === right.window_title);
+function stripRememberedPageContextAttachHints(pageContext: PageContext): PageContext {
+  return compactPageContext({
+    app_name: pageContext.app_name,
+    title: pageContext.title,
+    url: pageContext.url,
+    window_title: pageContext.window_title,
+  }) ?? pageContext;
 }
 
 async function readForegroundPageContext(): Promise<PageContext | undefined> {
@@ -95,18 +89,19 @@ async function readForegroundPageContext(): Promise<PageContext | undefined> {
 }
 
 async function hydrateRememberedPageContext(rememberedPageContext: PageContext) {
+  const stableRememberedPageContext = stripRememberedPageContextAttachHints(rememberedPageContext);
   const foregroundPageContext = await readForegroundPageContext();
-  if (!pageContextAnchorsMatch(rememberedPageContext, foregroundPageContext)) {
-    return rememberedPageContext;
+  if (!pageContextAnchorsMatch(stableRememberedPageContext, foregroundPageContext)) {
+    return stableRememberedPageContext;
   }
 
   // The remembered session anchor keeps stable page identity only. When the
   // current foreground snapshot still points at the same page, rehydrate fresh
   // attach hints so follow-up task starts do not replay stale process metadata.
   return compactPageContext({
-    ...rememberedPageContext,
+    ...stableRememberedPageContext,
     ...foregroundPageContext,
-  }) ?? rememberedPageContext;
+  }) ?? stableRememberedPageContext;
 }
 
 async function resolveTaskPageContext(pageContext: PageContext | undefined, sessionId: string | undefined) {
@@ -117,7 +112,9 @@ async function resolveTaskPageContext(pageContext: PageContext | undefined, sess
   }
 
   const rememberedPageContext = getConversationPageContextForSession(sessionId);
-  if (rememberedPageContext) {
+  // URL-less remembered anchors are too weak to reuse safely across follow-up
+  // tasks, so fall back to the shell-ball default context instead.
+  if (rememberedPageContext?.url) {
     return hydrateRememberedPageContext(rememberedPageContext);
   }
 

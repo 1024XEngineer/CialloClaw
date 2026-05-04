@@ -115,8 +115,6 @@ function stripVolatileAttachHints(pageContext: PageContext): PageContext {
     ...(pageContext.title ? { title: pageContext.title } : {}),
     ...(pageContext.url ? { url: pageContext.url } : {}),
     ...(pageContext.window_title ? { window_title: pageContext.window_title } : {}),
-    ...(pageContext.visible_text ? { visible_text: pageContext.visible_text } : {}),
-    ...(pageContext.hover_target ? { hover_target: pageContext.hover_target } : {}),
   };
 }
 

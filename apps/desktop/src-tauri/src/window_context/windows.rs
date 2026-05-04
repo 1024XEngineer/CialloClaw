@@ -239,9 +239,28 @@ pub(crate) fn read_cached_or_lightweight_window_context_for_hwnd(
     })
 }
 
+pub(crate) fn read_live_or_cached_window_context_for_hwnd(
+    hwnd: HWND,
+) -> ActiveWindowContextPayload {
+    let cached_context = read_cached_window_context_for_hwnd(hwnd);
+    if let Some(live_context) = try_read_live_window_context_for_hwnd(hwnd) {
+        return merge_unresolved_browser_context_fields(live_context, cached_context.as_ref());
+    }
+
+    cached_context.unwrap_or_else(|| read_cached_or_lightweight_window_context_for_hwnd(hwnd))
+}
+
 fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
-    let mut context =
-        read_lightweight_window_context_for_hwnd(hwnd).unwrap_or_else(|_| default_window_context());
+    let cached_context = read_cached_window_context_for_hwnd(hwnd);
+    if let Some(live_context) = try_read_live_window_context_for_hwnd(hwnd) {
+        return merge_unresolved_browser_context_fields(live_context, cached_context.as_ref());
+    }
+
+    cached_context.unwrap_or_else(default_window_context)
+}
+
+fn try_read_live_window_context_for_hwnd(hwnd: HWND) -> Option<ActiveWindowContextPayload> {
+    let mut context = read_lightweight_window_context_for_hwnd(hwnd).ok()?;
 
     if let Some(snapshot) = read_window_automation_snapshot(hwnd, &context) {
         context.url = snapshot.url;
@@ -251,7 +270,24 @@ fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
     } else {
         context.url = read_url_for_window_context(hwnd, &context);
     }
-    context
+    Some(context)
+}
+
+fn merge_unresolved_browser_context_fields(
+    mut live_context: ActiveWindowContextPayload,
+    cached_context: Option<&ActiveWindowContextPayload>,
+) -> ActiveWindowContextPayload {
+    let Some(cached_context) = cached_context else {
+        return live_context;
+    };
+
+    // Only preserve the last resolved browser URL. Reusing visible text, hover
+    // targets, or error hints would mix old page content into a newly navigated tab.
+    if should_refresh_window_context_url(&live_context) && live_context.url.is_none() {
+        live_context.url = cached_context.url.clone();
+    }
+
+    live_context
 }
 
 fn with_window_context_activity_counts(
@@ -394,6 +430,15 @@ fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
     let hwnd = HWND(cached.hwnd as *mut core::ffi::c_void);
     if hwnd.0.is_null() {
         return Some(with_window_context_activity_counts(cached.context));
+    }
+
+    if let Some(context) = try_read_live_window_context_for_hwnd(hwnd)
+        .map(|context| merge_unresolved_browser_context_fields(context, Some(&cached.context)))
+    {
+        record_page_switch_after_url_refresh(&context);
+        cache_window_context(hwnd, &context);
+        schedule_window_context_url_refresh(hwnd, &context);
+        return Some(with_window_context_activity_counts(context));
     }
 
     let mut context = cached.context;

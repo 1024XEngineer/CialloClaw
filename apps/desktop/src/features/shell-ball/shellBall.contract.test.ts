@@ -2728,6 +2728,287 @@ test("task-entry services keep rpc transport failures visible and forward file d
   );
 });
 
+test("task-entry services do not hydrate remembered page context from hover-only window matches", async () => {
+  const startTaskCalls: Array<Record<string, unknown>> = [];
+  const rememberedPageContext = {
+    app_name: "Chrome",
+    title: "Settings",
+    hover_target: "Save",
+    window_title: "Settings",
+  };
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask(params: Record<string, unknown>) {
+          startTaskCalls.push(params);
+          return Promise.resolve({
+            bubble_message: null,
+            delivery_result: null,
+            task: {
+              task_id: "task_shell_ball_hover_anchor",
+              title: "Process files",
+              source_type: "dragged_file",
+              status: "processing",
+              intent: null,
+              current_step: "processing",
+              risk_level: "yellow",
+              started_at: "2026-04-18T10:00:00.000Z",
+              updated_at: "2026-04-18T10:00:00.000Z",
+              finished_at: null,
+            },
+          });
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return "sess_shell_ball_hover_anchor";
+        },
+        getConversationPageContextForSession(sessionId?: string) {
+          return sessionId === "sess_shell_ball_hover_anchor" ? rememberedPageContext : undefined;
+        },
+        rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
+      },
+      "@/platform/desktopWindowContext": {
+        getActiveWindowContext() {
+          return Promise.resolve({
+            app_name: "Chrome",
+            browser_kind: "chrome",
+            process_id: 4412,
+            process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            title: "Build Dashboard",
+            url: "https://example.com/build?ticket=secret#fragment",
+            hover_target: "Save",
+          });
+        },
+      },
+      "./pageContext": {
+        compactPageContext,
+        mapDesktopWindowSnapshotToPageContext,
+      },
+      "./agentInputService": {
+        submitTextInput() {
+          return Promise.reject(new Error("transport is not wired"));
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+      };
+
+      await service.startTaskFromFiles(["C:\\workspace\\notes.md"]);
+    },
+  );
+
+  assert.deepEqual(startTaskCalls[0]?.input, {
+    type: "file",
+    files: ["C:\\workspace\\notes.md"],
+    page_context: {
+      app_name: "desktop",
+      title: "Quick Intake",
+      url: "local://shell-ball",
+    },
+  });
+});
+
+test("task-entry services do not hydrate remembered page context from same-title window-only matches", async () => {
+  const startTaskCalls: Array<Record<string, unknown>> = [];
+  const rememberedPageContext = {
+    app_name: "Chrome",
+    title: "Settings",
+    window_title: "Settings",
+  };
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask(params: Record<string, unknown>) {
+          startTaskCalls.push(params);
+          return Promise.resolve({
+            bubble_message: null,
+            delivery_result: null,
+            task: {
+              task_id: "task_shell_ball_title_anchor",
+              title: "Process files",
+              source_type: "dragged_file",
+              status: "processing",
+              intent: null,
+              current_step: "processing",
+              risk_level: "yellow",
+              started_at: "2026-04-18T10:00:00.000Z",
+              updated_at: "2026-04-18T10:00:00.000Z",
+              finished_at: null,
+            },
+          });
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return "sess_shell_ball_title_anchor";
+        },
+        getConversationPageContextForSession(sessionId?: string) {
+          return sessionId === "sess_shell_ball_title_anchor" ? rememberedPageContext : undefined;
+        },
+        rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
+      },
+      "@/platform/desktopWindowContext": {
+        getActiveWindowContext() {
+          return Promise.resolve({
+            app_name: "Chrome",
+            browser_kind: "chrome",
+            process_id: 4412,
+            process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            title: "Settings",
+            hover_target: "Save",
+          });
+        },
+      },
+      "./pageContext": {
+        compactPageContext,
+        mapDesktopWindowSnapshotToPageContext,
+      },
+      "./agentInputService": {
+        submitTextInput() {
+          return Promise.reject(new Error("transport is not wired"));
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+      };
+
+      await service.startTaskFromFiles(["C:\\workspace\\notes.md"]);
+    },
+  );
+
+  assert.deepEqual(startTaskCalls[0]?.input, {
+    type: "file",
+    files: ["C:\\workspace\\notes.md"],
+    page_context: {
+      app_name: "desktop",
+      title: "Quick Intake",
+      url: "local://shell-ball",
+    },
+  });
+});
+
+test("task-entry services drop stale remembered page-content hints during same-url hydration", async () => {
+  const startTaskCalls: Array<Record<string, unknown>> = [];
+  const rememberedPageContext = {
+    app_name: "Chrome",
+    title: "Build Dashboard",
+    url: "https://example.com/build",
+    hover_target: "Old publish button",
+    visible_text: "Old validation warning",
+  };
+
+  await withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/taskService.ts"),
+    {
+      "@/rpc/methods": {
+        startTask(params: Record<string, unknown>) {
+          startTaskCalls.push(params);
+          return Promise.resolve({
+            bubble_message: null,
+            delivery_result: null,
+            task: {
+              task_id: "task_shell_ball_same_url_anchor",
+              title: "Process files",
+              source_type: "dragged_file",
+              status: "processing",
+              intent: null,
+              current_step: "processing",
+              risk_level: "yellow",
+              started_at: "2026-04-18T10:00:00.000Z",
+              updated_at: "2026-04-18T10:00:00.000Z",
+              finished_at: null,
+            },
+          });
+        },
+      },
+      "@/stores/taskStore": {
+        useTaskStore: {
+          getState() {
+            return { tasks: [] as Array<Record<string, unknown>> };
+          },
+        },
+      },
+      "./conversationSessionService": {
+        getCurrentConversationSessionId(): string | undefined {
+          return "sess_shell_ball_same_url_anchor";
+        },
+        getConversationPageContextForSession(sessionId?: string) {
+          return sessionId === "sess_shell_ball_same_url_anchor" ? rememberedPageContext : undefined;
+        },
+        rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
+      },
+      "@/platform/desktopWindowContext": {
+        getActiveWindowContext() {
+          return Promise.resolve({
+            app_name: "Chrome",
+            browser_kind: "chrome",
+            process_id: 4412,
+            process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            title: "Build Dashboard",
+            url: "https://example.com/build?ticket=secret#fragment",
+          });
+        },
+      },
+      "./pageContext": {
+        compactPageContext,
+        mapDesktopWindowSnapshotToPageContext,
+      },
+      "./agentInputService": {
+        submitTextInput() {
+          return Promise.reject(new Error("transport is not wired"));
+        },
+      },
+    },
+    async (moduleExports) => {
+      const service = moduleExports as {
+        startTaskFromFiles: (files: string[], context?: Record<string, unknown>, text?: string) => Promise<unknown>;
+      };
+
+      await service.startTaskFromFiles(["C:\\workspace\\notes.md"]);
+    },
+  );
+
+  assert.deepEqual(startTaskCalls[0]?.input, {
+    type: "file",
+    files: ["C:\\workspace\\notes.md"],
+    page_context: {
+      app_name: "Chrome",
+      browser_kind: "chrome",
+      process_id: 4412,
+      process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+      title: "Build Dashboard",
+      url: "https://example.com/build",
+      window_title: "Build Dashboard",
+    },
+  });
+});
+
 test("submitTextInput enriches formal context with desktop snapshots before rpc submit", async () => {
   const submitCalls: Array<Record<string, unknown>> = [];
   const originalDateNow = Date.now;
@@ -7610,6 +7891,8 @@ test("conversation session cache preserves real page anchors for later file cont
           process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
           title: "Build Dashboard",
           url: "https://example.com/build",
+          visible_text: "Current build summary",
+          hover_target: "Publish button",
         },
       );
 
@@ -7990,6 +8273,7 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   const selectionProviderSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/selection/selection.provider.tsx"), "utf8");
   const selectionTypesSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/types.rs"), "utf8");
   const selectionHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/windows.rs"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/services/taskService.ts"), "utf8");
   const windowContextHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/window_context/windows.rs"), "utf8");
 
   assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
@@ -8008,11 +8292,19 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   assert.doesNotMatch(selectionProviderSource, /useInterval\(/);
   assert.match(selectionTypesSource, /pub visible_text: Option<String>,/);
   assert.match(selectionTypesSource, /pub hover_target: Option<String>,/);
-  assert.match(selectionHostSource, /read_cached_or_lightweight_window_context_for_hwnd\(foreground_window\)/);
-  assert.doesNotMatch(selectionHostSource, /read_window_context_for_hwnd\(foreground_window\)/);
+  assert.match(selectionHostSource, /read_live_or_cached_window_context_for_hwnd\(foreground_window\)/);
+  assert.doesNotMatch(selectionHostSource, /read_cached_or_lightweight_window_context_for_hwnd\(foreground_window\)/);
   assert.match(selectionHostSource, /visible_text: window_context\.visible_text\.clone\(\),/);
   assert.match(selectionHostSource, /hover_target: window_context\.hover_target\.clone\(\),/);
+  assert.match(taskServiceSource, /if \(rememberedPageContext\?\.url\) \{\s*return hydrateRememberedPageContext\(rememberedPageContext\);\s*\}/);
   assert.match(windowContextHostSource, /let mut context = read_cached_or_lightweight_window_context_for_hwnd\(hwnd\);/);
+  assert.match(windowContextHostSource, /merge_unresolved_browser_context_fields\(live_context, cached_context\.as_ref\(\)\)/);
+  assert.match(windowContextHostSource, /fn read_cached_window_context_with_url\(\) -> Option<ActiveWindowContextPayload> \{[\s\S]*try_read_live_window_context_for_hwnd\(hwnd\)[\s\S]*record_page_switch_after_url_refresh\(&context\);/);
+  assert.match(windowContextHostSource, /merge_unresolved_browser_context_fields\(context, Some\(&cached\.context\)\)/);
+  assert.match(windowContextHostSource, /if should_refresh_window_context_url\(&live_context\) && live_context\.url\.is_none\(\) \{\s*live_context\.url = cached_context\.url\.clone\(\);\s*\}/);
+  assert.doesNotMatch(windowContextHostSource, /live_context\.visible_text = cached_context\.visible_text\.clone\(\);/);
+  assert.doesNotMatch(windowContextHostSource, /live_context\.hover_target = cached_context\.hover_target\.clone\(\);/);
+  assert.doesNotMatch(windowContextHostSource, /live_context\.error_text = cached_context\.error_text\.clone\(\)/);
   assert.match(windowContextHostSource, /let next_context = read_window_context_for_hwnd\(hwnd\);/);
   assert.match(windowContextHostSource, /looks_like_actionable_error_signal/);
   assert.match(windowContextHostSource, /assert!\(!looks_like_error_signal\("Rust error handling patterns"\)\);/);
