@@ -1729,6 +1729,78 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	}
 }
 
+func TestEnginePrepareRestartLeavesLiveTaskStableUntilCommit(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_prepare_restart",
+		Title:       "prepare restart task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	if _, ok := engine.SetPresentation(task.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "stable result",
+		"preview_text": "stable preview",
+		"payload":      map[string]any{"task_id": task.TaskID},
+	}, []map[string]any{{
+		"artifact_id": "art_prepare_restart",
+		"task_id":     task.TaskID,
+		"path":        "workspace/stable.md",
+	}}); !ok {
+		t.Fatal("expected stable presentation before restart")
+	}
+	if _, ok := engine.SetCitations(task.TaskID, []map[string]any{{
+		"citation_id": "cit_prepare_restart",
+		"task_id":     task.TaskID,
+		"label":       "stable citation",
+	}}); !ok {
+		t.Fatal("expected stable citations before restart")
+	}
+	if _, ok := engine.AppendAuditData(task.TaskID, []map[string]any{{
+		"audit_id": "audit_prepare_restart",
+		"task_id":  task.TaskID,
+		"summary":  "stable audit",
+	}}, nil); !ok {
+		t.Fatal("expected stable audit before restart")
+	}
+
+	previous, prepared, err := engine.PrepareRestart(task.TaskID, map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("prepare restart failed: %v", err)
+	}
+	if prepared.RunID == previous.RunID {
+		t.Fatalf("expected prepared restart to allocate a fresh run_id, got %s", prepared.RunID)
+	}
+	if prepared.ExecutionAttempt != previous.ExecutionAttempt+1 {
+		t.Fatalf("expected prepared restart to increment attempt, got before=%d after=%d", previous.ExecutionAttempt, prepared.ExecutionAttempt)
+	}
+	if prepared.DeliveryResult != nil || len(prepared.Artifacts) != 0 || len(prepared.Citations) != 0 || len(prepared.AuditRecords) != 0 {
+		t.Fatalf("expected prepared restart copy to clear formal outputs, got %+v", prepared)
+	}
+
+	liveTask, ok := engine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected live task to remain readable")
+	}
+	if liveTask.RunID != previous.RunID || liveTask.ExecutionAttempt != previous.ExecutionAttempt {
+		t.Fatalf("expected live task identity to stay on previous attempt, got %+v", liveTask)
+	}
+	if liveTask.DeliveryResult == nil || len(liveTask.Artifacts) != 1 || len(liveTask.Citations) != 1 || len(liveTask.AuditRecords) != 1 {
+		t.Fatalf("expected live task to preserve finished outputs before commit, got %+v", liveTask)
+	}
+
+	processingTask, changed := engine.BeginPreparedExecution(prepared, "agent_loop", "restart committed")
+	if !changed {
+		t.Fatal("expected prepared restart execution to commit")
+	}
+	if processingTask.RunID != prepared.RunID || processingTask.ExecutionAttempt != prepared.ExecutionAttempt {
+		t.Fatalf("expected committed restart to preserve prepared identity, got %+v", processingTask)
+	}
+}
+
 func TestEngineRestartPersistsExecutionAttemptAcrossReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-run-attempts.db")
 	store, err := storage.NewSQLiteTaskRunStore(path)

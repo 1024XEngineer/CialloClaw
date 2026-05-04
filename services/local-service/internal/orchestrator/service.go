@@ -1972,7 +1972,6 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	if action == "restart" {
 		restartedTask, restartBubble, restartErr := s.advanceRestartedTaskAttempt(previousTask, updatedTask)
 		if restartErr != nil {
-			_ = s.runEngine.RestorePreparedTask(previousTask)
 			return nil, restartErr
 		}
 		updatedTask = restartedTask
@@ -3265,6 +3264,9 @@ func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.T
 		task.UpdatedAt.Format(dateTimeLayout),
 	)
 	queuedTask, changed := s.runEngine.QueueTaskForSession(task.TaskID, activeTask.TaskID, bubble)
+	if currentTask, currentOk := s.runEngine.GetTask(task.TaskID); currentOk && currentTask.RunID != task.RunID {
+		queuedTask, changed = s.runEngine.QueuePreparedTaskForSession(task, activeTask.TaskID, bubble)
+	}
 	if !changed {
 		return runengine.TaskRecord{}, nil, false, ErrTaskNotFound
 	}
@@ -6677,6 +6679,9 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if currentTask, currentOk := s.runEngine.GetTask(task.TaskID); currentOk && currentTask.RunID != task.RunID {
+		updatedTask, changed = s.runEngine.MarkPreparedTaskWaitingApprovalWithPlan(task, approvalRequest, pendingExecution, bubble)
+	}
 	if !changed {
 		return task, nil, false, ErrTaskNotFound
 	}
@@ -7471,6 +7476,9 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // the segment as restart instead of initial.
 func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
+	if currentTask, currentOk := s.runEngine.GetTask(task.TaskID); currentOk && currentTask.RunID != task.RunID {
+		processingTask, ok = s.runEngine.BeginPreparedExecution(task, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
+	}
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}

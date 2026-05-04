@@ -3307,6 +3307,66 @@ func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *test
 	}
 }
 
+func TestServiceRestartPreparationStaysInvisibleUntilAttemptCommits(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "restart preparation visibility")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_prepare_visibility",
+		Title:       "Restart preparation visibility task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	if _, ok := service.runEngine.SetPresentation(task.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "Previous result",
+		"preview_text": "previous preview",
+		"payload":      map[string]any{"task_id": task.TaskID},
+	}, []map[string]any{{
+		"artifact_id": "art_restart_prepare_visibility",
+		"task_id":     task.TaskID,
+		"path":        "workspace/previous.md",
+	}}); !ok {
+		t.Fatal("expected previous presentation before restart preparation")
+	}
+
+	previousTask, preparedTask, err := service.runEngine.PrepareRestart(task.TaskID, map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("prepare restart failed: %v", err)
+	}
+	if preparedTask.RunID == previousTask.RunID {
+		t.Fatalf("expected prepared restart to allocate a fresh run_id, got %s", preparedTask.RunID)
+	}
+
+	liveTask, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected live task to remain readable during restart preparation")
+	}
+	if liveTask.RunID != previousTask.RunID || liveTask.DeliveryResult == nil || len(liveTask.Artifacts) != 1 {
+		t.Fatalf("expected live task to stay on the previous finished attempt before commit, got %+v", liveTask)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get during restart preparation failed: %v", err)
+	}
+	if detailResult["delivery_result"] == nil {
+		t.Fatalf("expected task detail to keep previous delivery_result before restart commit, got %+v", detailResult)
+	}
+	if artifacts := detailResult["artifacts"].([]map[string]any); len(artifacts) != 1 {
+		t.Fatalf("expected task detail to keep previous artifacts before restart commit, got %+v", artifacts)
+	}
+
+	restartedTask, _, err := service.advanceRestartedTaskAttempt(previousTask, preparedTask)
+	if err != nil {
+		t.Fatalf("advance restarted task attempt failed: %v", err)
+	}
+	if restartedTask.RunID != preparedTask.RunID || restartedTask.ExecutionAttempt != preparedTask.ExecutionAttempt {
+		t.Fatalf("expected committed restart to publish the prepared attempt, got %+v", restartedTask)
+	}
+}
+
 func TestMaybeEscalateHumanLoopSkipsSideEffectingExecutionAttempt(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "unused")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
