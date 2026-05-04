@@ -110,7 +110,7 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
     }
 
     if is_shell_ball_cluster_window(hwnd) {
-        return Ok(read_cached_window_context_with_url());
+        return Ok(read_cached_window_context_for_shell_ball());
     }
 
     let context = read_window_context_for_hwnd(hwnd);
@@ -316,6 +316,15 @@ fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
     })
 }
 
+fn read_cached_window_context_for_shell_ball() -> Option<ActiveWindowContextPayload> {
+    let cached_context = read_cached_window_context()?;
+    if !should_refresh_cached_shell_ball_window_context(&cached_context) {
+        return Some(cached_context);
+    }
+
+    read_cached_window_context_with_url().or(Some(cached_context))
+}
+
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
     let cached = LAST_EXTERNAL_WINDOW_CONTEXT
         .lock()
@@ -464,6 +473,10 @@ fn should_refresh_window_context_url(context: &ActiveWindowContextPayload) -> bo
     )
 }
 
+fn should_refresh_cached_shell_ball_window_context(context: &ActiveWindowContextPayload) -> bool {
+    should_refresh_window_context_url(context) && context.url.is_none()
+}
+
 fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> String {
     format!(
         "{}|{}|{}",
@@ -562,9 +575,9 @@ fn get_query_process_image_name(process: HANDLE) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_browser_kind, should_refresh_window_context_url, ActiveWindowContextPayload,
-        BROWSER_KIND_CHROME, BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER,
-        BROWSER_KIND_OTHER_BROWSER,
+        classify_browser_kind, should_refresh_cached_shell_ball_window_context,
+        should_refresh_window_context_url, ActiveWindowContextPayload, BROWSER_KIND_CHROME,
+        BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER, BROWSER_KIND_OTHER_BROWSER,
     };
 
     fn build_context(browser_kind: &str) -> ActiveWindowContextPayload {
@@ -603,6 +616,22 @@ mod tests {
         assert!(!should_refresh_window_context_url(&build_context(
             BROWSER_KIND_NON_BROWSER
         )));
+    }
+
+    #[test]
+    fn shell_ball_cached_context_refresh_only_when_browser_url_is_missing() {
+        let mut browser_with_url = build_context(BROWSER_KIND_CHROME);
+        browser_with_url.url = Some("https://example.com/build".to_string());
+
+        assert!(!should_refresh_cached_shell_ball_window_context(
+            &browser_with_url
+        ));
+        assert!(should_refresh_cached_shell_ball_window_context(
+            &build_context(BROWSER_KIND_EDGE,)
+        ));
+        assert!(!should_refresh_cached_shell_ball_window_context(
+            &build_context(BROWSER_KIND_NON_BROWSER,)
+        ));
     }
 }
 
