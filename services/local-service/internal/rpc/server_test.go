@@ -1571,6 +1571,9 @@ func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(
 		{name: "dashboard.overview.get", invoke: func() (any, *rpcError) { return server.handleAgentDashboardOverviewGet(map[string]any{}) }},
 		{name: "dashboard.module.get", invoke: func() (any, *rpcError) { return server.handleAgentDashboardModuleGet(map[string]any{"module": "task"}) }},
 		{name: "mirror.overview.get", invoke: func() (any, *rpcError) { return server.handleAgentMirrorOverviewGet(map[string]any{}) }},
+		{name: "mirror.conversation.list", invoke: func() (any, *rpcError) {
+			return server.handleAgentMirrorConversationList(map[string]any{"limit": 20, "offset": 0})
+		}},
 		{name: "security.summary.get", invoke: func() (any, *rpcError) { return server.handleAgentSecuritySummaryGet(nil) }},
 		{name: "security.pending.list", invoke: func() (any, *rpcError) { return server.handleAgentSecurityPendingList(map[string]any{}) }},
 		{name: "security.respond", invoke: func() (any, *rpcError) {

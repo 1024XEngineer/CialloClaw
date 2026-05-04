@@ -84,6 +84,10 @@ export const APPROVAL_DECISIONS = ["allow_once", "deny_once"] as const;
 // APPROVAL_STATUSES 定义共享常量。
 export const APPROVAL_STATUSES = ["pending", "approved", "denied"] as const;
 
+// MIRROR_CONVERSATION_RECORD_STATUSES defines the stable mirror conversation
+// lifecycle states returned by backend history queries.
+export const MIRROR_CONVERSATION_RECORD_STATUSES = ["submitted", "responded", "failed"] as const;
+
 // SETTINGS_SCOPES 定义共享常量。
 export const SETTINGS_SCOPES = ["all", "general", "floating_ball", "memory", "task_automation", "models"] as const;
 
@@ -154,6 +158,8 @@ export type BubbleMessageType = (typeof BUBBLE_MESSAGE_TYPES)[number];
 export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
 // ApprovalStatus 定义当前模块的数据结构。
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+// MirrorConversationRecordStatus defines the stored mirror conversation state.
+export type MirrorConversationRecordStatus = (typeof MIRROR_CONVERSATION_RECORD_STATUSES)[number];
 // SettingsScope 定义当前模块的数据结构。
 export type SettingsScope = (typeof SETTINGS_SCOPES)[number];
 // ApplyMode 定义当前模块的数据结构。
@@ -404,14 +410,32 @@ export interface ModelInvocationRecord {
   latency_ms: number;
 }
 
-// MirrorReference 定义当前模块的接口约束。
+// MirrorReference defines one stable memory summary surfaced by mirror overview.
 export interface MirrorReference {
   memory_id: string;
   reason: string;
   summary: string;
 }
 
-// SettingsSnapshot 定义当前模块的接口约束。
+// MirrorConversationRecord defines one persisted mirror conversation history item.
+export interface MirrorConversationRecord {
+  record_id: string;
+  trace_id: string;
+  created_at: string;
+  updated_at: string;
+  source: RequestSource;
+  trigger: Extract<RequestTrigger, "voice_commit" | "hover_text_input">;
+  input_mode: InputMode;
+  session_id: string | null;
+  task_id: string | null;
+  user_text: string;
+  agent_text: string | null;
+  agent_bubble_type: BubbleMessageType | null;
+  status: MirrorConversationRecordStatus;
+  error_message: string | null;
+}
+
+// SettingsSnapshot defines the persisted non-secret settings contract.
 export interface SettingsSnapshot {
   settings: {
     general: {

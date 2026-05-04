@@ -74,6 +74,7 @@ type Descriptor struct {
 type Service struct {
 	adapter                  platform.StorageAdapter
 	memoryStore              MemoryStore
+	mirrorConversationStore  MirrorConversationStore
 	taskRunStore             TaskRunStore
 	toolCallStore            ToolCallStore
 	loopRuntimeStore         LoopRuntimeStore
@@ -121,6 +122,7 @@ func newServiceWithStrongholdBootstrap(adapter platform.StorageAdapter, bootstra
 	}
 
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
+	mirrorConversationStore := MirrorConversationStore(newInMemoryMirrorConversationStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	loopRuntimeStore := LoopRuntimeStore(newInMemoryLoopRuntimeStore())
 	sessionStore := SessionStore(newInMemorySessionStore())
@@ -165,6 +167,15 @@ func newServiceWithStrongholdBootstrap(adapter platform.StorageAdapter, bootstra
 			}
 			if err != nil {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite memory store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteMirrorConversationStore, err := NewSQLiteMirrorConversationStore(databasePath)
+			if err == nil {
+				mirrorConversationStore = sqliteMirrorConversationStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite mirror conversation store: %w", err))
 				fallbackActive = true
 			}
 
@@ -372,6 +383,7 @@ func newServiceWithStrongholdBootstrap(adapter platform.StorageAdapter, bootstra
 	return &Service{
 		adapter:                  adapter,
 		memoryStore:              memoryStore,
+		mirrorConversationStore:  mirrorConversationStore,
 		taskRunStore:             taskRunStore,
 		toolCallStore:            toolCallStore,
 		loopRuntimeStore:         loopRuntimeStore,
@@ -531,6 +543,11 @@ func (s *Service) MemoryStore() MemoryStore {
 	return s.memoryStore
 }
 
+// MirrorConversationStore returns the configured mirror conversation store.
+func (s *Service) MirrorConversationStore() MirrorConversationStore {
+	return s.mirrorConversationStore
+}
+
 func (s *Service) TaskRunStore() TaskRunStore {
 	return s.taskRunStore
 }
@@ -630,6 +647,9 @@ func (s *Service) AuthorizationRecordStore() AuthorizationRecordStore {
 func (s *Service) Close() error {
 	errs := make([]error, 0, 2)
 	if closer, ok := s.memoryStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.mirrorConversationStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.taskRunStore.(interface{ Close() error }); ok {

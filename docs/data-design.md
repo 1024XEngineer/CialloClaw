@@ -57,6 +57,7 @@
 - `memory_summaries`
 - `memory_candidates`
 - `retrieval_hits`
+- `mirror_conversations`
 - FTS5 文本索引
 - sqlite-vec 向量索引
 
@@ -205,6 +206,7 @@
 | `memory_summaries` | 长期记忆 | 镜子、Memory | Memory Engine | 正式长期记忆 |
 | `memory_candidates` | 候选记忆 | Memory 审查流程 | Memory Engine | 候选层 |
 | `retrieval_hits` | 召回命中 | 排障、Eval | Memory Engine | 一次任务中的命中记录 |
+| `mirror_conversations` | 镜子会话历史 | 镜子页 | Orchestrator | 近场输入与气泡响应的正式历史视图 |
 | `skill_manifests` | Skill 配置 | 前馈层 | Skill Loader | Skill 元数据和版本 |
 | `blueprint_definitions` | 蓝图定义 | 前馈层 | Blueprint Loader | 计划模板 |
 | `prompt_template_versions` | Prompt 模板 | 前馈层 | Prompt Composer | Prompt 版本 |
@@ -239,9 +241,9 @@
 - 作用：维持 task-centric 与 run-centric 双层对象的稳定映射。
 
 ### 6.4 记忆写入与本地检索
-- 主要表：`memory_summaries / memory_candidates / retrieval_hits / trace_records`
-- 关键字段：`memory_summaries.category`，`memory_candidates.review_status`，`retrieval_hits.score / source`
-- 作用：实现记忆写入、召回、命中记录与排障追踪。
+- 主要表：`memory_summaries / memory_candidates / retrieval_hits / mirror_conversations / trace_records`
+- 关键字段：`memory_summaries.category`，`memory_candidates.review_status`，`retrieval_hits.score / source`，`mirror_conversations.updated_at / task_id / status`
+- 作用：实现记忆写入、召回、命中记录、镜子会话历史与排障追踪。
 
 ### 6.5 风险授权与恢复回滚
 - 主要表：`approval_requests / authorization_records / audit_records / recovery_points`
@@ -727,6 +729,29 @@ CREATE TABLE retrieval_hits (
 CREATE INDEX idx_retrieval_hits_task_score ON retrieval_hits(task_id, score DESC);
 ```
 
+### 7.18.1 mirror_conversations
+
+```sql
+CREATE TABLE mirror_conversations (
+    record_id TEXT PRIMARY KEY,                  -- 会话记录ID
+    trace_id TEXT NOT NULL,                      -- 请求trace ID
+    created_at TEXT NOT NULL,                    -- 首次记录时间
+    updated_at TEXT NOT NULL,                    -- 最近更新时间
+    source TEXT NOT NULL,                        -- 请求来源
+    trigger TEXT NOT NULL,                       -- 触发方式
+    input_mode TEXT NOT NULL,                    -- 输入模式
+    session_id TEXT,                             -- 关联session
+    task_id TEXT,                                -- 关联task
+    user_text TEXT NOT NULL,                     -- 用户输入
+    agent_text TEXT,                             -- 代理输出文本
+    agent_bubble_type TEXT,                      -- 代理气泡类型
+    status TEXT NOT NULL,                        -- submitted/responded/failed
+    error_message TEXT                           -- 失败信息
+);
+CREATE INDEX idx_mirror_conversations_updated ON mirror_conversations(updated_at DESC, created_at DESC);
+CREATE INDEX idx_mirror_conversations_task ON mirror_conversations(task_id, updated_at DESC);
+```
+
 ### 7.19 skill_manifests
 
 ```sql
@@ -954,13 +979,14 @@ CREATE VIRTUAL TABLE memory_summaries_fts USING fts5(
 16. `memory_candidates`
 17. `memory_summaries`
 18. `retrieval_hits`
-19. `skill_manifests`
-20. `blueprint_definitions`
-21. `prompt_template_versions`
-22. `plugin_manifests`
-23. `settings_snapshots`
-24. `trace_records`
-25. `eval_snapshots`
+19. `mirror_conversations`
+20. `skill_manifests`
+21. `blueprint_definitions`
+22. `prompt_template_versions`
+23. `plugin_manifests`
+24. `settings_snapshots`
+25. `trace_records`
+26. `eval_snapshots`
 
 ---
 

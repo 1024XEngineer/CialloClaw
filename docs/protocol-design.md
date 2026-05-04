@@ -2873,7 +2873,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 补充约束：
 
-- 当前 stable 范围内，镜子域只冻结 `agent.mirror.overview.get`
+- 当前 stable 范围内，镜子域冻结 `agent.mirror.overview.get` 与 `agent.mirror.conversation.list`
 - `agent.mirror.memory.manage` 仍属于 planned，前端不得绕过协议真源提前调用
 
 ### agent.mirror.overview.get 入参说明
@@ -2944,6 +2944,109 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     },
     "meta": {
       "server_time": "2026-04-07T11:01:31+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+### 8.3.4.1 `agent.mirror.conversation.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户在镜子页查看近期会话承接历史时
+- **系统处理**：
+  - 按时间倒序返回正式持久化的镜子会话记录
+  - 支持按 `task_id`、`source` 与 `status` 做过滤
+- **入参**：可选过滤条件、分页参数
+- **出参**：镜子会话记录列表、分页信息
+
+补充约束：
+
+- 该接口只返回后端正式持久化的记录，不读取前端本地缓存
+- 返回顺序固定为 `updated_at DESC, created_at DESC, record_id DESC`
+
+### agent.mirror.conversation.list 入参说明
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `task_id` | 可选任务 ID；为空时不过滤 |
+| `source` | 可选来源；用于区分悬浮球、仪表盘、托盘面板 |
+| `status` | 可选状态；支持 `submitted / responded / failed` |
+| `limit` | 每页条数 |
+| `offset` | 分页偏移 |
+
+### agent.mirror.conversation.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_mirror_conversation_list_001",
+  "method": "agent.mirror.conversation.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_mirror_conversation_list_001",
+      "client_time": "2026-04-07T11:04:30+08:00"
+    },
+    "task_id": "task_301",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.mirror.conversation.list 出参说明
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `data.items[].record_id` | 记录 ID |
+| `data.items[].trace_id` | 请求 trace ID |
+| `data.items[].source` | 请求来源 |
+| `data.items[].trigger` | 触发方式 |
+| `data.items[].input_mode` | 输入模式 |
+| `data.items[].session_id` | 关联会话 ID；无则为 `null` |
+| `data.items[].task_id` | 关联任务 ID；无则为 `null` |
+| `data.items[].user_text` | 用户输入文本 |
+| `data.items[].agent_text` | 返回给用户的气泡文本；无则为 `null` |
+| `data.items[].agent_bubble_type` | 气泡类型；无则为 `null` |
+| `data.items[].status` | 记录状态 |
+| `data.items[].error_message` | 失败信息；无则为 `null` |
+| `data.page` | 分页信息 |
+
+### agent.mirror.conversation.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_mirror_conversation_list_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "record_id": "mirror_conversation_trace_001",
+          "trace_id": "trace_001",
+          "created_at": "2026-04-07T11:04:30+08:00",
+          "updated_at": "2026-04-07T11:04:36+08:00",
+          "source": "dashboard",
+          "trigger": "voice_commit",
+          "input_mode": "voice",
+          "session_id": "session_001",
+          "task_id": "task_301",
+          "user_text": "帮我总结这个报错",
+          "agent_text": "我已整理出报错原因和下一步建议。",
+          "agent_bubble_type": "result",
+          "status": "responded",
+          "error_message": null
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:04:37+08:00"
     },
     "warnings": []
   }

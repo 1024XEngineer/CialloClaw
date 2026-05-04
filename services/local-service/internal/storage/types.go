@@ -69,6 +69,31 @@ type MemoryStore interface {
 	ListRecentSummaries(ctx context.Context, limit int) ([]MemorySummaryRecord, error)
 }
 
+// MirrorConversationRecord captures one persisted mirror conversation history
+// row sourced from the formal input-submit pipeline.
+type MirrorConversationRecord struct {
+	RecordID        string
+	TraceID         string
+	CreatedAt       string
+	UpdatedAt       string
+	Source          string
+	Trigger         string
+	InputMode       string
+	SessionID       string
+	TaskID          string
+	UserText        string
+	AgentText       string
+	AgentBubbleType string
+	Status          string
+	ErrorMessage    string
+}
+
+// MirrorConversationStore persists backend-owned mirror conversation history.
+type MirrorConversationStore interface {
+	SaveMirrorConversation(ctx context.Context, record MirrorConversationRecord) error
+	ListMirrorConversations(ctx context.Context, taskID, source, status string, limit, offset int) ([]MirrorConversationRecord, int, error)
+}
+
 // ArtifactRecord describes one persisted artifact snapshot.
 type ArtifactRecord struct {
 	ArtifactID          string

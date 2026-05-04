@@ -301,8 +301,12 @@ func (s *Service) RunEngine() *runengine.Engine {
 // SubmitInput handles agent.input.submit.
 // It captures context, derives intent suggestions, and decides whether the task
 // waits for more input, asks for confirmation, or runs immediately.
-func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
+func (s *Service) SubmitInput(params map[string]any) (response map[string]any, err error) {
 	snapshot := s.context.Capture(params)
+	mirrorRecord := s.beginMirrorConversationRecord(params, snapshot)
+	defer func() {
+		s.finishMirrorConversationRecord(mirrorRecord, response, err)
+	}()
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", false)
 	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
@@ -402,7 +406,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		}
 	}
 
-	response := map[string]any{
+	response = map[string]any{
 		"task":            taskMap(task),
 		"bubble_message":  bubble,
 		"delivery_result": nil,

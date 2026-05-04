@@ -39,6 +39,7 @@ func (s *Server) registerHandlers() {
 		"agent.dashboard.overview.get":         s.handleAgentDashboardOverviewGet,
 		"agent.dashboard.module.get":           s.handleAgentDashboardModuleGet,
 		"agent.mirror.overview.get":            s.handleAgentMirrorOverviewGet,
+		"agent.mirror.conversation.list":       s.handleAgentMirrorConversationList,
 		"agent.security.summary.get":           s.handleAgentSecuritySummaryGet,
 		"agent.security.audit.list":            s.handleAgentSecurityAuditList,
 		"agent.security.pending.list":          s.handleAgentSecurityPendingList,
@@ -192,6 +193,12 @@ func (s *Server) handleAgentDashboardModuleGet(params map[string]any) (any, *rpc
 // handleAgentMirrorOverviewGet handles agent.mirror.overview.get.
 func (s *Server) handleAgentMirrorOverviewGet(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.MirrorOverviewGet(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentMirrorConversationList handles agent.mirror.conversation.list.
+func (s *Server) handleAgentMirrorConversationList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.MirrorConversationList(params)
 	return wrapOrchestratorResult(data, err)
 }
 

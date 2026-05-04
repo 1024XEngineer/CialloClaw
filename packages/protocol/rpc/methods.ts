@@ -14,6 +14,7 @@ import type {
   InputMode,
   InputType,
   IntentPayload,
+  MirrorConversationRecord,
   MirrorReference,
   NotepadAction,
   PluginListItem,
@@ -68,6 +69,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_DASHBOARD_OVERVIEW_GET: "agent.dashboard.overview.get",
   AGENT_DASHBOARD_MODULE_GET: "agent.dashboard.module.get",
   AGENT_MIRROR_OVERVIEW_GET: "agent.mirror.overview.get",
+  AGENT_MIRROR_CONVERSATION_LIST: "agent.mirror.conversation.list",
   AGENT_SECURITY_SUMMARY_GET: "agent.security.summary.get",
   AGENT_SECURITY_AUDIT_LIST: "agent.security.audit.list",
   AGENT_SECURITY_RESTORE_POINTS_LIST: "agent.security.restore_points.list",
@@ -635,13 +637,15 @@ export interface AgentDashboardModuleGetResult {
   highlights: string[];
 }
 
-// AgentMirrorOverviewGetParams 定义当前模块的接口约束。
+// AgentMirrorOverviewGetParams defines the parameters for
+// `agent.mirror.overview.get`.
 export interface AgentMirrorOverviewGetParams {
   request_meta: RequestMeta;
   include?: Array<"history_summary" | "daily_summary" | "profile" | "memory_references">;
 }
 
-// AgentMirrorOverviewGetResult 定义当前模块的接口约束。
+// AgentMirrorOverviewGetResult defines the result for
+// `agent.mirror.overview.get`.
 export interface AgentMirrorOverviewGetResult {
   history_summary: string[];
   daily_summary: {
@@ -657,12 +661,32 @@ export interface AgentMirrorOverviewGetResult {
   memory_references: MirrorReference[];
 }
 
-// AgentSecuritySummaryGetParams 定义当前模块的接口约束。
+// AgentMirrorConversationListParams defines the parameters for
+// `agent.mirror.conversation.list`.
+export interface AgentMirrorConversationListParams {
+  request_meta: RequestMeta;
+  task_id?: string;
+  source?: RequestSource;
+  status?: MirrorConversationRecord["status"];
+  limit: number;
+  offset: number;
+}
+
+// AgentMirrorConversationListResult defines the result for
+// `agent.mirror.conversation.list`.
+export interface AgentMirrorConversationListResult {
+  items: MirrorConversationRecord[];
+  page: JsonRpcPage;
+}
+
+// AgentSecuritySummaryGetParams defines the parameters for
+// `agent.security.summary.get`.
 export interface AgentSecuritySummaryGetParams {
   request_meta: RequestMeta;
 }
 
-// AgentSecuritySummaryGetResult 定义当前模块的接口约束。
+// AgentSecuritySummaryGetResult defines the result for
+// `agent.security.summary.get`.
 export interface AgentSecuritySummaryGetResult {
   summary: {
     security_status: SecurityStatus;
