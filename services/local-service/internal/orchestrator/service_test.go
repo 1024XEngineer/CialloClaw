@@ -6202,6 +6202,88 @@ func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testi
 	}
 }
 
+func TestServiceAttachFormalCitationsReplacesPreviousAttemptHistory(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "replace restart citation history")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_replace_restart_citations"
+	firstAttempt := runengine.TaskRecord{
+		TaskID: taskID,
+		RunID:  "run_replace_restart_citations_1",
+	}
+	secondAttempt := runengine.TaskRecord{
+		TaskID: taskID,
+		RunID:  "run_replace_restart_citations_2",
+	}
+
+	firstArtifacts := []map[string]any{{
+		"artifact_id":   "art_replace_restart_citations_1",
+		"task_id":       taskID,
+		"artifact_type": "screen_capture",
+		"title":         "first.png",
+		"path":          "workspace/first.png",
+		"mime_type":     "image/png",
+	}}
+	secondArtifacts := []map[string]any{{
+		"artifact_id":   "art_replace_restart_citations_2",
+		"task_id":       taskID,
+		"artifact_type": "screen_capture",
+		"title":         "second.png",
+		"path":          "workspace/second.png",
+		"mime_type":     "image/png",
+	}}
+
+	service.attachFormalCitations(firstAttempt, firstAttempt, []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_replace_restart_citations_1",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "first attempt excerpt",
+				"screen_session_id": "screen_sess_first",
+			},
+		},
+	}}, nil, map[string]any{"payload": map[string]any{"task_id": taskID}}, firstArtifacts)
+
+	service.attachFormalCitations(secondAttempt, secondAttempt, []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_replace_restart_citations_2",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "second attempt excerpt",
+				"screen_session_id": "screen_sess_second",
+			},
+		},
+	}}, nil, map[string]any{"payload": map[string]any{"task_id": taskID}}, secondArtifacts)
+
+	allCitations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID, "")
+	if err != nil {
+		t.Fatalf("list replaced citations failed: %v", err)
+	}
+	if len(allCitations) != 1 {
+		t.Fatalf("expected task-scoped citation replacement to keep one citation chain, got %+v", allCitations)
+	}
+	if allCitations[0].RunID != secondAttempt.RunID || allCitations[0].ArtifactID != "art_replace_restart_citations_2" {
+		t.Fatalf("expected latest attempt citation chain to replace previous history, got %+v", allCitations[0])
+	}
+	firstAttemptCitations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID, firstAttempt.RunID)
+	if err != nil {
+		t.Fatalf("list first attempt citations failed: %v", err)
+	}
+	if len(firstAttemptCitations) != 0 {
+		t.Fatalf("expected first attempt citations to be removed after restart replacement, got %+v", firstAttemptCitations)
+	}
+	secondAttemptCitations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID, secondAttempt.RunID)
+	if err != nil {
+		t.Fatalf("list second attempt citations failed: %v", err)
+	}
+	if len(secondAttemptCitations) != 1 || secondAttemptCitations[0].ExcerptText != "second attempt excerpt" {
+		t.Fatalf("expected second attempt citation chain to remain queryable, got %+v", secondAttemptCitations)
+	}
+}
+
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 	service := newTestService()
 
