@@ -1723,16 +1723,25 @@ flowchart TB
 - 结构化 DOM/页面结果回传。
 
 #### 实现约束
-- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类正式能力；
+- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
+- sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
+- `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
+- `browser_*` 动作必须显式提供 `attach`，不得偷偷回退到 launch 路径；其中 `browser_navigate` 的顶层 `url` 仅表示导航目标，不参与附着页筛选；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
 
+#### worker 契约补充
+- attached 模式结果可追加 `attached / browser_kind / browser_transport / endpoint_url / source` 元信息，供后续 Go sidecar、引用映射与前端承接复用；
+- `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tab_focus` 结果至少需要稳定回写 `page_index / url / title`，`browser_tabs_list` 需要回写 `tabs[]` 与 `tab_count`；
+- worker 至少需要把 `browser_attach_failed`、`browser_kind_mismatch`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
+
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。
-2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom`。
-3. 把页面结果、结构化 DOM、截图或 URL 元数据组装成标准工具输出。
+2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom` 与 `browser_*` 动作。
+3. 把页面结果、结构化 DOM、页签列表、导航结果或 URL 元数据组装成标准工具输出。
 4. 为需要证据链的场景生成 `citation_seed` 与 artifact 候选。
 5. 通过 `tool_call.completed` 和正式交付链回流，而不是独立暴露页面结果。
 
