@@ -277,6 +277,9 @@ impl NamedPipeBridgeState {
     /// request_via_isolated_connection keeps short control-panel style reads off
     /// the shared streaming session so a long-running shell-ball task cannot
     /// delay unrelated settings fetches behind the same pipe connection.
+    /// Notifications observed on the isolated request are still forwarded into
+    /// the shared desktop subscription fan-out so dashboard and security surfaces
+    /// stay in sync when a shell-ball submit uses the isolated path.
     fn request_via_isolated_connection(
         self: &Arc<Self>,
         payload: Value,
@@ -286,8 +289,9 @@ impl NamedPipeBridgeState {
         let request_id = extract_request_id(&payload)?;
         let (response_tx, response_rx) = mpsc::channel();
 
+        let state = Arc::clone(self);
         std::thread::spawn(move || {
-            let result = send_isolated_named_pipe_request(&pipe_name, &request_id, payload);
+            let result = send_isolated_named_pipe_request(&state, &pipe_name, &request_id, payload);
             let _ = response_tx.send(result);
         });
 
@@ -1435,8 +1439,9 @@ mod desktop_settings_snapshot_tests {
 #[cfg(test)]
 mod named_pipe_routing_tests {
     use super::{
-        configure_sidecar_named_pipe, requires_shared_named_pipe_request,
-        should_use_isolated_named_pipe_payload, NamedPipeBridgeState, DEFAULT_NAMED_PIPE_PATH,
+        classify_isolated_named_pipe_message, configure_sidecar_named_pipe,
+        requires_shared_named_pipe_request, should_use_isolated_named_pipe_payload,
+        IsolatedNamedPipeMessage, NamedPipeBridgeState, DEFAULT_NAMED_PIPE_PATH,
     };
     use serde_json::json;
 
@@ -1511,6 +1516,57 @@ mod named_pipe_routing_tests {
             scoped_pipe
         );
     }
+
+    #[test]
+    fn isolated_named_pipe_message_classification_marks_matching_response() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": "req_submit",
+            "result": {
+                "data": {
+                    "task": {
+                        "task_id": "task-shell-ball"
+                    }
+                }
+            }
+        });
+
+        let classified = classify_isolated_named_pipe_message("\"req_submit\"", message);
+
+        match classified {
+            IsolatedNamedPipeMessage::MatchedResponse(message) => {
+                assert_eq!(message.get("id"), Some(&json!("req_submit")));
+            }
+            _ => panic!("expected matching isolated response to be returned"),
+        }
+    }
+
+    #[test]
+    fn isolated_named_pipe_message_classification_forwards_notifications() {
+        let message = json!({
+            "jsonrpc": "2.0",
+            "method": "task.updated",
+            "params": {
+                "task_id": "task-shell-ball",
+                "status": "processing"
+            }
+        });
+
+        let classified = classify_isolated_named_pipe_message("\"req_submit\"", message);
+
+        match classified {
+            IsolatedNamedPipeMessage::ForwardedNotification { topic, message } => {
+                assert_eq!(topic, "task.updated");
+                assert_eq!(
+                    message
+                        .get("params")
+                        .and_then(|params| params.get("task_id")),
+                    Some(&json!("task-shell-ball"))
+                );
+            }
+            _ => panic!("expected isolated notification to be forwarded"),
+        }
+    }
 }
 
 fn writer_loop(
@@ -1561,10 +1617,10 @@ fn reader_loop(reader: std::fs::File, state: Arc<NamedPipeBridgeState>) {
     );
 }
 
-/// should_use_isolated_named_pipe_request identifies request types that only
-/// need one response payload and do not rely on streamed task notifications.
-/// Routing them to a fresh connection prevents shell-ball task streams from
-/// head-of-line blocking control-panel reads on the shared session.
+/// should_use_isolated_named_pipe_request identifies request types that can use
+/// a fresh response channel without depending on request/response ordering on
+/// the shared session. Isolated requests may still forward notifications into
+/// the host-side subscription fan-out when the backend emits them.
 fn should_use_isolated_named_pipe_request(method: &str) -> bool {
     !requires_shared_named_pipe_request(method)
 }
@@ -1608,10 +1664,37 @@ fn requires_shared_named_pipe_request(method: &str) -> bool {
     )
 }
 
+enum IsolatedNamedPipeMessage {
+    ForwardedNotification { topic: String, message: Value },
+    MatchedResponse(Value),
+    Ignored,
+}
+
+fn classify_isolated_named_pipe_message(
+    request_id: &str,
+    message: Value,
+) -> IsolatedNamedPipeMessage {
+    if let Some(method) = message.get("method").and_then(Value::as_str) {
+        return IsolatedNamedPipeMessage::ForwardedNotification {
+            topic: method.to_string(),
+            message,
+        };
+    }
+
+    if let Some(id) = message.get("id") {
+        if normalize_id(id) == request_id {
+            return IsolatedNamedPipeMessage::MatchedResponse(message);
+        }
+    }
+
+    IsolatedNamedPipeMessage::Ignored
+}
+
 /// send_isolated_named_pipe_request performs one request/response exchange on a
-/// fresh pipe connection. Notifications are ignored because the isolated mode is
-/// only used for RPC methods that do not depend on streamed task updates.
+/// fresh pipe connection while forwarding any notifications into the shared
+/// desktop subscription fan-out.
 fn send_isolated_named_pipe_request(
+    state: &Arc<NamedPipeBridgeState>,
     pipe_name: &str,
     request_id: &str,
     payload: Value,
@@ -1636,11 +1719,15 @@ fn send_isolated_named_pipe_request(
     while let Some(result) = responses.next() {
         let message = result
             .map_err(|error| format!("failed to decode isolated named pipe response: {error}"))?;
-        let Some(id) = message.get("id") else {
-            continue;
-        };
-        if normalize_id(id) == request_id {
-            return Ok(message);
+
+        match classify_isolated_named_pipe_message(request_id, message) {
+            IsolatedNamedPipeMessage::ForwardedNotification { topic, message } => {
+                state.dispatch_notification(&topic, &message);
+            }
+            IsolatedNamedPipeMessage::MatchedResponse(message) => {
+                return Ok(message);
+            }
+            IsolatedNamedPipeMessage::Ignored => {}
         }
     }
 
