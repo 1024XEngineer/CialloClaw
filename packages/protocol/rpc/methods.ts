@@ -141,6 +141,9 @@ export interface PageContext {
   title?: string;
   app_name?: string;
   url?: string;
+  browser_kind?: "chrome" | "edge" | "other_browser" | "non_browser";
+  process_path?: string;
+  process_id?: number;
   window_title?: string;
   visible_text?: string;
   hover_target?: string;
@@ -255,6 +258,9 @@ export interface AgentTaskStartParams {
   };
   context?: InputContext;
   delivery?: DeliveryPreference;
+  options?: {
+    confirm_required?: boolean;
+  };
 }
 
 // AgentTaskStartResult 定义当前模块的接口约束。

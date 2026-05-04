@@ -285,6 +285,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }>({
     handleDroppedFiles: () => undefined,
   });
+  const inputFocusRequestRef = useRef<() => void>(() => undefined);
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
   const focusInlineInputField = useCallback((syncInteraction = true) => {
     if (syncInteraction) {
@@ -293,6 +294,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     setInputFocusToken((current) => current + 1);
   }, [handleInputFocusRequest]);
+  inputFocusRequestRef.current = () => focusInlineInputField(false);
   const {
     handleClipboardPrompt: handleCoordinatorClipboardPrompt,
     handleDroppedFiles: handleCoordinatorDroppedFiles,
@@ -636,14 +638,23 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         case "leave":
           setFileDropActive(false);
           return;
-        case "drop":
+        case "drop": {
           setFileDropActive(false);
           if (event.payload.paths.length === 0) {
             return;
           }
 
-          void dragDropHandlersRef.current.handleDroppedFiles(event.payload.paths);
+          const droppedPaths = event.payload.paths;
+          void (async () => {
+            try {
+              await dragDropHandlersRef.current.handleDroppedFiles(droppedPaths);
+              inputFocusRequestRef.current();
+            } catch (error) {
+              console.warn("shell-ball file drop handling failed", error);
+            }
+          })();
           return;
+        }
       }
     }).then((unlisten) => {
       if (disposed) {

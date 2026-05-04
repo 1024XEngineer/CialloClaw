@@ -1353,7 +1353,7 @@
 
 .task-detail-runtime-item__payload {
   color: var(--task-ink, #5f544b);
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--task-font-mono);
   font-size: 0.76rem;
   line-height: 1.6;
   overflow-wrap: anywhere;

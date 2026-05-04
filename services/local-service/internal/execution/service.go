@@ -24,6 +24,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -31,6 +32,8 @@ const (
 	defaultAgentLoopIntentName  = "agent_loop"
 	defaultAgentLoopTimeout     = 90 * time.Second
 	internalScreenAnalyzeIntent = "screen_analyze_candidate"
+	deliveryPreviewMaxLength    = 120
+	inputPreviewMaxLength       = 96
 )
 
 // Service owns the minimum executable task pipeline inside local-service.
@@ -107,6 +110,18 @@ func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Servi
 	}
 	s.steeringPoller = poller
 	return s
+}
+
+// CanConsumeActiveSteering reports whether an in-flight task with this intent
+// can drain follow-up guidance before execution finishes. Agent-loop intent is
+// not enough on its own because prompt fallback paths and loop runs without a
+// poller have no live steering consumption point.
+func (s *Service) CanConsumeActiveSteering(taskIntent map[string]any) bool {
+	if s == nil || s.steeringPoller == nil || !isAgentLoopIntent(taskIntent) {
+		return false
+	}
+	modelService := s.currentModel()
+	return modelService != nil && modelService.SupportsToolCalling() && s.loop != nil
 }
 
 // Request carries the minimum execution input for one task attempt.
@@ -342,7 +357,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		ToolInput: map[string]any{
 			"intent_name":     effectiveIntentName(request.Intent),
 			"delivery_type":   deliveryType,
-			"input_preview":   truncateText(inputText, 96),
+			"input_preview":   truncateText(inputText, inputPreviewMaxLength),
 			"available_tools": s.availableToolNames(),
 			"workers":         s.availableWorkers(),
 		},
@@ -1528,7 +1543,7 @@ func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, 
 		fmt.Sprintf("已分析屏幕内容：%s", ocrSummary),
 		"已分析屏幕内容。",
 	)
-	previewText := truncateText(ocrSummary, 96)
+	previewText := truncateText(ocrSummary, deliveryPreviewMaxLength)
 	observationSummary := cloneMap(flow.ObservationSeed)
 	citationSeed := map[string]any{
 		"artifact_id":       stringValue(flow.Artifact, "artifact_id", ""),
@@ -1860,9 +1875,16 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		return trace, nil
 	}
 
-	trace, err := s.generateOutputWithPrompt(ctx, request, inputText)
+	promptInputText := inputText
+	if len(request.SteeringMessages) > 0 {
+		// Prompt-only execution does not have a live loop poller, so queued
+		// steering must be folded into this generation request before the task
+		// resumes from authorization or a session queue.
+		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+	}
+	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
-		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, promptInputText, err); fallbackOK {
 			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
 			return fallbackTrace, nil
 		}
@@ -2277,7 +2299,7 @@ func workspaceDocumentContent(title, outputText string) string {
 }
 
 func previewTextForOutput(outputText, deliveryType string) string {
-	preview := truncateText(normalizeWhitespace(outputText), 96)
+	preview := truncateText(normalizeWhitespace(outputText), deliveryPreviewMaxLength)
 	if preview == "" {
 		preview = "结果已生成"
 	}
@@ -2386,10 +2408,7 @@ func normalizeWhitespace(inputText string) string {
 }
 
 func truncateText(inputText string, maxLength int) string {
-	if maxLength <= 0 || len(inputText) <= maxLength {
-		return inputText
-	}
-	return inputText[:maxLength] + "..."
+	return textutil.TruncateGraphemes(inputText, maxLength)
 }
 
 func mapValue(values map[string]any, key string) map[string]any {

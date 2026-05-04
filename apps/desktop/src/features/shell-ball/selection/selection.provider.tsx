@@ -28,6 +28,9 @@ export function areShellBallSelectionSnapshotsEqual(
     && left.page_context.window_title === right.page_context.window_title
     && left.page_context.visible_text === right.page_context.visible_text
     && left.page_context.hover_target === right.page_context.hover_target
+    && left.page_context.browser_kind === right.page_context.browser_kind
+    && left.page_context.process_path === right.page_context.process_path
+    && left.page_context.process_id === right.page_context.process_id
   );
 }
 

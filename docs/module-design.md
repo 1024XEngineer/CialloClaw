@@ -810,7 +810,7 @@ flowchart TB
 - 左键双击：打开仪表盘
 - 左键长按：语音主入口，上滑锁定、下滑取消
 - 鼠标悬停：显示轻量输入与主动推荐
-- 文件拖拽：解析文件后进入意图确认
+- 文件拖拽：先进入附件队列；带明确说明的新任务可直接进入执行链路，裸文件或补充证据按确认 / 等待输入骨架承接
 - 文本选中：进入可操作提示态，再进入意图确认
 
 对应模块分工：
@@ -1354,7 +1354,8 @@ flowchart TB
 #### 具体判断方式
 - **确定性规则**：空输入直接进入 `waiting_input`；显式 `intent` 优先。
 - **轻量建议**：`intent.Suggest()` 输出 `Suggestion`，包含 `IntentConfirmed / RequiresConfirm / TaskTitle / DirectDeliveryType` 等字段。
-- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification。
+- **确认策略**：`options.confirm_required` 只负责阻止当前输入直接执行；附件等对象型入口若已经带有明确用户说明，应直接进入 Agent Loop / 治理 / 执行链路，裸对象或低置信度输入才停在确认或澄清。
+- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification；`confirm_required` 只负责阻止直接执行，不负责抹掉已经明确的任务归属。普通文本补充可续接到同一 `session` 内唯一的 `waiting_input / confirming_intent` 任务，但仍停在确认门后；文件、选区、错误等结构化补充证据若要续接到这类待用户补充的任务，都必须带有任务特定证据（如 lineage、共享文件、同一页面 / 窗口 / 对象锚点），不能只因为输入是结构化对象就续接；多候选场景下只有存在唯一任务特定匹配时才允许结构化续接；不能续接正在执行的任务，也不能自动执行；悬浮球默认入口锚点（如 `desktop / local://shell-ball`）只表示补充证据从哪里进入系统，不应作为正向续接证据，也不应覆盖或冲突于原 task 的真实页面 / 应用锚点。
 - **执行阶段分工**：入口规划只决定“以什么意图、什么交付类型、是否要确认进入主链”；真正的 ReAct/Agent Loop 计划在执行阶段发生。
 
 #### 关键中间产物
@@ -1453,7 +1454,8 @@ flowchart TB
 #### 运行控制器如何承接
 - 若 lane 忙，则运行控制器把任务转入 `blocked + session_queue`；
 - 当前序任务完成后，通过 `NextQueuedTaskForSession()` 和 `ResumeQueuedTask()` 恢复；
-- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`。
+- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`；正在 `processing` 的任务只有在当前执行是可轮询的 `agent_loop` 时才接受运行中 steering，普通 prompt 执行中的 follow-up 应排队为后续 task，避免返回“已挂回”但没有消费点。
+- 非 `agent_loop` 的恢复执行路径必须在重新生成 prompt 前合并已排队 steering，确保等待授权或 session queue 期间记录的补充要求不会被静默忽略。
 
 #### 异常处理
 - 候选任务状态不允许续接：直接新开任务；
@@ -1721,16 +1723,25 @@ flowchart TB
 - 结构化 DOM/页面结果回传。
 
 #### 实现约束
-- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类正式能力；
+- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
+- sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
+- `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
+- `browser_*` 动作必须显式提供 `attach`，不得偷偷回退到 launch 路径；其中 `browser_navigate` 的顶层 `url` 仅表示导航目标，不参与附着页筛选；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
 
+#### worker 契约补充
+- attached 模式结果可追加 `attached / browser_kind / browser_transport / endpoint_url / source` 元信息，供后续 Go sidecar、引用映射与前端承接复用；
+- `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tab_focus` 结果至少需要稳定回写 `page_index / url / title`，`browser_tabs_list` 需要回写 `tabs[]` 与 `tab_count`；
+- worker 至少需要把 `browser_attach_failed`、`browser_kind_mismatch`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
+
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。
-2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom`。
-3. 把页面结果、结构化 DOM、截图或 URL 元数据组装成标准工具输出。
+2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom` 与 `browser_*` 动作。
+3. 把页面结果、结构化 DOM、页签列表、导航结果或 URL 元数据组装成标准工具输出。
 4. 为需要证据链的场景生成 `citation_seed` 与 artifact 候选。
 5. 通过 `tool_call.completed` 和正式交付链回流，而不是独立暴露页面结果。
 
@@ -2594,13 +2605,13 @@ flowchart TB
 
 ## 6. 关键时序图与实现说明
 
-### 6.1 近场对象承接时序：文本选中 / 文件拖拽 -> 意图确认 -> 执行
+### 6.1 近场对象承接时序：文本选中 / 文件拖拽 -> 确认或直接执行
 
 **链路目标**：把文本选中、文件拖拽等“近场对象承接”转换成正式任务。  
 **主要模块参与**：表现层、应用编排层、协议适配层、本地接入层、上下文归一与准备器、入口判断与规划器、运行控制器、风险评估与授权承接、正式结果交付协调。
 **关键结果**：形成 `task`，必要时生成 `bubble_message` 进行意图确认，最终得到 `delivery_result`。  
 **异常分支**：高风险动作进入授权链路；对象失效则回退到待机或确认失败态。  
-**实现说明**：此链路是所有近场承接动作的统一模板，文本选中、拖拽文件、错误信息承接和主动机会承接都应先落在这个链路上再分化。
+**实现说明**：此链路是所有近场承接动作的统一模板，文本选中、拖拽文件、错误信息承接和主动机会承接都应落在同一确认 / 执行骨架上；带明确说明的文件任务可以直接进入治理与执行，裸文件仍进入确认或补充输入，带任务特定证据的结构化补充证据可续接到正在等待用户输入的原 task。
 
 ```mermaid
 sequenceDiagram
@@ -2883,12 +2894,12 @@ sequenceDiagram
     end
 ```
 
-### 6.8 机会对象承接时序：文本 / 文件 / 推荐 -> 意图确认
+### 6.8 机会对象承接时序：文本 / 文件 / 推荐 -> 确认或执行
 
-**链路目标**：把文本、文件、推荐机会这些对象统一进入意图确认链路。  
-**关键结果**：确认前用 `bubble_message` 承接，确认后转入正式 `task` 执行。  
-**重点约束**：文件解析、机会识别和对象识别都不得直接跳过意图确认逻辑。  
-**实现说明**：无论对象来源是选中文本、拖拽文件还是主动推荐，后续都应收敛到同一套确认与执行骨架。
+**链路目标**：把文本、文件、推荐机会这些对象统一进入确认 / 执行骨架。
+**关键结果**：需要确认时用 `bubble_message` 承接，确认后转入正式 `task` 执行；不需要确认且说明明确时直接进入治理与执行。
+**重点约束**：文件解析、机会识别和对象识别不得维护各自独立的确认状态；裸文件和低置信度对象必须停在确认或补充输入。
+**实现说明**：无论对象来源是选中文本、拖拽文件还是主动推荐，后续都应收敛到同一套确认与执行骨架；带任务特定证据的结构化补充证据可以续接待用户补充的原 task，但不能绕过确认门禁去自动执行。
 
 ```mermaid
 sequenceDiagram
@@ -3192,7 +3203,7 @@ stateDiagram-v2
 ### 6.15 前端状态图：意图确认
 
 **说明**：这是前端承接流程和后端规划流程之间的桥接状态机，结束点通常会进入 `agent.task.confirm` 或直接执行。  
-**实现补充**：所有对象型入口都应进入同一确认骨架，不允许各入口维护不同的确认状态定义。
+**实现补充**：所有对象型入口都应复用同一确认 / 执行骨架，不允许各入口维护不同的确认状态定义；带明确说明的文件任务可直接进入主执行链路，裸文件或低置信度对象进入确认 / 补充输入，带任务特定证据的结构化补充证据可挂回 `waiting_input / confirming_intent` 任务但仍不得自动执行。
 
 ```mermaid
 stateDiagram-v2
