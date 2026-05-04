@@ -325,6 +325,12 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
+	if decision, ok := s.routeUnanchoredSubmitInput(context.Background(), snapshot, suggestion, confirmRequired); ok {
+		if decision.Route == inputRouteSocialChat {
+			return s.socialChatInputResponse(decision), nil
+		}
+		suggestion = applyInputRouteDecision(suggestion, decision)
+	}
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
 	if !suggestion.RequiresConfirm {
 		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)

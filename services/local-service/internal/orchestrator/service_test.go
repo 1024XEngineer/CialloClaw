@@ -974,10 +974,12 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
+func TestServiceSubmitInputReturnsSocialChatWithoutTask(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{
+		output: `{"route":"social_chat","reply":"你好，我在。"}`,
+	})
 
-	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"你好", "🙂"}
 	for index, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
 			result, err := service.SubmitInput(map[string]any{
@@ -993,22 +995,133 @@ func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmati
 				t.Fatalf("submit input failed: %v", err)
 			}
 
-			task := result["task"].(map[string]any)
-			if task["status"] != "waiting_input" {
-				t.Fatalf("expected short free text clarification to keep task open, got %v", task["status"])
-			}
-			intentValue, ok := task["intent"].(map[string]any)
-			if !ok || intentValue["name"] != "agent_loop" {
-				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
+			if result["task"] != nil {
+				t.Fatalf("expected social chat not to create a task, got %+v", result["task"])
 			}
 			if result["delivery_result"] != nil {
-				t.Fatalf("expected short free text clarification not to finalize delivery_result, got %+v", result["delivery_result"])
+				t.Fatalf("expected social chat not to create delivery_result, got %+v", result["delivery_result"])
 			}
-			bubble := result["bubble_message"].(map[string]any)
-			if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
-				t.Fatalf("expected short free text clarification bubble, got %+v", bubble)
+			bubble, ok := result["bubble_message"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected social chat bubble, got %+v", result["bubble_message"])
+			}
+			if bubble["task_id"] != "" {
+				t.Fatalf("expected social chat bubble to stay detached from task, got %+v", bubble)
+			}
+			if !strings.Contains(stringValue(bubble, "text", ""), "你好") {
+				t.Fatalf("expected social chat reply bubble, got %+v", bubble)
 			}
 		})
+	}
+}
+
+func TestServiceSubmitInputRoutesUnanchoredAmbiguousTextToConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_ambiguous_text",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看下",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected ambiguous text to enter confirmation, got %v", task["status"])
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected clarification routing to defer delivery_result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestServiceSubmitInputKeepsTaskRequestAfterClassifier(t *testing.T) {
+	callCount := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			callCount++
+			output := "Translated note ready."
+			if callCount == 1 {
+				output = `{"route":"task_request","reply":""}`
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  fmt.Sprintf("req_route_%d", callCount),
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: output,
+			}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_classified_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected classified task request to execute, got %v", task["status"])
+	}
+	if callCount < 2 {
+		t.Fatalf("expected classifier and execution model calls, got %d", callCount)
+	}
+}
+
+func TestServiceSubmitInputFallsBackToTaskWhenClassifierFails(t *testing.T) {
+	callCount := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return model.GenerateTextResponse{}, errors.New("classifier unavailable")
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_classifier_fallback",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Fallback task completed.",
+			}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_classifier_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Summarize the visible note",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected classifier failure to fall back to task execution, got %v", task["status"])
+	}
+	if callCount < 2 {
+		t.Fatalf("expected classifier and fallback execution model calls, got %d", callCount)
 	}
 }
 
