@@ -1580,13 +1580,16 @@ func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(
 			return server.handleAgentSecurityRespond(map[string]any{"task_id": "missing", "decision": "approve"})
 		}},
 		{name: "settings.runtime_paths.get", invoke: func() (any, *rpcError) { return server.handleAgentSettingsRuntimePathsGet(map[string]any{}) }},
+		{name: "settings.restore_defaults", invoke: func() (any, *rpcError) { return server.handleAgentSettingsRestoreDefaults(map[string]any{}) }},
 		{name: "settings.model.validate", invoke: func() (any, *rpcError) { return server.handleAgentSettingsModelValidate(map[string]any{}) }},
+		{name: "memory.delete_all", invoke: func() (any, *rpcError) { return server.handleAgentMemoryDeleteAll(map[string]any{}) }},
 		{name: "log.execution.list", invoke: func() (any, *rpcError) {
 			return server.handleAgentLogExecutionList(map[string]any{"limit": 20, "offset": 0})
 		}},
 		{name: "log.error.list", invoke: func() (any, *rpcError) {
 			return server.handleAgentLogErrorList(map[string]any{"limit": 20, "offset": 0})
 		}},
+		{name: "task.history.delete", invoke: func() (any, *rpcError) { return server.handleAgentTaskHistoryDelete(map[string]any{}) }},
 	}
 	for _, call := range handlerCalls {
 		data, rpcErr := call.invoke()

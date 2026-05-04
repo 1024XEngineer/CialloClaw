@@ -49,9 +49,12 @@ func (s *Server) registerHandlers() {
 		"agent.settings.get":                   s.handleAgentSettingsGet,
 		"agent.settings.update":                s.handleAgentSettingsUpdate,
 		"agent.settings.runtime_paths.get":     s.handleAgentSettingsRuntimePathsGet,
+		"agent.settings.restore_defaults":      s.handleAgentSettingsRestoreDefaults,
 		"agent.settings.model.validate":        s.handleAgentSettingsModelValidate,
+		"agent.memory.delete_all":              s.handleAgentMemoryDeleteAll,
 		"agent.log.execution.list":             s.handleAgentLogExecutionList,
 		"agent.log.error.list":                 s.handleAgentLogErrorList,
+		"agent.task.history.delete":            s.handleAgentTaskHistoryDelete,
 		"agent.plugin.runtime.list":            s.handleAgentPluginRuntimeList,
 		"agent.plugin.list":                    s.handleAgentPluginList,
 		"agent.plugin.detail.get":              s.handleAgentPluginDetailGet,
@@ -261,9 +264,21 @@ func (s *Server) handleAgentSettingsRuntimePathsGet(params map[string]any) (any,
 	return wrapOrchestratorResult(data, err)
 }
 
+// handleAgentSettingsRestoreDefaults handles agent.settings.restore_defaults.
+func (s *Server) handleAgentSettingsRestoreDefaults(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SettingsRestoreDefaults(params)
+	return wrapOrchestratorResult(data, err)
+}
+
 // handleAgentSettingsModelValidate handles agent.settings.model.validate.
 func (s *Server) handleAgentSettingsModelValidate(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.SettingsModelValidate(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentMemoryDeleteAll handles agent.memory.delete_all.
+func (s *Server) handleAgentMemoryDeleteAll(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.MemoryDeleteAll(params)
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -276,6 +291,12 @@ func (s *Server) handleAgentLogExecutionList(params map[string]any) (any, *rpcEr
 // handleAgentLogErrorList handles agent.log.error.list.
 func (s *Server) handleAgentLogErrorList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.LogErrorList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentTaskHistoryDelete handles agent.task.history.delete.
+func (s *Server) handleAgentTaskHistoryDelete(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.TaskHistoryDelete(params)
 	return wrapOrchestratorResult(data, err)
 }
 

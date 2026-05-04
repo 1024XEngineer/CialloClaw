@@ -2803,6 +2803,32 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 			"delivery_result":      deliveryResult,
 		}, nil
 	}
+	if stringValue(pendingExecution, "kind", "") == maintenancePendingExecutionKind {
+		updatedTask, bubble, deliveryResult, err := s.executeMaintenanceActionAfterApproval(processingTask, pendingExecution)
+		if err != nil {
+			return nil, err
+		}
+		if updatedTask.Status == "completed" {
+			updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
+		}
+		if operationName == maintenanceOperationTaskHistoryDelete {
+			if err := s.persistStandaloneAuthorizationRecord(authorizationRecord); err != nil {
+				return nil, err
+			}
+		}
+		if taskIsTerminal(updatedTask.Status) {
+			if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+				return nil, queueErr
+			}
+		}
+		return map[string]any{
+			"authorization_record": authorizationRecord,
+			"task":                 taskMap(updatedTask),
+			"bubble_message":       bubble,
+			"impact_scope":         impactScope,
+			"delivery_result":      deliveryResult,
+		}, nil
+	}
 
 	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
 	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")

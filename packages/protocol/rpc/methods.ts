@@ -80,9 +80,12 @@ export const RPC_METHODS_STABLE = {
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
   AGENT_SETTINGS_RUNTIME_PATHS_GET: "agent.settings.runtime_paths.get",
+  AGENT_SETTINGS_RESTORE_DEFAULTS: "agent.settings.restore_defaults",
   AGENT_SETTINGS_MODEL_VALIDATE: "agent.settings.model.validate",
+  AGENT_MEMORY_DELETE_ALL: "agent.memory.delete_all",
   AGENT_LOG_EXECUTION_LIST: "agent.log.execution.list",
   AGENT_LOG_ERROR_LIST: "agent.log.error.list",
+  AGENT_TASK_HISTORY_DELETE: "agent.task.history.delete",
   AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
   AGENT_PLUGIN_LIST: "agent.plugin.list",
   AGENT_PLUGIN_DETAIL_GET: "agent.plugin.detail.get",
@@ -942,6 +945,39 @@ export interface AgentLogErrorListResult {
   items: ExecutionLogRecord[];
   page: JsonRpcPage;
 }
+
+// AgentMaintenanceActionResult defines the approval-gated control-panel action
+// envelope shared by destructive maintenance endpoints.
+export interface AgentMaintenanceActionResult {
+  task: Task;
+  approval_request: ApprovalRequest;
+  bubble_message: BubbleMessage;
+  impact_scope: ImpactScope;
+}
+
+// AgentSettingsRestoreDefaultsParams defines the restore-defaults request.
+export interface AgentSettingsRestoreDefaultsParams {
+  request_meta: RequestMeta;
+}
+
+// AgentSettingsRestoreDefaultsResult defines the restore-defaults approval gate.
+export type AgentSettingsRestoreDefaultsResult = AgentMaintenanceActionResult;
+
+// AgentMemoryDeleteAllParams defines the delete-all-memory request.
+export interface AgentMemoryDeleteAllParams {
+  request_meta: RequestMeta;
+}
+
+// AgentMemoryDeleteAllResult defines the delete-all-memory approval gate.
+export type AgentMemoryDeleteAllResult = AgentMaintenanceActionResult;
+
+// AgentTaskHistoryDeleteParams defines the delete-task-history request.
+export interface AgentTaskHistoryDeleteParams {
+  request_meta: RequestMeta;
+}
+
+// AgentTaskHistoryDeleteResult defines the delete-task-history approval gate.
+export type AgentTaskHistoryDeleteResult = AgentMaintenanceActionResult;
 
 // AgentPluginRuntimeListParams defines the stable plugin runtime query params.
 export interface AgentPluginRuntimeListParams {
