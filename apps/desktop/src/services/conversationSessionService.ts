@@ -109,15 +109,28 @@ function hasTaskSpecificPageContextAnchor(pageContext: PageContext) {
   );
 }
 
+function stripVolatileAttachHints(pageContext: PageContext): PageContext {
+  return {
+    ...(pageContext.app_name ? { app_name: pageContext.app_name } : {}),
+    ...(pageContext.title ? { title: pageContext.title } : {}),
+    ...(pageContext.url ? { url: pageContext.url } : {}),
+    ...(pageContext.window_title ? { window_title: pageContext.window_title } : {}),
+    ...(pageContext.visible_text ? { visible_text: pageContext.visible_text } : {}),
+    ...(pageContext.hover_target ? { hover_target: pageContext.hover_target } : {}),
+  };
+}
+
 function normalizePageContext(value: PageContext | null | undefined) {
   if (value == null) {
     return null;
   }
 
-  const pageContext = compactPageContext(value);
-  if (!pageContext) {
+  const compactedPageContext = compactPageContext(value);
+  if (!compactedPageContext) {
     return null;
   }
+
+  const pageContext = stripVolatileAttachHints(compactedPageContext);
 
   if (!hasTaskSpecificPageContextAnchor(pageContext)) {
     return null;
@@ -148,7 +161,9 @@ export function rememberConversationSessionFromTask(task: Task | null | undefine
 /**
  * Remembers the real page or window anchor associated with a backend-owned
  * session. Synthetic shell-ball wrapper context is intentionally ignored so a
- * later attachment cannot pretend it matches a pending task.
+ * later attachment cannot pretend it matches a pending task. Volatile attach
+ * hints are stripped here so follow-up reuse keeps a stable page anchor instead
+ * of replaying stale process metadata.
  */
 export function rememberConversationPageContextFromTask(task: Task | null | undefined, pageContext: PageContext | null | undefined) {
   const normalizedSessionId = normalizeSessionId((task as BackendOwnedSessionCarrier | null | undefined)?.session_id);

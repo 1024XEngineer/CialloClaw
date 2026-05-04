@@ -7411,7 +7411,14 @@ test("conversation session cache preserves real page anchors for later file cont
 
       service.rememberConversationPageContextFromTask(
         { session_id: "sess_shell_ball_anchor" },
-        { app_name: "Chrome", title: "Build Dashboard", url: "https://example.com/build" },
+        {
+          app_name: "Chrome",
+          browser_kind: "chrome",
+          process_id: 4412,
+          process_path: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
+        },
       );
 
       assert.deepEqual(service.getConversationPageContextForSession("sess_shell_ball_anchor"), {
