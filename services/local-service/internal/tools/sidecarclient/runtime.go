@@ -170,8 +170,39 @@ func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tool
 	}, nil
 }
 
+func (c runtimePlaywrightClient) ReadPageAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_read", URL: url, Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	return tools.BrowserPageReadResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		MIMEType:                 stringValue(response.Result, "mime_type"),
+		TextType:                 stringValue(response.Result, "text_type"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
 func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
+	if err != nil {
+		return tools.BrowserPageSearchResult{}, err
+	}
+	return tools.BrowserPageSearchResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Query:                    stringValue(response.Result, "query"),
+		MatchCount:               intValue(response.Result, "match_count"),
+		Matches:                  stringSliceValue(response.Result, "matches"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, attach tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit, Attach: cloneAttachConfigPtr(&attach)})
 	if err != nil {
 		return tools.BrowserPageSearchResult{}, err
 	}
@@ -200,8 +231,40 @@ func (c runtimePlaywrightClient) InteractPage(ctx context.Context, url string, a
 	}, nil
 }
 
+func (c runtimePlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_interact", URL: url, Actions: cloneActionSlice(actions), Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserPageInteractResult{}, err
+	}
+	return tools.BrowserPageInteractResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		ActionsApplied:           intValue(response.Result, "actions_applied"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
 func (c runtimePlaywrightClient) StructuredDOM(ctx context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url})
+	if err != nil {
+		return tools.BrowserStructuredDOMResult{}, err
+	}
+	return tools.BrowserStructuredDOMResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		Headings:                 stringSliceValue(response.Result, "headings"),
+		Links:                    stringSliceValue(response.Result, "links"),
+		Buttons:                  stringSliceValue(response.Result, "buttons"),
+		Inputs:                   stringSliceValue(response.Result, "inputs"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url, Attach: cloneAttachConfigPtr(&attach)})
 	if err != nil {
 		return tools.BrowserStructuredDOMResult{}, err
 	}

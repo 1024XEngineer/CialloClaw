@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
@@ -3389,27 +3390,43 @@ func resolvePageToolInput(intentName string, arguments map[string]any, snapshot 
 }
 
 func pageAttachInput(urlValue string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) map[string]any {
-	browserKind := strings.ToLower(strings.TrimSpace(firstNonEmpty(stringValue(arguments, "browser_kind", ""), snapshot.BrowserKind)))
+	// Page-level attach hints must come from trusted desktop context. The planner
+	// can request a page tool, but it must not steer browser kind or CDP endpoint
+	// away from the observed foreground session.
+	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
 	if browserKind != "chrome" && browserKind != "edge" {
 		return nil
 	}
-	pageURL := strings.TrimSpace(snapshot.PageURL)
-	if pageURL == "" || pageURL != strings.TrimSpace(urlValue) {
+	pageURL := comparablePageURL(snapshot.PageURL)
+	requestURL := comparablePageURL(urlValue)
+	if pageURL == "" || requestURL == "" || pageURL != requestURL {
 		return nil
 	}
 	target := map[string]any{"url": pageURL}
-	if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
-		target["title_contains"] = windowTitle
+	if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
+		target["title_contains"] = pageTitle
 	}
 	attach := map[string]any{
 		"mode":         string(tools.BrowserAttachModeCDP),
 		"browser_kind": browserKind,
 		"target":       target,
 	}
-	if endpointURL := strings.TrimSpace(stringValue(arguments, "endpoint_url", "")); endpointURL != "" {
-		attach["endpoint_url"] = endpointURL
-	}
 	return attach
+}
+
+func comparablePageURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+	return parsed.String()
 }
 
 func requireAuthorizationFlag(intent map[string]any) bool {

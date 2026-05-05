@@ -57,6 +57,13 @@ func (noopPlaywrightSidecarClient) InteractBrowser(_ context.Context, _ tools.Br
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+type attachAwarePageClient interface {
+	ReadPageAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error)
+	SearchPageAttached(ctx context.Context, url, query string, limit int, attach tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error)
+	InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error)
+	StructuredDOMAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error)
+}
+
 type PageReadTool struct {
 	meta tools.ToolMetadata
 }
@@ -90,22 +97,28 @@ func (t *PageReadTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 		return nil, tools.ErrPlaywrightSidecarFailed
 	}
 	url := strings.TrimSpace(input["url"].(string))
-	result, err := execCtx.Playwright.ReadPage(ctx, url)
+	result, err := pageReadResult(ctx, execCtx.Playwright, url, input)
 	if err != nil {
 		return nil, err
 	}
-	rawOutput := map[string]any{
-		"url":          result.URL,
-		"title":        result.Title,
-		"text_content": result.TextContent,
-		"mime_type":    result.MIMEType,
-		"text_type":    result.TextType,
-		"source":       firstNonEmptyString(result.Source, "playwright_sidecar"),
-	}
+	rawOutput := browserExecutionMetadataOutput(result.BrowserExecutionMetadata)
+	rawOutput["url"] = result.URL
+	rawOutput["title"] = result.Title
+	rawOutput["text_content"] = result.TextContent
+	rawOutput["mime_type"] = result.MIMEType
+	rawOutput["text_type"] = result.TextType
+	rawOutput["source"] = firstNonEmptyString(result.Source, "playwright_sidecar")
 	return &tools.ToolResult{
-		ToolName:      t.meta.Name,
-		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "content_preview": previewPageText(result.TextContent), "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
+		ToolName:  t.meta.Name,
+		RawOutput: rawOutput,
+		SummaryOutput: map[string]any{
+			"url":             result.URL,
+			"title":           result.Title,
+			"browser_kind":    result.BrowserKind,
+			"attached":        result.Attached,
+			"content_preview": previewPageText(result.TextContent),
+			"source":          firstNonEmptyString(result.Source, "playwright_sidecar"),
+		},
 	}, nil
 }
 
@@ -170,21 +183,28 @@ func (t *PageInteractTool) Execute(ctx context.Context, execCtx *tools.ToolExecu
 	}
 	url := strings.TrimSpace(input["url"].(string))
 	actions := mapSliceValue(input, "actions")
-	result, err := execCtx.Playwright.InteractPage(ctx, url, actions)
+	result, err := pageInteractResult(ctx, execCtx.Playwright, url, actions, input)
 	if err != nil {
 		return nil, err
 	}
-	rawOutput := map[string]any{
-		"url":             result.URL,
-		"title":           result.Title,
-		"text_content":    result.TextContent,
-		"actions_applied": result.ActionsApplied,
-		"source":          firstNonEmptyString(result.Source, "playwright_sidecar"),
-	}
+	rawOutput := browserExecutionMetadataOutput(result.BrowserExecutionMetadata)
+	rawOutput["url"] = result.URL
+	rawOutput["title"] = result.Title
+	rawOutput["text_content"] = result.TextContent
+	rawOutput["actions_applied"] = result.ActionsApplied
+	rawOutput["source"] = firstNonEmptyString(result.Source, "playwright_sidecar")
 	return &tools.ToolResult{
-		ToolName:      t.meta.Name,
-		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "content_preview": previewPageText(result.TextContent), "actions_applied": result.ActionsApplied, "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
+		ToolName:  t.meta.Name,
+		RawOutput: rawOutput,
+		SummaryOutput: map[string]any{
+			"url":             result.URL,
+			"title":           result.Title,
+			"browser_kind":    result.BrowserKind,
+			"attached":        result.Attached,
+			"content_preview": previewPageText(result.TextContent),
+			"actions_applied": result.ActionsApplied,
+			"source":          firstNonEmptyString(result.Source, "playwright_sidecar"),
+		},
 	}, nil
 }
 
@@ -221,23 +241,22 @@ func (t *StructuredDOMTool) Execute(ctx context.Context, execCtx *tools.ToolExec
 		return nil, tools.ErrPlaywrightSidecarFailed
 	}
 	url := strings.TrimSpace(input["url"].(string))
-	result, err := execCtx.Playwright.StructuredDOM(ctx, url)
+	result, err := structuredDOMResult(ctx, execCtx.Playwright, url, input)
 	if err != nil {
 		return nil, err
 	}
-	rawOutput := map[string]any{
-		"url":      result.URL,
-		"title":    result.Title,
-		"headings": append([]string(nil), result.Headings...),
-		"links":    append([]string(nil), result.Links...),
-		"buttons":  append([]string(nil), result.Buttons...),
-		"inputs":   append([]string(nil), result.Inputs...),
-		"source":   firstNonEmptyString(result.Source, "playwright_sidecar"),
-	}
+	rawOutput := browserExecutionMetadataOutput(result.BrowserExecutionMetadata)
+	rawOutput["url"] = result.URL
+	rawOutput["title"] = result.Title
+	rawOutput["headings"] = append([]string(nil), result.Headings...)
+	rawOutput["links"] = append([]string(nil), result.Links...)
+	rawOutput["buttons"] = append([]string(nil), result.Buttons...)
+	rawOutput["inputs"] = append([]string(nil), result.Inputs...)
+	rawOutput["source"] = firstNonEmptyString(result.Source, "playwright_sidecar")
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "heading_count": len(result.Headings), "link_count": len(result.Links), "button_count": len(result.Buttons), "input_count": len(result.Inputs), "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
+		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "browser_kind": result.BrowserKind, "attached": result.Attached, "heading_count": len(result.Headings), "link_count": len(result.Links), "button_count": len(result.Buttons), "input_count": len(result.Inputs), "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
 	}, nil
 }
 
@@ -274,21 +293,20 @@ func (t *PageSearchTool) Execute(ctx context.Context, execCtx *tools.ToolExecute
 			}
 		}
 	}
-	result, err := execCtx.Playwright.SearchPage(ctx, url, query, limit)
+	result, err := pageSearchResult(ctx, execCtx.Playwright, url, query, limit, input)
 	if err != nil {
 		return nil, err
 	}
-	rawOutput := map[string]any{
-		"url":         result.URL,
-		"query":       result.Query,
-		"match_count": result.MatchCount,
-		"matches":     append([]string(nil), result.Matches...),
-		"source":      firstNonEmptyString(result.Source, "playwright_sidecar"),
-	}
+	rawOutput := browserExecutionMetadataOutput(result.BrowserExecutionMetadata)
+	rawOutput["url"] = result.URL
+	rawOutput["query"] = result.Query
+	rawOutput["match_count"] = result.MatchCount
+	rawOutput["matches"] = append([]string(nil), result.Matches...)
+	rawOutput["source"] = firstNonEmptyString(result.Source, "playwright_sidecar")
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "query": result.Query, "match_count": result.MatchCount, "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
+		SummaryOutput: map[string]any{"url": result.URL, "query": result.Query, "browser_kind": result.BrowserKind, "attached": result.Attached, "match_count": result.MatchCount, "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
 	}, nil
 }
 
@@ -310,6 +328,77 @@ func RegisterPlaywrightTools(registry *tools.Registry) error {
 		}
 	}
 	return nil
+}
+
+func pageReadResult(ctx context.Context, client tools.PlaywrightSidecarClient, url string, input map[string]any) (tools.BrowserPageReadResult, error) {
+	attach, ok, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	if !ok {
+		return client.ReadPage(ctx, url)
+	}
+	attachClient, ok := client.(attachAwarePageClient)
+	if !ok {
+		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	return attachClient.ReadPageAttached(ctx, url, attach)
+}
+
+func pageSearchResult(ctx context.Context, client tools.PlaywrightSidecarClient, url, query string, limit int, input map[string]any) (tools.BrowserPageSearchResult, error) {
+	attach, ok, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return tools.BrowserPageSearchResult{}, err
+	}
+	if !ok {
+		return client.SearchPage(ctx, url, query, limit)
+	}
+	attachClient, ok := client.(attachAwarePageClient)
+	if !ok {
+		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	return attachClient.SearchPageAttached(ctx, url, query, limit, attach)
+}
+
+func pageInteractResult(ctx context.Context, client tools.PlaywrightSidecarClient, url string, actions []map[string]any, input map[string]any) (tools.BrowserPageInteractResult, error) {
+	attach, ok, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return tools.BrowserPageInteractResult{}, err
+	}
+	if !ok {
+		return client.InteractPage(ctx, url, actions)
+	}
+	attachClient, ok := client.(attachAwarePageClient)
+	if !ok {
+		return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	return attachClient.InteractPageAttached(ctx, url, actions, attach)
+}
+
+func structuredDOMResult(ctx context.Context, client tools.PlaywrightSidecarClient, url string, input map[string]any) (tools.BrowserStructuredDOMResult, error) {
+	attach, ok, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return tools.BrowserStructuredDOMResult{}, err
+	}
+	if !ok {
+		return client.StructuredDOM(ctx, url)
+	}
+	attachClient, ok := client.(attachAwarePageClient)
+	if !ok {
+		return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+	}
+	return attachClient.StructuredDOMAttached(ctx, url, attach)
+}
+
+func optionalAttachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, bool, error) {
+	if _, ok := input["attach"]; !ok {
+		return tools.BrowserAttachConfig{}, false, nil
+	}
+	attach, err := attachConfigFromInput(input)
+	if err != nil {
+		return tools.BrowserAttachConfig{}, false, err
+	}
+	return attach, true, nil
 }
 
 func mapSliceValue(values map[string]any, key string) []map[string]any {
