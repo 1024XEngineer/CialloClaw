@@ -169,7 +169,7 @@ export const floatingPetInitialLayout: FloatingPetInitialLayout = {
   },
   rootBody: {
     opacity: 1,
-    position: { x: 235.83, y: 248.84 },
+    position: { x: 235.83, y: 248.94 },
     rotation: 0,
     scale: { x: 100, y: 100 },
     body: {
@@ -278,8 +278,8 @@ export const floatingPetInitialLayout: FloatingPetInitialLayout = {
     },
     rightWing: {
       opacity: 1,
-      position: { x: 86.11, y: 9.6 },
-      rotation: -64.423,
+      position: { x: 86.11, y: 9.5 },
+      rotation: -1.31,
       scale: { x: 13.3, y: 13.3 },
     },
     tail: {
