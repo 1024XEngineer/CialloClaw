@@ -141,23 +141,42 @@ func existingMaintenanceRecoveryFiles(files []string) ([]string, error) {
 
 func backupMaintenanceSource(ctx context.Context, sourcePath, backupPath string, preferSQLiteSnapshot bool) error {
 	if preferSQLiteSnapshot {
-		if err := checkpointSQLiteDatabase(ctx, sourcePath); err != nil {
-			return err
-		}
+		return snapshotMaintenanceSQLiteDatabase(ctx, sourcePath, backupPath)
 	}
 	return copyMaintenanceFile(sourcePath, backupPath)
 }
 
-func checkpointSQLiteDatabase(ctx context.Context, databasePath string) error {
+// snapshotMaintenanceSQLiteDatabase uses SQLite's own snapshot export path so
+// maintenance recovery points keep a transactionally consistent point-in-time
+// backup instead of copying a live database file after a best-effort
+// checkpoint.
+func snapshotMaintenanceSQLiteDatabase(ctx context.Context, databasePath, backupPath string) error {
 	db, err := openSQLiteDatabase(databasePath)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE);`); err != nil {
-		return fmt.Errorf("checkpoint sqlite database: %w", err)
+
+	tempBackupPath := filepath.Clean(backupPath) + ".tmp"
+	if err := os.Remove(tempBackupPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset maintenance sqlite snapshot %s: %w", tempBackupPath, err)
+	}
+	defer func() { _ = os.Remove(tempBackupPath) }()
+
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO %s;", sqliteStringLiteral(tempBackupPath))); err != nil {
+		return fmt.Errorf("snapshot sqlite database: %w", err)
+	}
+	if err := os.Chmod(tempBackupPath, maintenanceRecoveryFileMode); err != nil {
+		return fmt.Errorf("chmod maintenance sqlite snapshot %s: %w", tempBackupPath, err)
+	}
+	if err := os.Rename(tempBackupPath, backupPath); err != nil {
+		return fmt.Errorf("finalize maintenance sqlite snapshot %s: %w", backupPath, err)
 	}
 	return nil
+}
+
+func sqliteStringLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func copyMaintenanceFile(sourcePath, backupPath string) error {

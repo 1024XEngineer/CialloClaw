@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -115,6 +116,12 @@ func TestServiceCreateMaintenanceRecoveryPoint(t *testing.T) {
 	service := NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "maintenance-recovery.db")))
 	t.Cleanup(func() { _ = service.Close() })
 	ctx := context.Background()
+	if err := service.SessionStore().WriteSession(ctx, SessionRecord{SessionID: "session_maint_001", Title: "Maintenance", Status: "active", CreatedAt: "2026-04-18T10:00:00Z", UpdatedAt: "2026-04-18T10:00:00Z"}); err != nil {
+		t.Fatalf("WriteSession returned error: %v", err)
+	}
+	if err := service.TaskStore().WriteTask(ctx, TaskRecord{TaskID: "task_maint_001", SessionID: "session_maint_001", RunID: "run_maint_001", Title: "Maintenance backup", SourceType: "dashboard", Status: "pending", StartedAt: "2026-04-18T10:00:00Z", UpdatedAt: "2026-04-18T10:00:00Z"}); err != nil {
+		t.Fatalf("WriteTask returned error: %v", err)
+	}
 	if err := service.SecretStore().PutSecret(ctx, SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "sk-live", UpdatedAt: "2026-04-18T10:00:00Z"}); err != nil {
 		t.Fatalf("PutSecret returned error: %v", err)
 	}
@@ -129,6 +136,19 @@ func TestServiceCreateMaintenanceRecoveryPoint(t *testing.T) {
 		if _, err := os.Stat(filepath.FromSlash(objectPath)); err != nil {
 			t.Fatalf("expected maintenance recovery object %q to exist: %v", objectPath, err)
 		}
+	}
+	manifest := readMaintenanceRecoveryManifest(t, filepath.FromSlash(point.Objects[0]))
+	databaseBackupPath := manifestBackupPath(t, manifest, "sqlite_database")
+	if backupTask, err := readTaskFromSQLiteBackup(ctx, databaseBackupPath, "task_maint_001"); err != nil {
+		t.Fatalf("readTaskFromSQLiteBackup returned error: %v", err)
+	} else if backupTask.Title != "Maintenance backup" {
+		t.Fatalf("expected sqlite snapshot to include task data, got %+v", backupTask)
+	}
+	secretStoreBackupPath := manifestBackupPath(t, manifest, "secret_store")
+	if secretValue, err := readSecretFromSQLiteBackup(ctx, secretStoreBackupPath, "model", "openai_responses_api_key"); err != nil {
+		t.Fatalf("readSecretFromSQLiteBackup returned error: %v", err)
+	} else if secretValue != "sk-live" {
+		t.Fatalf("expected sqlite snapshot to include secret data, got %q", secretValue)
 	}
 	if runtime.GOOS != "windows" {
 		pointDir := filepath.Dir(filepath.FromSlash(point.Objects[0]))
@@ -155,6 +175,59 @@ func assertPathPermissions(t *testing.T, path string, expected os.FileMode) {
 	if actual := info.Mode().Perm(); actual != expected {
 		t.Fatalf("expected %q permissions %o, got %o", path, expected, actual)
 	}
+}
+
+func readMaintenanceRecoveryManifest(t *testing.T, manifestPath string) maintenanceRecoveryManifest {
+	t.Helper()
+	rawManifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error for %q: %v", manifestPath, err)
+	}
+	var manifest maintenanceRecoveryManifest
+	if err := json.Unmarshal(rawManifest, &manifest); err != nil {
+		t.Fatalf("Unmarshal returned error for %q: %v", manifestPath, err)
+	}
+	return manifest
+}
+
+func manifestBackupPath(t *testing.T, manifest maintenanceRecoveryManifest, kind string) string {
+	t.Helper()
+	for _, asset := range manifest.Assets {
+		if asset.Kind == kind {
+			return filepath.FromSlash(asset.BackupPath)
+		}
+	}
+	t.Fatalf("expected manifest asset kind %q in %+v", kind, manifest.Assets)
+	return ""
+}
+
+func readTaskFromSQLiteBackup(ctx context.Context, databasePath, taskID string) (TaskRecord, error) {
+	db, err := openSQLiteDatabase(databasePath)
+	if err != nil {
+		return TaskRecord{}, err
+	}
+	defer func() { _ = db.Close() }()
+
+	row := db.QueryRowContext(ctx, `SELECT task_id, session_id, run_id, title, source_type, status, started_at, updated_at FROM tasks WHERE task_id = ?`, taskID)
+	var record TaskRecord
+	if err := row.Scan(&record.TaskID, &record.SessionID, &record.RunID, &record.Title, &record.SourceType, &record.Status, &record.StartedAt, &record.UpdatedAt); err != nil {
+		return TaskRecord{}, err
+	}
+	return record, nil
+}
+
+func readSecretFromSQLiteBackup(ctx context.Context, databasePath, namespace, key string) (string, error) {
+	store, err := NewSQLiteSecretStore(databasePath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = store.Close() }()
+
+	record, err := store.GetSecret(ctx, namespace, key)
+	if err != nil {
+		return "", err
+	}
+	return record.Value, nil
 }
 
 func TestServiceCreateMaintenanceRecoveryPointInMemoryFallback(t *testing.T) {
