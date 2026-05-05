@@ -45,6 +45,8 @@ export type ShellBallBubbleInlineRecommendationState = {
 export type ShellBallBubbleIntentConfirmState = {
   intentName: string;
   intentLabel: string;
+  sessionId?: string;
+  pageContext?: PageContext;
 };
 
 export type ShellBallBubbleDesktopState = {
@@ -98,6 +100,7 @@ function cloneShellBallBubbleIntentConfirmState(
 ): ShellBallBubbleIntentConfirmState {
   return {
     ...state,
+    ...(state.pageContext ? { pageContext: { ...state.pageContext } } : {}),
   };
 }
 

@@ -20,7 +20,7 @@ import { JsonRpcClientError } from "@/rpc/client";
 import { getRecommendations, respondSecurityDetailed, steerTask, submitRecommendationFeedback } from "@/rpc/methods";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
-import { getConversationSessionIdForTask } from "@/services/conversationSessionService";
+import { getConversationPageContextForSession, getConversationSessionIdForTask } from "@/services/conversationSessionService";
 import { getDesktopClipboardActivitySnapshot } from "@/platform/desktopClipboardActivity";
 import { getDesktopMouseActivitySnapshot } from "@/platform/desktopActivity";
 import { normalizeDesktopErrorSignalText } from "@/platform/desktopErrorSignal";
@@ -148,6 +148,7 @@ type ShellBallIntentCorrectionSession = {
   intentName: string;
   intentLabel: string;
   sessionId?: string;
+  pageContext?: PageContext;
   savedInputValue: string;
 };
 
@@ -1001,10 +1002,16 @@ export function createShellBallAgentBubbleItem(
       });
     }
 
+    const taskSessionId = typeof result.task.session_id === "string" ? result.task.session_id.trim() : "";
+    const normalizedTaskSessionId = taskSessionId !== "" ? taskSessionId : undefined;
     const intentConfirm = bubbleType === "intent_confirm" && result.task.intent?.name?.trim()
       ? {
           intentName: result.task.intent.name,
           intentLabel: formatShellBallIntentLabel(result.task.intent.name),
+          sessionId: normalizedTaskSessionId,
+          pageContext: normalizedTaskSessionId
+            ? getConversationPageContextForSession(normalizedTaskSessionId)
+            : undefined,
         }
       : undefined;
 
@@ -1396,6 +1403,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     draftOverride?: string;
     savedInputValueOverride?: string;
     sessionIdOverride?: string;
+    pageContextOverride?: PageContext;
   }) => {
     const normalizedTaskId = input.taskId.trim();
 
@@ -1403,13 +1411,21 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
+    const resolvedSessionId = input.sessionIdOverride?.trim()
+      || getConversationSessionIdForTask(normalizedTaskId);
+    // Intent correction is task-scoped follow-up input, so it must stay pinned
+    // to the target task instead of inheriting whichever foreground page is
+    // active when the user clicks "Modify intent" or submits the borrowed draft.
+    const resolvedPageContext = input.pageContextOverride
+      ?? intentCorrectionRef.current?.pageContext
+      ?? (resolvedSessionId ? getConversationPageContextForSession(resolvedSessionId) : undefined);
+
     setIntentCorrection({
       taskId: normalizedTaskId,
       intentName: input.intentName,
       intentLabel: input.intentLabel,
-      sessionId: input.sessionIdOverride
-        ?? getConversationSessionIdForTask(normalizedTaskId)
-        ?? handlersRef.current.getCurrentConversationSessionId?.(),
+      sessionId: resolvedSessionId,
+      ...(resolvedPageContext ? { pageContext: { ...resolvedPageContext } } : {}),
       savedInputValue: input.savedInputValueOverride
         ?? intentCorrectionRef.current?.savedInputValue
         ?? snapshotRef.current.inputValue,
@@ -3175,7 +3191,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               source: "floating_ball",
               trigger: "hover_text_input",
               inputMode: "text",
-              sessionId: activeIntentCorrection.sessionId ?? handlersRef.current.getCurrentConversationSessionId?.(),
+              sessionId: activeIntentCorrection.sessionId,
+              disableSessionFallback: true,
+              pageContext: activeIntentCorrection.pageContext,
+              disableForegroundContextEnrichment: true,
               options: {
                 confirm_required: false,
                 preferred_delivery: "bubble",
@@ -3208,6 +3227,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               draftOverride: submittedText,
               savedInputValueOverride: activeIntentCorrection.savedInputValue,
               sessionIdOverride: activeIntentCorrection.sessionId,
+              pageContextOverride: activeIntentCorrection.pageContext,
             });
             setBubbleItems((currentItems) =>
               replaceShellBallPendingBubble(
@@ -3582,7 +3602,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       .reverse()
       .find((item) => item.bubble.task_id === normalizedTaskId && item.bubble.type === "intent_confirm");
     const intentName = intentBubble?.desktop.intentConfirm?.intentName
-      ?? activeShellBallTaskIntentNameRef.current
+      ?? (activeShellBallTaskIdRef.current === normalizedTaskId
+        ? activeShellBallTaskIntentNameRef.current
+        : null)
       ?? "agent_loop";
     const intentLabel = intentBubble?.desktop.intentConfirm?.intentLabel
       ?? formatShellBallIntentLabel(intentName);
@@ -3591,6 +3613,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       taskId: normalizedTaskId,
       intentName,
       intentLabel,
+      sessionIdOverride: intentBubble?.desktop.intentConfirm?.sessionId,
+      pageContextOverride: intentBubble?.desktop.intentConfirm?.pageContext,
     });
   }, [enterIntentCorrectionMode]);
 

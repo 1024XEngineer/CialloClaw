@@ -49,6 +49,8 @@ export type SubmitTextInputParams = {
   context?: InputContext;
   pageContext?: PageContext;
   sessionId?: string;
+  disableSessionFallback?: boolean;
+  disableForegroundContextEnrichment?: boolean;
   options?: {
     confirm_required?: boolean;
     preferred_delivery?: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
@@ -210,11 +212,19 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
   return undefined;
 }
 
-function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
+function shouldEnrichVisualContext(params: AgentInputSubmitParams, input: SubmitTextInputParams): boolean {
+  if (input.disableForegroundContextEnrichment) {
+    return false;
+  }
+
   return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
 }
 
-function shouldAttachForegroundPageContext(params: AgentInputSubmitParams): boolean {
+function shouldAttachForegroundPageContext(params: AgentInputSubmitParams, input: SubmitTextInputParams): boolean {
+  if (input.disableForegroundContextEnrichment) {
+    return false;
+  }
+
   return params.source === "floating_ball"
     && (params.trigger === "hover_text_input" || params.trigger === "voice_commit");
 }
@@ -255,7 +265,8 @@ async function readDesktopClipboardActivitySnapshot(): Promise<DesktopClipboardA
  */
 export function createTextInputSubmitParams(input: SubmitTextInputParams): AgentInputSubmitParams | null {
   const normalizedText = input.text.trim();
-  const normalizedSessionId = input.sessionId?.trim() || getCurrentConversationSessionId();
+  const normalizedSessionId = input.sessionId?.trim()
+    || (input.disableSessionFallback ? undefined : getCurrentConversationSessionId());
 
   if (normalizedText === "") {
     return null;
@@ -278,9 +289,12 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
 
 export type SubmitTextInputResult = AgentInputSubmitResult;
 
-async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
-  const enrichVisualContext = shouldEnrichVisualContext(params);
-  const attachForegroundPageContext = shouldAttachForegroundPageContext(params);
+async function enrichTextInputSubmitParams(
+  input: SubmitTextInputParams,
+  params: AgentInputSubmitParams,
+): Promise<AgentInputSubmitParams> {
+  const enrichVisualContext = shouldEnrichVisualContext(params, input);
+  const attachForegroundPageContext = shouldAttachForegroundPageContext(params, input);
   const shouldReadForegroundWindowContext = enrichVisualContext || attachForegroundPageContext;
   const [windowContext, mouseActivitySnapshot, clipboardActivitySnapshot] = await Promise.all([
     shouldReadForegroundWindowContext ? readDesktopWindowContext() : Promise.resolve(null),
@@ -345,7 +359,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     return null;
   }
 
-  const enrichedParams = await enrichTextInputSubmitParams(params);
+  const enrichedParams = await enrichTextInputSubmitParams(input, params);
   recordMirrorConversationStart(enrichedParams);
   const rpcMethods = await import("@/rpc/methods");
 
