@@ -372,14 +372,15 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <motion.g
-            animate={{ rotate: wingMotion.right.rotate }}
-            initial={false}
-            transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
-            transform={`translate(${floatingPetInitialLayout.rootBody.rightWing.position.x} ${floatingPetInitialLayout.rootBody.rightWing.position.y})`}
-          >
-            {renderCenteredImageAtOrigin("rightWing", floatingPetInitialLayout.rootBody.rightWing.scale, floatingPetInitialLayout.rootBody.rightWing.rotation)}
-          </motion.g>
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.rightWing.position.x} ${floatingPetInitialLayout.rootBody.rightWing.position.y})`}>
+            <motion.g
+              animate={{ rotate: wingMotion.right.rotate }}
+              initial={false}
+              transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
+            >
+              {renderCenteredImageAtOrigin("rightWing", floatingPetInitialLayout.rootBody.rightWing.scale, floatingPetInitialLayout.rootBody.rightWing.rotation)}
+            </motion.g>
+          </g>
 
           <g transform={`translate(${floatingPetInitialLayout.rootBody.face.position.x} ${floatingPetInitialLayout.rootBody.face.position.y})`}>
             <g transform={`translate(${floatingPetInitialLayout.rootBody.cheek.position.x} ${floatingPetInitialLayout.rootBody.cheek.position.y})`}>
