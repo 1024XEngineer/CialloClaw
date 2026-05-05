@@ -259,6 +259,24 @@ function renderCenteredImageAtOrigin(assetName: FloatingPetAssetName, scale: Flo
   );
 }
 
+function renderCenteredImageRelativeToPivot(
+  assetName: FloatingPetAssetName,
+  layout: FloatingPetLayerTransform,
+  pivot: FloatingPetLayerTransform["position"],
+) {
+  return renderCenteredImage(
+    assetName,
+    {
+      ...layout,
+      position: {
+        x: layout.position.x - pivot.x,
+        y: layout.position.y - pivot.y,
+      },
+    },
+    layout.rotation,
+  );
+}
+
 function resolveOpenEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
   if (eyesClosed) {
     return { opacity: 0, scaleY: 1, times: [0, 1], duration: 0.18, repeat: 0 };
@@ -352,35 +370,38 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
         </AnimatePresence>
 
         <motion.g animate={rootBodyMotion.animate} initial={false} transition={rootBodyMotion.transition}>
-          <g transform={`translate(${floatingPetInitialLayout.rootBody.tail.position.x} ${floatingPetInitialLayout.rootBody.tail.position.y})`}>
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}>
             <motion.g
               animate={{ rotate: tailMotion.rotate }}
               initial={false}
+              style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
               transition={{ duration: tailMotion.duration, ease: "easeInOut", repeat: tailMotion.repeat, times: tailMotion.times }}
             >
-              {renderCenteredImageAtOrigin("tail", floatingPetInitialLayout.rootBody.tail.scale, floatingPetInitialLayout.rootBody.tail.rotation)}
+              {renderCenteredImageRelativeToPivot("tail", floatingPetInitialLayout.rootBody.tail, floatingPetInitialLayout.rootBody.tailBone.position)}
             </motion.g>
           </g>
 
-          <g transform={`translate(${floatingPetInitialLayout.rootBody.leftWing.position.x} ${floatingPetInitialLayout.rootBody.leftWing.position.y})`}>
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}>
             <motion.g
               animate={{ rotate: wingMotion.left.rotate }}
               initial={false}
+              style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
               transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.left.repeat, times: wingMotion.left.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
             >
-              {renderCenteredImageAtOrigin("leftWing", floatingPetInitialLayout.rootBody.leftWing.scale, floatingPetInitialLayout.rootBody.leftWing.rotation)}
+              {renderCenteredImageRelativeToPivot("leftWing", floatingPetInitialLayout.rootBody.leftWing, floatingPetInitialLayout.rootBody.leftBone.position)}
             </motion.g>
           </g>
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <g transform={`translate(${floatingPetInitialLayout.rootBody.rightWing.position.x} ${floatingPetInitialLayout.rootBody.rightWing.position.y})`}>
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}>
             <motion.g
               animate={{ rotate: wingMotion.right.rotate }}
               initial={false}
+              style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
               transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
             >
-              {renderCenteredImageAtOrigin("rightWing", floatingPetInitialLayout.rootBody.rightWing.scale, floatingPetInitialLayout.rootBody.rightWing.rotation)}
+              {renderCenteredImageRelativeToPivot("rightWing", floatingPetInitialLayout.rootBody.rightWing, floatingPetInitialLayout.rootBody.rightBone.position)}
             </motion.g>
           </g>
 
