@@ -352,23 +352,25 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
         </AnimatePresence>
 
         <motion.g animate={rootBodyMotion.animate} initial={false} transition={rootBodyMotion.transition}>
-          <motion.g
-            animate={{ rotate: tailMotion.rotate }}
-            initial={false}
-            transition={{ duration: tailMotion.duration, ease: "easeInOut", repeat: tailMotion.repeat, times: tailMotion.times }}
-            transform={`translate(${floatingPetInitialLayout.rootBody.tail.position.x} ${floatingPetInitialLayout.rootBody.tail.position.y})`}
-          >
-            {renderCenteredImageAtOrigin("tail", floatingPetInitialLayout.rootBody.tail.scale, floatingPetInitialLayout.rootBody.tail.rotation)}
-          </motion.g>
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.tail.position.x} ${floatingPetInitialLayout.rootBody.tail.position.y})`}>
+            <motion.g
+              animate={{ rotate: tailMotion.rotate }}
+              initial={false}
+              transition={{ duration: tailMotion.duration, ease: "easeInOut", repeat: tailMotion.repeat, times: tailMotion.times }}
+            >
+              {renderCenteredImageAtOrigin("tail", floatingPetInitialLayout.rootBody.tail.scale, floatingPetInitialLayout.rootBody.tail.rotation)}
+            </motion.g>
+          </g>
 
-          <motion.g
-            animate={{ rotate: wingMotion.left.rotate }}
-            initial={false}
-            transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.left.repeat, times: wingMotion.left.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
-            transform={`translate(${floatingPetInitialLayout.rootBody.leftWing.position.x} ${floatingPetInitialLayout.rootBody.leftWing.position.y})`}
-          >
-            {renderCenteredImageAtOrigin("leftWing", floatingPetInitialLayout.rootBody.leftWing.scale, floatingPetInitialLayout.rootBody.leftWing.rotation)}
-          </motion.g>
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.leftWing.position.x} ${floatingPetInitialLayout.rootBody.leftWing.position.y})`}>
+            <motion.g
+              animate={{ rotate: wingMotion.left.rotate }}
+              initial={false}
+              transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.left.repeat, times: wingMotion.left.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
+            >
+              {renderCenteredImageAtOrigin("leftWing", floatingPetInitialLayout.rootBody.leftWing.scale, floatingPetInitialLayout.rootBody.leftWing.rotation)}
+            </motion.g>
+          </g>
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
