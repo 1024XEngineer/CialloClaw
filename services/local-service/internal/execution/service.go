@@ -472,7 +472,7 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	analysis.CitationSeed["screen_session_id"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "screen_session_id", "")
 	analysis.CitationSeed["evidence_role"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "evidence_role", "")
 	auditTargetCandidate := screenAuditTargetCandidate(candidate, analysis.Artifact)
-	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, auditTargetCandidate, analysis.PreviewText)
+	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, request.RunID, auditTargetCandidate, analysis.PreviewText)
 	auditCandidate := screenAnalysisAuditCandidate(auditTargetCandidate, analysis.PreviewText, "success")
 	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, analysis.CleanupPaths)
 	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
@@ -482,7 +482,7 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 		cleanupSummary = mergeScreenCleanupSummaries(promotedCleanup, s.screenAnalysisCleanupSummary(cleanupPlan))
 		cleanupExecuted = mergeScreenCleanupSummaries(promotedCleanup, pendingScreenCleanupExecution(cleanupPlan))
 	}
-	persistedArtifact := s.persistScreenArtifact(ctx, request.TaskID, analysis.Artifact)
+	persistedArtifact := s.persistScreenArtifact(ctx, request.TaskID, request.RunID, analysis.Artifact)
 	recoveryPoint := s.screenAnalysisRecoveryPoint(ctx, request.TaskID, cleanupPlan, cleanupExecuted)
 	traceSummary := s.screenAnalysisTraceSummary(candidate, analysis)
 	evalSummary := s.screenAnalysisEvalSummary(candidate, analysis)
@@ -521,7 +521,7 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 func (s *Service) screenAnalysisFailureResult(ctx context.Context, request Request, candidate tools.ScreenFrameCandidate, err error) Result {
 	args := mapValue(request.Intent, "arguments")
 	summary := firstNonEmpty(strings.TrimSpace(err.Error()), "screen analysis failed")
-	auditRecord := s.screenAnalysisAuditRecordWithResult(request.TaskID, candidate, summary, "failed")
+	auditRecord := s.screenAnalysisAuditRecordWithResult(request.TaskID, request.RunID, candidate, summary, "failed")
 	auditCandidate := screenAnalysisAuditCandidate(candidate, summary, "failed")
 	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, nil)
 	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
@@ -596,7 +596,7 @@ func (s *Service) promoteScreenArtifactForPersistence(_ context.Context, taskID 
 	return normalized, cleanup
 }
 
-func (s *Service) persistScreenArtifact(ctx context.Context, taskID string, artifact map[string]any) map[string]any {
+func (s *Service) persistScreenArtifact(ctx context.Context, taskID, runID string, artifact map[string]any) map[string]any {
 	if s == nil || s.artifactStore == nil || len(artifact) == 0 {
 		return nil
 	}
@@ -607,6 +607,7 @@ func (s *Service) persistScreenArtifact(ctx context.Context, taskID string, arti
 	record := storage.ArtifactRecord{
 		ArtifactID:          stringValue(artifact, "artifact_id", ""),
 		TaskID:              firstNonEmpty(stringValue(artifact, "task_id", ""), taskID),
+		RunID:               firstNonEmpty(stringValue(artifact, "run_id", ""), runID),
 		ArtifactType:        stringValue(artifact, "artifact_type", ""),
 		Title:               stringValue(artifact, "title", ""),
 		Path:                stringValue(artifact, "path", ""),
@@ -686,11 +687,11 @@ func (s *Service) screenAnalysisEvalSummary(candidate tools.ScreenFrameCandidate
 	}
 }
 
-func (s *Service) screenAnalysisAuditRecord(taskID string, candidate tools.ScreenFrameCandidate, previewText string) map[string]any {
-	return s.screenAnalysisAuditRecordWithResult(taskID, candidate, previewText, "success")
+func (s *Service) screenAnalysisAuditRecord(taskID, runID string, candidate tools.ScreenFrameCandidate, previewText string) map[string]any {
+	return s.screenAnalysisAuditRecordWithResult(taskID, runID, candidate, previewText, "success")
 }
 
-func (s *Service) screenAnalysisAuditRecordWithResult(taskID string, candidate tools.ScreenFrameCandidate, summary string, resultStatus string) map[string]any {
+func (s *Service) screenAnalysisAuditRecordWithResult(taskID, runID string, candidate tools.ScreenFrameCandidate, summary string, resultStatus string) map[string]any {
 	if s == nil || s.audit == nil {
 		return nil
 	}
@@ -700,6 +701,7 @@ func (s *Service) screenAnalysisAuditRecordWithResult(taskID string, candidate t
 	}
 	record, err := s.audit.BuildRecord(audit.RecordInput{
 		TaskID:  taskID,
+		RunID:   runID,
 		Type:    "screen_capture",
 		Action:  screenAuditActionName(candidate),
 		Summary: firstNonEmpty(summary, "screen analysis completed"),
@@ -1050,7 +1052,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		if content, ok := toolResult.RawOutput["content"].(string); ok && strings.TrimSpace(content) != "" {
 			result.Content = content
 		}
-		consumedOutput, consumedArtifact, err := s.consumeWriteFileCandidates(ctx, request.TaskID, toolResult.RawOutput)
+		consumedOutput, consumedArtifact, err := s.consumeWriteFileCandidates(ctx, request.TaskID, request.RunID, toolResult.RawOutput)
 		if err != nil {
 			return Result{}, false, err
 		}
@@ -1630,7 +1632,7 @@ func removeCleanupPath(fileSystem platform.FileSystemAdapter, cleanupPath string
 	return []string{cleanupPath}, nil
 }
 
-func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
+func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID, runID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
 	if len(rawOutput) == 0 {
 		return nil, nil, nil
 	}
@@ -1641,6 +1643,9 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 		recordInput, err := audit.BuildRecordInputFromCandidate(taskID, auditCandidate)
 		if err != nil {
 			return nil, nil, fmt.Errorf("build audit record from candidate: %w", err)
+		}
+		if strings.TrimSpace(recordInput.RunID) == "" {
+			recordInput.RunID = runID
 		}
 		if record, err := s.audit.Write(ctx, recordInput); err != nil {
 			return nil, nil, fmt.Errorf("write audit record from candidate: %w", err)
@@ -1669,6 +1674,7 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 		artifact = map[string]any{
 			"artifact_id":   "",
 			"task_id":       taskID,
+			"run_id":        runID,
 			"artifact_type": artifactCandidate["artifact_type"],
 			"title":         artifactCandidate["title"],
 			"path":          artifactCandidate["path"],
@@ -2119,6 +2125,7 @@ func (s *Service) buildModelAuditRecord(ctx context.Context, request Request, in
 
 	record, err := s.audit.Write(ctx, audit.RecordInput{
 		TaskID:  request.TaskID,
+		RunID:   request.RunID,
 		Type:    "model",
 		Action:  "generate_text",
 		Summary: "model invocation completed",
@@ -2973,6 +2980,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		_ = s.loopStore.SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
 			DeliveryResultID: result.DeliveryRecord.DeliveryResultID,
 			TaskID:           result.DeliveryRecord.TaskID,
+			RunID:            request.RunID,
 			Type:             result.DeliveryRecord.Type,
 			Title:            result.DeliveryRecord.Title,
 			PayloadJSON:      marshalEventPayload(result.DeliveryRecord.Payload),

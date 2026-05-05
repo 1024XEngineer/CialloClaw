@@ -1,4 +1,4 @@
-// 该文件负责存储层的数据接口或落盘实现。
+// Package storage provides the SQLite-backed memory store implementation.
 package storage
 
 import (
@@ -6,8 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,71 +13,67 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// sqliteDriverName 定义当前模块的基础变量。
+// sqliteDriverName identifies the SQLite driver shared across storage stores.
 const sqliteDriverName = "sqlite"
 
-// sqliteMemorySource 定义当前模块的基础变量。
+// sqliteMemorySource labels retrieval hits produced by this SQLite store.
 const sqliteMemorySource = "storage_sqlite"
 
 const sqliteFTSTableName = "memory_summaries_fts"
 const sqliteVectorStubTableName = "memory_summary_vectors"
 
-// ErrMemorySummaryIDRequired 定义当前模块的基础变量。
+// ErrMemorySummaryIDRequired reports a missing memory_summary_id value.
 var ErrMemorySummaryIDRequired = errors.New("storage memory_summary_id is required")
 
-// ErrMemoryTaskIDRequired 定义当前模块的基础变量。
+// ErrMemoryTaskIDRequired reports a missing task_id value for memory rows.
 var ErrMemoryTaskIDRequired = errors.New("storage memory task_id is required")
 
-// ErrMemoryRunIDRequired 定义当前模块的基础变量。
+// ErrMemoryRunIDRequired reports a missing run_id value for memory rows.
 var ErrMemoryRunIDRequired = errors.New("storage memory run_id is required")
 
-// ErrMemorySummaryRequired 定义当前模块的基础变量。
+// ErrMemorySummaryRequired reports a missing summary payload.
 var ErrMemorySummaryRequired = errors.New("storage memory summary is required")
 
-// ErrMemoryCreatedAtRequired 定义当前模块的基础变量。
+// ErrMemoryCreatedAtRequired reports a missing created_at timestamp.
 var ErrMemoryCreatedAtRequired = errors.New("storage memory created_at is required")
 
-// ErrMemoryCreatedAtInvalid 定义当前模块的基础变量。
+// ErrMemoryCreatedAtInvalid reports an invalid created_at timestamp.
 var ErrMemoryCreatedAtInvalid = errors.New("storage memory created_at must be rfc3339")
 
-// ErrRetrievalHitIDRequired 定义当前模块的基础变量。
+// ErrRetrievalHitIDRequired reports a missing retrieval_hit_id value.
 var ErrRetrievalHitIDRequired = errors.New("storage retrieval_hit_id is required")
 
-// ErrRetrievalHitTaskIDRequired 定义当前模块的基础变量。
+// ErrRetrievalHitTaskIDRequired reports a missing task_id value for hits.
 var ErrRetrievalHitTaskIDRequired = errors.New("storage retrieval_hit task_id is required")
 
-// ErrRetrievalHitRunIDRequired 定义当前模块的基础变量。
+// ErrRetrievalHitRunIDRequired reports a missing run_id value for hits.
 var ErrRetrievalHitRunIDRequired = errors.New("storage retrieval_hit run_id is required")
 
-// ErrRetrievalHitMemoryIDRequired 定义当前模块的基础变量。
+// ErrRetrievalHitMemoryIDRequired reports a missing memory_id value for hits.
 var ErrRetrievalHitMemoryIDRequired = errors.New("storage retrieval_hit memory_id is required")
 
-// ErrRetrievalHitSourceRequired 定义当前模块的基础变量。
+// ErrRetrievalHitSourceRequired reports a missing source value for hits.
 var ErrRetrievalHitSourceRequired = errors.New("storage retrieval_hit source is required")
 
-// ErrRetrievalHitCreatedAtRequired 定义当前模块的基础变量。
+// ErrRetrievalHitCreatedAtRequired reports a missing created_at timestamp.
 var ErrRetrievalHitCreatedAtRequired = errors.New("storage retrieval_hit created_at is required")
 
-// ErrRetrievalHitCreatedAtInvalid 定义当前模块的基础变量。
+// ErrRetrievalHitCreatedAtInvalid reports an invalid created_at timestamp.
 var ErrRetrievalHitCreatedAtInvalid = errors.New("storage retrieval_hit created_at must be rfc3339")
 
-// SQLiteMemoryStore 定义当前模块的数据结构。
+// SQLiteMemoryStore persists memory summaries and retrieval hits in SQLite.
 type SQLiteMemoryStore struct {
 	db *sql.DB
 }
 
-// NewSQLiteMemoryStore 创建并返回SQLiteMemoryStore。
+// NewSQLiteMemoryStore opens and initializes the SQLite memory store.
 func NewSQLiteMemoryStore(databasePath string) (*SQLiteMemoryStore, error) {
-	databasePath = strings.TrimSpace(databasePath)
-	if databasePath == "" {
-		return nil, ErrDatabasePathRequired
+	cleanedPath, err := prepareSQLiteDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("prepare sqlite directory: %w", err)
-	}
-
-	db, err := sql.Open(sqliteDriverName, databasePath)
+	db, err := sql.Open(sqliteDriverName, cleanedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -97,7 +91,7 @@ func NewSQLiteMemoryStore(databasePath string) (*SQLiteMemoryStore, error) {
 	return store, nil
 }
 
-// SaveSummary 处理当前模块的相关逻辑。
+// SaveSummary persists one memory summary and refreshes its FTS row.
 func (s *SQLiteMemoryStore) SaveSummary(ctx context.Context, summary MemorySummaryRecord) error {
 	if err := validateMemorySummaryRecord(summary); err != nil {
 		return err
@@ -142,7 +136,7 @@ func (s *SQLiteMemoryStore) SaveSummary(ctx context.Context, summary MemorySumma
 	return nil
 }
 
-// SaveRetrievalHits 处理当前模块的相关逻辑。
+// SaveRetrievalHits persists one batch of retrieval-hit records.
 func (s *SQLiteMemoryStore) SaveRetrievalHits(ctx context.Context, hits []MemoryRetrievalRecord) error {
 	if len(hits) == 0 {
 		return nil
@@ -185,7 +179,7 @@ func (s *SQLiteMemoryStore) SaveRetrievalHits(ctx context.Context, hits []Memory
 	return nil
 }
 
-// SearchSummaries 处理当前模块的相关逻辑。
+// SearchSummaries returns the best matching summaries outside the current run.
 func (s *SQLiteMemoryStore) SearchSummaries(ctx context.Context, taskID, runID, query string, limit int) ([]MemoryRetrievalRecord, error) {
 	limit = normalizeMemoryLimit(limit)
 	query = strings.ToLower(strings.TrimSpace(query))
@@ -261,7 +255,7 @@ func (s *SQLiteMemoryStore) SearchSummaries(ctx context.Context, taskID, runID, 
 	return hits, nil
 }
 
-// ListRecentSummaries 列出RecentSummaries。
+// ListRecentSummaries returns the most recent persisted memory summaries.
 func (s *SQLiteMemoryStore) ListRecentSummaries(ctx context.Context, limit int) ([]MemorySummaryRecord, error) {
 	limit = normalizeMemoryLimit(limit)
 
@@ -293,7 +287,7 @@ func (s *SQLiteMemoryStore) ListRecentSummaries(ctx context.Context, limit int) 
 	return summaries, nil
 }
 
-// Close 处理当前模块的相关逻辑。
+// Close releases the underlying SQLite connection.
 func (s *SQLiteMemoryStore) Close() error {
 	if s.db == nil {
 		return nil
@@ -302,7 +296,7 @@ func (s *SQLiteMemoryStore) Close() error {
 	return s.db.Close()
 }
 
-// journalMode 处理当前模块的相关逻辑。
+// journalMode reports the active SQLite journal mode for this store.
 func (s *SQLiteMemoryStore) journalMode(ctx context.Context) (string, error) {
 	var mode string
 	if err := s.db.QueryRowContext(ctx, `PRAGMA journal_mode;`).Scan(&mode); err != nil {
@@ -312,7 +306,7 @@ func (s *SQLiteMemoryStore) journalMode(ctx context.Context) (string, error) {
 	return strings.ToLower(strings.TrimSpace(mode)), nil
 }
 
-// initialize 处理当前模块的相关逻辑。
+// initialize creates the SQLite tables and indexes required by the store.
 func (s *SQLiteMemoryStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("enable sqlite wal mode: %w", err)
@@ -399,7 +393,7 @@ func buildFTS5Query(query string) string {
 	return strings.Join(quotedTerms, " OR ")
 }
 
-// validateMemorySummaryRecord 处理当前模块的相关逻辑。
+// validateMemorySummaryRecord enforces the minimal summary persistence shape.
 func validateMemorySummaryRecord(summary MemorySummaryRecord) error {
 	if strings.TrimSpace(summary.MemorySummaryID) == "" {
 		return ErrMemorySummaryIDRequired

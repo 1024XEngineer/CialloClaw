@@ -288,6 +288,7 @@ function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktop
 function loadTaskPageMapperModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.mapper.js")) as {
+      canTaskAcceptSteering: (task: Task) => boolean;
       getTaskPrimaryActions: (task: Task, detail: AgentTaskDetailGetResult) => Array<{ action: string; label: string; tooltip: string }>;
     },
   );
@@ -1795,13 +1796,19 @@ test("task context links back into mirror detail state instead of plain text dea
 });
 
 test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
-  const { getTaskPrimaryActions } = loadTaskPageMapperModule();
+  const { canTaskAcceptSteering, getTaskPrimaryActions } = loadTaskPageMapperModule();
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
+  const processingPromptTask = createTask({ status: "processing", current_step: "generate_output", intent: { name: "agent_loop", arguments: {} } });
+  const processingLoopTask = createTask({ status: "processing", current_step: "agent_loop", intent: { name: "agent_loop", arguments: {} } });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
   const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
+  assert.equal(canTaskAcceptSteering(waitingAuthTask), true);
+  assert.equal(canTaskAcceptSteering(waitingInputTask), false);
+  assert.equal(canTaskAcceptSteering(processingPromptTask), false);
+  assert.equal(canTaskAcceptSteering(processingLoopTask), true);
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
     getTaskPrimaryActions(waitingInputTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingInputTask })).map((action) => action.action),
@@ -1809,7 +1816,8 @@ test("task page keeps waiting-auth anchors and routes follow-up steering through
   );
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
-  assert.match(taskDetailPanelSource, /placeholder=\{canSteerTask \? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"\}/);
+  assert.match(taskDetailPanelSource, /const canSteerTask = canTaskAcceptSteering\(task\)/);
+  assert.match(taskDetailPanelSource, /placeholder=\{steeringPlaceholder\}/);
 });
 
 test("settings service normalizes legacy stored snapshots before returning and saving", () => {

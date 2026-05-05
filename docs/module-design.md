@@ -1496,6 +1496,8 @@ flowchart TB
 - 为一次任务执行标记 `initial / resume / restart` 分段；
 - 隔离长任务的 steering message 和重试上下文；
 - 把执行尝试和人类复核后的继续执行放回同一主任务，而不是分叉出新的正式主对象；
+- `restart` 分段必须来自重启前的终态任务快照与重启后的新 `run_id`，`TaskControl` 完成状态迁移后必须把新尝试送回会话串行队列与风险治理 / 授权边界，只有通过这些前置门禁后才启动执行，避免留下没有 executor 承接的 `processing` 快照或绕过治理的执行；
+- 同一 `task_id` 发生 `restart` 后，任务详情和审计明细中的 `delivery_result / artifact / citation / authorization_record / audit_record` 必须按当前 `run_id` 读取正式记录；其中 `delivery_result / artifact / authorization_record / audit_record` 的旧尝试数据可以保留在存储层，但不能继续污染新尝试的任务详情、失败摘要或安全审计 drill-down；`citation` 当前仍是 task 级替换语义，只保证当前尝试的正式引用链正确，不承诺保留旧尝试的 citation 历史；
 - 为后续真正的一等子任务能力预留边界。
 
 #### 关键中间产物

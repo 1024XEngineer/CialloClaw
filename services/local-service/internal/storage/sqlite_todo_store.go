@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -22,15 +20,12 @@ type SQLiteTodoStore struct {
 
 // NewSQLiteTodoStore creates and returns a SQLiteTodoStore.
 func NewSQLiteTodoStore(databasePath string) (*SQLiteTodoStore, error) {
-	databasePath = strings.TrimSpace(databasePath)
-	if databasePath == "" {
-		return nil, ErrDatabasePathRequired
-	}
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("prepare sqlite directory: %w", err)
+	cleanedPath, err := prepareSQLiteDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
 
-	db, err := sql.Open(sqliteDriverName, databasePath)
+	db, err := sql.Open(sqliteDriverName, cleanedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}

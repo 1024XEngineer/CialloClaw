@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
-import { getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
+import { canTaskAcceptSteering, getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
 import type { TaskDetailData } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
 import { TaskContextBlock } from "./TaskContextBlock";
@@ -80,7 +80,8 @@ export function TaskDetailPanel({
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
   const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
-  const canSteerTask = !ended && task.status !== "cancelled";
+  const canSteerTask = canTaskAcceptSteering(task);
+  const steeringPlaceholder = canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : ended ? "当前任务已结束，不能继续补充要求。" : "当前阶段不能直接追加要求，请通过悬浮球重新提交。";
   const formalDeliveryResult = detail.delivery_result;
   const runtimeSummary = detail.runtime_summary;
   const evidenceItems = detail.citations;
@@ -576,7 +577,7 @@ export function TaskDetailPanel({
                     className="task-detail-steer-box__input"
                     disabled={!canSteerTask || steeringPending}
                     onChange={(event) => setSteeringMessage(event.target.value)}
-                    placeholder={canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"}
+                    placeholder={steeringPlaceholder}
                     rows={3}
                     value={steeringMessage}
                   />
