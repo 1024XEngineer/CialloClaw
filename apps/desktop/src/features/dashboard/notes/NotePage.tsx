@@ -165,7 +165,6 @@ function findReplacementItemIdForSourceNote(
 function resolveNoteItemSourceNotePath(
   item: NoteListItem,
   sourceNotesByPath: Map<string, SourceNoteDocument>,
-  sourceNotesByTitle: Map<string, SourceNoteDocument>,
 ) {
   const sourcePath = readTodoSourcePath(item.item);
   if (sourcePath) {
@@ -183,16 +182,15 @@ function resolveNoteItemSourceNotePath(
     return resourceMatch.path;
   }
 
-  return sourceNotesByTitle.get(item.item.title.trim().toLowerCase())?.path ?? null;
+  return null;
 }
 
 function matchesSourceNotePath(
   item: NoteListItem,
   sourceNotePath: string,
   sourceNotesByPath: Map<string, SourceNoteDocument>,
-  sourceNotesByTitle: Map<string, SourceNoteDocument>,
 ) {
-  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
   return matchedPath !== null && normalizeSourceNoteKey(matchedPath) === normalizeSourceNoteKey(sourceNotePath);
 }
 
@@ -350,15 +348,11 @@ export function NotePage() {
     () => new Map(sourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note])),
     [sourceNotes],
   );
-  const sourceNotesByTitle = useMemo(
-    () => new Map(sourceNotes.map((note) => [note.title.trim().toLowerCase(), note])),
-    [sourceNotes],
-  );
   const representedSourceNoteBlocks = useMemo(() => {
     const representedBlocks = new Set<string>();
 
     [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
       if (!matchedPath) {
         return;
       }
@@ -373,7 +367,7 @@ export function NotePage() {
     });
 
     return representedBlocks;
-  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
+  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath]);
   const sourceNoteFallbackItems = useMemo(
     () =>
       sourceNotes
@@ -419,14 +413,14 @@ export function NotePage() {
     const itemPathMap = new Map<string, string>();
 
     allItems.forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
       if (matchedPath) {
         itemPathMap.set(item.item.item_id, matchedPath);
       }
     });
 
     return itemPathMap;
-  }, [allItems, sourceNotesByPath, sourceNotesByTitle]);
+  }, [allItems, sourceNotesByPath]);
   const noteItemIdsBySourcePath = useMemo(() => {
     const pathItemMap = new Map<string, string[]>();
 
@@ -554,7 +548,6 @@ export function NotePage() {
     const latestSourceNotesResult = await sourceNotesQuery.refetch();
     const latestSourceNotes = latestSourceNotesResult.data?.notes ?? sourceNotes;
     const latestSourceNotesByPath = new Map(latestSourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note]));
-    const latestSourceNotesByTitle = new Map(latestSourceNotes.map((note) => [note.title.trim().toLowerCase(), note]));
     const normalizedExpectedPath = normalizeSourceNoteKey(sourceIdentity.path);
     const normalizedExpectedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
     const refetchedItems = await refetchAllNoteBuckets();
@@ -563,7 +556,7 @@ export function NotePage() {
         return false;
       }
 
-      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath, latestSourceNotesByTitle);
+      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath);
       if (!matchedPath || normalizeSourceNoteKey(matchedPath) !== normalizedExpectedPath) {
         return false;
       }
@@ -578,7 +571,7 @@ export function NotePage() {
         (item) =>
           !item.sourceNote?.localOnly
           && normalizeSourceNoteTitleKey(item.item.title) === normalizedExpectedTitle
-          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath, latestSourceNotesByTitle),
+          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath),
       );
 
     if (!matchedItem) {
@@ -665,7 +658,7 @@ export function NotePage() {
   }
 
   function resolveSourceNotePathForItem(item: NoteListItem) {
-    return resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+    return resolveNoteItemSourceNotePath(item, sourceNotesByPath);
   }
 
   function openSourceStudioForItem(item: NoteListItem) {
