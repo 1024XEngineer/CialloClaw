@@ -265,7 +265,7 @@ export const floatingPetInitialLayout: FloatingPetInitialLayout = {
     },
     leftWing: {
       opacity: 1,
-      position: { x: -93.89, y: 0.1 },
+      position: { x: -93.89, y: 0 },
       rotation: -98.127,
       scale: { x: 10, y: 10 },
     },
@@ -279,12 +279,12 @@ export const floatingPetInitialLayout: FloatingPetInitialLayout = {
     rightWing: {
       opacity: 1,
       position: { x: 86.11, y: 9.5 },
-      rotation: -1.31,
+      rotation: -64.423,
       scale: { x: 13.3, y: 13.3 },
     },
     tail: {
       opacity: 1,
-      position: { x: 113.61, y: 77.6 },
+      position: { x: 113.61, y: 77.5 },
       rotation: -36.046,
       scale: { x: 11, y: 11 },
     },
