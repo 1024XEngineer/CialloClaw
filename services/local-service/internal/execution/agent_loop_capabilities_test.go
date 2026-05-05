@@ -52,10 +52,10 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
 	definitions := service.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"})
-	if len(definitions) != 10 {
-		t.Fatalf("expected browser-capable snapshot to expose ten planner-visible tools, got %+v", definitions)
+	if len(definitions) != 8 {
+		t.Fatalf("expected browser-capable snapshot to expose eight planner-visible tools, got %+v", definitions)
 	}
-	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_navigate", "browser_tab_focus", "page_read", "page_search", "structured_dom"}
+	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "page_read", "page_search", "structured_dom"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -64,8 +64,23 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 	if !strings.Contains(definitions[2].Description, "不会隐式导航或交互页面") {
 		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", definitions[2].Description)
 	}
-	if !strings.Contains(definitions[5].Description, "不会自动把关键词转换成搜索引擎查询") {
-		t.Fatalf("expected browser_navigate description to include navigation constraint, got %q", definitions[5].Description)
+	if !strings.Contains(definitions[7].Description, "不会执行页面交互") {
+		t.Fatalf("expected structured_dom description to preserve read-only contract, got %q", definitions[7].Description)
+	}
+}
+
+func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *testing.T) {
+	service := newAgentLoopCapabilityTestService(t, true)
+	definitions := service.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{BrowserKind: "edge"})
+	names := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		names = append(names, definition.Name)
+	}
+	if !containsString(names, "browser_attach_current") || !containsString(names, "browser_tabs_list") {
+		t.Fatalf("expected sparse browser context to expose discovery-safe tools, got %+v", names)
+	}
+	if containsString(names, "browser_snapshot") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
+		t.Fatalf("expected sparse browser context to keep target-dependent browser tools hidden, got %+v", names)
 	}
 }
 
@@ -100,6 +115,12 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	}
 	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
 		t.Fatal("expected browser_attach_current to be allowed when the snapshot exposes an attach-capable browser")
+	}
+	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
+		t.Fatal("expected browser_tabs_list to stay allowed with sparse browser context")
+	}
+	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_navigate", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
+		t.Fatal("expected browser_navigate to stay hidden until loop governance can pause for approval")
 	}
 	if withPlaywright.isAllowedAgentLoopTool("browser_interact") {
 		t.Fatal("expected browser_interact to stay disallowed until the planner catalog opts in")
@@ -137,4 +158,13 @@ func newAgentLoopCapabilityTestService(t *testing.T, registerPlaywright bool) *S
 		nil,
 		plugin.NewService(),
 	)
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

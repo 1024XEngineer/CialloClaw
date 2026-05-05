@@ -1858,6 +1858,23 @@ func TestResolvePageToolInputMatchesEquivalentRootURLs(t *testing.T) {
 	}
 }
 
+func TestResolveBrowserToolInputAllowsSparseDiscoveryTargets(t *testing.T) {
+	input, ok := resolveBrowserToolInput("browser_tabs_list", map[string]any{}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome"})
+	if !ok {
+		t.Fatal("expected browser_tabs_list to resolve with sparse browser snapshot")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected browser tabs list attach hints, got %+v", input)
+	}
+	if attach["browser_kind"] != "chrome" {
+		t.Fatalf("expected sparse browser attach hints to keep browser kind, got %+v", attach)
+	}
+	if _, exists := attach["target"]; exists {
+		t.Fatalf("expected sparse browser discovery attach hints to omit target filters, got %+v", attach)
+	}
+}
+
 func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

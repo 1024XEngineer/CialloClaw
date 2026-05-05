@@ -99,45 +99,6 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
-		Name:                   "browser_navigate",
-		RequiresCurrentBrowser: true,
-		UseWhen:                "需要在当前真实浏览器标签页里打开一个新的绝对 URL",
-		AvoidWhen:              "用户只需要读取当前页面，或只是想搜索页面内关键词",
-		Constraints: []string{
-			"浏览器导航可能触发审批",
-			"一次只导航到一个绝对 URL",
-			"不会自动把关键词转换成搜索引擎查询",
-		},
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url": map[string]any{"type": "string", "description": "Absolute URL to open in the attached browser tab."},
-			},
-			"required":             []string{"url"},
-			"additionalProperties": false,
-		},
-	},
-	{
-		Name:                   "browser_tab_focus",
-		RequiresCurrentBrowser: true,
-		UseWhen:                "需要切换到当前真实浏览器中的另一个已知标签页",
-		AvoidWhen:              "用户只需要查看标签页列表，或需要直接导航到一个全新 URL",
-		Constraints: []string{
-			"切换标签页可能触发审批",
-			"可选使用 page_index 或目标线索缩小范围",
-			"不会修改页面内容",
-		},
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"page_index":     map[string]any{"type": "integer", "minimum": 0},
-				"target_url":     map[string]any{"type": "string", "description": "Optional URL hint for the target tab."},
-				"title_contains": map[string]any{"type": "string", "description": "Optional title substring hint for the target tab."},
-			},
-			"additionalProperties": false,
-		},
-	},
-	{
 		Name:      "page_read",
 		UseWhen:   "需要读取某个网页的标题或主要可见文本",
 		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
@@ -319,6 +280,9 @@ func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot contextsvc.TaskCont
 	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
 	if browserKind != "chrome" && browserKind != "edge" {
 		return false
+	}
+	if c.Name == "browser_attach_current" || c.Name == "browser_tabs_list" {
+		return true
 	}
 	if strings.TrimSpace(snapshot.PageURL) != "" {
 		return true

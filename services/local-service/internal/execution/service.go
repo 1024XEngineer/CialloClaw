@@ -3309,10 +3309,14 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 		return nil, false
 	}
 	useSnapshotTarget := true
+	allowEmptyTarget := false
+	if intentName == "browser_attach_current" || intentName == "browser_tabs_list" {
+		allowEmptyTarget = true
+	}
 	if intentName == "browser_tab_focus" {
 		useSnapshotTarget = browserTargetOverrideMissing(arguments)
 	}
-	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget)
+	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget, allowEmptyTarget)
 	if len(attach) == 0 {
 		return nil, false
 	}
@@ -3339,7 +3343,7 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 	}
 }
 
-func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget bool) map[string]any {
+func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget bool) map[string]any {
 	target := map[string]any{}
 	if pageIndex, ok := browserAttachPageIndex(arguments); ok {
 		target["page_index"] = pageIndex
@@ -3358,14 +3362,17 @@ func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContext
 			target["title_contains"] = windowTitle
 		}
 	}
-	if len(target) == 0 {
+	if len(target) == 0 && !allowEmptyTarget {
 		return nil
 	}
-	return map[string]any{
+	attach := map[string]any{
 		"mode":         string(tools.BrowserAttachModeCDP),
 		"browser_kind": browserKind,
-		"target":       target,
 	}
+	if len(target) > 0 {
+		attach["target"] = target
+	}
+	return attach
 }
 
 func browserAttachPageIndex(arguments map[string]any) (int, bool) {
