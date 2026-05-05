@@ -259,21 +259,48 @@ function renderCenteredImageAtOrigin(assetName: FloatingPetAssetName, scale: Flo
   );
 }
 
-function renderCenteredImageRelativeToPivot(
-  assetName: FloatingPetAssetName,
-  layout: FloatingPetLayerTransform,
-  pivot: FloatingPetLayerTransform["position"],
-) {
-  return renderCenteredImage(
-    assetName,
-    {
-      ...layout,
-      position: {
-        x: layout.position.x - pivot.x,
-        y: layout.position.y - pivot.y,
-      },
-    },
-    layout.rotation,
+function resolveLocalPivot(centerPosition: FloatingPetLayerTransform["position"], bonePosition: FloatingPetLayerTransform["position"]) {
+  return {
+    x: bonePosition.x - centerPosition.x,
+    y: bonePosition.y - centerPosition.y,
+  };
+}
+
+type BoneRotatedLayerProps = {
+  animatedRotate: number | number[];
+  assetName: FloatingPetAssetName;
+  bonePosition: FloatingPetLayerTransform["position"];
+  layer: FloatingPetLayerTransform;
+  repeat: number;
+  times: number[];
+  transitionDuration: number;
+};
+
+function BoneRotatedLayer({
+  animatedRotate,
+  assetName,
+  bonePosition,
+  layer,
+  repeat,
+  times,
+  transitionDuration,
+}: BoneRotatedLayerProps) {
+  const localPivot = resolveLocalPivot(layer.position, bonePosition);
+
+  return (
+    <g transform={`translate(${layer.position.x} ${layer.position.y})`}>
+      <g transform={`translate(${localPivot.x} ${localPivot.y})`}>
+        <motion.g
+          animate={{ rotate: animatedRotate }}
+          initial={false}
+          transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
+        >
+          <g transform={`translate(${-localPivot.x} ${-localPivot.y})`}>
+            {renderCenteredImageAtOrigin(assetName, layer.scale, layer.rotation)}
+          </g>
+        </motion.g>
+      </g>
+    </g>
   );
 }
 
@@ -370,40 +397,37 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
         </AnimatePresence>
 
         <motion.g animate={rootBodyMotion.animate} initial={false} transition={rootBodyMotion.transition}>
-          <g transform={`translate(${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}>
-            <motion.g
-              animate={{ rotate: tailMotion.rotate }}
-              initial={false}
-              style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
-              transition={{ duration: tailMotion.duration, ease: "easeInOut", repeat: tailMotion.repeat, times: tailMotion.times }}
-            >
-              {renderCenteredImageRelativeToPivot("tail", floatingPetInitialLayout.rootBody.tail, floatingPetInitialLayout.rootBody.tailBone.position)}
-            </motion.g>
-          </g>
+          <BoneRotatedLayer
+            animatedRotate={tailMotion.rotate}
+            assetName="tail"
+            bonePosition={floatingPetInitialLayout.rootBody.tailBone.position}
+            layer={floatingPetInitialLayout.rootBody.tail}
+            repeat={tailMotion.repeat}
+            times={tailMotion.times}
+            transitionDuration={tailMotion.duration}
+          />
 
-          <g transform={`translate(${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}>
-            <motion.g
-              animate={{ rotate: wingMotion.left.rotate }}
-              initial={false}
-              style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
-              transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.left.repeat, times: wingMotion.left.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
-            >
-              {renderCenteredImageRelativeToPivot("leftWing", floatingPetInitialLayout.rootBody.leftWing, floatingPetInitialLayout.rootBody.leftBone.position)}
-            </motion.g>
-          </g>
+          <BoneRotatedLayer
+            animatedRotate={wingMotion.left.rotate}
+            assetName="leftWing"
+            bonePosition={floatingPetInitialLayout.rootBody.leftBone.position}
+            layer={floatingPetInitialLayout.rootBody.leftWing}
+            repeat={wingMotion.left.repeat}
+            times={wingMotion.left.rotate.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1]}
+            transitionDuration={FLOATING_PET_LOOP_DURATION_S}
+          />
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <g transform={`translate(${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}>
-            <motion.g
-              animate={{ rotate: wingMotion.right.rotate }}
-              initial={false}
-              style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
-              transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
-            >
-              {renderCenteredImageRelativeToPivot("rightWing", floatingPetInitialLayout.rootBody.rightWing, floatingPetInitialLayout.rootBody.rightBone.position)}
-            </motion.g>
-          </g>
+          <BoneRotatedLayer
+            animatedRotate={wingMotion.right.rotate}
+            assetName="rightWing"
+            bonePosition={floatingPetInitialLayout.rootBody.rightBone.position}
+            layer={floatingPetInitialLayout.rootBody.rightWing}
+            repeat={wingMotion.right.repeat}
+            times={wingMotion.right.rotate.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1]}
+            transitionDuration={FLOATING_PET_LOOP_DURATION_S}
+          />
 
           <g transform={`translate(${floatingPetInitialLayout.rootBody.face.position.x} ${floatingPetInitialLayout.rootBody.face.position.y})`}>
             <g transform={`translate(${floatingPetInitialLayout.rootBody.cheek.position.x} ${floatingPetInitialLayout.rootBody.cheek.position.y})`}>
