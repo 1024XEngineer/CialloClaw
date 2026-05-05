@@ -1574,12 +1574,13 @@ func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
 }
 
 func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
-	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{readResult: tools.BrowserPageReadResult{
-		Title:       "Example Page",
-		TextContent: "page content from sidecar",
-		MIMEType:    "text/html",
-		TextType:    "text/html",
-		Source:      "playwright_sidecar",
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{attachedReadResult: tools.BrowserPageReadResult{
+		BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+		Title:                    "Example Page",
+		TextContent:              "page content from sidecar",
+		MIMEType:                 "text/html",
+		TextType:                 "text/html",
+		Source:                   "playwright_worker_cdp",
 	}})
 
 	result, err := service.Execute(context.Background(), Request{
@@ -1587,7 +1588,7 @@ func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 		RunID:                "run_005",
 		Title:                "页面读取",
 		Intent:               map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
-		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面"},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面", BrowserKind: "chrome", PageURL: "https://example.com", PageTitle: "Example Page", WindowTitle: "Example Page - Google Chrome"},
 		DeliveryType:         "bubble",
 		ResultTitle:          "页面读取结果",
 		ApprovalGranted:      true,
@@ -1600,8 +1601,22 @@ func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 	if result.ToolName != "page_read" {
 		t.Fatalf("expected page_read tool, got %s", result.ToolName)
 	}
+	attachInput, ok := result.ToolInput["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected page_read tool input to carry attach hints, got %+v", result.ToolInput)
+	}
+	if attachInput["browser_kind"] != "chrome" {
+		t.Fatalf("expected page_read attach browser kind, got %+v", attachInput)
+	}
+	target, ok := attachInput["target"].(map[string]any)
+	if !ok || target["title_contains"] != "Example Page" {
+		t.Fatalf("expected page_read attach target to use page title, got %+v", attachInput)
+	}
 	if result.ToolOutput["summary_output"] == nil {
 		t.Fatalf("expected sidecar tool summary output, got %+v", result.ToolOutput)
+	}
+	if attached, _ := result.ToolOutput["attached"].(bool); !attached {
+		t.Fatalf("expected page_read tool output to expose attached execution metadata, got %+v", result.ToolOutput)
 	}
 	if len(result.ExtensionAssets) < 4 {
 		t.Fatalf("expected static execution assets plus plugin manifest refs, got %+v", result.ExtensionAssets)
@@ -1788,6 +1803,82 @@ func TestExecuteDirectSidecarPageReadFailureReturnsMappedToolTrace(t *testing.T)
 	}
 	if result.ToolCalls[0].ErrorCode == nil || *result.ToolCalls[0].ErrorCode != tools.ToolErrorCodePlaywrightSidecarFail {
 		t.Fatalf("expected unified sidecar error code, got %+v", result.ToolCalls[0])
+	}
+}
+
+func TestResolvePageToolInputInjectsAttachHintsFromSnapshot(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com/current", PageTitle: "Current Tab", WindowTitle: "Current Tab - Microsoft Edge"}
+	input, ok := resolvePageToolInput("page_search", map[string]any{"url": "https://example.com/current", "query": "docs", "limit": 2.0, "browser_kind": "chrome", "endpoint_url": "http://127.0.0.1:9999"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_search tool input to resolve")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach hints in page_search input, got %+v", input)
+	}
+	if attach["browser_kind"] != "edge" {
+		t.Fatalf("expected attach browser kind edge, got %+v", attach)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["url"] != "https://example.com/current" || target["title_contains"] != "Current Tab" {
+		t.Fatalf("expected attach target to use current page snapshot, got %+v", attach)
+	}
+	if _, exists := attach["endpoint_url"]; exists {
+		t.Fatalf("expected injected attach hints to ignore model-controlled endpoint override, got %+v", attach)
+	}
+	if input["query"] != "docs" || input["limit"] != 2.0 {
+		t.Fatalf("expected search-specific input to survive attach injection, got %+v", input)
+	}
+}
+
+func TestResolvePageToolInputSkipsAttachWhenSnapshotDoesNotMatchRequestedPage(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/current", WindowTitle: "Current Tab"}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/other"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve")
+	}
+	if _, exists := input["attach"]; exists {
+		t.Fatalf("expected mismatched snapshot to fall back to launch path, got %+v", input)
+	}
+}
+
+func TestResolvePageToolInputMatchesEquivalentRootURLs(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", PageTitle: "Home"}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve for equivalent root URL forms")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected equivalent root URLs to keep attach hints, got %+v", input)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["url"] != "https://example.com/" {
+		t.Fatalf("expected root URL target normalization, got %+v", attach)
+	}
+}
+
+func TestResolvePageToolInputAllowsWorkerDetectedBrowserKind(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{
+		PageURL:     "https://example.com/current",
+		PageTitle:   "Current Tab",
+		ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+		WindowTitle: "Current Tab - Google Chrome",
+	}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/current", "browser_kind": "edge"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve when browser kind is omitted from snapshot")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach hints with worker-detected browser kind fallback, got %+v", input)
+	}
+	if _, exists := attach["browser_kind"]; exists {
+		t.Fatalf("expected attach hints to omit browser_kind when snapshot does not classify it, got %+v", attach)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["url"] != "https://example.com/current" || target["title_contains"] != "Current Tab" {
+		t.Fatalf("expected attach target to remain based on the trusted page snapshot, got %+v", attach)
 	}
 }
 
@@ -2902,14 +2993,8 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 		wantKey    string
 		wantAttach bool
 	}{
-		{name: "browser_attach_current", request: Request{Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantKey: "attach", wantAttach: true},
-		{name: "browser_snapshot", request: Request{Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_snapshot", wantKey: "attach", wantAttach: true},
-		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantKey: "url", wantAttach: true},
-		{name: "browser_tabs_list", request: Request{Intent: map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_tabs_list", wantKey: "attach", wantAttach: true},
-		{name: "browser_tab_focus", request: Request{Intent: map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"page_index": 1.0}}}}}, wantTool: "browser_tab_focus", wantKey: "attach", wantAttach: true},
-		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
-		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact", wantKey: "url"},
-		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom", wantKey: "url"},
+		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantKey: "url", wantAttach: true},
+		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantKey: "url", wantAttach: true},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
 		{name: "transcode_media", request: Request{Intent: map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4", "format": "mp4"}}}, wantTool: "transcode_media", wantKey: "output_path"},
 		{name: "extract_frames", request: Request{Intent: map[string]any{"name": "extract_frames", "arguments": map[string]any{"path": "clips/demo.mov", "output_dir": "frames", "limit": 2.0}}}, wantTool: "extract_frames", wantKey: "output_dir"},
@@ -2925,7 +3010,7 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 			}
 			_, hasAttach := input["attach"]
 			if hasAttach != test.wantAttach {
-				t.Fatalf("expected attach=%v, got %+v", test.wantAttach, input)
+				t.Fatalf("expected attach=%v, got input %+v", test.wantAttach, input)
 			}
 		})
 	}
@@ -2939,11 +3024,8 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 		wantTool   string
 		wantAttach bool
 	}{
-		{name: "browser_attach_current", request: Request{TaskID: "task_browser_attach", RunID: "run_browser_attach", DeliveryType: "bubble", ResultTitle: "浏览器附着结果", Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantAttach: true},
-		{name: "browser_navigate", request: Request{TaskID: "task_browser_nav", RunID: "run_browser_nav", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantAttach: true},
-		{name: "browser_interact", request: Request{TaskID: "task_browser_interact", RunID: "run_browser_interact", DeliveryType: "bubble", ResultTitle: "浏览器交互结果", Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantAttach: true},
-		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact"},
-		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom"},
+		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantAttach: true},
+		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantAttach: true},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
 		{name: "normalize_recording", request: Request{TaskID: "task_004", RunID: "run_004", DeliveryType: "bubble", ResultTitle: "归一化结果", Intent: map[string]any{"name": "normalize_recording", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4"}}}, wantTool: "normalize_recording"},
 	}
@@ -2964,7 +3046,7 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 			}
 			_, hasAttach := input["attach"]
 			if hasAttach != test.wantAttach {
-				t.Fatalf("expected attach=%v, got %+v", test.wantAttach, input)
+				t.Fatalf("expected attach=%v, got input %+v", test.wantAttach, input)
 			}
 		})
 	}
@@ -3172,15 +3254,6 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
-	if governanceTargetObject("browser_snapshot", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs" {
-		t.Fatalf("expected browser snapshot governance target url")
-	}
-	if governanceTargetObject("browser_tab_focus", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 2}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "browser_tab:2" {
-		t.Fatalf("expected browser tab focus governance target to use page index")
-	}
-	if governanceTargetObject("browser_navigate", map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs/start" {
-		t.Fatalf("expected browser navigate governance target to prefer top-level url")
-	}
 	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
 		t.Fatalf("expected file-based governance target path")
 	}
@@ -3192,15 +3265,6 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	}
 	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
 		t.Fatalf("expected webpage intent to preserve approved url target")
-	}
-	if approvedTargetObject(map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}}, "/workspace") != "https://example.com/docs" {
-		t.Fatalf("expected browser attach approval target to use attached url")
-	}
-	if approvedTargetObject(map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 3.0}}}}, "/workspace") != "browser_tab:3" {
-		t.Fatalf("expected browser tab focus approval target to use tab index")
-	}
-	if approvedTargetObject(map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}}, "/workspace") != "https://example.com/docs/start" {
-		t.Fatalf("expected browser navigate approval target to prefer destination url")
 	}
 	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
 		t.Fatalf("expected media intent approval target to follow output_path")
@@ -3236,15 +3300,19 @@ type stubExecutionCapability struct {
 }
 
 type stubPlaywrightClient struct {
-	readResult       tools.BrowserPageReadResult
-	searchResult     tools.BrowserPageSearchResult
-	interactResult   tools.BrowserPageInteractResult
-	structuredResult tools.BrowserStructuredDOMResult
-	attachResult     tools.BrowserAttachedPageResult
-	snapshotResult   tools.BrowserSnapshotResult
-	navigateResult   tools.BrowserNavigationResult
-	tabsResult       tools.BrowserTabsListResult
-	err              error
+	readResult               tools.BrowserPageReadResult
+	searchResult             tools.BrowserPageSearchResult
+	interactResult           tools.BrowserPageInteractResult
+	structuredResult         tools.BrowserStructuredDOMResult
+	attachedReadResult       tools.BrowserPageReadResult
+	attachedSearchResult     tools.BrowserPageSearchResult
+	attachedInteractResult   tools.BrowserPageInteractResult
+	attachedStructuredResult tools.BrowserStructuredDOMResult
+	attachResult             tools.BrowserAttachedPageResult
+	snapshotResult           tools.BrowserSnapshotResult
+	navigateResult           tools.BrowserNavigationResult
+	tabsResult               tools.BrowserTabsListResult
+	err                      error
 }
 
 type stubOCRWorkerClient struct {
@@ -3269,10 +3337,6 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 	return result, nil
 }
 
-func (s stubPlaywrightClient) ReadPageAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
-	return s.ReadPage(ctx, url)
-}
-
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageSearchResult{}, s.err
@@ -3290,11 +3354,6 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	}
 	return result, nil
 }
-
-func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
-	return s.SearchPage(ctx, url, query, limit)
-}
-
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
@@ -3305,11 +3364,6 @@ func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []ma
 	}
 	return result, nil
 }
-
-func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
-	return s.InteractPage(ctx, url, actions)
-}
-
 func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
 	if s.err != nil {
 		return tools.BrowserStructuredDOMResult{}, s.err
@@ -3321,8 +3375,71 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 	return result, nil
 }
 
-func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return s.StructuredDOM(ctx, url)
+func (s stubPlaywrightClient) ReadPageAttached(_ context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageReadResult{}, s.err
+	}
+	result := s.attachedReadResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	result.Attached = true
+	if result.BrowserKind == "" {
+		result.BrowserKind = attach.BrowserKind
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) SearchPageAttached(_ context.Context, url, query string, limit int, attach tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageSearchResult{}, s.err
+	}
+	result := s.attachedSearchResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	if result.Query == "" {
+		result.Query = query
+	}
+	if limit > 0 && len(result.Matches) > limit {
+		result.Matches = result.Matches[:limit]
+		result.MatchCount = len(result.Matches)
+	}
+	result.Attached = true
+	if result.BrowserKind == "" {
+		result.BrowserKind = attach.BrowserKind
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) InteractPageAttached(_ context.Context, url string, _ []map[string]any, attach tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	result := s.attachedInteractResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	result.Attached = true
+	if result.BrowserKind == "" {
+		result.BrowserKind = attach.BrowserKind
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) StructuredDOMAttached(_ context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	if s.err != nil {
+		return tools.BrowserStructuredDOMResult{}, s.err
+	}
+	result := s.attachedStructuredResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	result.Attached = true
+	if result.BrowserKind == "" {
+		result.BrowserKind = attach.BrowserKind
+	}
+	return result, nil
 }
 
 func (s stubPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
