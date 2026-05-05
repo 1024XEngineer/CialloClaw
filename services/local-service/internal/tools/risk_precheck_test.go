@@ -207,6 +207,62 @@ func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testin
 	}
 }
 
+func TestBuildRiskPrecheckInputBrowserSnapshotCapturesAppScope(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_snapshot", DisplayName: "Browser Snapshot", Source: ToolSourceSidecar},
+		"browser_snapshot",
+		execCtx,
+		map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/page"}}},
+	)
+	if input.Workspace.TargetPath != "https://example.com/page" {
+		t.Fatalf("expected browser snapshot target to use attached page URL, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within != nil {
+		t.Fatalf("expected browser snapshot to skip workspace boundary checks, got %+v", input.Workspace)
+	}
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {
+		t.Fatalf("expected browser snapshot to stay low risk, got %+v", result)
+	}
+	apps := result.ImpactScope["apps"].([]string)
+	if len(apps) != 1 || apps[0] != "chrome" {
+		t.Fatalf("expected browser snapshot app scope, got %+v", result.ImpactScope)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserNavigateUsesDestinationURL(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_navigate", DisplayName: "Browser Navigate", Source: ToolSourceSidecar},
+		"browser_navigate",
+		execCtx,
+		map[string]any{
+			"url":    "https://example.com/next",
+			"attach": map[string]any{"browser_kind": "edge", "target": map[string]any{"url": "https://example.com/current"}},
+		},
+	)
+	if input.Workspace.TargetPath != "https://example.com/next" {
+		t.Fatalf("expected browser navigate target to prefer destination URL, got %+v", input.Workspace)
+	}
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected browser navigate to require approval, got %+v", result)
+	}
+}
+
 func TestBuildRiskPrecheckInputUsesMediaOutputTarget(t *testing.T) {
 	execCtx := &ToolExecuteContext{
 		WorkspacePath: "/workspace",

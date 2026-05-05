@@ -1,36 +1,24 @@
-// 该文件负责风险评估层的最小骨架。
+// Package risk implements the minimal governance assessment layer.
 package risk
 
 import "strings"
 
-// Service 提供当前模块的服务能力。
+// Service evaluates tool risk without mutating orchestrator state.
 type Service struct{}
 
-// NewService 创建并返回Service。
+// NewService constructs a minimal risk assessment service.
 func NewService() *Service {
 	return &Service{}
 }
 
-// DefaultLevel 处理当前模块的相关逻辑。
+// DefaultLevel returns the default risk level used by callers that need a
+// stable fallback before any assessment runs.
 func (s *Service) DefaultLevel() string {
 	return string(RiskLevelGreen)
 }
 
-// Assess 对一次工具或操作请求进行最小风险评估。
-//
-// 当前规则保持保守：
-// 1. 能力不可用 => red + deny
-// 2. 命中危险命令 => red + deny
-// 3. 命中需审批命令 => red + approval_required
-// 4. 超出工作区 => red + deny
-// 5. write_file 且工作区信息未知 => yellow + approval_required
-// 6. 存在覆盖/删除风险 => yellow + checkpoint_required
-// 7. 其他 => green
-//
-// 注意：
-// - 这里不直接生成 ApprovalRequest；
-// - 这里不推进状态机；
-// - 这里只给上层一个稳定、可测试的风险判断结果。
+// Assess returns a stable, testable governance decision for one tool request.
+// It does not allocate approval records or mutate any task state.
 func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 	result := AssessmentResult{
 		RiskLevel:   RiskLevelGreen,
@@ -74,7 +62,11 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
-	if isWebpageOperation(input.OperationName) {
+	if isLowRiskBrowserObservationOperation(input.OperationName) {
+		return result
+	}
+
+	if isApprovalBrowserOperation(input.OperationName) {
 		result.RiskLevel = RiskLevelYellow
 		result.ApprovalRequired = true
 		result.Reason = ReasonWebpageApproval
@@ -147,9 +139,18 @@ func isApprovalCommand(commandPreview string) bool {
 	return false
 }
 
-func isWebpageOperation(operationName string) bool {
+func isApprovalBrowserOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search", "page_interact", "structured_dom":
+	case "page_read", "page_search", "page_interact", "structured_dom", "browser_navigate", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLowRiskBrowserObservationOperation(operationName string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list":
 		return true
 	default:
 		return false
