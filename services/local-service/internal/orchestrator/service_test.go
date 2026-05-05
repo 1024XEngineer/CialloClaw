@@ -43,6 +43,18 @@ import (
 
 type taskInspectorFailingSettingsStore struct{}
 
+func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
+	if got := truncateText("已完成总结，正在定位文件", 8); got != "已完成总结..." {
+		t.Fatalf("expected grapheme-safe chinese truncation, got %q", got)
+	}
+	if got := truncateText("定位完成📄打开结果", 8); got != "定位完成📄..." {
+		t.Fatalf("expected grapheme-safe emoji truncation, got %q", got)
+	}
+	if got := truncateText("完成e\u0301文档整理", 6); got != "完成e\u0301..." {
+		t.Fatalf("expected grapheme-safe combining-mark truncation, got %q", got)
+	}
+}
+
 func (taskInspectorFailingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
 	return errors.New("settings snapshot write failed")
 }
@@ -550,6 +562,15 @@ func querySQLiteCount(t *testing.T, databasePath, query string, args ...any) int
 	return count
 }
 
+func querySQLiteInt(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var value int
+	if err := db.QueryRow(query, args...).Scan(&value); err != nil {
+		t.Fatalf("query sqlite int failed: %v", err)
+	}
+	return value
+}
+
 func intPtr(value int) *int {
 	return &value
 }
@@ -953,10 +974,12 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
+func TestServiceSubmitInputReturnsSocialChatWithoutTask(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{
+		output: `{"route":"social_chat","reply":"你好，我在。"}`,
+	})
 
-	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"你好", "🙂"}
 	for index, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
 			result, err := service.SubmitInput(map[string]any{
@@ -972,22 +995,133 @@ func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmati
 				t.Fatalf("submit input failed: %v", err)
 			}
 
-			task := result["task"].(map[string]any)
-			if task["status"] != "waiting_input" {
-				t.Fatalf("expected short free text clarification to keep task open, got %v", task["status"])
-			}
-			intentValue, ok := task["intent"].(map[string]any)
-			if !ok || intentValue["name"] != "agent_loop" {
-				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
+			if result["task"] != nil {
+				t.Fatalf("expected social chat not to create a task, got %+v", result["task"])
 			}
 			if result["delivery_result"] != nil {
-				t.Fatalf("expected short free text clarification not to finalize delivery_result, got %+v", result["delivery_result"])
+				t.Fatalf("expected social chat not to create delivery_result, got %+v", result["delivery_result"])
 			}
-			bubble := result["bubble_message"].(map[string]any)
-			if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
-				t.Fatalf("expected short free text clarification bubble, got %+v", bubble)
+			bubble, ok := result["bubble_message"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected social chat bubble, got %+v", result["bubble_message"])
+			}
+			if bubble["task_id"] != "" {
+				t.Fatalf("expected social chat bubble to stay detached from task, got %+v", bubble)
+			}
+			if !strings.Contains(stringValue(bubble, "text", ""), "你好") {
+				t.Fatalf("expected social chat reply bubble, got %+v", bubble)
 			}
 		})
+	}
+}
+
+func TestServiceSubmitInputRoutesUnanchoredAmbiguousTextToConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_ambiguous_text",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看下",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected ambiguous text to enter confirmation, got %v", task["status"])
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected clarification routing to defer delivery_result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestServiceSubmitInputKeepsTaskRequestAfterClassifier(t *testing.T) {
+	callCount := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			callCount++
+			output := "Translated note ready."
+			if callCount == 1 {
+				output = `{"route":"task_request","reply":""}`
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  fmt.Sprintf("req_route_%d", callCount),
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: output,
+			}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_classified_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected classified task request to execute, got %v", task["status"])
+	}
+	if callCount < 2 {
+		t.Fatalf("expected classifier and execution model calls, got %d", callCount)
+	}
+}
+
+func TestServiceSubmitInputFallsBackToTaskWhenClassifierFails(t *testing.T) {
+	callCount := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return model.GenerateTextResponse{}, errors.New("classifier unavailable")
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_classifier_fallback",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Fallback task completed.",
+			}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_classifier_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Summarize the visible note",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected classifier failure to fall back to task execution, got %v", task["status"])
+	}
+	if callCount < 2 {
+		t.Fatalf("expected classifier and fallback execution model calls, got %d", callCount)
 	}
 }
 
@@ -7076,6 +7210,133 @@ func TestServiceStartTaskHitsRealMemoryAndRecordsRetrievalHit(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) {
+	var capturedInput string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			capturedInput = request.Input
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_memory_context",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "已结合历史记忆输出结果。",
+				Usage: model.TokenUsage{
+					InputTokens:  12,
+					OutputTokens: 18,
+					TotalTokens:  30,
+				},
+				LatencyMS: 21,
+			}, nil
+		},
+	})
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_context_001",
+		TaskID:          "task_seed_context_001",
+		RunID:           "run_seed_context_001",
+		Summary:         "project alpha prefers markdown bullets and concise structure",
+		CreatedAt:       time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_memory_context",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请按 project alpha markdown bullets 总结这段内容",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	if !strings.Contains(capturedInput, "历史记忆参考数据") {
+		t.Fatalf("expected execution input to include retrieved memory section, got %q", capturedInput)
+	}
+	if !strings.Contains(capturedInput, "\"summary\": \"project alpha prefers markdown bullets and concise structure\"") {
+		t.Fatalf("expected execution input to include retrieved summary text, got %q", capturedInput)
+	}
+	if strings.Contains(capturedInput, "- [summary] project alpha prefers markdown bullets and concise structure") {
+		t.Fatalf("expected retrieved memory to stay structured instead of raw prompt bullets, got %q", capturedInput)
+	}
+}
+
+func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "确认后的执行结果。")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	db, err := sql.Open("sqlite", service.storage.DatabasePath())
+	if err != nil {
+		t.Fatalf("open sqlite database failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`
+		CREATE TABLE retrieval_hit_audit (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			write_count INTEGER NOT NULL
+		);
+		INSERT INTO retrieval_hit_audit (id, write_count) VALUES (1, 0);
+		CREATE TRIGGER retrieval_hit_audit_insert
+		AFTER INSERT ON retrieval_hits
+		BEGIN
+			UPDATE retrieval_hit_audit SET write_count = write_count + 1 WHERE id = 1;
+		END;
+	`); err != nil {
+		t.Fatalf("create retrieval hit audit trigger failed: %v", err)
+	}
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_confirm_001",
+		TaskID:          "task_seed_confirm_001",
+		RunID:           "run_seed_confirm_001",
+		Summary:         "project alpha 输出格式偏向使用小标题和简洁说明",
+		CreatedAt:       time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_memory_hit",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请解释 project alpha 的输出格式",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 1 {
+		t.Fatalf("expected start task to write retrieval hits once for task %s", taskID)
+	}
+
+	if _, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	}); err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 2 {
+		t.Fatalf("expected confirmation to add exactly one retrieval-hit write for task %s", taskID)
+	}
+}
+
 func TestServiceMirrorOverviewFallsBackToStoredFinishedTasks(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "stored mirror overview")
 	if service.storage == nil {
@@ -12517,6 +12778,174 @@ func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	}
 }
 
+func TestServiceTaskSteerRejectsActivePromptTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name   string
+		intent map[string]any
+		step   string
+	}{
+		{
+			name:   "prompt intent",
+			intent: map[string]any{"name": "summarize", "arguments": map[string]any{}},
+			step:   "generate_output",
+		},
+		{
+			name:   "agent loop prompt fallback",
+			intent: map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+			step:   "generate_output",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_prompt",
+				Title:       "Prompt task",
+				SourceType:  "hover_input",
+				Status:      "processing",
+				Intent:      testCase.intent,
+				CurrentStep: testCase.step,
+				RiskLevel:   "green",
+			})
+
+			_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Add a network impact section."})
+			if !errors.Is(err, ErrTaskStatusInvalid) {
+				t.Fatalf("expected prompt-path processing task to reject active steering, got %v", err)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 0 {
+				t.Fatalf("expected rejected steering to leave task queue empty, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
+func TestServiceTaskSteerRejectsPendingInputTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name string
+		task runengine.CreateTaskInput
+	}{
+		{
+			name: "waiting input",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_waiting_input",
+				Title:       "Waiting input task",
+				SourceType:  "hover_input",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				RiskLevel:   "green",
+			},
+		},
+		{
+			name: "confirming intent",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_confirming_intent",
+				Title:       "Confirming intent task",
+				SourceType:  "hover_input",
+				Status:      "confirming_intent",
+				Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+				CurrentStep: "intent_confirmation",
+				RiskLevel:   "green",
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(testCase.task)
+
+			_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Use this as the formal follow-up."})
+			if !errors.Is(err, ErrTaskStatusInvalid) {
+				t.Fatalf("expected pending-input task to reject explicit steering, got %v", err)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 0 {
+				t.Fatalf("expected rejected pending-input steering to leave queue empty, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
+func TestServiceTaskSteerAllowsDeferredTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name string
+		task runengine.CreateTaskInput
+	}{
+		{
+			name: "waiting authorization",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_waiting_auth",
+				Title:       "Waiting auth task",
+				SourceType:  "hover_input",
+				Status:      "waiting_auth",
+				Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{}},
+				CurrentStep: "waiting_authorization",
+				RiskLevel:   "yellow",
+			},
+		},
+		{
+			name: "blocked queue",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_blocked",
+				Title:       "Blocked task",
+				SourceType:  "hover_input",
+				Status:      "blocked",
+				Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+				CurrentStep: "session_queue",
+				RiskLevel:   "green",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(testCase.task)
+
+			result, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Carry this instruction into the resumed task."})
+			if err != nil {
+				t.Fatalf("expected deferred task steering to succeed, got %v", err)
+			}
+			if result["task"].(map[string]any)["task_id"] != task.TaskID {
+				t.Fatalf("expected steered task id %s, got %+v", task.TaskID, result)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected deferred task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 1 || record.SteeringMessages[0] != "Carry this instruction into the resumed task." {
+				t.Fatalf("expected deferred steering to persist, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
+func TestServiceActiveExecutionStepNameTracksSteeringCapability(t *testing.T) {
+	promptService, _ := newTestServiceWithModelClient(t, stubModelClient{output: "prompt fallback"})
+	intent := map[string]any{"name": "agent_loop", "arguments": map[string]any{}}
+	if step := promptService.activeExecutionStepName(intent); step != "generate_output" {
+		t.Fatalf("expected prompt-only agent-loop intent to start generate_output, got %s", step)
+	}
+
+	loopService, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{output: "loop ready"})
+	if step := loopService.activeExecutionStepName(intent); step != "agent_loop" {
+		t.Fatalf("expected pollable tool-calling loop to start agent_loop, got %s", step)
+	}
+
+	if step := loopService.activeExecutionStepName(map[string]any{"name": "summarize"}); step != "generate_output" {
+		t.Fatalf("expected non-loop intent to start generate_output, got %s", step)
+	}
+}
+
 func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 	var activeTaskID string
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -12539,6 +12968,7 @@ func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 		Title:       "Analyze the current failure",
 		SourceType:  "hover_input",
 		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
 		CurrentStep: "agent_loop",
 		RiskLevel:   "green",
 	})
@@ -12571,6 +13001,48 @@ func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 	}
 	if len(record.SteeringMessages) != 1 || !strings.Contains(record.SteeringMessages[0], "重点看网络层") {
 		t.Fatalf("expected follow-up steering message to persist, got %+v", record.SteeringMessages)
+	}
+}
+
+func TestServiceSubmitInputQueuesNewTaskWhenActivePromptTaskCannotConsumeSteering(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Queued prompt task output.")
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_prompt_processing",
+		Title:       "Summarize release note",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "再补一版网络影响摘要",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected a separate queued task instead of prompt-path steering, got %+v", task)
+	}
+	if task["status"] != "blocked" || task["current_step"] != "session_queue" {
+		t.Fatalf("expected prompt-path follow-up to queue behind the active task, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected active task to remain in runtime")
+	}
+	if len(record.SteeringMessages) != 0 {
+		t.Fatalf("expected active prompt task not to accept unconsumable steering, got %+v", record.SteeringMessages)
 	}
 }
 
@@ -13008,6 +13480,82 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *te
 	}
 }
 
+func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *testing.T) {
+	var modelTaskIDs []string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelTaskIDs = append(modelTaskIDs, request.TaskID)
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirming_text_follow_up",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Task should not execute before formal confirmation.",
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirming_text_follow_up",
+		Title:       "Confirm build analysis",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Intent: map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			InputType:   "text",
+			Text:        "Analyze the build failure.",
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit plain text follow-up for confirming task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected text follow-up to remain on confirming task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected plain text follow-up to stay behind confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected plain text follow-up to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected confirming task to remain in runtime")
+	}
+	if record.Status != "confirming_intent" || record.CurrentStep != "intent_confirmation" {
+		t.Fatalf("expected runtime task to keep confirmation gate, got %+v", record)
+	}
+	if !strings.Contains(record.Snapshot.Text, "Analyze the build failure.") ||
+		!strings.Contains(record.Snapshot.Text, "Use the latest customer impact numbers.") {
+		t.Fatalf("expected runtime task to retain original and follow-up text, got %+v", record.Snapshot)
+	}
+	if len(modelTaskIDs) > 0 {
+		t.Fatalf("expected plain text follow-up to keep confirmation gate without model execution, got model calls %v", modelTaskIDs)
+	}
+}
 func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitConfirmation(t *testing.T) {
 	var activeTaskID string
 	var classifierCalled bool

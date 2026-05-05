@@ -796,7 +796,7 @@ export function useShellBallInteraction() {
       setPendingFiles(reset.nextPendingFiles);
       inputFocusedRef.current = reset.nextFocused;
       setInputFocused(reset.nextFocused);
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
       return result;
@@ -827,7 +827,7 @@ export function useShellBallInteraction() {
         sessionId: getCurrentConversationSessionId(),
       });
 
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
 

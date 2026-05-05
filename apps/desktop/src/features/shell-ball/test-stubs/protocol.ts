@@ -41,6 +41,9 @@ export const REQUEST_TRIGGERS = [
   "error_detected",
   "recommendation_click",
 ] as const;
+export const ERROR_CODES = {
+  TASK_STATUS_INVALID: 1001004,
+} as const;
 export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 export const INPUT_MODES = ["voice", "text"] as const;
 export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal", "screen_capture"] as const;
@@ -359,6 +362,9 @@ export interface PageContext {
   title?: string;
   app_name?: string;
   url?: string;
+  browser_kind?: "chrome" | "edge" | "other_browser" | "non_browser";
+  process_path?: string;
+  process_id?: number;
   window_title?: string;
   visible_text?: string;
   hover_target?: string;
@@ -442,7 +448,7 @@ export interface AgentInputSubmitParams {
 }
 
 export interface AgentInputSubmitResult {
-  task: Task;
+  task: Task | null;
   bubble_message: BubbleMessage | null;
   delivery_result: DeliveryResult | null;
 }

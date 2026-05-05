@@ -71,6 +71,12 @@ pub fn reveal_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), S
     reveal_with_system_handler(&target)
 }
 
+/// Opens one host-owned runtime directory after creating it when needed.
+pub fn open_trusted_directory(target: &Path, trusted_root: &Path) -> Result<(), String> {
+    let canonical_target = prepare_trusted_directory_target(target, trusted_root)?;
+    open_with_system_handler(&canonical_target)
+}
+
 /// Resolves delivery paths against trusted workspace or runtime-open roots and
 /// rejects any target that escapes those formal desktop-open scopes.
 fn resolve_existing_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<PathBuf, String> {
@@ -127,6 +133,42 @@ fn resolve_path_candidate(raw_path: &str, roots: &LocalPathRoots) -> Result<Path
     }
 
     Err("runtime-relative delivery paths must stay within the trusted temp/ scope".to_string())
+}
+
+fn prepare_trusted_directory_target(target: &Path, trusted_root: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(target).map_err(|error| {
+        format!(
+            "failed to create trusted local directory {}: {error}",
+            target.display()
+        )
+    })?;
+
+    let canonical_target = target.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize trusted local directory {}: {error}",
+            target.display()
+        )
+    })?;
+
+    if !canonical_target.is_dir() {
+        return Err(format!(
+            "trusted local target is not a directory: {}",
+            canonical_target.display()
+        ));
+    }
+
+    // The runtime root captured during startup remains the host-trusted scope.
+    // Even if a later symlink/junction rewires `data` somewhere else, the
+    // canonicalized directory must still stay under that original root.
+    if !canonical_target.starts_with(trusted_root) {
+        return Err(format!(
+            "trusted local target escaped the runtime root {}: {}",
+            trusted_root.display(),
+            canonical_target.display()
+        ));
+    }
+
+    Ok(canonical_target)
 }
 
 fn strip_workspace_prefix(raw_path: &str) -> Option<&str> {
@@ -283,7 +325,10 @@ fn run_platform_command(program: &str, args: &[&Path], description: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_existing_local_path, resolve_path_candidate, LocalPathRoots};
+    use super::{
+        open_trusted_directory, prepare_trusted_directory_target, resolve_existing_local_path,
+        resolve_path_candidate, LocalPathRoots,
+    };
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -421,6 +466,60 @@ mod tests {
         );
 
         assert_eq!(roots.workspace_root(), Some(&missing_workspace_root));
+    }
+
+    #[test]
+    fn prepare_trusted_directory_target_creates_missing_directory() {
+        let fixture = create_root_fixture("trusted-runtime-data-dir");
+        let target = fixture.runtime_root.join("data");
+
+        let resolved = prepare_trusted_directory_target(&target, &fixture.runtime_root)
+            .expect("prepare trusted runtime data directory");
+
+        assert!(resolved.is_absolute());
+        assert!(resolved.is_dir());
+
+        let _ = fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn prepare_trusted_directory_target_rejects_existing_files() {
+        let fixture = create_root_fixture("trusted-runtime-data-file");
+        let target = fixture.runtime_root.join("data");
+        fs::write(&target, "not a directory").expect("write trusted runtime file");
+
+        let error = prepare_trusted_directory_target(&target, &fixture.runtime_root)
+            .expect_err("file target should not masquerade as a directory");
+
+        assert!(error.contains("failed to create trusted local directory"));
+
+        let _ = fs::remove_file(target);
+    }
+
+    #[test]
+    fn prepare_trusted_directory_target_rejects_directories_outside_runtime_root() {
+        let fixture = create_root_fixture("trusted-runtime-outside-root");
+        let target = unique_temp_path("trusted-runtime-external-data-dir");
+
+        let error = prepare_trusted_directory_target(&target, &fixture.runtime_root)
+            .expect_err("external directories should not be treated as trusted runtime data");
+
+        assert!(error.contains("escaped the runtime root"));
+
+        let _ = fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn open_trusted_directory_rejects_directories_outside_runtime_root_before_shell_open() {
+        let fixture = create_root_fixture("trusted-runtime-open-boundary");
+        let target = unique_temp_path("trusted-runtime-open-external-data-dir");
+
+        let error = open_trusted_directory(&target, &fixture.runtime_root)
+            .expect_err("external directories should fail before shell open");
+
+        assert!(error.contains("escaped the runtime root"));
+
+        let _ = fs::remove_dir_all(target);
     }
 
     struct RootFixture {

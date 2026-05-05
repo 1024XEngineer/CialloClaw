@@ -802,7 +802,7 @@ flowchart TB
 
 ### 3.7.1 入口与轻量承接域
 
-系统默认以悬浮球为近场入口，以气泡和轻量输入区作为任务承接层，而不是以聊天页作为主入口。该功能域负责把语音、悬停输入、文本选中、文件拖拽和推荐点击统一转为任务请求，并在当前现场完成对象识别、意图确认、短结果返回和下一步分流。
+系统默认以悬浮球为近场入口，以气泡和轻量输入区作为任务承接层，而不是以聊天页作为主入口。该功能域负责把语音、悬停输入、文本选中、文件拖拽和推荐点击统一承接，并在当前现场完成对象识别、意图确认、短结果返回和下一步分流。只有正式工作请求会升级为 `task`；无任务锚点的纯社交 / 闲聊输入只允许返回脱离 `task` 的轻量气泡，不进入任务详情、运行态或正式交付链。
 
 核心入口包括：
 
@@ -817,7 +817,7 @@ flowchart TB
 - 前端表现层负责入口可见形态；
 - 应用编排层负责统一动作归一化；
 - 状态管理层负责轻承接局部状态；
-- 后端本地接入层与任务编排与运行层负责把对象升级为正式 task 请求。
+- 后端本地接入层与任务编排与运行层负责判断对象是否需要升级为正式 task 请求，并保持非任务型轻量反馈与正式任务链分层。
 
 ### 3.7.2 任务状态与持续追踪域
 
@@ -1291,7 +1291,7 @@ flowchart TB
 2. 再调用 `maybeContinueExistingTask()` 判定是继续未完成任务还是创建新任务。
 3. 对新任务调用 `intent.Suggest()` 生成 `Suggestion`，并据此决定 `status / current_step / delivery_type`。
 4. 用 `runengine.CreateTask()` 或 `runengine.ConfirmTask()` 建立正式 `task -> run` 映射。
-5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态。
+5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态，并把命中的摘要保留在读取计划与镜像引用中，供后续执行、调试、回放和查询解释使用；当前执行层仍通过同一个 prompt 输入通道消费这些摘要，只能依靠结构化序列化和提示文案把它们降级为背景参考，不能把这种做法描述成独立 trust boundary。
 6. 若同一 `session` 已有活动任务，调用 `queueTaskIfSessionBusy()` 进入排队。
 7. 若存在高风险动作或策略拦截，再进入 `handleTaskGovernanceDecision()`。
 8. 只有在前述步骤都通过后，才调用 `executeTask()` 真正开始执行。
@@ -1454,7 +1454,8 @@ flowchart TB
 #### 运行控制器如何承接
 - 若 lane 忙，则运行控制器把任务转入 `blocked + session_queue`；
 - 当前序任务完成后，通过 `NextQueuedTaskForSession()` 和 `ResumeQueuedTask()` 恢复；
-- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`。
+- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`；正在 `processing` 的任务只有在当前执行是可轮询的 `agent_loop` 时才接受运行中 steering，普通 prompt 执行中的 follow-up 应排队为后续 task，避免返回“已挂回”但没有消费点。
+- 非 `agent_loop` 的恢复执行路径必须在重新生成 prompt 前合并已排队 steering，确保等待授权或 session queue 期间记录的补充要求不会被静默忽略。
 
 #### 异常处理
 - 候选任务状态不允许续接：直接新开任务；
@@ -1467,7 +1468,7 @@ flowchart TB
 该子模块负责在“真正执行前”和“执行完成后”分别挂接记忆与交付的计划对象。它负责的是**交接与计划**，不是最终的记忆持久化或交付发布拥有者。
 
 #### 核心职责
-- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划；
+- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划，并把命中的摘要保留在读取计划和镜像引用里，供执行、调试、回放和查询解释使用；当前执行层消费这些摘要时仍走同一个 prompt 输入通道，因此这里只能做到结构化背景参考，不得把它写成已经建立独立信任边界；
 - 在执行完成后，把 `delivery_result / artifact / citation` 的后续写入和查询补全交给治理与交付层、能力与存储层；
 - 保证即使进程重启，也能说明“这个任务原本打算读什么记忆、写什么交付”。
 
@@ -1722,16 +1723,25 @@ flowchart TB
 - 结构化 DOM/页面结果回传。
 
 #### 实现约束
-- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类正式能力；
+- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
+- sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
+- `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
+- `browser_*` 动作必须显式提供 `attach`，不得偷偷回退到 launch 路径；其中 `browser_navigate` 的顶层 `url` 仅表示导航目标，不参与附着页筛选；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
 
+#### worker 契约补充
+- attached 模式结果可追加 `attached / browser_kind / browser_transport / endpoint_url / source` 元信息，供后续 Go sidecar、引用映射与前端承接复用；
+- `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tab_focus` 结果至少需要稳定回写 `page_index / url / title`，`browser_tabs_list` 需要回写 `tabs[]` 与 `tab_count`；
+- worker 至少需要把 `browser_attach_failed`、`browser_kind_mismatch`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
+
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。
-2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom`。
-3. 把页面结果、结构化 DOM、截图或 URL 元数据组装成标准工具输出。
+2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom` 与 `browser_*` 动作。
+3. 把页面结果、结构化 DOM、页签列表、导航结果或 URL 元数据组装成标准工具输出。
 4. 为需要证据链的场景生成 `citation_seed` 与 artifact 候选。
 5. 通过 `tool_call.completed` 和正式交付链回流，而不是独立暴露页面结果。
 

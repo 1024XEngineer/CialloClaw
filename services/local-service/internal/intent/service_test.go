@@ -52,10 +52,10 @@ func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 	}
 }
 
-func TestSuggestRoutesShortFreeTextToAgentLoopWithoutConfirmation(t *testing.T) {
+func TestSuggestKeepsPlainFreeTextOnAgentLoopBeforeRouting(t *testing.T) {
 	service := NewService()
 
-	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"解释下", "整理会议纪要", "a.go", "v1.2", `C:\`, `@me`}
 	for _, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
 			suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
@@ -67,7 +67,7 @@ func TestSuggestRoutesShortFreeTextToAgentLoopWithoutConfirmation(t *testing.T) 
 				t.Fatalf("expected short text to route through agent loop, got %q", got)
 			}
 			if suggestion.RequiresConfirm {
-				t.Fatal("expected non-ambiguous short text to skip forced confirmation")
+				t.Fatal("expected plain free text to skip forced confirmation before submit-time routing")
 			}
 		})
 	}

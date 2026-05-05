@@ -2,7 +2,7 @@ import type { BubbleMessage, DeliveryResult, IntentPayload, Task } from "@ciallo
 import { createMockAgentInputSubmitResult } from "@/services/agentInputMock";
 
 type ShellBallMockResult = {
-  task: Task;
+  task: Task | null;
   bubble_message: BubbleMessage | null;
   delivery_result: DeliveryResult | null;
 };
