@@ -673,8 +673,9 @@ CREATE TABLE recovery_points (
     recovery_point_id TEXT PRIMARY KEY,          -- 恢复点ID
     task_id TEXT NOT NULL,                       -- 所属task
     summary TEXT NOT NULL,                       -- 恢复点说明
-    objects_json TEXT NOT NULL,                  -- 关联对象(JSON)
     created_at TEXT NOT NULL,                    -- 创建时间
+    mode TEXT NOT NULL DEFAULT 'workspace_snapshot', -- 恢复模式
+    objects_json TEXT NOT NULL,                  -- 关联对象(JSON)
     FOREIGN KEY(task_id) REFERENCES tasks(task_id)
 );
 CREATE INDEX idx_recovery_points_task_time ON recovery_points(task_id, created_at DESC);

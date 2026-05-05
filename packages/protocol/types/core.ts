@@ -84,6 +84,10 @@ export const APPROVAL_DECISIONS = ["allow_once", "deny_once"] as const;
 // APPROVAL_STATUSES 定义共享常量。
 export const APPROVAL_STATUSES = ["pending", "approved", "denied"] as const;
 
+// RECOVERY_POINT_MODES defines whether one recovery point is directly restorable
+// by backend automation or only preserves manual backup assets.
+export const RECOVERY_POINT_MODES = ["workspace_snapshot", "manual_backup"] as const;
+
 // MIRROR_CONVERSATION_RECORD_STATUSES defines the stable mirror conversation
 // lifecycle states returned by backend history queries.
 export const MIRROR_CONVERSATION_RECORD_STATUSES = ["submitted", "responded", "failed"] as const;
@@ -158,6 +162,8 @@ export type BubbleMessageType = (typeof BUBBLE_MESSAGE_TYPES)[number];
 export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
 // ApprovalStatus 定义当前模块的数据结构。
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+// RecoveryPointMode defines the restore semantics of one recovery point.
+export type RecoveryPointMode = (typeof RECOVERY_POINT_MODES)[number];
 // MirrorConversationRecordStatus defines the stored mirror conversation state.
 export type MirrorConversationRecordStatus = (typeof MIRROR_CONVERSATION_RECORD_STATUSES)[number];
 // SettingsScope 定义当前模块的数据结构。
@@ -359,6 +365,9 @@ export interface RecoveryPoint {
   task_id: string;
   summary: string;
   created_at: string;
+  // Legacy cached fixtures may omit this field; consumers should treat absence
+  // as `workspace_snapshot`.
+  mode?: RecoveryPointMode;
   objects: string[];
 }
 

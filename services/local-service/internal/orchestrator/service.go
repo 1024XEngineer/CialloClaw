@@ -40,14 +40,15 @@ import (
 // ErrTaskNotFound indicates that the provided task_id does not exist in the
 // current runtime or hydrated query state.
 var (
-	ErrTaskNotFound           = errors.New("task not found")
-	ErrArtifactNotFound       = errors.New("artifact not found")
-	ErrTaskStatusInvalid      = errors.New("task status invalid")
-	ErrTaskAlreadyFinished    = errors.New("task already finished")
-	ErrStorageQueryFailed     = errors.New("storage query failed")
-	ErrStrongholdAccessFailed = errors.New("stronghold access failed")
-	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
-	persistedToolCallEventSeq atomic.Uint64
+	ErrTaskNotFound            = errors.New("task not found")
+	ErrArtifactNotFound        = errors.New("artifact not found")
+	ErrTaskStatusInvalid       = errors.New("task status invalid")
+	ErrTaskAlreadyFinished     = errors.New("task already finished")
+	ErrStorageQueryFailed      = errors.New("storage query failed")
+	ErrStrongholdAccessFailed  = errors.New("stronghold access failed")
+	ErrRecoveryPointNotFound   = errors.New("recovery point not found")
+	ErrRecoveryPointManualOnly = errors.New("recovery point requires manual restore")
+	persistedToolCallEventSeq  atomic.Uint64
 )
 
 const (
@@ -2552,6 +2553,7 @@ func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]a
 			"task_id":           point.TaskID,
 			"summary":           point.Summary,
 			"created_at":        point.CreatedAt,
+			"mode":              normalizeRecoveryPointMode(point.Mode),
 			"objects":           append([]string(nil), point.Objects...),
 		})
 	}
@@ -2571,6 +2573,9 @@ func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, e
 	point, err := s.findRecoveryPointFromStorage(taskID, recoveryPointID)
 	if err != nil {
 		return nil, err
+	}
+	if normalizeRecoveryPointMode(point.Mode) == "manual_backup" {
+		return nil, ErrRecoveryPointManualOnly
 	}
 	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
 	task, ok := s.runEngine.GetTask(resolvedTaskID)
@@ -5699,8 +5704,16 @@ func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
 		"task_id":           point.TaskID,
 		"summary":           point.Summary,
 		"created_at":        point.CreatedAt,
+		"mode":              normalizeRecoveryPointMode(point.Mode),
 		"objects":           append([]string(nil), point.Objects...),
 	}
+}
+
+func normalizeRecoveryPointMode(mode string) string {
+	if strings.TrimSpace(mode) == "manual_backup" {
+		return "manual_backup"
+	}
+	return "workspace_snapshot"
 }
 
 func restoreApplyAssessment(point checkpoint.RecoveryPoint) execution.GovernanceAssessment {

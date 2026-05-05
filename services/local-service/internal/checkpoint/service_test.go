@@ -93,6 +93,13 @@ func TestServiceBuildRecoveryPoint(t *testing.T) {
 	}
 }
 
+func TestServiceStatus(t *testing.T) {
+	service := NewService()
+	if service.Status() != "ready" {
+		t.Fatalf("expected ready status, got %q", service.Status())
+	}
+}
+
 func TestServiceCreate(t *testing.T) {
 	writer := &stubWriter{}
 	service := NewService(writer)
@@ -123,6 +130,21 @@ func TestServiceCreatePropagatesWriterError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected writer error")
+	}
+}
+
+func TestServiceCreateWithSnapshotsValidatesInputs(t *testing.T) {
+	service := NewService()
+	if _, err := service.CreateWithSnapshots(context.Background(), nil, CreateInput{TaskID: "task_001", Summary: "before overwrite", Objects: []string{"workspace/report.md"}}); !errors.Is(err, ErrSnapshotFSNil) {
+		t.Fatalf("expected ErrSnapshotFSNil, got %v", err)
+	}
+	policy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "workspace"))
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	if _, err := service.CreateWithSnapshots(context.Background(), fileSystem, CreateInput{TaskID: "task_001", Summary: "before overwrite"}); !errors.Is(err, ErrObjectsRequired) {
+		t.Fatalf("expected ErrObjectsRequired, got %v", err)
 	}
 }
 

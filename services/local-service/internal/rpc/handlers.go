@@ -416,6 +416,14 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_recovery_point_not_found",
 		}
 	}
+	if errors.Is(err, orchestrator.ErrRecoveryPointManualOnly) {
+		return nil, &rpcError{
+			Code:    1005007,
+			Message: "RECOVERY_POINT_MANUAL_ONLY",
+			Detail:  err.Error(),
+			TraceID: "trace_recovery_point_manual_only",
+		}
+	}
 	if errors.Is(err, model.ErrModelProviderRequired) || errors.Is(err, model.ErrModelProviderUnsupported) {
 		return nil, &rpcError{
 			Code:    1008001,

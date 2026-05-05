@@ -12,9 +12,12 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-var memoryCleanupSQLiteTables = []string{"retrieval_hits", "memory_summaries_fts", "memory_summaries"}
+var memoryCleanupSQLiteTables = []string{"retrieval_hits", "memory_summaries_fts", "memory_summary_vectors", "memory_summaries"}
 
 var taskHistoryCleanupSQLiteTables = []string{
+	"eval_snapshots_orphaned",
+	"eval_snapshots",
+	"trace_records",
 	"mirror_conversations",
 	"authorization_records",
 	"approval_requests",
@@ -81,6 +84,8 @@ func hasSQLiteTaskHistoryStore(s *Service) bool {
 		s.approvalRequestStore,
 		s.authorizationRecordStore,
 		s.mirrorConversationStore,
+		s.traceStore,
+		s.evalStore,
 	} {
 		switch store.(type) {
 		case *SQLiteTaskRunStore,
@@ -94,7 +99,9 @@ func hasSQLiteTaskHistoryStore(s *Service) bool {
 			*SQLiteRecoveryPointStore,
 			*SQLiteApprovalRequestStore,
 			*SQLiteAuthorizationRecordStore,
-			*SQLiteMirrorConversationStore:
+			*SQLiteMirrorConversationStore,
+			*SQLiteTraceStore,
+			*SQLiteEvalStore:
 			return true
 		}
 	}
@@ -167,6 +174,16 @@ func clearInMemoryTaskHistoryStores(s *Service) {
 	if store, ok := s.mirrorConversationStore.(*inMemoryMirrorConversationStore); ok && store != nil {
 		store.mu.Lock()
 		store.records = []MirrorConversationRecord{}
+		store.mu.Unlock()
+	}
+	if store, ok := s.traceStore.(*inMemoryTraceStore); ok && store != nil {
+		store.mu.Lock()
+		store.records = []TraceRecord{}
+		store.mu.Unlock()
+	}
+	if store, ok := s.evalStore.(*inMemoryEvalStore); ok && store != nil {
+		store.mu.Lock()
+		store.records = []EvalSnapshotRecord{}
 		store.mu.Unlock()
 	}
 }

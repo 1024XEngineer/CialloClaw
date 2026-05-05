@@ -3429,6 +3429,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **入参**：可选任务 ID、分页参数
 - **出参**：恢复点列表、分页信息
 
+补充约束：
+
+- `data.items[].mode = workspace_snapshot` 表示该恢复点可直接走 `agent.security.restore.apply`。
+- `data.items[].mode = manual_backup` 表示该恢复点只提供人工恢复资产，不支持直接走自动回滚。
+- 为兼容旧测试桩或历史缓存，若某个恢复点未显式返回 `mode`，调用方应按 `workspace_snapshot` 解释。
+
 ### agent.security.restore_points.list 入参说明
 
 | 字段      | 中文说明        |
@@ -3464,6 +3470,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.items[].recovery_point_id` | 恢复点 ID    |
 | `data.items[].task_id`           | 关联任务 ID  |
 | `data.items[].summary`           | 恢复点说明   |
+| `data.items[].mode`              | 恢复模式     |
 | `data.items[].objects`           | 关联对象清单 |
 | `data.page`                      | 分页信息     |
 
@@ -3481,6 +3488,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "task_id": "task_301",
           "summary": "write_file_before_change",
           "created_at": "2026-04-07T11:04:30+08:00",
+          "mode": "workspace_snapshot",
           "objects": ["workspace/notes/output.md"]
         }
       ],
@@ -3550,12 +3558,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 2. 用户确认后，再通过 `agent.security.respond` 执行真正的恢复动作
 3. 最终的恢复成功/失败、审计记录和状态气泡在 `agent.security.respond` 响应中返回
 
+补充约束：
+
+- 只有 `mode = workspace_snapshot` 的恢复点支持 `agent.security.restore.apply`。
+- `mode = manual_backup` 的恢复点用于维护类高风险动作的人工恢复锚点；调用方不能把它误当作可自动回滚的工作区快照。
+
 ### agent.security.restore.apply 错误说明
 
 | 错误码 | 错误名 | 中文说明 |
 | ------ | ------ | -------- |
 | `1005001` | `SQLITE_WRITE_FAILED` | 恢复点读取或持久化存储查询失败 |
 | `1005006` | `RECOVERY_POINT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
+| `1005007` | `RECOVERY_POINT_MANUAL_ONLY` | 目标恢复点只提供人工恢复资产，不支持自动回滚 |
 
 ### agent.security.restore.apply 首次出参示例
 
@@ -3575,6 +3589,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_301",
         "summary": "write_file_before_change",
         "created_at": "2026-04-07T11:04:30+08:00",
+        "mode": "workspace_snapshot",
         "objects": ["workspace/notes/output.md"]
       },
       "audit_record": null,
@@ -3611,6 +3626,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_301",
         "summary": "write_file_before_change",
         "created_at": "2026-04-07T11:04:30+08:00",
+        "mode": "workspace_snapshot",
         "objects": ["workspace/notes/output.md"]
       },
       "audit_record": {

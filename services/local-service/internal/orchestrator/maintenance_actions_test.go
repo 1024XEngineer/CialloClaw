@@ -55,6 +55,16 @@ func TestServiceSecurityRespondAppliesSettingsRestoreDefaults(t *testing.T) {
 	if respondResult["task"].(map[string]any)["status"] != "completed" {
 		t.Fatalf("expected completed maintenance task, got %+v", respondResult)
 	}
+	recoveryPoints, total, err := service.storage.RecoveryPointStore().ListRecoveryPoints(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("ListRecoveryPoints returned error: %v", err)
+	}
+	if total != 1 || len(recoveryPoints) != 1 || len(recoveryPoints[0].Objects) == 0 {
+		t.Fatalf("expected one persisted maintenance recovery point, got total=%d items=%+v", total, recoveryPoints)
+	}
+	if _, err := service.SecurityRestoreApply(map[string]any{"task_id": taskID, "recovery_point_id": recoveryPoints[0].RecoveryPointID}); !errors.Is(err, ErrRecoveryPointManualOnly) {
+		t.Fatalf("expected manual maintenance recovery point to reject automatic restore, got %v", err)
+	}
 	settings := service.runEngine.Settings()
 	if mapValue(settings, "general")["language"] != "zh-CN" || boolValue(mapValue(settings, "memory"), "enabled", false) != true {
 		t.Fatalf("expected settings reset to defaults, got %+v", settings)
@@ -86,6 +96,13 @@ func TestServiceSecurityRespondDeletesAllMemory(t *testing.T) {
 	}
 	if respondResult["task"].(map[string]any)["status"] != "completed" {
 		t.Fatalf("expected completed delete-memory task, got %+v", respondResult)
+	}
+	recoveryPoints, total, err := service.storage.RecoveryPointStore().ListRecoveryPoints(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("ListRecoveryPoints returned error: %v", err)
+	}
+	if total != 1 || len(recoveryPoints) != 1 {
+		t.Fatalf("expected one persisted memory recovery point, got total=%d items=%+v", total, recoveryPoints)
 	}
 	summaries, err := service.storage.MemoryStore().ListRecentSummaries(context.Background(), 10)
 	if err != nil {
@@ -139,6 +156,13 @@ func TestServiceSecurityRespondDeletesTaskHistory(t *testing.T) {
 	}
 	if mirrorTotal != 0 || len(mirrorItems) != 0 {
 		t.Fatalf("expected mirror history cleared, got total=%d items=%+v", mirrorTotal, mirrorItems)
+	}
+	recoveryPoints, recoveryTotal, err := service.storage.RecoveryPointStore().ListRecoveryPoints(context.Background(), taskID, 20, 0)
+	if err != nil {
+		t.Fatalf("ListRecoveryPoints returned error: %v", err)
+	}
+	if recoveryTotal != 1 || len(recoveryPoints) != 1 {
+		t.Fatalf("expected task-history cleanup to preserve maintenance recovery point, got total=%d items=%+v", recoveryTotal, recoveryPoints)
 	}
 	authorizations, authTotal, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
 	if err != nil {

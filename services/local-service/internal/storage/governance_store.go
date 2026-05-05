@@ -178,6 +178,7 @@ func newInMemoryRecoveryPointStore() *inMemoryRecoveryPointStore {
 func (s *inMemoryRecoveryPointStore) WriteRecoveryPoint(_ context.Context, point checkpoint.RecoveryPoint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	point.Mode = normalizeRecoveryPointMode(point.Mode)
 	s.points = append(s.points, point)
 	return nil
 }
@@ -641,12 +642,13 @@ func (s *SQLiteRecoveryPointStore) WriteRecoveryPoint(ctx context.Context, point
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO recovery_points (recovery_point_id, task_id, summary, created_at, objects_json)
-		 VALUES (?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO recovery_points (recovery_point_id, task_id, summary, created_at, mode, objects_json)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		point.RecoveryPointID,
 		point.TaskID,
 		point.Summary,
 		point.CreatedAt,
+		normalizeRecoveryPointMode(point.Mode),
 		string(objectsJSON),
 	)
 	if err != nil {
@@ -708,7 +710,7 @@ func filterApprovalRequests(records []ApprovalRequestRecord, taskID string, stat
 
 func (s *SQLiteRecoveryPointStore) ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error) {
 	countQuery := `SELECT COUNT(1) FROM recovery_points`
-	query := `SELECT recovery_point_id, task_id, summary, created_at, objects_json FROM recovery_points`
+	query := `SELECT recovery_point_id, task_id, summary, created_at, mode, objects_json FROM recovery_points`
 	args := []any{}
 	if taskID != "" {
 		countQuery += ` WHERE task_id = ?`
@@ -733,10 +735,12 @@ func (s *SQLiteRecoveryPointStore) ListRecoveryPoints(ctx context.Context, taskI
 	items := make([]checkpoint.RecoveryPoint, 0)
 	for rows.Next() {
 		var point checkpoint.RecoveryPoint
+		var mode sql.NullString
 		var objectsJSON string
-		if err := rows.Scan(&point.RecoveryPointID, &point.TaskID, &point.Summary, &point.CreatedAt, &objectsJSON); err != nil {
+		if err := rows.Scan(&point.RecoveryPointID, &point.TaskID, &point.Summary, &point.CreatedAt, &mode, &objectsJSON); err != nil {
 			return nil, 0, fmt.Errorf("scan recovery point: %w", err)
 		}
+		point.Mode = normalizeRecoveryPointMode(mode.String)
 		if err := json.Unmarshal([]byte(objectsJSON), &point.Objects); err != nil {
 			return nil, 0, fmt.Errorf("unmarshal recovery point objects: %w", err)
 		}
@@ -749,15 +753,17 @@ func (s *SQLiteRecoveryPointStore) ListRecoveryPoints(ctx context.Context, taskI
 }
 
 func (s *SQLiteRecoveryPointStore) GetRecoveryPoint(ctx context.Context, recoveryPointID string) (checkpoint.RecoveryPoint, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT recovery_point_id, task_id, summary, created_at, objects_json FROM recovery_points WHERE recovery_point_id = ?`, recoveryPointID)
+	row := s.db.QueryRowContext(ctx, `SELECT recovery_point_id, task_id, summary, created_at, mode, objects_json FROM recovery_points WHERE recovery_point_id = ?`, recoveryPointID)
 	var point checkpoint.RecoveryPoint
+	var mode sql.NullString
 	var objectsJSON string
-	if err := row.Scan(&point.RecoveryPointID, &point.TaskID, &point.Summary, &point.CreatedAt, &objectsJSON); err != nil {
+	if err := row.Scan(&point.RecoveryPointID, &point.TaskID, &point.Summary, &point.CreatedAt, &mode, &objectsJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return checkpoint.RecoveryPoint{}, ErrRecoveryPointNotFound
 		}
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("get recovery point: %w", err)
 	}
+	point.Mode = normalizeRecoveryPointMode(mode.String)
 	if err := json.Unmarshal([]byte(objectsJSON), &point.Objects); err != nil {
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("unmarshal recovery point objects: %w", err)
 	}
@@ -784,12 +790,59 @@ func (s *SQLiteRecoveryPointStore) initialize(ctx context.Context) error {
 			task_id TEXT NOT NULL,
 			summary TEXT NOT NULL,
 			created_at TEXT NOT NULL,
+			mode TEXT NOT NULL DEFAULT 'workspace_snapshot',
 			objects_json TEXT NOT NULL
 		);
 	`); err != nil {
 		return fmt.Errorf("create recovery_points table: %w", err)
 	}
+	if err := ensureRecoveryPointColumns(ctx, s.db); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureRecoveryPointColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(recovery_points);`)
+	if err != nil {
+		return fmt.Errorf("inspect recovery_points schema: %w", err)
+	}
+	defer rows.Close()
+	hasMode := false
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			columnType   string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan recovery_points schema: %w", err)
+		}
+		if name == "mode" {
+			hasMode = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate recovery_points schema: %w", err)
+	}
+	if hasMode {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE recovery_points ADD COLUMN mode TEXT NOT NULL DEFAULT 'workspace_snapshot';`); err != nil {
+		return fmt.Errorf("migrate recovery_points add mode: %w", err)
+	}
+	return nil
+}
+
+func normalizeRecoveryPointMode(mode string) string {
+	if strings.TrimSpace(mode) == "manual_backup" {
+		return "manual_backup"
+	}
+	return "workspace_snapshot"
 }
 
 func openSQLiteDatabase(databasePath string) (*sql.DB, error) {

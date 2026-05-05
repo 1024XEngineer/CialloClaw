@@ -1431,6 +1431,16 @@ func TestDispatchMapsRecoveryPointNotFoundErrors(t *testing.T) {
 	}
 }
 
+func TestDispatchMapsManualRecoveryPointErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrRecoveryPointManualOnly)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1005007 || rpcErr.Message != "RECOVERY_POINT_MANUAL_ONLY" {
+		t.Fatalf("expected RECOVERY_POINT_MANUAL_ONLY mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
 func TestDispatchMapsStrongholdErrors(t *testing.T) {
 	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrStrongholdAccessFailed)
 	if rpcErr == nil {

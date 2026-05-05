@@ -20,6 +20,7 @@ type RecoveryPoint struct {
 	TaskID          string
 	Summary         string
 	CreatedAt       string
+	Mode            string
 	Objects         []string
 }
 

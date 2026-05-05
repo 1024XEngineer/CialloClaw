@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
@@ -145,64 +146,93 @@ func (s *Service) executeMaintenanceActionAfterApproval(task runengine.TaskRecor
 		updatedTask, bubble, deliveryResult := s.executeTaskHistoryDelete(task, pendingExecution)
 		return updatedTask, bubble, deliveryResult, nil
 	default:
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, fmt.Errorf("unsupported maintenance action"))
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, fmt.Errorf("unsupported maintenance action"), nil)
 		return updatedTask, bubble, nil, nil
 	}
 }
 
 func (s *Service) executeSettingsRestoreDefaults(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any) {
+	recoveryPoint, err := s.prepareMaintenanceRecoveryPoint(task, pendingExecution)
+	if err != nil {
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, nil)
+		return updatedTask, bubble, nil
+	}
+	latestRestorePoint := maintenanceLatestRestorePoint(recoveryPoint)
 	defaults := runengine.DefaultSettingsSnapshot()
 	currentProvider := providerFromSettings(modelSettingsSection(s.runEngine.Settings()), s.defaultSettingsProvider())
+	rollbacks := make([]modelSecretRollback, 0, 1)
+	if currentProvider != "" {
+		rollback, rollbackErr := s.captureModelSecretRollback(currentProvider)
+		if rollbackErr != nil {
+			updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, rollbackErr, latestRestorePoint)
+			return updatedTask, bubble, nil
+		}
+		if err := s.deleteModelSecretIfPresent(currentProvider); err != nil {
+			updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, latestRestorePoint)
+			return updatedTask, bubble, nil
+		}
+		rollbacks = append(rollbacks, rollback)
+	}
 	if _, err := s.SettingsUpdate(defaults); err != nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err)
-		return updatedTask, bubble, nil
-	}
-	if err := s.deleteModelSecretIfPresent(currentProvider); err != nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err)
-		return updatedTask, bubble, nil
-	}
-	if err := s.reloadRuntimeModelFromSettings(); err != nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err)
+		s.rollbackModelSecretMutations(rollbacks)
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, latestRestorePoint)
 		return updatedTask, bubble, nil
 	}
 	s.runEngine.UpdateInspectorConfig(mapValue(defaults, "task_automation"))
-	return s.completeMaintenanceAction(task, pendingExecution)
+	return s.completeMaintenanceAction(task, pendingExecution, latestRestorePoint)
 }
 
 func (s *Service) executeMemoryDeleteAll(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any) {
+	recoveryPoint, err := s.prepareMaintenanceRecoveryPoint(task, pendingExecution)
+	if err != nil {
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, nil)
+		return updatedTask, bubble, nil
+	}
+	latestRestorePoint := maintenanceLatestRestorePoint(recoveryPoint)
 	if s.storage == nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, fmt.Errorf("memory storage is unavailable"))
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, fmt.Errorf("memory storage is unavailable"), latestRestorePoint)
 		return updatedTask, bubble, nil
 	}
 	if err := s.storage.DeleteAllMemory(context.Background()); err != nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err)
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, latestRestorePoint)
 		return updatedTask, bubble, nil
 	}
-	return s.completeMaintenanceAction(task, pendingExecution)
+	return s.completeMaintenanceAction(task, pendingExecution, latestRestorePoint)
 }
 
 func (s *Service) executeTaskHistoryDelete(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any) {
-	if err := s.clearRuntimeTaskHistory(task.TaskID); err != nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err)
+	recoveryPoint, err := s.prepareMaintenanceRecoveryPoint(task, pendingExecution)
+	if err != nil {
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, nil)
 		return updatedTask, bubble, nil
 	}
+	latestRestorePoint := maintenanceLatestRestorePoint(recoveryPoint)
 	if s.storage == nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, fmt.Errorf("task history storage is unavailable"))
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, fmt.Errorf("task history storage is unavailable"), latestRestorePoint)
 		return updatedTask, bubble, nil
 	}
 	if err := s.storage.DeleteAllTaskHistory(context.Background()); err != nil {
-		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err)
+		_ = s.persistMaintenanceRecoveryPoint(recoveryPoint)
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, latestRestorePoint)
 		return updatedTask, bubble, nil
 	}
-	return s.completeMaintenanceAction(task, pendingExecution)
+	if err := s.persistMaintenanceRecoveryPoint(recoveryPoint); err != nil {
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, latestRestorePoint)
+		return updatedTask, bubble, nil
+	}
+	if err := s.clearRuntimeTaskHistory(task.TaskID); err != nil {
+		updatedTask, bubble := s.failMaintenanceAction(task, pendingExecution, err, latestRestorePoint)
+		return updatedTask, bubble, nil
+	}
+	return s.completeMaintenanceAction(task, pendingExecution, latestRestorePoint)
 }
 
-func (s *Service) completeMaintenanceAction(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any) {
+func (s *Service) completeMaintenanceAction(task runengine.TaskRecord, pendingExecution map[string]any, latestRestorePoint map[string]any) (runengine.TaskRecord, map[string]any, map[string]any) {
 	resultTitle := firstNonEmptyString(stringValue(pendingExecution, "result_title", ""), "维护动作已完成")
 	resultText := firstNonEmptyString(stringValue(pendingExecution, "result_bubble_text", ""), "操作已完成。")
 	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, "bubble", resultTitle, resultText)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", resultText, time.Now().Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, nil)
+	updatedTask, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, nil, latestRestorePoint)
 	if !ok {
 		return task, bubble, deliveryResult
 	}
@@ -219,14 +249,14 @@ func (s *Service) completeMaintenanceAction(task runengine.TaskRecord, pendingEx
 	return updatedTask, bubble, deliveryResult
 }
 
-func (s *Service) failMaintenanceAction(task runengine.TaskRecord, pendingExecution map[string]any, executionErr error) (runengine.TaskRecord, map[string]any) {
+func (s *Service) failMaintenanceAction(task runengine.TaskRecord, pendingExecution map[string]any, executionErr error, latestRestorePoint map[string]any) (runengine.TaskRecord, map[string]any) {
 	impactScope := cloneMap(mapValue(pendingExecution, "impact_scope"))
 	if len(impactScope) == 0 {
 		impactScope = maintenanceImpactScope(currentDatabasePath(s.storage))
 	}
 	bubbleText := fmt.Sprintf("维护动作执行失败：%s", strings.TrimSpace(executionErr.Error()))
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, time.Now().Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.FailTaskExecution(task.TaskID, "maintenance_failed", "execution_error", bubbleText, impactScope, bubble)
+	updatedTask, ok := s.runEngine.FailTaskExecution(task.TaskID, "maintenance_failed", "execution_error", bubbleText, impactScope, bubble, latestRestorePoint)
 	if !ok {
 		return task, bubble
 	}
@@ -261,6 +291,39 @@ func (s *Service) clearRuntimeTaskHistory(keepTaskID string) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) prepareMaintenanceRecoveryPoint(task runengine.TaskRecord, pendingExecution map[string]any) (checkpoint.RecoveryPoint, error) {
+	if s == nil || s.storage == nil {
+		return checkpoint.RecoveryPoint{}, nil
+	}
+	files := []string{currentDatabasePath(s.storage)}
+	if stringValue(pendingExecution, "operation_name", "") == maintenanceOperationSettingsRestoreDefaults {
+		files = append(files, currentSecretStorePath(s.storage))
+	}
+	return s.storage.CreateMaintenanceRecoveryPoint(context.Background(), task.TaskID, maintenanceRecoverySummary(pendingExecution), files)
+}
+
+func (s *Service) persistMaintenanceRecoveryPoint(point checkpoint.RecoveryPoint) error {
+	if s == nil || s.storage == nil || point.RecoveryPointID == "" {
+		return nil
+	}
+	if err := s.storage.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), point); err != nil {
+		return fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	return nil
+}
+
+func maintenanceRecoverySummary(pendingExecution map[string]any) string {
+	operationName := stringValue(pendingExecution, "operation_name", "maintenance_action")
+	return fmt.Sprintf("manual recovery assets before %s", operationName)
+}
+
+func maintenanceLatestRestorePoint(point checkpoint.RecoveryPoint) map[string]any {
+	if strings.TrimSpace(point.RecoveryPointID) == "" {
+		return nil
+	}
+	return recoveryPointMap(point)
 }
 
 func (s *Service) deleteModelSecretIfPresent(provider string) error {

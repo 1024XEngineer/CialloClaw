@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,18 @@ func TestServiceDeleteAllMemory(t *testing.T) {
 			}}); err != nil {
 				t.Fatalf("SaveRetrievalHits returned error: %v", err)
 			}
+			if service.DatabasePath() != "" {
+				db, err := openSQLiteDatabase(service.DatabasePath())
+				if err != nil {
+					t.Fatalf("openSQLiteDatabase returned error: %v", err)
+				}
+				if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO memory_summary_vectors (memory_summary_id, embedding_blob, provider) VALUES (?, ?, ?)`, "mem_001", []byte{1, 2, 3}, "sqlite_vec_skeleton"); err != nil {
+					t.Fatalf("seed memory_summary_vectors returned error: %v", err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatalf("close seeded sqlite database returned error: %v", err)
+				}
+			}
 
 			if err := service.DeleteAllMemory(ctx); err != nil {
 				t.Fatalf("DeleteAllMemory returned error: %v", err)
@@ -77,7 +90,62 @@ func TestServiceDeleteAllMemory(t *testing.T) {
 			if len(hits) != 0 {
 				t.Fatalf("expected cleared retrieval hits, got %+v", hits)
 			}
+			if service.DatabasePath() != "" {
+				db, err := openSQLiteDatabase(service.DatabasePath())
+				if err != nil {
+					t.Fatalf("openSQLiteDatabase after cleanup returned error: %v", err)
+				}
+				var vectorCount int
+				if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM memory_summary_vectors`).Scan(&vectorCount); err != nil {
+					t.Fatalf("count memory_summary_vectors returned error: %v", err)
+				}
+				if vectorCount != 0 {
+					t.Fatalf("expected cleared memory vectors, got %d", vectorCount)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatalf("close verified sqlite database returned error: %v", err)
+				}
+			}
 		})
+	}
+}
+
+func TestServiceCreateMaintenanceRecoveryPoint(t *testing.T) {
+	service := NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "maintenance-recovery.db")))
+	t.Cleanup(func() { _ = service.Close() })
+	ctx := context.Background()
+	if err := service.SecretStore().PutSecret(ctx, SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "sk-live", UpdatedAt: "2026-04-18T10:00:00Z"}); err != nil {
+		t.Fatalf("PutSecret returned error: %v", err)
+	}
+	point, err := service.CreateMaintenanceRecoveryPoint(ctx, "task_maint_001", "before cleanup", []string{service.DatabasePath(), service.SecretStorePath()})
+	if err != nil {
+		t.Fatalf("CreateMaintenanceRecoveryPoint returned error: %v", err)
+	}
+	if point.RecoveryPointID == "" || len(point.Objects) < 2 {
+		t.Fatalf("expected persisted maintenance recovery assets, got %+v", point)
+	}
+	for _, objectPath := range point.Objects {
+		if _, err := os.Stat(filepath.FromSlash(objectPath)); err != nil {
+			t.Fatalf("expected maintenance recovery object %q to exist: %v", objectPath, err)
+		}
+	}
+	items, total, err := service.RecoveryPointStore().ListRecoveryPoints(ctx, "task_maint_001", 20, 0)
+	if err != nil {
+		t.Fatalf("ListRecoveryPoints returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].RecoveryPointID != point.RecoveryPointID {
+		t.Fatalf("expected persisted maintenance recovery point, got total=%d items=%+v", total, items)
+	}
+}
+
+func TestServiceCreateMaintenanceRecoveryPointInMemoryFallback(t *testing.T) {
+	service := NewService(nil)
+	point, err := service.CreateMaintenanceRecoveryPoint(context.Background(), "task_maint_memory", "before cleanup", nil)
+	if err != nil {
+		t.Fatalf("CreateMaintenanceRecoveryPoint returned error: %v", err)
+	}
+	if len(point.Objects) != 1 || point.Objects[0] != "in_memory_runtime_state" {
+		t.Fatalf("expected in-memory fallback recovery point, got %+v", point)
 	}
 }
 
@@ -150,6 +218,12 @@ func TestServiceDeleteAllTaskHistory(t *testing.T) {
 			if err := service.MirrorConversationStore().SaveMirrorConversation(ctx, MirrorConversationRecord{RecordID: "mirror_001", TraceID: "trace_001", CreatedAt: "2026-04-18T10:01:07Z", UpdatedAt: "2026-04-18T10:01:08Z", Source: "dashboard", Trigger: "voice_commit", InputMode: "voice", TaskID: "task_001", UserText: "history", Status: "responded"}); err != nil {
 				t.Fatalf("SaveMirrorConversation returned error: %v", err)
 			}
+			if err := service.TraceStore().WriteTraceRecord(ctx, TraceRecord{TraceID: "trace_001", TaskID: "task_001", RunID: "run_001", CreatedAt: "2026-04-18T10:01:09Z"}); err != nil {
+				t.Fatalf("WriteTraceRecord returned error: %v", err)
+			}
+			if err := service.EvalStore().WriteEvalSnapshot(ctx, EvalSnapshotRecord{EvalSnapshotID: "eval_001", TraceID: "trace_001", TaskID: "task_001", Status: "passed", MetricsJSON: `{}`, CreatedAt: "2026-04-18T10:01:10Z"}); err != nil {
+				t.Fatalf("WriteEvalSnapshot returned error: %v", err)
+			}
 
 			if err := service.DeleteAllTaskHistory(ctx); err != nil {
 				t.Fatalf("DeleteAllTaskHistory returned error: %v", err)
@@ -196,6 +270,12 @@ func TestServiceDeleteAllTaskHistory(t *testing.T) {
 			}
 			if items, total, err := service.MirrorConversationStore().ListMirrorConversations(ctx, "task_001", "", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared mirror conversations, got total=%d items=%+v err=%v", total, items, err)
+			}
+			if items, total, err := service.TraceStore().ListTraceRecords(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
+				t.Fatalf("expected cleared trace records, got total=%d items=%+v err=%v", total, items, err)
+			}
+			if items, total, err := service.EvalStore().ListEvalSnapshots(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
+				t.Fatalf("expected cleared eval snapshots, got total=%d items=%+v err=%v", total, items, err)
 			}
 		})
 	}

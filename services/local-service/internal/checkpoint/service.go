@@ -72,6 +72,7 @@ func (s *Service) BuildRecoveryPoint(input CreateInput) (RecoveryPoint, error) {
 		TaskID:          strings.TrimSpace(input.TaskID),
 		Summary:         strings.TrimSpace(input.Summary),
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		Mode:            "workspace_snapshot",
 		Objects:         objects,
 	}, nil
 }
