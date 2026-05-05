@@ -104,6 +104,10 @@ import {
   shouldAutoOpenShellBallDeliveryResult,
   sortShellBallBubbleItemsByTimestamp,
 } from "./useShellBallCoordinator";
+import {
+  buildShellBallIntentCorrectionPlaceholder,
+  formatShellBallIntentLabel,
+} from "./shellBallIntentCorrection";
 import { respondSecurity } from "./test-stubs/rpcMethods";
 import {
   appendShellBallDroppedText,
@@ -3910,6 +3914,28 @@ test("shell-ball input bar surfaces voice preview guidance to the UI", () => {
   assert.match(markup, /Release to cancel/);
 });
 
+test("shell-ball input bar can borrow the inline draft field for intent correction", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallInputBar, {
+      mode: "interactive",
+      voicePreview: null,
+      value: "translate this to japanese",
+      label: "Modify intent",
+      placeholder: "Describe the intent you want instead of Rewrite.",
+      auxiliaryAction: "cancel",
+      onValueChange: () => {},
+      onAttachFile: () => {},
+      onCancel: () => {},
+      onSubmit: () => {},
+      onFocusChange: () => {},
+    }),
+  );
+
+  assert.match(markup, />Modify intent</);
+  assert.match(markup, /Describe the intent you want instead of Rewrite\./);
+  assert.match(markup, /aria-label="Cancel intent correction"/);
+});
+
 test("shell-ball mascot supports passive rendering outside the floating ball host", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallMascot, {
@@ -4624,7 +4650,7 @@ test("shell-ball pending-approval bubbles render inline allow and deny controls"
   assert.doesNotMatch(markup, /data-bubble-action="delete"/);
 });
 
-test("shell-ball intent confirmation bubbles render an inline OK action without pin controls", () => {
+test("shell-ball intent confirmation bubbles render the intent chip plus inline modify and OK actions", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallBubbleZone, {
       visualState: "confirming_intent",
@@ -4642,16 +4668,25 @@ test("shell-ball intent confirmation bubbles render an inline OK action without 
           role: "agent",
           desktop: {
             lifecycleState: "visible",
+            intentConfirm: {
+              intentName: "rewrite",
+              intentLabel: "Rewrite",
+            },
           },
         },
       ] satisfies ShellBallBubbleItem[],
       onConfirmIntentBubble() {},
+      onRefineIntentBubble() {},
       onDeleteBubble() {},
       onPinBubble() {},
     }),
   );
 
   assert.equal(markup.match(/data-bubble-action="confirm_intent"/g)?.length, 1);
+  assert.equal(markup.match(/data-bubble-action="refine_intent"/g)?.length, 1);
+  assert.match(markup, />Intent</);
+  assert.match(markup, />Rewrite</);
+  assert.match(markup, />Modify intent</);
   assert.match(markup, />OK</);
   assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.doesNotMatch(markup, /data-bubble-action="delete"/);
@@ -4776,6 +4811,46 @@ test("shell-ball coordinator prefers bubble_message text over non-empty delivery
   assert.equal(createdItem.bubble.text, "完整的回复正文，不应该被预览文本替换。");
   assert.equal(createdItem.bubble.created_at, "2026-04-11T10:10:30.000Z");
   assert.equal(createdItem.role, "agent");
+});
+
+test("shell-ball agent intent confirmation bubbles preserve the inferred intent label in desktop metadata", () => {
+  const createdItem = createShellBallAgentBubbleItem(
+    {
+      task: {
+        task_id: "task-intent-bubble",
+        intent: {
+          name: "translate",
+          arguments: {
+            target_language: "Japanese",
+          },
+        },
+      },
+      bubble_message: {
+        bubble_id: "bubble-intent-translate",
+        task_id: "task-intent-bubble",
+        type: "intent_confirm",
+        text: "Should I translate this to Japanese?",
+        pinned: false,
+        hidden: false,
+        created_at: "2026-05-05T10:10:30.000Z",
+      },
+      delivery_result: null,
+    } as any,
+    "2026-05-05T10:10:40.000Z",
+  ) as ShellBallBubbleItem;
+
+  assert.deepEqual(createdItem.desktop.intentConfirm, {
+    intentName: "translate",
+    intentLabel: "Translate",
+  });
+});
+
+test("shell-ball intent correction helpers keep the borrowed-input copy readable", () => {
+  assert.equal(formatShellBallIntentLabel("write_file"), "Write Document");
+  assert.equal(
+    buildShellBallIntentCorrectionPlaceholder("Rewrite"),
+    "Describe the intent you want instead of Rewrite.",
+  );
 });
 
 test("shell-ball auto-open helper only targets formal delivery types with native open flows", () => {
@@ -7346,19 +7421,33 @@ test("shell-ball approval bubble actions stay on the formal security respond pat
   assert.match(coordinatorSource, /createShellBallApprovalPendingBubbleItem\(\{/);
 });
 
-test("shell-ball intent confirmation actions stay on the formal confirm event path", () => {
+test("shell-ball confirm buttons stay on the formal confirm path while borrowed intent edits reuse input continuation", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const bubbleMessageSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"),
     "utf8",
   );
+  const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
   assert.match(appSource, /onConfirmIntentBubble=\{handleCoordinatorConfirmIntentBubble\}/);
+  assert.match(appSource, /onRefineIntentBubble=\{handleCoordinatorRefineIntentBubble\}/);
+  assert.match(appSource, /auxiliaryAction=\{intentCorrection === null \? "attach" : "cancel"\}/);
+  assert.match(appSource, /label=\{intentCorrection\?\.label\}/);
+  assert.match(appSource, /placeholder=\{intentCorrection\?\.placeholder\}/);
   assert.match(bubbleMessageSource, /data-bubble-action="confirm_intent"/);
+  assert.match(bubbleMessageSource, /data-bubble-action="refine_intent"/);
   assert.match(bubbleMessageSource, /onConfirmIntent\?\.\(taskId\)/);
+  assert.match(bubbleMessageSource, /onRefineIntent\?\.\(taskId\)/);
+  assert.match(inputBarSource, /auxiliaryAction = "attach"/);
+  assert.match(inputBarSource, /aria-label=\{auxiliaryActionLabel\}/);
   assert.match(coordinatorSource, /getCurrentWindow\(\)\.emit\(shellBallWindowSyncEvents\.intentDecision,/);
   assert.match(coordinatorSource, /decision: "confirm"/);
+  assert.match(coordinatorSource, /const result = await submitTextInput\(\{/);
+  assert.match(coordinatorSource, /sessionId: activeIntentCorrection\.sessionId \?\? handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
+  assert.match(coordinatorSource, /const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem\(\{/);
+  assert.match(coordinatorSource, /getConversationSessionIdForTask\(normalizedTaskId\)/);
+  assert.doesNotMatch(coordinatorSource, /const correctedIntent = parseShellBallIntentCorrection\(submittedText\);/);
 });
 
 test("shell-ball retires intent confirmation bubbles while formal confirmation is in flight", () => {

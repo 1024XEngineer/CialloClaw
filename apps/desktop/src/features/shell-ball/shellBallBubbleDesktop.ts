@@ -38,6 +38,15 @@ export type ShellBallBubbleInlineRecommendationState = {
   requestContext: RecommendationContext;
 };
 
+/**
+ * Intent confirmation metadata is local bubble chrome used to expose the
+ * current inferred intent without changing the protocol bubble payload.
+ */
+export type ShellBallBubbleIntentConfirmState = {
+  intentName: string;
+  intentLabel: string;
+};
+
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
@@ -47,6 +56,7 @@ export type ShellBallBubbleDesktopState = {
   turnPhase?: number;
   inlineApproval?: ShellBallBubbleInlineApprovalState;
   inlineRecommendation?: ShellBallBubbleInlineRecommendationState;
+  intentConfirm?: ShellBallBubbleIntentConfirmState;
 };
 
 export type ShellBallBubbleItem = {
@@ -83,6 +93,14 @@ function cloneShellBallBubbleInlineRecommendationState(
   };
 }
 
+function cloneShellBallBubbleIntentConfirmState(
+  state: ShellBallBubbleIntentConfirmState,
+): ShellBallBubbleIntentConfirmState {
+  return {
+    ...state,
+  };
+}
+
 export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
   return {
     ...state,
@@ -90,6 +108,7 @@ export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopSt
     ...(state.inlineRecommendation
       ? { inlineRecommendation: cloneShellBallBubbleInlineRecommendationState(state.inlineRecommendation) }
       : {}),
+    ...(state.intentConfirm ? { intentConfirm: cloneShellBallBubbleIntentConfirmState(state.intentConfirm) } : {}),
   };
 }
 

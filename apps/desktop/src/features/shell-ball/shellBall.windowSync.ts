@@ -5,8 +5,6 @@ import { getShellBallInputBarMode } from "./shellBall.interaction";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 
-import type { IntentPayload } from "@cialloclaw/protocol";
-
 export const shellBallWindowSyncEvents = Object.freeze({
   snapshot: "desktop-shell-ball:snapshot",
   geometry: "desktop-shell-ball:geometry",
@@ -146,7 +144,6 @@ export type ShellBallIntentDecisionPayload = {
   source: ShellBallBubbleActionSource;
   taskId: string;
   decision: ShellBallIntentDecision;
-  correctedIntent?: IntentPayload;
 };
 
 export type ShellBallBubbleActionPayload = {

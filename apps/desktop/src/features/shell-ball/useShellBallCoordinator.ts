@@ -20,6 +20,7 @@ import { JsonRpcClientError } from "@/rpc/client";
 import { getRecommendations, respondSecurityDetailed, steerTask, submitRecommendationFeedback } from "@/rpc/methods";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
+import { getConversationSessionIdForTask } from "@/services/conversationSessionService";
 import { getDesktopClipboardActivitySnapshot } from "@/platform/desktopClipboardActivity";
 import { getDesktopMouseActivitySnapshot } from "@/platform/desktopActivity";
 import { normalizeDesktopErrorSignalText } from "@/platform/desktopErrorSignal";
@@ -61,6 +62,10 @@ import {
 import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
 import { getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
 import { useShellBallStore } from "../../stores/shellBallStore";
+import {
+  buildShellBallIntentCorrectionPlaceholder,
+  formatShellBallIntentLabel,
+} from "./shellBallIntentCorrection";
 
 type ShellBallCoordinatorInput = {
   visualState: ShellBallVisualState;
@@ -136,6 +141,19 @@ type ShellBallTaskOutputServiceModule = {
     taskId: string | null;
     url: string | null;
   };
+};
+
+type ShellBallIntentCorrectionSession = {
+  taskId: string;
+  intentName: string;
+  intentLabel: string;
+  sessionId?: string;
+  savedInputValue: string;
+};
+
+type ShellBallIntentCorrectionViewModel = {
+  label: string;
+  placeholder: string;
 };
 
 const defaultSubmitVoiceText: NonNullable<ShellBallCoordinatorInput["onSubmitVoiceText"]> = () => null;
@@ -983,6 +1001,13 @@ export function createShellBallAgentBubbleItem(
       });
     }
 
+    const intentConfirm = bubbleType === "intent_confirm" && result.task.intent?.name?.trim()
+      ? {
+          intentName: result.task.intent.name,
+          intentLabel: formatShellBallIntentLabel(result.task.intent.name),
+        }
+      : undefined;
+
     return {
       bubble: {
         ...bubbleMessage,
@@ -990,7 +1015,10 @@ export function createShellBallAgentBubbleItem(
         pinned: false,
       },
       role: "agent",
-      desktop: createShellBallBubbleDesktopState(turnOrder),
+      desktop: {
+        ...createShellBallBubbleDesktopState(turnOrder),
+        ...(intentConfirm ? { intentConfirm } : {}),
+      },
     } satisfies ShellBallBubbleItem;
   }
 
@@ -1191,7 +1219,21 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleTurnIndexRef = useRef(0);
   const [bubbleVisibilityPhase, setBubbleVisibilityPhase] = useState<ShellBallBubbleVisibilityPhase>("hidden");
   const [inputHovered, setInputHovered] = useState(false);
+  // Intent correction stays shell-ball-local only as a temporary input mode.
+  // Once submitted, the borrowed text goes through the existing session-scoped
+  // input continuation path so the backend remains the source of truth for
+  // pending-task reinterpretation.
+  const [intentCorrection, setIntentCorrection] = useState<ShellBallIntentCorrectionSession | null>(null);
   const helpersVisible = input.helperWindowsVisible ?? true;
+  const intentCorrectionViewModel = useMemo<ShellBallIntentCorrectionViewModel | null>(
+    () => intentCorrection === null
+      ? null
+      : {
+          label: "Modify intent",
+          placeholder: buildShellBallIntentCorrectionPlaceholder(intentCorrection.intentLabel),
+        },
+    [intentCorrection],
+  );
   const snapshot = useMemo(
     () =>
       createShellBallWindowSnapshot({
@@ -1208,14 +1250,15 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           regionActive: input.regionActive,
           inputFocused: input.inputFocused,
           inputHovered,
-          hasDraft: input.inputValue.trim() !== "" || (input.pendingFiles ?? []).length > 0,
+          hasDraft: input.inputValue.trim() !== "" || (intentCorrection === null && (input.pendingFiles ?? []).length > 0),
         }),
       }),
-    [bubbleItems, bubbleVisibilityPhase, helpersVisible, input.inputFocused, input.inputValue, input.pendingFiles, input.regionActive, input.visualState, input.voiceHintMode, input.voicePreview, inputHovered],
+    [bubbleItems, bubbleVisibilityPhase, helpersVisible, input.inputFocused, input.inputValue, input.pendingFiles, input.regionActive, input.visualState, input.voiceHintMode, input.voicePreview, inputHovered, intentCorrection],
   );
   const snapshotRef = useRef(snapshot);
   const bubbleItemsRef = useRef(bubbleItems);
   const bubbleVisibilityPhaseRef = useRef<ShellBallBubbleVisibilityPhase>(bubbleVisibilityPhase);
+  const intentCorrectionRef = useRef<ShellBallIntentCorrectionSession | null>(intentCorrection);
   const visibleBubbleCountRef = useRef(getShellBallVisibleBubbleItems(bubbleItems).length);
   const previousVisibleBubbleCountRef = useRef(visibleBubbleCountRef.current);
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
@@ -1249,9 +1292,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const autoOpenedDeliveryKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
-  // Intent confirmation bubbles are shell-ball-local affordances for the formal
-  // confirm RPC. Track in-flight submissions so repeat clicks cannot dispatch
-  // duplicate `agent.task.confirm` calls before the bubble is retired.
+  // Confirm buttons still resolve through the formal confirm RPC. Track
+  // in-flight clicks so repeat presses cannot dispatch duplicate
+  // `agent.task.confirm` calls before the bubble is retired.
   const pendingIntentDecisionTaskIdsRef = useRef(new Set<string>());
   const activeShellBallTaskIdRef = useRef<string | null>(null);
   const activeShellBallTaskIntentNameRef = useRef<string | null>(null);
@@ -1291,6 +1334,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   snapshotRef.current = snapshot;
   bubbleItemsRef.current = bubbleItems;
   bubbleVisibilityPhaseRef.current = bubbleVisibilityPhase;
+  intentCorrectionRef.current = intentCorrection;
   handlersRef.current = {
     setInputValue: input.setInputValue,
     onAppendPendingFiles: input.onAppendPendingFiles ?? (() => {}),
@@ -1318,6 +1362,60 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
   const getTaskBubbleTurnIndex = useCallback((taskId: string) => {
     return shellBallTaskTurnIndexRef.current.get(taskId);
+  }, []);
+
+  // Releasing the borrowed input field must restore the user's original draft
+  // because the correction text is only a temporary local overlay on top of
+  // the normal shell-ball input workflow.
+  const exitIntentCorrectionMode = useCallback((input: {
+    refocus: boolean;
+    restoreValueOverride?: string;
+  }) => {
+    const currentIntentCorrection = intentCorrectionRef.current;
+    if (currentIntentCorrection === null) {
+      return;
+    }
+
+    setIntentCorrection(null);
+    handlersRef.current.setInputValue(input.restoreValueOverride ?? currentIntentCorrection.savedInputValue);
+
+    if (input.refocus) {
+      handlersRef.current.onRequestInputFocus();
+      return;
+    }
+
+    handlersRef.current.onInputFocusChange(false);
+  }, []);
+
+  // Entering correction mode clears the visible input value, but it preserves
+  // the original draft locally so cancel and retry flows can restore it later.
+  const enterIntentCorrectionMode = useCallback((input: {
+    taskId: string;
+    intentName: string;
+    intentLabel: string;
+    draftOverride?: string;
+    savedInputValueOverride?: string;
+    sessionIdOverride?: string;
+  }) => {
+    const normalizedTaskId = input.taskId.trim();
+
+    if (normalizedTaskId === "") {
+      return;
+    }
+
+    setIntentCorrection({
+      taskId: normalizedTaskId,
+      intentName: input.intentName,
+      intentLabel: input.intentLabel,
+      sessionId: input.sessionIdOverride
+        ?? getConversationSessionIdForTask(normalizedTaskId)
+        ?? handlersRef.current.getCurrentConversationSessionId?.(),
+      savedInputValue: input.savedInputValueOverride
+        ?? intentCorrectionRef.current?.savedInputValue
+        ?? snapshotRef.current.inputValue,
+    });
+    handlersRef.current.setInputValue(input.draftOverride ?? "");
+    handlersRef.current.onRequestInputFocus();
   }, []);
 
   const appendApprovalPendingBubble = useCallback((input: QueuedApprovalPendingNotification) => {
@@ -2899,14 +2997,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
         confirmTask: (request: {
           confirmed: boolean;
-          corrected_intent?: ShellBallIntentDecisionPayload["correctedIntent"];
           request_meta: ReturnType<typeof createShellBallRequestMeta>;
           task_id: string;
         }) => Promise<ShellBallInputSubmitResult>;
       }>;
       const createdAt = new Date().toISOString();
       const turnIndex = allocateBubbleTurnIndex();
-      const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
+      const decisionText = payload.decision === "confirm" ? "Confirm" : "Cancel";
 
       bindTaskToBubbleTurn(normalizedTaskId, turnIndex);
 
@@ -2931,7 +3028,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         const rpcMethods = await importRpcMethods();
         const result = await rpcMethods.confirmTask({
           confirmed: payload.decision === "confirm",
-          corrected_intent: payload.correctedIntent,
           request_meta: createShellBallRequestMeta(),
           task_id: normalizedTaskId,
         });
@@ -3014,7 +3110,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         cleanup();
       }
     };
-  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, registerShellBallTask]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, enterIntentCorrectionMode, registerShellBallTask]);
 
   const handlePrimaryAction = useCallback(async (action: ShellBallPrimaryAction) => {
     switch (action) {
@@ -3039,6 +3135,100 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       case "submit": {
         const submittedText = snapshotRef.current.inputValue.trim();
         const submittedFiles = snapshotRef.current.pendingFiles;
+        const activeIntentCorrection = intentCorrectionRef.current;
+
+        if (activeIntentCorrection !== null) {
+          const createdAt = new Date().toISOString();
+          const turnIndex = allocateBubbleTurnIndex();
+          const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+            createdAt,
+            taskId: activeIntentCorrection.taskId,
+            turnIndex,
+            turnPhase: 1,
+          });
+          exitIntentCorrectionMode({
+            refocus: false,
+          });
+          bindTaskToBubbleTurn(activeIntentCorrection.taskId, turnIndex);
+          setBubbleItems((currentItems) =>
+            sortShellBallBubbleItemsByTimestamp([
+              ...setShellBallIntentConfirmBubbleHidden(currentItems, activeIntentCorrection.taskId, true),
+              createShellBallTextBubbleItem({
+                role: "user",
+                text: submittedText,
+                bubbleType: "result",
+                createdAt,
+                taskId: activeIntentCorrection.taskId,
+                turnIndex,
+                turnPhase: 0,
+              }),
+              pendingAgentBubbleItem,
+            ]),
+          );
+          revealBubbleRegion();
+
+          const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
+          try {
+            const result = await submitTextInput({
+              text: submittedText,
+              source: "floating_ball",
+              trigger: "hover_text_input",
+              inputMode: "text",
+              sessionId: activeIntentCorrection.sessionId ?? handlersRef.current.getCurrentConversationSessionId?.(),
+              options: {
+                confirm_required: false,
+                preferred_delivery: "bubble",
+              },
+            });
+
+            if (!isShellBallInputSubmitResult(result)) {
+              throw new Error("Shell-ball intent correction did not return a task result.");
+            }
+
+            registerShellBallTask(result.task.task_id, turnIndex, result.task.status, result.task.intent?.name ?? null);
+            setBubbleItems((currentItems) =>
+              replaceShellBallPendingBubble(
+                currentItems,
+                pendingAgentBubbleItem.bubble.bubble_id,
+                createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ),
+            );
+            revealBubbleRegion();
+            void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+          } catch (error) {
+            console.warn("shell-ball intent correction submit failed", error);
+            enterIntentCorrectionMode({
+              taskId: activeIntentCorrection.taskId,
+              intentName: activeIntentCorrection.intentName,
+              intentLabel: activeIntentCorrection.intentLabel,
+              draftOverride: submittedText,
+              savedInputValueOverride: activeIntentCorrection.savedInputValue,
+              sessionIdOverride: activeIntentCorrection.sessionId,
+            });
+            setBubbleItems((currentItems) =>
+              replaceShellBallPendingBubble(
+                setShellBallIntentConfirmBubbleHidden(currentItems, activeIntentCorrection.taskId, false),
+                pendingAgentBubbleItem.bubble.bubble_id,
+                createShellBallTaskErrorBubbleItem({
+                  createdAt: new Date().toISOString(),
+                  error,
+                  taskId: activeIntentCorrection.taskId,
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ),
+            );
+            revealBubbleRegion();
+          } finally {
+            finishPendingTaskRegistration();
+          }
+
+          break;
+        }
 
         if (shouldHandleShellBallWindowCommand({ text: submittedText, files: submittedFiles })) {
           void handleWindowPrompt();
@@ -3359,7 +3549,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         void handlePrimaryRecommendationClick();
         break;
     }
-  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, getTaskBubbleTurnIndex, handlePrimaryRecommendationClick, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, enterIntentCorrectionMode, exitIntentCorrectionMode, getTaskBubbleTurnIndex, handlePrimaryRecommendationClick, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
 
   const handleConfirmIntentBubble = useCallback((taskId: string) => {
     const normalizedTaskId = taskId.trim();
@@ -3368,15 +3558,51 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
+    if (intentCorrectionRef.current !== null) {
+      exitIntentCorrectionMode({
+        refocus: false,
+      });
+    }
+
     void getCurrentWindow().emit(shellBallWindowSyncEvents.intentDecision, {
       source: "bubble",
       taskId: normalizedTaskId,
       decision: "confirm",
     } satisfies ShellBallIntentDecisionPayload);
-  }, []);
+  }, [exitIntentCorrectionMode]);
+
+  const handleRefineIntentBubble = useCallback((taskId: string) => {
+    const normalizedTaskId = taskId.trim();
+
+    if (normalizedTaskId === "") {
+      return;
+    }
+
+    const intentBubble = [...bubbleItemsRef.current]
+      .reverse()
+      .find((item) => item.bubble.task_id === normalizedTaskId && item.bubble.type === "intent_confirm");
+    const intentName = intentBubble?.desktop.intentConfirm?.intentName
+      ?? activeShellBallTaskIntentNameRef.current
+      ?? "agent_loop";
+    const intentLabel = intentBubble?.desktop.intentConfirm?.intentLabel
+      ?? formatShellBallIntentLabel(intentName);
+
+    enterIntentCorrectionMode({
+      taskId: normalizedTaskId,
+      intentName,
+      intentLabel,
+    });
+  }, [enterIntentCorrectionMode]);
+
+  const handleCancelIntentCorrection = useCallback(() => {
+    exitIntentCorrectionMode({
+      refocus: true,
+    });
+  }, [exitIntentCorrectionMode]);
 
   return {
     snapshot,
+    intentCorrection: intentCorrectionViewModel,
     handleDroppedFiles,
     handleSelectedTextPrompt,
     handleClipboardPrompt,
@@ -3385,6 +3611,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handleRecommendationAccept,
     handleRecommendationIgnore,
     handleConfirmIntentBubble,
+    handleRefineIntentBubble,
+    handleCancelIntentCorrection,
     handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,

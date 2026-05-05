@@ -400,6 +400,35 @@ body[data-app-window="shell-ball"],
   word-break: break-word;
 }
 
+.shell-ball-bubble-message__intent-confirm-header {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.46rem;
+}
+
+.shell-ball-bubble-message__intent-confirm-label {
+  color: rgba(96, 103, 113, 0.78);
+  font-family: var(--font-mono);
+  font-size: 0.48rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.shell-ball-bubble-message__intent-chip {
+  background: rgba(106, 145, 200, 0.14);
+  border: 1px solid rgba(106, 145, 200, 0.24);
+  border-radius: 999px;
+  color: rgba(59, 88, 124, 0.94);
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 0.48rem;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 0.22rem 0.42rem;
+  text-transform: uppercase;
+}
+
 .shell-ball-bubble-message__loading {
   align-items: center;
   display: grid;

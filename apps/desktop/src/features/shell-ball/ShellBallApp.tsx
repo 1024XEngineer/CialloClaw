@@ -304,11 +304,14 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleRecommendationAccept: handleCoordinatorRecommendationAccept,
     handleRecommendationIgnore: handleCoordinatorRecommendationIgnore,
     handleConfirmIntentBubble: handleCoordinatorConfirmIntentBubble,
+    handleRefineIntentBubble: handleCoordinatorRefineIntentBubble,
+    handleCancelIntentCorrection: handleCoordinatorCancelIntentCorrection,
     handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,
     handleRegionEnter: handleCoordinatorRegionEnter,
     handleRegionLeave: handleCoordinatorRegionLeave,
+    intentCorrection,
     snapshot,
   } = useShellBallCoordinator({
     getBallClientRect: () => mascotRef.current?.getBoundingClientRect() ?? null,
@@ -990,6 +993,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
                     handleCoordinatorBubbleAction({ action: "deny_approval", bubbleId, source: "bubble" });
                   }}
                   onConfirmIntentBubble={handleCoordinatorConfirmIntentBubble}
+                  onRefineIntentBubble={handleCoordinatorRefineIntentBubble}
                   onAcceptRecommendationBubble={handleCoordinatorRecommendationAccept}
                   onIgnoreRecommendationBubble={handleCoordinatorRecommendationIgnore}
                   onPinBubble={(bubbleId) => {
@@ -1014,15 +1018,19 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
             handleCoordinatorInputHoverChange(false);
           }}
         >
-          <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} />
+          {intentCorrection === null ? <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} /> : null}
           <ShellBallInputBar
             focusToken={inputFocusToken}
             mode={inlineInputMode}
             voicePreview={snapshot.voicePreview}
             value={inputValue}
-            hasPendingFiles={pendingFiles.length > 0}
+            hasPendingFiles={intentCorrection === null && pendingFiles.length > 0}
+            label={intentCorrection?.label}
+            placeholder={intentCorrection?.placeholder}
+            auxiliaryAction={intentCorrection === null ? "attach" : "cancel"}
             onValueChange={setInputValue}
             onAttachFile={handleInlineAttachFile}
+            onCancel={handleCoordinatorCancelIntentCorrection}
             onSubmit={() => {
               void handleCoordinatorPrimaryAction("submit");
             }}

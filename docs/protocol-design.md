@@ -570,7 +570,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **悬浮球单击 / 双击 / 长按 / 上滑 / 下滑 / 悬停** 属于前端交互动作，本地先进入前端状态机，再映射到 `agent.input.submit`、`agent.task.start` 或本地 UI 行为。
 - **文本选中承接、文件拖拽承接、错误信息承接** 统一收敛到 `agent.task.start`。
-- **意图确认与纠偏** 统一使用 `agent.task.confirm`，用于采纳系统猜测或覆盖为用户修正后的意图。
+- **意图确认与纠偏**：显式确认仍使用 `agent.task.confirm`；若同一 `session` 内只有一个 `waiting_input / confirming_intent` 任务，用户也可通过 `agent.input.submit` 以自然语言补充或修正说明，继续挂回该任务。
 - 气泡置顶 / 删除 / 恢复：优先作为前端局部能力，必要时再引出设置或历史管理接口
 - **主动推荐与反馈** 统一使用 `agent.recommendation.get` 和 `agent.recommendation.feedback.submit`。
 - **屏幕截图、剪贴板、鼠标停留等场景感知信号** 统一使用 `agent.screen.analyze`，用于判断是否刷新推荐，不直接替代 `agent.task.start` 创建正式任务。

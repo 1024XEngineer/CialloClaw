@@ -11,6 +11,7 @@ type ShellBallBubbleZoneProps = {
   onAllowApprovalBubble?: (bubbleId: string) => void;
   onDenyApprovalBubble?: (bubbleId: string) => void;
   onConfirmIntentBubble?: (taskId: string) => void;
+  onRefineIntentBubble?: (taskId: string) => void;
   onAcceptRecommendationBubble?: (bubbleId: string) => void;
   onIgnoreRecommendationBubble?: (bubbleId: string) => void;
 };
@@ -23,6 +24,7 @@ export function ShellBallBubbleZone({
   onAllowApprovalBubble,
   onDenyApprovalBubble,
   onConfirmIntentBubble,
+  onRefineIntentBubble,
   onAcceptRecommendationBubble,
   onIgnoreRecommendationBubble,
 }: ShellBallBubbleZoneProps) {
@@ -99,6 +101,7 @@ export function ShellBallBubbleZone({
               onAllowApproval={onAllowApprovalBubble}
               onDenyApproval={onDenyApprovalBubble}
               onConfirmIntent={onConfirmIntentBubble}
+              onRefineIntent={onRefineIntentBubble}
               onAcceptRecommendation={onAcceptRecommendationBubble}
               onIgnoreRecommendation={onIgnoreRecommendationBubble}
             />

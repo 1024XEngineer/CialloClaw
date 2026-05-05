@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
 import styled from "styled-components";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, X } from "lucide-react";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallInputBarMode } from "../shellBall.types";
 
@@ -11,8 +11,12 @@ type ShellBallInputBarProps = {
   value: string;
   hasPendingFiles?: boolean;
   focusToken?: number;
+  label?: string;
+  placeholder?: string;
+  auxiliaryAction?: "attach" | "cancel";
   onValueChange: (value: string) => void;
   onAttachFile: () => void;
+  onCancel?: () => void;
   onSubmit: () => void;
   onFocusChange: (focused: boolean) => void;
   onResizeStateChange?: (resizing: boolean) => void;
@@ -35,8 +39,12 @@ export function ShellBallInputBar({
   value,
   hasPendingFiles = false,
   focusToken = 0,
+  label = SHELL_BALL_INPUT_LABEL,
+  placeholder,
+  auxiliaryAction = "attach",
   onValueChange,
   onAttachFile,
+  onCancel,
   onSubmit,
   onFocusChange,
   onResizeStateChange: _onResizeStateChange = () => {},
@@ -54,6 +62,7 @@ export function ShellBallInputBar({
   const isVoice = mode === "voice";
   const buttonsDisabled = isHidden || isReadonly || isVoice;
   const submitDisabled = !isInteractive || (trimmedValue === "" && !hasPendingFiles);
+  const auxiliaryActionLabel = auxiliaryAction === "cancel" ? "Cancel intent correction" : "Attach file";
 
   useLayoutEffect(() => {
     const field = inputRef.current;
@@ -166,10 +175,10 @@ export function ShellBallInputBar({
           readOnly={isHidden || isReadonly || isVoice}
           tabIndex={isInteractive ? 0 : -1}
           aria-label="Shell-ball input"
-          placeholder={isVoice ? "Voice capture is active" : ""}
+          placeholder={isVoice ? "Voice capture is active" : placeholder ?? ""}
           rows={1}
         />
-        <span>{SHELL_BALL_INPUT_LABEL}</span>
+        <span>{label}</span>
         <i />
       </div>
       <div className="shell-ball-uiverse-actions">
@@ -177,11 +186,13 @@ export function ShellBallInputBar({
           type="button"
           className="shell-ball-uiverse-action"
           data-shell-ball-interactive="true"
-          onClick={onAttachFile}
+          onClick={auxiliaryAction === "cancel" ? onCancel : onAttachFile}
           disabled={buttonsDisabled}
-          aria-label="Attach file"
+          aria-label={auxiliaryActionLabel}
         >
-          <Paperclip className="shell-ball-uiverse-action-icon" />
+          {auxiliaryAction === "cancel"
+            ? <X className="shell-ball-uiverse-action-icon" />
+            : <Paperclip className="shell-ball-uiverse-action-icon" />}
         </button>
         <button
           type="button"
