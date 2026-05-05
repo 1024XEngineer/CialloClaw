@@ -4895,6 +4895,44 @@ test("shell-ball intent confirmation bubbles render the intent chip plus inline 
   assert.doesNotMatch(markup, /data-bubble-action="delete"/);
 });
 
+test("shell-ball intent confirmation bubbles disable inline actions while correction submit is in flight", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "confirming_intent",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-intent-confirm-busy-1",
+            task_id: "task-intent-confirm-busy-1",
+            type: "intent_confirm",
+            text: "Should I continue with a rewrite?",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-30T09:10:00.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+            intentConfirm: {
+              intentName: "rewrite",
+              intentLabel: "Rewrite",
+              status: "submitting",
+            },
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+      onConfirmIntentBubble() {},
+      onRefineIntentBubble() {},
+      onDeleteBubble() {},
+      onPinBubble() {},
+    }),
+  );
+
+  assert.equal(markup.match(/data-bubble-action="confirm_intent"/g)?.length, 1);
+  assert.equal(markup.match(/data-bubble-action="refine_intent"/g)?.length, 1);
+  assert.equal(markup.match(/disabled=""/g)?.length, 2);
+});
+
 test("shell-ball coordinator bubble actions pin and delete local items", () => {
   const sourceItems: ShellBallBubbleItem[] = [
     {
@@ -7672,13 +7710,21 @@ test("shell-ball confirm buttons stay on the formal confirm path while borrowed 
   assert.match(coordinatorSource, /pageContext: activeIntentCorrection\.pageContext,/);
   assert.match(coordinatorSource, /disableForegroundContextEnrichment: true,/);
   assert.match(coordinatorSource, /const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem\(\{/);
+  assert.match(coordinatorSource, /const pendingIntentCorrectionTaskIdsRef = useRef\(new Set<string>\(\)\);/);
   assert.match(coordinatorSource, /getConversationSessionIdForTask\(normalizedTaskId\)/);
   assert.match(coordinatorSource, /sessionIdOverride: intentBubble\?\.desktop\.intentConfirm\?\.sessionId,/);
   assert.match(coordinatorSource, /pageContextOverride: intentBubble\?\.desktop\.intentConfirm\?\.pageContext,/);
   assert.match(coordinatorSource, /const carriedPageContext = currentIntentCorrection\?\.taskId === normalizedTaskId/);
   assert.match(coordinatorSource, /\?\? carriedPageContext/);
+  assert.match(
+    coordinatorSource,
+    /setShellBallIntentConfirmStatus\(\s*currentItems,\s*activeIntentCorrection\.taskId,\s*"submitting",?\s*\)/,
+  );
   assert.match(coordinatorSource, /const continuedOriginalTask = result\.task\.task_id === activeIntentCorrection\.taskId;/);
   assert.match(coordinatorSource, /if \(continuedOriginalTask\) \{\s*nextItems = setShellBallIntentConfirmBubbleHidden\(/s);
+  assert.match(coordinatorSource, /pendingIntentCorrectionTaskIdsRef\.current\.delete\(activeIntentCorrection\.taskId\);/);
+  assert.match(coordinatorSource, /pendingIntentCorrectionTaskIdsRef\.current\.has\(normalizedTaskId\)/);
+  assert.match(bubbleMessageSource, /disabled=\{intentConfirmBusy\}/);
   assert.doesNotMatch(correctionSubmitPrefix, /bindTaskToBubbleTurn\(activeIntentCorrection\.taskId, turnIndex\);/);
   assert.doesNotMatch(correctionSubmitPrefix, /setShellBallIntentConfirmBubbleHidden\(currentItems, activeIntentCorrection\.taskId, true\)/);
   assert.doesNotMatch(coordinatorSource, /const correctedIntent = parseShellBallIntentCorrection\(submittedText\);/);

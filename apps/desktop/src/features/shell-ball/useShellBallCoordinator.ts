@@ -1008,6 +1008,7 @@ export function createShellBallAgentBubbleItem(
       ? {
           intentName: result.task.intent.name,
           intentLabel: formatShellBallIntentLabel(result.task.intent.name),
+          status: "idle" as const,
           sessionId: normalizedTaskSessionId,
           pageContext: normalizedTaskSessionId
             ? getConversationPageContextForSession(normalizedTaskSessionId)
@@ -1190,6 +1191,39 @@ function setShellBallInlineApprovalState(
   );
 }
 
+function setShellBallIntentConfirmStatus(
+  items: ShellBallBubbleItem[],
+  taskId: string,
+  status: "idle" | "submitting",
+): ShellBallBubbleItem[] {
+  let changed = false;
+
+  const nextItems = items.map((item) => {
+    if (item.role !== "agent" || item.bubble.type !== "intent_confirm" || item.bubble.task_id.trim() !== taskId) {
+      return item;
+    }
+
+    const currentIntentConfirm = item.desktop.intentConfirm;
+    if (currentIntentConfirm === undefined || currentIntentConfirm.status === status) {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      desktop: {
+        ...item.desktop,
+        intentConfirm: {
+          ...currentIntentConfirm,
+          status,
+        },
+      },
+    };
+  });
+
+  return changed ? nextItems : items;
+}
+
 export function applyShellBallBubbleAction(
   items: ShellBallBubbleItem[],
   payload: Pick<ShellBallBubbleActionPayload, "action" | "bubbleId">,
@@ -1303,6 +1337,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   // in-flight clicks so repeat presses cannot dispatch duplicate
   // `agent.task.confirm` calls before the bubble is retired.
   const pendingIntentDecisionTaskIdsRef = useRef(new Set<string>());
+  // Borrowed-input intent corrections must also stay task-scoped while their
+  // continuation request is in flight so the original confirm bubble cannot be
+  // clicked into a conflicting second action before the backend responds.
+  const pendingIntentCorrectionTaskIdsRef = useRef(new Set<string>());
   const activeShellBallTaskIdRef = useRef<string | null>(null);
   const activeShellBallTaskIntentNameRef = useRef<string | null>(null);
   const activeShellBallTaskStatusRef = useRef<TaskUpdatedNotification["status"] | null>(null);
@@ -3158,6 +3196,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         const activeIntentCorrection = intentCorrectionRef.current;
 
         if (activeIntentCorrection !== null) {
+          if (pendingIntentCorrectionTaskIdsRef.current.has(activeIntentCorrection.taskId)) {
+            break;
+          }
+
+          pendingIntentCorrectionTaskIdsRef.current.add(activeIntentCorrection.taskId);
           const createdAt = new Date().toISOString();
           const turnIndex = allocateBubbleTurnIndex();
           const userBubbleItem = createShellBallTextBubbleItem({
@@ -3178,7 +3221,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           });
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
-              ...currentItems,
+              ...setShellBallIntentConfirmStatus(currentItems, activeIntentCorrection.taskId, "submitting"),
               userBubbleItem,
               pendingAgentBubbleItem,
             ]),
@@ -3228,6 +3271,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                   activeIntentCorrection.taskId,
                   true,
                 );
+              } else {
+                nextItems = setShellBallIntentConfirmStatus(
+                  nextItems,
+                  activeIntentCorrection.taskId,
+                  "idle",
+                );
               }
 
               return replaceShellBallPendingBubble(
@@ -3266,7 +3315,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               );
 
               return replaceShellBallPendingBubble(
-                setShellBallIntentConfirmBubbleHidden(nextItems, activeIntentCorrection.taskId, false),
+                setShellBallIntentConfirmStatus(
+                  setShellBallIntentConfirmBubbleHidden(nextItems, activeIntentCorrection.taskId, false),
+                  activeIntentCorrection.taskId,
+                  "idle",
+                ),
                 pendingAgentBubbleItem.bubble.bubble_id,
                 createShellBallTaskErrorBubbleItem({
                   createdAt: new Date().toISOString(),
@@ -3279,6 +3332,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             });
             revealBubbleRegion();
           } finally {
+            pendingIntentCorrectionTaskIdsRef.current.delete(activeIntentCorrection.taskId);
             finishPendingTaskRegistration();
           }
 
@@ -3609,7 +3663,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const handleConfirmIntentBubble = useCallback((taskId: string) => {
     const normalizedTaskId = taskId.trim();
 
-    if (normalizedTaskId === "") {
+    if (
+      normalizedTaskId === ""
+      || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)
+      || pendingIntentCorrectionTaskIdsRef.current.has(normalizedTaskId)
+    ) {
       return;
     }
 
@@ -3629,7 +3687,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const handleRefineIntentBubble = useCallback((taskId: string) => {
     const normalizedTaskId = taskId.trim();
 
-    if (normalizedTaskId === "") {
+    if (
+      normalizedTaskId === ""
+      || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)
+      || pendingIntentCorrectionTaskIdsRef.current.has(normalizedTaskId)
+    ) {
       return;
     }
 

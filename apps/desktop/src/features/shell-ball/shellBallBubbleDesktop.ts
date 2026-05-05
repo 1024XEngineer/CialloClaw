@@ -45,6 +45,7 @@ export type ShellBallBubbleInlineRecommendationState = {
 export type ShellBallBubbleIntentConfirmState = {
   intentName: string;
   intentLabel: string;
+  status?: "idle" | "submitting";
   sessionId?: string;
   pageContext?: PageContext;
 };

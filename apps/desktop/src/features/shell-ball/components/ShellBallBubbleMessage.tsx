@@ -33,6 +33,7 @@ export function ShellBallBubbleMessage({
   const inlineRecommendation = item.role === "agent" ? item.desktop.inlineRecommendation : undefined;
   const intentConfirm = item.role === "agent" ? item.desktop.intentConfirm : undefined;
   const inlineApprovalBusy = inlineApproval?.status === "submitting";
+  const intentConfirmBusy = intentConfirm?.status === "submitting";
   const shouldShowInlineApprovalActions =
     inlineApproval !== undefined && onAllowApproval !== undefined && onDenyApproval !== undefined;
   const shouldShowInlineRecommendationActions =
@@ -164,6 +165,7 @@ export function ShellBallBubbleMessage({
               data-bubble-action="refine_intent"
               data-bubble-id={bubbleId}
               aria-label="Modify intent"
+              disabled={intentConfirmBusy}
               onClick={() => {
                 onRefineIntent?.(taskId);
               }}
@@ -176,6 +178,7 @@ export function ShellBallBubbleMessage({
               data-bubble-action="confirm_intent"
               data-bubble-id={bubbleId}
               aria-label="Confirm intent"
+              disabled={intentConfirmBusy}
               onClick={() => {
                 onConfirmIntent?.(taskId);
               }}
