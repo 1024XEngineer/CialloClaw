@@ -20,6 +20,15 @@ func attachedBrowserInput() map[string]any {
 	}
 }
 
+func attachedBrowserInputWithoutTarget() map[string]any {
+	return map[string]any{
+		"attach": map[string]any{
+			"mode":         "cdp",
+			"browser_kind": "chrome",
+		},
+	}
+}
+
 type stubPlaywrightClient struct {
 	readResult       tools.BrowserPageReadResult
 	searchResult     tools.BrowserPageSearchResult
@@ -300,7 +309,7 @@ func TestBrowserAttachToolsExecuteSuccess(t *testing.T) {
 		t.Fatalf("unexpected browser_navigate result=%+v err=%v", navigateResult, err)
 	}
 
-	tabsResult, err := NewBrowserTabsListTool().Execute(context.Background(), execCtx, attachedBrowserInput())
+	tabsResult, err := NewBrowserTabsListTool().Execute(context.Background(), execCtx, attachedBrowserInputWithoutTarget())
 	if err != nil || tabsResult.SummaryOutput["tab_count"] != 2 {
 		t.Fatalf("unexpected browser_tabs_list result=%+v err=%v", tabsResult, err)
 	}
@@ -324,8 +333,11 @@ func TestBrowserAttachToolsValidateAttachContract(t *testing.T) {
 	if err := NewBrowserAttachCurrentTool().Validate(map[string]any{}); err == nil {
 		t.Fatal("expected browser_attach_current validate to fail without attach")
 	}
-	if err := NewBrowserSnapshotTool().Validate(map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{}}}); err == nil {
-		t.Fatal("expected browser_snapshot validate to fail without target filters")
+	if err := NewBrowserSnapshotTool().Validate(attachedBrowserInputWithoutTarget()); err != nil {
+		t.Fatalf("expected browser_snapshot validate to allow attach without target filters, got %v", err)
+	}
+	if err := NewBrowserTabsListTool().Validate(attachedBrowserInputWithoutTarget()); err != nil {
+		t.Fatalf("expected browser_tabs_list validate to allow attach without target filters, got %v", err)
 	}
 	if err := NewBrowserNavigateTool().Validate(attachedBrowserInput()); err == nil {
 		t.Fatal("expected browser_navigate validate to require url")

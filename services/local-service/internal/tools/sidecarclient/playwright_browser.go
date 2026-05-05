@@ -377,8 +377,8 @@ func attachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, err
 		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be one of chrome or edge")
 	}
 	targetInput, ok := attachInput["target"].(map[string]any)
-	if !ok || len(targetInput) == 0 {
-		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.target must be an object")
+	if !ok {
+		targetInput = nil
 	}
 	target := tools.BrowserAttachTarget{
 		URL:           strings.TrimSpace(stringValueMap(targetInput, "url")),
@@ -387,9 +387,6 @@ func attachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, err
 	}
 	if _, exists := targetInput["page_index"]; exists && target.PageIndex == nil {
 		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.target.page_index must be a non-negative integer")
-	}
-	if target.URL == "" && target.TitleContains == "" && target.PageIndex == nil {
-		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.target must include at least one of url, title_contains, or page_index")
 	}
 	return tools.BrowserAttachConfig{
 		Mode:        mode,
