@@ -1411,13 +1411,17 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
+    const currentIntentCorrection = intentCorrectionRef.current;
     const resolvedSessionId = input.sessionIdOverride?.trim()
       || getConversationSessionIdForTask(normalizedTaskId);
     // Intent correction is task-scoped follow-up input, so it must stay pinned
     // to the target task instead of inheriting whichever foreground page is
     // active when the user clicks "Modify intent" or submits the borrowed draft.
+    const carriedPageContext = currentIntentCorrection?.taskId === normalizedTaskId
+      ? currentIntentCorrection.pageContext
+      : undefined;
     const resolvedPageContext = input.pageContextOverride
-      ?? intentCorrectionRef.current?.pageContext
+      ?? carriedPageContext
       ?? (resolvedSessionId ? getConversationPageContextForSession(resolvedSessionId) : undefined);
 
     setIntentCorrection({
@@ -1427,7 +1431,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       sessionId: resolvedSessionId,
       ...(resolvedPageContext ? { pageContext: { ...resolvedPageContext } } : {}),
       savedInputValue: input.savedInputValueOverride
-        ?? intentCorrectionRef.current?.savedInputValue
+        ?? currentIntentCorrection?.savedInputValue
         ?? snapshotRef.current.inputValue,
     });
     handlersRef.current.setInputValue(input.draftOverride ?? "");
@@ -3156,28 +3160,26 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         if (activeIntentCorrection !== null) {
           const createdAt = new Date().toISOString();
           const turnIndex = allocateBubbleTurnIndex();
+          const userBubbleItem = createShellBallTextBubbleItem({
+            role: "user",
+            text: submittedText,
+            bubbleType: "result",
+            createdAt,
+            turnIndex,
+            turnPhase: 0,
+          });
           const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
             createdAt,
-            taskId: activeIntentCorrection.taskId,
             turnIndex,
             turnPhase: 1,
           });
           exitIntentCorrectionMode({
             refocus: false,
           });
-          bindTaskToBubbleTurn(activeIntentCorrection.taskId, turnIndex);
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
-              ...setShellBallIntentConfirmBubbleHidden(currentItems, activeIntentCorrection.taskId, true),
-              createShellBallTextBubbleItem({
-                role: "user",
-                text: submittedText,
-                bubbleType: "result",
-                createdAt,
-                taskId: activeIntentCorrection.taskId,
-                turnIndex,
-                turnPhase: 0,
-              }),
+              ...currentItems,
+              userBubbleItem,
               pendingAgentBubbleItem,
             ]),
           );
@@ -3206,16 +3208,37 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             }
 
             registerShellBallTask(result.task.task_id, turnIndex, result.task.status, result.task.intent?.name ?? null);
-            setBubbleItems((currentItems) =>
-              replaceShellBallPendingBubble(
-                currentItems,
+            const continuedOriginalTask = result.task.task_id === activeIntentCorrection.taskId;
+            setBubbleItems((currentItems) => {
+              let nextItems = currentItems.map((item) =>
+                item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+                  ? {
+                      ...item,
+                      bubble: {
+                        ...item.bubble,
+                        task_id: result.task.task_id,
+                      },
+                    }
+                  : item,
+              );
+
+              if (continuedOriginalTask) {
+                nextItems = setShellBallIntentConfirmBubbleHidden(
+                  nextItems,
+                  activeIntentCorrection.taskId,
+                  true,
+                );
+              }
+
+              return replaceShellBallPendingBubble(
+                nextItems,
                 pendingAgentBubbleItem.bubble.bubble_id,
                 createShellBallAgentBubbleItem(result, new Date().toISOString(), {
                   turnIndex,
                   turnPhase: 1,
                 }),
-              ),
-            );
+              );
+            });
             revealBubbleRegion();
             void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
           } catch (error) {
@@ -3229,9 +3252,21 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               sessionIdOverride: activeIntentCorrection.sessionId,
               pageContextOverride: activeIntentCorrection.pageContext,
             });
-            setBubbleItems((currentItems) =>
-              replaceShellBallPendingBubble(
-                setShellBallIntentConfirmBubbleHidden(currentItems, activeIntentCorrection.taskId, false),
+            setBubbleItems((currentItems) => {
+              const nextItems = currentItems.map((item) =>
+                item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+                  ? {
+                      ...item,
+                      bubble: {
+                        ...item.bubble,
+                        task_id: activeIntentCorrection.taskId,
+                      },
+                    }
+                  : item,
+              );
+
+              return replaceShellBallPendingBubble(
+                setShellBallIntentConfirmBubbleHidden(nextItems, activeIntentCorrection.taskId, false),
                 pendingAgentBubbleItem.bubble.bubble_id,
                 createShellBallTaskErrorBubbleItem({
                   createdAt: new Date().toISOString(),
@@ -3240,8 +3275,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                   turnIndex,
                   turnPhase: 1,
                 }),
-              ),
-            );
+              );
+            });
             revealBubbleRegion();
           } finally {
             finishPendingTaskRegistration();

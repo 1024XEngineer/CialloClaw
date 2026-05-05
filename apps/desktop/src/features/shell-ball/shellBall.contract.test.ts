@@ -7648,6 +7648,10 @@ test("shell-ball confirm buttons stay on the formal confirm path while borrowed 
     "utf8",
   );
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
+  const correctionBranchMatch = coordinatorSource.match(/if \(activeIntentCorrection !== null\) \{([\s\S]*?)\n\s*break;\n\s*\}/);
+  assert.ok(correctionBranchMatch);
+  const correctionBranchSource = correctionBranchMatch[1] ?? "";
+  const correctionSubmitPrefix = correctionBranchSource.split("const result = await submitTextInput({", 1)[0] ?? "";
 
   assert.match(appSource, /onConfirmIntentBubble=\{handleCoordinatorConfirmIntentBubble\}/);
   assert.match(appSource, /onRefineIntentBubble=\{handleCoordinatorRefineIntentBubble\}/);
@@ -7671,6 +7675,12 @@ test("shell-ball confirm buttons stay on the formal confirm path while borrowed 
   assert.match(coordinatorSource, /getConversationSessionIdForTask\(normalizedTaskId\)/);
   assert.match(coordinatorSource, /sessionIdOverride: intentBubble\?\.desktop\.intentConfirm\?\.sessionId,/);
   assert.match(coordinatorSource, /pageContextOverride: intentBubble\?\.desktop\.intentConfirm\?\.pageContext,/);
+  assert.match(coordinatorSource, /const carriedPageContext = currentIntentCorrection\?\.taskId === normalizedTaskId/);
+  assert.match(coordinatorSource, /\?\? carriedPageContext/);
+  assert.match(coordinatorSource, /const continuedOriginalTask = result\.task\.task_id === activeIntentCorrection\.taskId;/);
+  assert.match(coordinatorSource, /if \(continuedOriginalTask\) \{\s*nextItems = setShellBallIntentConfirmBubbleHidden\(/s);
+  assert.doesNotMatch(correctionSubmitPrefix, /bindTaskToBubbleTurn\(activeIntentCorrection\.taskId, turnIndex\);/);
+  assert.doesNotMatch(correctionSubmitPrefix, /setShellBallIntentConfirmBubbleHidden\(currentItems, activeIntentCorrection\.taskId, true\)/);
   assert.doesNotMatch(coordinatorSource, /const correctedIntent = parseShellBallIntentCorrection\(submittedText\);/);
 });
 
