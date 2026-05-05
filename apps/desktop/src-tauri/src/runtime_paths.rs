@@ -63,6 +63,11 @@ impl DesktopRuntimePaths {
         self.runtime_root.join("temp")
     }
 
+    /// Returns the runtime data directory used by local-service storage.
+    pub fn data_dir(&self) -> PathBuf {
+        self.runtime_root.join("data")
+    }
+
     /// Returns the trusted runtime subroot that desktop open/reveal flows may
     /// expose to the renderer for transient runtime-managed files.
     pub fn local_open_runtime_root(&self) -> PathBuf {
@@ -225,6 +230,18 @@ mod tests {
         assert_eq!(
             runtime_paths.workspace_root(),
             Path::new("D:/CustomWorkspace")
+        );
+    }
+
+    #[test]
+    fn data_dir_stays_under_runtime_root() {
+        let runtime_paths = DesktopRuntimePaths::from_runtime_root(
+            Path::new("C:/Users/test/AppData/Local/CialloClaw").to_path_buf(),
+        );
+
+        assert_eq!(
+            runtime_paths.data_dir(),
+            Path::new("C:/Users/test/AppData/Local/CialloClaw/data")
         );
     }
 }

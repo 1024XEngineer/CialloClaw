@@ -217,7 +217,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 4.6 返回规则
 
-- 任务类接口：统一返回 `task`，按需附带 `delivery_result`、`bubble_message`
+- 任务类接口：统一返回 `task`，按需附带 `delivery_result`、`bubble_message`；`agent.input.submit` 对无任务锚点的纯社交 / 闲聊输入可返回 `task = null`
 - 列表类接口：统一返回 `items` + `page`
 - 安全类接口：统一返回 `approval_request / authorization_record / audit_record / recovery_point`，按需附带 `impact_scope`
 - 设置类接口：统一返回 `effective_settings` 或 `setting_item`、`apply_mode`、`need_restart`
@@ -600,9 +600,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **系统处理**：
   - 统一承接语音转写文本和轻量输入文本
   - 结合当前页面、选中文本、附带文件做上下文识别
-  - 创建 `task`，并直接进入处理或等待必要补充输入
+  - 对正式工作请求创建或续接 `task`，并直接进入处理或等待必要补充输入
+  - 对无任务锚点的纯社交 / 闲聊输入，可仅返回脱离 `task` 的轻量气泡
 - **入参**：会话信息、触发来源、输入内容、上下文、语音元信息、执行偏好
-- **出参**：任务对象、气泡消息、按需附带正式交付结果
+- **出参**：任务对象或 `null`、气泡消息、按需附带正式交付结果
 
 ### agent.input.submit 入参说明
 
@@ -644,6 +645,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
+- 当普通文本被判定为无任务锚点的纯社交 / 闲聊输入时，后端可返回 `data.task = null`、`data.delivery_result = null` 与 `task_id` 为空的 `bubble_message`；前端只能把它当作轻量承接反馈，不得写入正式任务链、任务详情或正式交付出口。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 - 若同一 `session` 内只有一个 `waiting_input / confirming_intent` 任务，普通文本补充可续接到该任务；`options.confirm_required = true` 只表示本次补充后仍需确认，不应把普通文本补充机械拆成新 task。
 - 文件、选区、错误等结构化补充证据若要续接旧 task，仍必须存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage。
@@ -700,17 +702,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
-| `data.task.task_id`      | 新建任务 ID                      |
-| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
-| `data.task.title`        | 任务标题                         |
-| `data.task.source_type`  | 任务来源类型                     |
-| `data.task.status`       | 当前任务状态                     |
-| `data.task.current_step` | 当前步骤                         |
+| `data.task`              | 正式任务对象；纯社交 / 闲聊输入可返回 `null` |
+| `data.task.task_id`      | 新建或续接任务 ID，仅当 `data.task` 非空时存在 |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID，仅当 `data.task` 非空时存在 |
+| `data.task.title`        | 任务标题，仅当 `data.task` 非空时存在 |
+| `data.task.source_type`  | 任务来源类型，仅当 `data.task` 非空时存在 |
+| `data.task.status`       | 当前任务状态，仅当 `data.task` 非空时存在 |
+| `data.task.current_step` | 当前步骤，仅当 `data.task` 非空时存在 |
 | `data.bubble_message`    | 气泡承接内容                     |
 | `data.delivery_result`   | 若后端已直接完成，可返回正式交付 |
 | `meta.server_time`       | 服务端响应时间                   |
 
 ### agent.input.submit 出参示例
+
+正式任务请求示例：
 
 ```json
 {
@@ -731,6 +736,31 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_001",
         "type": "status",
         "text": "已接收你的输入，正在整理当前页面内容。"
+      },
+      "delivery_result": null
+    },
+    "meta": {
+      "server_time": "2026-04-07T10:20:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+纯社交 / 闲聊输入示例：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_input_chat_001",
+  "result": {
+    "data": {
+      "task": null,
+      "bubble_message": {
+        "bubble_id": "bubble_chat_001",
+        "task_id": "",
+        "type": "result",
+        "text": "你好，我在。"
       },
       "delivery_result": null
     },
@@ -3667,6 +3697,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
 - 打包版默认 `general.download.workspace_path` 会解析为用户本机的 `AppLocalData/CialloClaw/workspace`，历史 `workspace` 相对占位值会在 settings snapshot 读取时迁移到该绝对目录。
 - 打包版默认 `task_automation.task_sources` 会解析为 `${workspace_path}/todos`；settings snapshot 读取时仅会把历史默认占位值（`workspace/todos` 或旧的 `D:/workspace/todos`）迁移到该绝对目录，用户自定义的 `workspace/...` 多根来源会保持原样。
+- 桌面宿主 `desktop_get_runtime_defaults` 会同时暴露当前运行时 `data_path`，用于控制面板展示本地存储位置并打开正式 `data` 目录。
 - `general.download.workspace_path` 当前不会热重建 bootstrap 时已经绑定的 workspace runtime（例如文件系统、执行后端与 execution workspace）；更新该字段会写入正式 settings snapshot，并返回 `apply_mode = restart_required` 与 `need_restart = true`，用于显式提示“重启后端后生效”。
 - 桌面宿主侧 `desktop_open_local_path`、`desktop_reveal_local_path` 只允许使用当前 bootstrap 生效的 `workspace root` 或宿主明确白名单的 runtime 子目录（当前仅接受 `temp/...` 前缀，并解析到 runtime temp 目录）；source-note 路径解析允许使用当前 `workspace root` 或宿主 `runtime root`。这些路径解析都不再回退到编译时 repo root，也不会因为待重启的 `workspace_path` 草稿而漂移本地打开范围。
 - 仪表盘 `trust_summary.workspace_path` 与 `out_of_workspace` 判断展示的是当前运行时真实生效的 workspace 根目录，而不是待重启后才会生效的 settings 草稿值。

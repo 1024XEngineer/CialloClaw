@@ -306,8 +306,10 @@ export async function submitTextInput(input: SubmitTextInputParams) {
 
   try {
     const result = await rpcMethods.submitInput(enrichedParams);
-    rememberConversationSessionFromTask(result.task);
-    rememberConversationPageContextFromTask(result.task, enrichedParams.context.page);
+    if (result.task) {
+      rememberConversationSessionFromTask(result.task);
+      rememberConversationPageContextFromTask(result.task, enrichedParams.context.page);
+    }
     recordMirrorConversationSuccess(enrichedParams, result);
     return result;
   } catch (error) {

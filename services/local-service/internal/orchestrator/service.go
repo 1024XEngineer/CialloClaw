@@ -33,6 +33,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -54,6 +55,8 @@ const (
 	executionSegmentInitial = "initial"
 	executionSegmentResume  = "resume"
 	executionSegmentRestart = "restart"
+	subjectPreviewMaxLength = 24
+	resultPreviewMaxLength  = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
@@ -321,6 +324,12 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		return nil, err
 	} else if handled {
 		return handledResponse, nil
+	}
+	if decision, ok := s.routeUnanchoredSubmitInput(context.Background(), snapshot, suggestion, confirmRequired); ok {
+		if decision.Route == inputRouteSocialChat {
+			return s.socialChatInputResponse(decision), nil
+		}
+		suggestion = applyInputRouteDecision(suggestion, decision)
 	}
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
 	if !suggestion.RequiresConfirm {
@@ -624,7 +633,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 }
 
 func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
-	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), subjectPreviewMaxLength)
 }
 
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
@@ -732,9 +741,9 @@ func isClipScreenSourcePath(pathValue string) bool {
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
+		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
 	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
@@ -981,7 +990,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	snapshot := snapshotFromTask(updatedTask)
-	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
 	if err != nil {
@@ -5975,9 +5983,9 @@ func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any
 	return merged
 }
 
-func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, error) {
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
 	if s.memory == nil {
-		return nil, memory.ErrStoreNotConfigured
+		return nil, nil, memory.ErrStoreNotConfigured
 	}
 	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
 		TaskID: taskID,
@@ -5986,13 +5994,13 @@ func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot
 		Limit:  memory.DefaultSearchLimit,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	persistedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
 	if err := s.memory.WriteRetrievalHits(context.Background(), persistedHits); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return mirrorReferencesFromRetrievalHits(persistedHits), nil
+	return mirrorReferencesFromRetrievalHits(persistedHits), persistedHits, nil
 }
 
 func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
@@ -6179,24 +6187,59 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 // debug, or storage-backed views can explain what memory lookup the task was
 // supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
-	readPlans := []map[string]any{
-		{
-			"kind":           "retrieval",
-			"backend":        s.memory.RetrievalBackend(),
-			"task_id":        taskID,
-			"run_id":         runID,
-			"query":          memoryQueryFromSnapshot(snapshot),
-			"reason":         "任务开始前准备记忆召回",
-			"intent_name":    stringValue(taskIntent, "name", "summarize"),
-			"selection_text": snapshot.SelectionText,
-			"input_text":     snapshot.Text,
-			"source_type":    snapshot.Trigger,
-		},
+	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
+	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
+	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
+	if err == nil {
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
+	}
+	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
+	readPlan := map[string]any{
+		"kind":           "retrieval",
+		"task_id":        taskID,
+		"run_id":         runID,
+		"query":          memoryQueryFromSnapshot(snapshot),
+		"reason":         "任务开始前准备记忆召回",
+		"intent_name":    stringValue(taskIntent, "name", "summarize"),
+		"selection_text": snapshot.SelectionText,
+		"input_text":     snapshot.Text,
+		"source_type":    snapshot.Trigger,
+	}
+	if memoryService != nil {
+		readPlan["backend"] = memoryService.RetrievalBackend()
+	}
+	if contextItems := retrievalContextItems(hits); len(contextItems) > 0 {
+		readPlan["retrieval_context"] = contextItems
 	}
 
-	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
-	references, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
-	s.syncTaskReadMirrorReferences(taskID, references, err)
+	return []map[string]any{readPlan}
+}
+
+func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	items := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
+		summary := strings.TrimSpace(hit.Summary)
+		if summary == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"memory_id": hit.MemoryID,
+			"source":    hit.Source,
+			"summary":   summary,
+			"score":     hit.Score,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }
 
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
@@ -6387,9 +6430,9 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
 	}
 	if len(perceptionSummary) == 0 {
-		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, resultPreviewMaxLength))
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, resultPreviewMaxLength))
 }
 
 // resultSpecFromIntent returns the default result title, preview text, and
@@ -7272,10 +7315,7 @@ func intValue(values map[string]any, key string, fallback int) int {
 // truncateText trims text to a fixed length for recommendation and memory
 // query surfaces.
 func truncateText(value string, maxLength int) string {
-	if len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength] + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
@@ -7338,6 +7378,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
+		MemoryReadPlans:      cloneMapSlice(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,
