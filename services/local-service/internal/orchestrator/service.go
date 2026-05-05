@@ -33,6 +33,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -54,6 +55,8 @@ const (
 	executionSegmentInitial = "initial"
 	executionSegmentResume  = "resume"
 	executionSegmentRestart = "restart"
+	subjectPreviewMaxLength = 24
+	resultPreviewMaxLength  = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
@@ -303,15 +306,18 @@ func (s *Service) RunEngine() *runengine.Engine {
 // waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
+	options := mapValue(params, "options")
+	confirmRequired := boolValue(options, "confirm_required", false)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: confirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
 	} else if strings.TrimSpace(resolvedSessionID) != "" {
 		params = withResolvedSessionID(params, resolvedSessionID)
 	}
-	options := mapValue(params, "options")
-	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
@@ -416,7 +422,13 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+	options := mapValue(params, "options")
+	forceConfirmRequired := boolValue(options, "confirm_required", false)
+	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent, taskContinuationOptions{
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: forceConfirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
@@ -428,8 +440,15 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
-	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
+	suggestion := s.intent.Suggest(snapshot, explicitIntent, confirmRequired)
+	fallbackConfirmRequired := confirmRequired
+	// Screen inference already carries its own authorization boundary; only an
+	// explicit caller request should turn an unavailable screen path back into
+	// intent confirmation.
+	if stringValue(suggestion.Intent, "name", "") == "screen_analyze" && !forceConfirmRequired {
+		fallbackConfirmRequired = suggestion.RequiresConfirm
+	}
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, fallbackConfirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -504,6 +523,28 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		response["delivery_result"] = nil
 	}
 	return response, nil
+}
+
+// taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.
+// Object-based task starts with their own instruction can enter the Agent Loop
+// directly, while bare objects still stop for intent confirmation.
+func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, forceConfirm bool) bool {
+	if forceConfirm {
+		return true
+	}
+	if len(explicitIntent) > 0 {
+		return false
+	}
+	return !taskStartHasExplicitGoal(snapshot)
+}
+
+func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
+	switch snapshot.InputType {
+	case "file":
+		return strings.TrimSpace(snapshot.Text) != ""
+	default:
+		return false
+	}
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
@@ -586,7 +627,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 }
 
 func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
-	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), subjectPreviewMaxLength)
 }
 
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
@@ -694,9 +735,9 @@ func isClipScreenSourcePath(pathValue string) bool {
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
+		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
 	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
@@ -943,7 +984,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	snapshot := snapshotFromTask(updatedTask)
-	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
 	if err != nil {
@@ -1539,6 +1579,9 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !taskCanAcceptExplicitSteering(task) {
+		return nil, ErrTaskStatusInvalid
+	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已记录新的补充要求，后续执行会纳入该指令。", time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.AppendSteeringMessage(task.TaskID, message, bubble)
 	if !changed {
@@ -1548,6 +1591,24 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 		"task":           taskMap(updatedTask),
 		"bubble_message": bubble,
 	}, nil
+}
+
+func taskCanAcceptExplicitSteering(task runengine.TaskRecord) bool {
+	switch task.Status {
+	case "processing":
+		// Active processing tasks can only consume steering when the running
+		// agent loop polls between rounds. Other processing paths must finish or
+		// queue a separate task instead of pretending the guidance was consumed.
+		return taskCanConsumeActiveSteering(task)
+	case "waiting_auth", "blocked":
+		// Deferred execution paths can carry explicit steering until approval or
+		// queue release resumes the task. Pending-input states are intentionally
+		// rejected so callers re-enter agent.input.submit and merge the text into
+		// the formal continuation snapshot instead of hiding it in runtime notes.
+		return true
+	default:
+		return false
+	}
 }
 
 // TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready
@@ -3134,7 +3195,7 @@ func (s *Service) drainSessionQueue(sessionID string) error {
 			"前序任务已完成，当前会话中的下一个任务开始执行。",
 			nextTask.UpdatedAt.Format(dateTimeLayout),
 		)
-		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, executionStepName(nextTask.Intent), bubble)
+		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, s.activeExecutionStepName(nextTask.Intent), bubble)
 		if !changed {
 			return ErrTaskNotFound
 		}
@@ -3476,19 +3537,65 @@ func mergeTaskLists(runtimeTasks, storageTasks []runengine.TaskRecord) []runengi
 }
 
 func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	selected := storageTask
 	if runtimeTask.UpdatedAt.After(storageTask.UpdatedAt) {
-		return runtimeTask
+		selected = runtimeTask
+	} else if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
+		selected = storageTask
+	} else if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
+		selected = runtimeTask
+	} else if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
+		selected = storageTask
 	}
-	if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
-		return storageTask
+	return taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask)
+}
+
+func taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	// Snapshot anchors are continuation evidence, not freshness state; keep the
+	// fresher task fields and only fill missing anchors from the alternate
+	// copies. A partial fresher snapshot can still carry text or files while
+	// missing the page/window anchors needed for follow-up routing.
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, runtimeTask.Snapshot)
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, storageTask.Snapshot)
+	return selected
+}
+
+func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	if isEmptySnapshot(selected) {
+		if isEmptySnapshot(fallback) {
+			return selected
+		}
+		return cloneTaskSnapshot(fallback)
 	}
-	if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
-		return runtimeTask
+	if isEmptySnapshot(fallback) {
+		return cloneTaskSnapshot(selected)
 	}
-	if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
-		return storageTask
+	merged := cloneTaskSnapshot(selected)
+	if isShellBallIntakeAnchor(merged) && !isShellBallIntakeAnchor(fallback) {
+		// Shell-ball intake context is not a task-specific anchor. Treat it as
+		// missing when another persisted copy still has the real page/window
+		// anchors needed for continuation routing.
+		merged.PageTitle = ""
+		merged.PageURL = ""
+		merged.AppName = ""
+		merged.WindowTitle = ""
 	}
-	return storageTask
+	if strings.TrimSpace(merged.PageTitle) == "" {
+		merged.PageTitle = fallback.PageTitle
+	}
+	if strings.TrimSpace(merged.PageURL) == "" {
+		merged.PageURL = fallback.PageURL
+	}
+	if strings.TrimSpace(merged.AppName) == "" {
+		merged.AppName = fallback.AppName
+	}
+	if strings.TrimSpace(merged.WindowTitle) == "" {
+		merged.WindowTitle = fallback.WindowTitle
+	}
+	if strings.TrimSpace(merged.HoverTarget) == "" {
+		merged.HoverTarget = fallback.HoverTarget
+	}
+	return merged
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
@@ -5870,9 +5977,9 @@ func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any
 	return merged
 }
 
-func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, error) {
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
 	if s.memory == nil {
-		return nil, memory.ErrStoreNotConfigured
+		return nil, nil, memory.ErrStoreNotConfigured
 	}
 	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
 		TaskID: taskID,
@@ -5881,13 +5988,13 @@ func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot
 		Limit:  memory.DefaultSearchLimit,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	persistedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
 	if err := s.memory.WriteRetrievalHits(context.Background(), persistedHits); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return mirrorReferencesFromRetrievalHits(persistedHits), nil
+	return mirrorReferencesFromRetrievalHits(persistedHits), persistedHits, nil
 }
 
 func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
@@ -6074,24 +6181,59 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 // debug, or storage-backed views can explain what memory lookup the task was
 // supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
-	readPlans := []map[string]any{
-		{
-			"kind":           "retrieval",
-			"backend":        s.memory.RetrievalBackend(),
-			"task_id":        taskID,
-			"run_id":         runID,
-			"query":          memoryQueryFromSnapshot(snapshot),
-			"reason":         "任务开始前准备记忆召回",
-			"intent_name":    stringValue(taskIntent, "name", "summarize"),
-			"selection_text": snapshot.SelectionText,
-			"input_text":     snapshot.Text,
-			"source_type":    snapshot.Trigger,
-		},
+	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
+	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
+	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
+	if err == nil {
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
+	}
+	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
+	readPlan := map[string]any{
+		"kind":           "retrieval",
+		"task_id":        taskID,
+		"run_id":         runID,
+		"query":          memoryQueryFromSnapshot(snapshot),
+		"reason":         "任务开始前准备记忆召回",
+		"intent_name":    stringValue(taskIntent, "name", "summarize"),
+		"selection_text": snapshot.SelectionText,
+		"input_text":     snapshot.Text,
+		"source_type":    snapshot.Trigger,
+	}
+	if memoryService != nil {
+		readPlan["backend"] = memoryService.RetrievalBackend()
+	}
+	if contextItems := retrievalContextItems(hits); len(contextItems) > 0 {
+		readPlan["retrieval_context"] = contextItems
 	}
 
-	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
-	references, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
-	s.syncTaskReadMirrorReferences(taskID, references, err)
+	return []map[string]any{readPlan}
+}
+
+func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	items := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
+		summary := strings.TrimSpace(hit.Summary)
+		if summary == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"memory_id": hit.MemoryID,
+			"source":    hit.Source,
+			"summary":   summary,
+			"score":     hit.Score,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }
 
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
@@ -6282,9 +6424,9 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
 	}
 	if len(perceptionSummary) == 0 {
-		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, resultPreviewMaxLength))
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, resultPreviewMaxLength))
 }
 
 // resultSpecFromIntent returns the default result title, preview text, and
@@ -7167,16 +7309,13 @@ func intValue(values map[string]any, key string, fallback int) int {
 // truncateText trims text to a fixed length for recommendation and memory
 // query surfaces.
 func truncateText(value string, maxLength int) string {
-	if len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength] + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
 // payloads.
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, executionStepName(taskIntent), "开始生成正式结果")
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
@@ -7233,6 +7372,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
+		MemoryReadPlans:      cloneMapSlice(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,
@@ -7842,6 +7982,17 @@ func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
 
 func executionStepName(taskIntent map[string]any) string {
 	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
+	}
+	return "generate_output"
+}
+
+// activeExecutionStepName records the execution step that can actually consume
+// live follow-up steering. Agent-loop intent may still fall back to prompt
+// generation, so processing tasks must not advertise a pollable loop unless the
+// executor confirms that runtime mode.
+func (s *Service) activeExecutionStepName(taskIntent map[string]any) string {
+	if s != nil && s.executor != nil && s.executor.CanConsumeActiveSteering(taskIntent) {
 		return "agent_loop"
 	}
 	return "generate_output"

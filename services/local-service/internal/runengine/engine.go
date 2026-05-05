@@ -1408,6 +1408,11 @@ func resumeStepForTask(record *TaskRecord) string {
 	if record == nil {
 		return "generate_output"
 	}
+	if currentStep := strings.TrimSpace(record.CurrentStep); currentStep != "" && currentStep != "human_in_loop" {
+		// Pause/resume must preserve the step that was actually running. Intent
+		// alone can overstate agent-loop capability after prompt fallback.
+		return currentStep
+	}
 	if stringValue(record.Intent, "name", "") == "agent_loop" {
 		return "agent_loop"
 	}
