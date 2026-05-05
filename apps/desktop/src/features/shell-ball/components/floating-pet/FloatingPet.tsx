@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { animate } from "motion";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/utils/cn";
 import styles from "./FloatingPet.module.css";
@@ -285,20 +286,43 @@ function BoneRotatedLayer({
   transitionDuration,
 }: BoneRotatedLayerProps) {
   const localPivot = resolveLocalPivot(layer.position, bonePosition);
+  const keyframes = Array.isArray(animatedRotate) ? animatedRotate : [animatedRotate];
+  const [currentRotate, setCurrentRotate] = useState<number>(keyframes[0] ?? 0);
+
+  useEffect(() => {
+    if (keyframes.length === 0) {
+      return;
+    }
+
+    setCurrentRotate(keyframes[0]);
+
+    if (keyframes.length === 1) {
+      return;
+    }
+
+    const controls = animate(keyframes[0], keyframes, {
+      duration: transitionDuration,
+      ease: "easeInOut",
+      onUpdate: setCurrentRotate,
+      repeat,
+      times,
+    });
+
+    return () => {
+      controls.stop();
+    };
+  }, [keyframes, repeat, times, transitionDuration]);
+
+  const transform = [
+    `translate(${layer.position.x} ${layer.position.y})`,
+    `translate(${localPivot.x} ${localPivot.y})`,
+    `rotate(${currentRotate})`,
+    `translate(${-localPivot.x} ${-localPivot.y})`,
+  ].join(" ");
 
   return (
-    <g transform={`translate(${layer.position.x} ${layer.position.y})`}>
-      <g transform={`translate(${localPivot.x} ${localPivot.y})`}>
-        <motion.g
-          animate={{ rotate: animatedRotate }}
-          initial={false}
-          transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
-        >
-          <g transform={`translate(${-localPivot.x} ${-localPivot.y})`}>
-            {renderCenteredImageAtOrigin(assetName, layer.scale, layer.rotation)}
-          </g>
-        </motion.g>
-      </g>
+    <g transform={transform}>
+      {renderCenteredImageAtOrigin(assetName, layer.scale, layer.rotation)}
     </g>
   );
 }
