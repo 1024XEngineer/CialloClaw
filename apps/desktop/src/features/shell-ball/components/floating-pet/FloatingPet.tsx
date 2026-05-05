@@ -259,6 +259,13 @@ function renderCenteredImageAtOrigin(assetName: FloatingPetAssetName, scale: Flo
   );
 }
 
+function resolveArtboardCenterFromRootOffset(position: FloatingPetLayerTransform["position"]) {
+  return {
+    x: ROOT_BODY_BASE_X + position.x,
+    y: ROOT_BODY_BASE_Y + position.y,
+  };
+}
+
 function resolveOpenEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
   if (eyesClosed) {
     return { opacity: 0, scaleY: 1, times: [0, 1], duration: 0.18, repeat: 0 };
@@ -372,14 +379,16 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <motion.g
-            animate={{ rotate: wingMotion.right.rotate }}
-            initial={false}
-            transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
-            transform={`translate(${floatingPetInitialLayout.rootBody.rightWing.position.x} ${floatingPetInitialLayout.rootBody.rightWing.position.y})`}
-          >
-            {renderCenteredImageAtOrigin("rightWing", floatingPetInitialLayout.rootBody.rightWing.scale, floatingPetInitialLayout.rootBody.rightWing.rotation)}
-          </motion.g>
+          <g transform={`translate(${-ROOT_BODY_BASE_X} ${-ROOT_BODY_BASE_Y})`}>
+            <motion.g
+              animate={{ rotate: wingMotion.right.rotate }}
+              initial={false}
+              transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
+              transform={`translate(${resolveArtboardCenterFromRootOffset(floatingPetInitialLayout.rootBody.rightWing.position).x} ${resolveArtboardCenterFromRootOffset(floatingPetInitialLayout.rootBody.rightWing.position).y})`}
+            >
+              {renderCenteredImageAtOrigin("rightWing", floatingPetInitialLayout.rootBody.rightWing.scale, floatingPetInitialLayout.rootBody.rightWing.rotation)}
+            </motion.g>
+          </g>
 
           <g transform={`translate(${floatingPetInitialLayout.rootBody.face.position.x} ${floatingPetInitialLayout.rootBody.face.position.y})`}>
             <g transform={`translate(${floatingPetInitialLayout.rootBody.cheek.position.x} ${floatingPetInitialLayout.rootBody.cheek.position.y})`}>
