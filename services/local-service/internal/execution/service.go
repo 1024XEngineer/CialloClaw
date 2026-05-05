@@ -1802,6 +1802,22 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 			return fmt.Sprintf("页面搜索完成，关键词 %q 共匹配 %v 处。", query, count)
 		}
 	}
+	if toolName == "browser_attach_current" || toolName == "browser_tab_focus" {
+		title := stringValue(result.SummaryOutput, "title", "")
+		if title == "" {
+			title = stringValue(result.RawOutput, "title", "")
+		}
+		if title != "" {
+			return fmt.Sprintf("已定位浏览器标签页：%s。", title)
+		}
+		return "已定位当前浏览器标签页。"
+	}
+	if toolName == "browser_tabs_list" {
+		if count, ok := result.SummaryOutput["tab_count"]; ok {
+			return fmt.Sprintf("当前浏览器共有 %v 个标签页可用。", count)
+		}
+		return "当前浏览器标签页列表已经返回。"
+	}
 	if count, ok := result.SummaryOutput["entry_count"]; ok {
 		return fmt.Sprintf("%s 执行完成，当前目录条目数：%v。", toolName, count)
 	}
