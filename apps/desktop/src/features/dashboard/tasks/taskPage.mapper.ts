@@ -93,6 +93,16 @@ export function getTaskRunwayTone(status: Task["status"]) {
   return "archive";
 }
 
+// Mirrors the backend task.steer state guard so the dashboard only enables
+// direct follow-up input when the current task can consume it.
+export function canTaskAcceptSteering(task: Task) {
+  if (task.status === "processing") {
+    return task.intent?.name === "agent_loop" && task.current_step === "agent_loop";
+  }
+
+  return task.status === "waiting_auth" || task.status === "blocked";
+}
+
 export function getTaskProgress(timeline: TaskStep[]): TaskProgressState {
   if (timeline.length === 0) {
     return {

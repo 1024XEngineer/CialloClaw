@@ -391,11 +391,11 @@ func (s failingAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.
 	return s.base.WriteAuthorizationDecision(ctx, record, approvalStatus, updatedAt)
 }
 
-func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]storage.AuthorizationRecordRecord, int, error) {
+func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]storage.AuthorizationRecordRecord, int, error) {
 	if s.base == nil {
 		return nil, 0, nil
 	}
-	return s.base.ListAuthorizationRecords(ctx, taskID, limit, offset)
+	return s.base.ListAuthorizationRecords(ctx, taskID, runID, limit, offset)
 }
 
 type countingTaskRunStore struct {
@@ -2755,6 +2755,12 @@ func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
 	if attempt := executionAttemptIndex(restartedAgainTask, legacyRestartProcessing); attempt != 3 {
 		t.Fatalf("expected fallback attempt inference to reach 3, got %d", attempt)
 	}
+
+	gatedRestartTask := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	gatedRestartProcessing := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	if segment := executionSegmentKind(gatedRestartTask, gatedRestartProcessing); segment != executionSegmentRestart {
+		t.Fatalf("expected gated restart attempt to keep restart segment, got %s", segment)
+	}
 }
 
 func TestServiceTaskControlResumeConsumesHumanLoopPendingPayload(t *testing.T) {
@@ -3071,6 +3077,483 @@ func TestServiceTaskControlResumePausedTaskDoesNotReexecute(t *testing.T) {
 	}
 	if record.PendingExecution != nil {
 		t.Fatalf("expected paused resume not to create pending execution, got %+v", record.PendingExecution)
+	}
+}
+
+func TestServiceTaskControlRestartExecutesFreshAttempt(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{output: "Restarted loop output."}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_restart_attempt",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English.",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	startedTask := startResult["task"].(map[string]any)
+	if startedTask["status"] != "completed" {
+		t.Fatalf("expected initial task to complete, got %+v", startedTask)
+	}
+	taskID := startedTask["task_id"].(string)
+	previousRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected completed task to remain in runtime")
+	}
+
+	result, err := service.TaskControl(map[string]any{"task_id": taskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "completed" || restartedTask["current_step"] != "return_result" {
+		t.Fatalf("expected restart control to execute through completion, got %+v", restartedTask)
+	}
+	restartedRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected restarted task to remain in runtime")
+	}
+	if restartedRecord.RunID == previousRecord.RunID {
+		t.Fatalf("expected restart to allocate a fresh run_id, got %s", restartedRecord.RunID)
+	}
+	if restartedRecord.ExecutionAttempt != previousRecord.ExecutionAttempt+1 {
+		t.Fatalf("expected restart attempt to increment, got before=%d after=%d", previousRecord.ExecutionAttempt, restartedRecord.ExecutionAttempt)
+	}
+	if restartedRecord.DeliveryResult == nil || restartedRecord.FinishedAt == nil {
+		t.Fatalf("expected restart execution to persist delivery and finished_at, got %+v", restartedRecord)
+	}
+	if modelClient.generateToolCallsCount < 2 {
+		t.Fatalf("expected restart to invoke executor again, got %d tool-call generations", modelClient.generateToolCallsCount)
+	}
+}
+
+func TestServiceTaskControlRestartRechecksAuthorization(t *testing.T) {
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: "Restart should wait for approval.",
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_restart_auth_unexpected",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Restart should wait for approval.",
+			}, nil
+		},
+	})
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_auth",
+		Title:       "Write restart output",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "workspace_document", "require_authorization": true}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
+
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "waiting_auth" || restartedTask["current_step"] != "waiting_authorization" {
+		t.Fatalf("expected restart to stop at authorization, got %+v", restartedTask)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected restarted task to remain in runtime")
+	}
+	if record.RunID == previousRunID {
+		t.Fatalf("expected restart authorization gate to use a fresh run_id, got %s", record.RunID)
+	}
+	if record.ExecutionAttempt != task.ExecutionAttempt+1 {
+		t.Fatalf("expected restart authorization gate to increment attempt, got before=%d after=%d", task.ExecutionAttempt, record.ExecutionAttempt)
+	}
+	if len(record.ApprovalRequest) == 0 || len(record.PendingExecution) == 0 {
+		t.Fatalf("expected restart to recreate approval state, got approval=%+v pending=%+v", record.ApprovalRequest, record.PendingExecution)
+	}
+	if record.DeliveryResult != nil || record.FinishedAt != nil {
+		t.Fatalf("expected restart to wait before delivery, got %+v", record)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("expected restart authorization gate to avoid model execution, got %d calls", modelCalls)
+	}
+	notifications, ok := service.runEngine.DrainNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected restart authorization notifications to remain available")
+	}
+	taskUpdatedCount := 0
+	approvalPendingCount := 0
+	for _, notification := range notifications {
+		switch notification.Method {
+		case "task.updated":
+			taskUpdatedCount++
+		case "approval.pending":
+			approvalPendingCount++
+		}
+		if notification.Method != "task.updated" {
+			continue
+		}
+		if status, _ := notification.Params["status"].(string); status == "processing" {
+			t.Fatalf("expected restart authorization gate to avoid transient processing notification, got %+v", notification.Params)
+		}
+	}
+	if taskUpdatedCount != 1 || approvalPendingCount != 1 {
+		t.Fatalf("expected one task.updated and one approval.pending notification, got %+v", notifications)
+	}
+}
+
+func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{output: "Queued restart output."}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_queue",
+		Title:       "Active session task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_queue",
+		Title:       "Finished task to restart",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
+
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "blocked" || restartedTask["current_step"] != "session_queue" {
+		t.Fatalf("expected restart to queue behind active session work, got %+v", restartedTask)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected queued restart to remain in runtime")
+	}
+	if record.RunID == previousRunID {
+		t.Fatalf("expected queued restart to allocate a fresh run_id, got %s", record.RunID)
+	}
+	if record.ExecutionAttempt != task.ExecutionAttempt+1 {
+		t.Fatalf("expected queued restart to increment attempt, got before=%d after=%d", task.ExecutionAttempt, record.ExecutionAttempt)
+	}
+	if modelClient.generateToolCallsCount != 0 {
+		t.Fatalf("expected queued restart not to execute while session is busy, got %d model calls", modelClient.generateToolCallsCount)
+	}
+	activeRecord, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok || activeRecord.Status != "processing" {
+		t.Fatalf("expected active session owner to keep running, got %+v ok=%v", activeRecord, ok)
+	}
+	notifications, ok := service.runEngine.DrainNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected queued restart notifications to remain available")
+	}
+	taskUpdatedCount := 0
+	sessionQueuedCount := 0
+	for _, notification := range notifications {
+		switch notification.Method {
+		case "task.updated":
+			taskUpdatedCount++
+		case "task.session_queued":
+			sessionQueuedCount++
+		}
+		if notification.Method != "task.updated" {
+			continue
+		}
+		if status, _ := notification.Params["status"].(string); status == "processing" {
+			t.Fatalf("expected queued restart to avoid transient processing notification, got %+v", notification.Params)
+		}
+	}
+	if taskUpdatedCount != 1 || sessionQueuedCount != 1 {
+		t.Fatalf("expected one task.updated and one task.session_queued notification, got %+v", notifications)
+	}
+}
+
+func TestServiceTaskControlRestartPublishesDeniedAttemptWithFreshRunID(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_deny",
+		Title:       "Denied restart task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "../secret.txt"}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
+
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "cancelled" || restartedTask["current_step"] != "risk_blocked" {
+		t.Fatalf("expected denied restart to publish the intercepted attempt, got %+v", restartedTask)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected denied restart to remain in runtime")
+	}
+	if record.RunID == previousRunID {
+		t.Fatalf("expected denied restart to retain the prepared run_id instead of cancelling the old attempt, got %s", record.RunID)
+	}
+	if record.ExecutionAttempt != task.ExecutionAttempt+1 {
+		t.Fatalf("expected denied restart to increment attempt, got before=%d after=%d", task.ExecutionAttempt, record.ExecutionAttempt)
+	}
+}
+
+func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "restart detail scope")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_detail_scope",
+		Title:       "Restart detail scope task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "yellow",
+	})
+	previousRunID := task.RunID
+	if _, ok := service.runEngine.SetPresentation(task.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "Previous attempt result",
+		"preview_text": "old preview",
+		"payload":      map[string]any{"task_id": task.TaskID},
+	}, []map[string]any{{
+		"artifact_id":      "art_restart_detail_previous",
+		"task_id":          task.TaskID,
+		"run_id":           previousRunID,
+		"artifact_type":    "generated_doc",
+		"title":            "old-result.md",
+		"path":             "workspace/old-result.md",
+		"mime_type":        "text/markdown",
+		"delivery_type":    "workspace_document",
+		"delivery_payload": map[string]any{"path": "workspace/old-result.md", "task_id": task.TaskID},
+		"created_at":       "2026-04-22T09:00:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if _, ok := service.runEngine.SetCitations(task.TaskID, []map[string]any{{
+		"citation_id":   "cit_restart_detail_previous",
+		"task_id":       task.TaskID,
+		"run_id":        previousRunID,
+		"source_type":   "file",
+		"source_ref":    "art_restart_detail_previous",
+		"label":         "previous attempt evidence",
+		"artifact_id":   "art_restart_detail_previous",
+		"artifact_type": "generated_doc",
+		"excerpt_text":  "old excerpt",
+	}}); !ok {
+		t.Fatal("expected runtime citations to update")
+	}
+	if _, ok := service.runEngine.AppendAuditData(task.TaskID, []map[string]any{{
+		"audit_id":   "audit_restart_detail_previous",
+		"task_id":    task.TaskID,
+		"run_id":     previousRunID,
+		"type":       "execution",
+		"action":     "agent_loop",
+		"summary":    "previous attempt failed",
+		"target":     "workspace/old-result.md",
+		"result":     "failed",
+		"created_at": "2026-04-22T09:00:01Z",
+		"metadata": map[string]any{
+			"failure_code":     "agent_loop_failed",
+			"failure_category": "task_execution",
+		},
+	}}, nil); !ok {
+		t.Fatal("expected runtime audit data to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_restart_detail_previous",
+		TaskID:              task.TaskID,
+		RunID:               previousRunID,
+		ArtifactType:        "generated_doc",
+		Title:               "old-result.md",
+		Path:                "workspace/old-result.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/old-result.md","task_id":"` + task.TaskID + `"}`,
+		CreatedAt:           "2026-04-22T09:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifact failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), task.TaskID, []storage.CitationRecord{{
+		CitationID:   "cit_restart_detail_previous",
+		TaskID:       task.TaskID,
+		RunID:        previousRunID,
+		SourceType:   "file",
+		SourceRef:    "art_restart_detail_previous",
+		Label:        "previous attempt evidence",
+		ArtifactID:   "art_restart_detail_previous",
+		ArtifactType: "generated_doc",
+		ExcerptText:  "old excerpt",
+		OrderIndex:   0,
+	}}); err != nil {
+		t.Fatalf("save stored citations failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_restart_detail_previous",
+		TaskID:           task.TaskID,
+		RunID:            previousRunID,
+		Type:             "workspace_document",
+		Title:            "Previous attempt result",
+		PayloadJSON:      `{"path":"workspace/old-result.md","task_id":"` + task.TaskID + `"}`,
+		PreviewText:      "old preview",
+		CreatedAt:        "2026-04-22T09:00:00Z",
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_restart_detail_previous",
+		TaskID:    task.TaskID,
+		RunID:     previousRunID,
+		Type:      "execution",
+		Action:    "agent_loop",
+		Summary:   "previous attempt failed",
+		Target:    "workspace/old-result.md",
+		Result:    "failed",
+		CreatedAt: "2026-04-22T09:00:01Z",
+	}); err != nil {
+		t.Fatalf("write stored audit record failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_restart_detail_previous",
+		TaskID:                task.TaskID,
+		RunID:                 previousRunID,
+		ApprovalID:            "appr_restart_detail_previous",
+		Decision:              "allow_once",
+		Operator:              "user",
+		CreatedAt:             "2026-04-22T09:00:02Z",
+	}); err != nil {
+		t.Fatalf("write stored authorization record failed: %v", err)
+	}
+
+	restartedTask, err := service.runEngine.ControlTask(task.TaskID, "restart", nil)
+	if err != nil {
+		t.Fatalf("restart runtime task failed: %v", err)
+	}
+	if restartedTask.RunID == previousRunID || restartedTask.ExecutionAttempt != 2 || restartedTask.Status != "processing" {
+		t.Fatalf("expected restart to allocate a fresh processing attempt, got %+v", restartedTask)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["delivery_result"] != nil {
+		t.Fatalf("expected restart detail to hide previous delivery_result, got %+v", detailResult["delivery_result"])
+	}
+	if artifacts := detailResult["artifacts"].([]map[string]any); len(artifacts) != 0 {
+		t.Fatalf("expected restart detail to hide previous artifacts, got %+v", artifacts)
+	}
+	if citations := detailResult["citations"].([]map[string]any); len(citations) != 0 {
+		t.Fatalf("expected restart detail to hide previous citations, got %+v", citations)
+	}
+	if detailResult["audit_record"] != nil {
+		t.Fatalf("expected restart detail to hide previous audit record, got %+v", detailResult["audit_record"])
+	}
+	if detailResult["authorization_record"] != nil {
+		t.Fatalf("expected restart detail to hide previous authorization record, got %+v", detailResult["authorization_record"])
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != nil || runtimeSummary["latest_failure_summary"] != nil {
+		t.Fatalf("expected restart runtime summary to clear previous failure markers, got %+v", runtimeSummary)
+	}
+	artifactListResult, err := service.TaskArtifactList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	if items := artifactListResult["items"].([]map[string]any); len(items) != 0 {
+		t.Fatalf("expected restart artifact list to hide previous artifacts, got %+v", items)
+	}
+	_, err = service.TaskArtifactOpen(map[string]any{"task_id": task.TaskID, "artifact_id": "art_restart_detail_previous"})
+	if !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("expected restart artifact open to reject previous attempt artifact, got %v", err)
+	}
+}
+
+func TestServiceRestartPreparationStaysInvisibleUntilAttemptCommits(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "restart preparation visibility")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_prepare_visibility",
+		Title:       "Restart preparation visibility task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	if _, ok := service.runEngine.SetPresentation(task.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "Previous result",
+		"preview_text": "previous preview",
+		"payload":      map[string]any{"task_id": task.TaskID},
+	}, []map[string]any{{
+		"artifact_id": "art_restart_prepare_visibility",
+		"task_id":     task.TaskID,
+		"path":        "workspace/previous.md",
+	}}); !ok {
+		t.Fatal("expected previous presentation before restart preparation")
+	}
+
+	previousTask, preparedTask, err := service.runEngine.PrepareRestart(task.TaskID, map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("prepare restart failed: %v", err)
+	}
+	if preparedTask.RunID == previousTask.RunID {
+		t.Fatalf("expected prepared restart to allocate a fresh run_id, got %s", preparedTask.RunID)
+	}
+
+	liveTask, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected live task to remain readable during restart preparation")
+	}
+	if liveTask.RunID != previousTask.RunID || liveTask.DeliveryResult == nil || len(liveTask.Artifacts) != 1 {
+		t.Fatalf("expected live task to stay on the previous finished attempt before commit, got %+v", liveTask)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get during restart preparation failed: %v", err)
+	}
+	if detailResult["delivery_result"] == nil {
+		t.Fatalf("expected task detail to keep previous delivery_result before restart commit, got %+v", detailResult)
+	}
+	if artifacts := detailResult["artifacts"].([]map[string]any); len(artifacts) != 1 {
+		t.Fatalf("expected task detail to keep previous artifacts before restart commit, got %+v", artifacts)
+	}
+
+	restartedTask, _, err := service.advanceRestartedTaskAttempt(previousTask, preparedTask)
+	if err != nil {
+		t.Fatalf("advance restarted task attempt failed: %v", err)
+	}
+	if restartedTask.RunID != preparedTask.RunID || restartedTask.ExecutionAttempt != preparedTask.ExecutionAttempt {
+		t.Fatalf("expected committed restart to publish the prepared attempt, got %+v", restartedTask)
 	}
 }
 
@@ -3575,6 +4058,11 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
+	taskRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to remain available")
+	}
+	runID := taskRecord.RunID
 
 	toolCallsResult, err := service.TaskToolCallsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
 	if err != nil {
@@ -3613,11 +4101,11 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 		t.Fatalf("expected persisted read_file runtime events, got %+v", events)
 	}
 
-	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID, "")
 	if err != nil {
 		t.Fatalf("get latest delivery result failed: %v", err)
 	}
-	if !ok || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
+	if !ok || deliveryRecord.RunID != runID || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
 		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
 	}
 
@@ -4225,7 +4713,7 @@ func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
 		t.Fatalf("security respond failed: %v", err)
 	}
 
-	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list authorization records failed: %v", err)
 	}
@@ -4331,7 +4819,7 @@ func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *test
 		t.Fatalf("expected repeated out-of-phase respond to return ErrTaskStatusInvalid, got %v", err)
 	}
 
-	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list authorization records failed: %v", err)
 	}
@@ -4390,7 +4878,7 @@ func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *
 		t.Fatalf("security respond for restore apply failed: %v", err)
 	}
 
-	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list authorization history failed: %v", err)
 	}
@@ -5961,7 +6449,7 @@ func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testi
 		"payload": map[string]any{"task_id": task.TaskID},
 	}, artifacts)
 
-	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
+	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID, "")
 	if err != nil {
 		t.Fatalf("list first-class citations failed: %v", err)
 	}
@@ -5973,6 +6461,88 @@ func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testi
 	}
 	if citations[0].ScreenSessionID != "screen_sess_persist" || citations[0].ExcerptText != "Fatal build error" {
 		t.Fatalf("expected persisted citation evidence fields to survive, got %+v", citations[0])
+	}
+}
+
+func TestServiceAttachFormalCitationsReplacesPreviousAttemptHistory(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "replace restart citation history")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_replace_restart_citations"
+	firstAttempt := runengine.TaskRecord{
+		TaskID: taskID,
+		RunID:  "run_replace_restart_citations_1",
+	}
+	secondAttempt := runengine.TaskRecord{
+		TaskID: taskID,
+		RunID:  "run_replace_restart_citations_2",
+	}
+
+	firstArtifacts := []map[string]any{{
+		"artifact_id":   "art_replace_restart_citations_1",
+		"task_id":       taskID,
+		"artifact_type": "screen_capture",
+		"title":         "first.png",
+		"path":          "workspace/first.png",
+		"mime_type":     "image/png",
+	}}
+	secondArtifacts := []map[string]any{{
+		"artifact_id":   "art_replace_restart_citations_2",
+		"task_id":       taskID,
+		"artifact_type": "screen_capture",
+		"title":         "second.png",
+		"path":          "workspace/second.png",
+		"mime_type":     "image/png",
+	}}
+
+	service.attachFormalCitations(firstAttempt, firstAttempt, []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_replace_restart_citations_1",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "first attempt excerpt",
+				"screen_session_id": "screen_sess_first",
+			},
+		},
+	}}, nil, map[string]any{"payload": map[string]any{"task_id": taskID}}, firstArtifacts)
+
+	service.attachFormalCitations(secondAttempt, secondAttempt, []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_replace_restart_citations_2",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "second attempt excerpt",
+				"screen_session_id": "screen_sess_second",
+			},
+		},
+	}}, nil, map[string]any{"payload": map[string]any{"task_id": taskID}}, secondArtifacts)
+
+	allCitations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID, "")
+	if err != nil {
+		t.Fatalf("list replaced citations failed: %v", err)
+	}
+	if len(allCitations) != 1 {
+		t.Fatalf("expected task-scoped citation replacement to keep one citation chain, got %+v", allCitations)
+	}
+	if allCitations[0].RunID != secondAttempt.RunID || allCitations[0].ArtifactID != "art_replace_restart_citations_2" {
+		t.Fatalf("expected latest attempt citation chain to replace previous history, got %+v", allCitations[0])
+	}
+	firstAttemptCitations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID, firstAttempt.RunID)
+	if err != nil {
+		t.Fatalf("list first attempt citations failed: %v", err)
+	}
+	if len(firstAttemptCitations) != 0 {
+		t.Fatalf("expected first attempt citations to be removed after restart replacement, got %+v", firstAttemptCitations)
+	}
+	secondAttemptCitations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID, secondAttempt.RunID)
+	if err != nil {
+		t.Fatalf("list second attempt citations failed: %v", err)
+	}
+	if len(secondAttemptCitations) != 1 || secondAttemptCitations[0].ExcerptText != "second attempt excerpt" {
+		t.Fatalf("expected second attempt citation chain to remain queryable, got %+v", secondAttemptCitations)
 	}
 }
 
@@ -6452,7 +7022,7 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	if record.Authorization == nil || record.Authorization["decision"] != "allow_once" {
 		t.Fatalf("expected authorization record to be stored, got %+v", record.Authorization)
 	}
-	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), "", 20, 0)
 	if err != nil {
 		t.Fatalf("list persisted artifacts failed: %v", err)
 	}
@@ -6547,7 +7117,7 @@ func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testin
 	if respondTask["status"] != "completed" {
 		t.Fatalf("expected authorized clip screen task to complete, got %+v", respondTask)
 	}
-	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), "", 20, 0)
 	if err != nil || total != 1 || len(artifacts) != 1 {
 		t.Fatalf("expected one persisted clip screen artifact, total=%d len=%d err=%v", total, len(artifacts), err)
 	}
@@ -6766,7 +7336,7 @@ func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
 	if record.Artifacts[0]["mime_type"] != "video/webm" {
 		t.Fatalf("expected clip screen analyze to keep video artifact mime type, got %+v", record.Artifacts)
 	}
-	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, "", 20, 0)
 	if err != nil || total != 1 || len(artifacts) != 1 {
 		t.Fatalf("expected one persisted clip artifact, total=%d len=%d err=%v", total, len(artifacts), err)
 	}
@@ -8607,6 +9177,73 @@ func TestServiceSecurityAuditListFallsBackToStoredAuditRecords(t *testing.T) {
 	}
 }
 
+func TestServiceSecurityAuditListScopesStructuredRestartAttemptToCurrentRun(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security audit current run scope")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_audit_current_attempt"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_audit_current_attempt",
+		RunID:               "run_current_attempt",
+		PrimaryRunID:        "run_primary_attempt",
+		Title:               "audit scoped task",
+		SourceType:          "hover_input",
+		Status:              "failed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"brief"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "failed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T09:00:00Z",
+		UpdatedAt:           "2026-04-22T09:05:00Z",
+		FinishedAt:          "2026-04-22T09:06:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	for _, record := range []audit.Record{
+		{
+			AuditID:   "audit_previous_attempt",
+			TaskID:    taskID,
+			RunID:     "run_primary_attempt",
+			Type:      "file",
+			Action:    "write_file",
+			Summary:   "previous attempt audit",
+			Target:    "workspace/previous.md",
+			Result:    "success",
+			CreatedAt: "2026-04-22T09:02:00Z",
+		},
+		{
+			AuditID:   "audit_current_attempt",
+			TaskID:    taskID,
+			RunID:     "run_current_attempt",
+			Type:      "file",
+			Action:    "write_file",
+			Summary:   "current attempt audit",
+			Target:    "workspace/current.md",
+			Result:    "success",
+			CreatedAt: "2026-04-22T09:05:00Z",
+		},
+	} {
+		if err := service.storage.AuditWriter().WriteAuditRecord(context.Background(), record); err != nil {
+			t.Fatalf("write audit record failed: %v", err)
+		}
+	}
+
+	result, err := service.SecurityAuditList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security audit list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["audit_id"] != "audit_current_attempt" {
+		t.Fatalf("expected only current attempt audit record, got %+v", items)
+	}
+}
+
 func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
 	_, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
@@ -10134,6 +10771,162 @@ func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKe
 	}
 }
 
+func TestServiceRestartedStructuredTaskFallsBackToCurrentSnapshotFormalData(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured restart snapshot fallback")
+	if service.storage == nil || service.storage.TaskStore() == nil {
+		t.Fatal("expected structured task storage to be wired")
+	}
+
+	taskID := "task_structured_restart_snapshot"
+	runID := "run_structured_restart_current"
+	primaryRunID := "run_structured_restart_primary"
+	startedAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 4, 16, 9, 6, 0, 0, time.UTC)
+
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_restart",
+		RunID:             runID,
+		ExecutionAttempt:  2,
+		Title:             "structured restart snapshot task",
+		SourceType:        "hover_input",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "summarize"},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         startedAt,
+		UpdatedAt:         updatedAt,
+		FinishedAt:        &finishedAt,
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "Restart snapshot detail",
+			"preview_text": "restart snapshot preview",
+			"payload":      map[string]any{"task_id": taskID},
+		},
+		Artifacts: []map[string]any{{
+			"artifact_id":      "art_restart_snapshot",
+			"task_id":          taskID,
+			"run_id":           runID,
+			"artifact_type":    "workspace_document",
+			"title":            "restart-snapshot.md",
+			"path":             "workspace/restart-snapshot.md",
+			"mime_type":        "text/markdown",
+			"delivery_type":    "task_detail",
+			"delivery_payload": map[string]any{"task_id": taskID},
+			"created_at":       "2026-04-16T09:06:00Z",
+		}},
+		Citations: []map[string]any{{
+			"citation_id":   "cit_restart_snapshot",
+			"task_id":       taskID,
+			"run_id":        runID,
+			"source_type":   "file",
+			"source_ref":    "art_restart_snapshot",
+			"label":         "restart snapshot evidence",
+			"artifact_id":   "art_restart_snapshot",
+			"artifact_type": "workspace_document",
+		}},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_restart_snapshot",
+			"task_id":    taskID,
+			"run_id":     runID,
+			"type":       "execution",
+			"action":     "deliver_result",
+			"summary":    "Restart snapshot completed.",
+			"target":     "workspace/restart-snapshot.md",
+			"result":     "failed",
+			"created_at": "2026-04-16T09:06:00Z",
+			"metadata": map[string]any{
+				"failure_code":     "SNAPSHOT_ONLY_FAILURE",
+				"failure_category": "restart_snapshot",
+			},
+		}},
+		Authorization: map[string]any{
+			"authorization_record_id": "auth_restart_snapshot",
+			"task_id":                 taskID,
+			"run_id":                  runID,
+			"approval_id":             "appr_restart_snapshot",
+			"decision":                "allow_once",
+			"operator":                "user",
+			"created_at":              "2026-04-16T09:05:30Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal restart snapshot json failed: %v", err)
+	}
+
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_restart",
+		RunID:               runID,
+		PrimaryRunID:        primaryRunID,
+		Title:               "structured restart snapshot task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"concise"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured restart task failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["preview_text"] != "restart snapshot preview" {
+		t.Fatalf("expected restart snapshot delivery result fallback, got %+v", detailResult["delivery_result"])
+	}
+	authorizationRecord, ok := detailResult["authorization_record"].(map[string]any)
+	if !ok || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected restart snapshot authorization fallback, got %+v", detailResult["authorization_record"])
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_restart_snapshot" {
+		t.Fatalf("expected restart snapshot artifact fallback, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["citation_id"] != "cit_restart_snapshot" {
+		t.Fatalf("expected restart snapshot citation fallback, got %+v", citations)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "SNAPSHOT_ONLY_FAILURE" {
+		t.Fatalf("expected restart snapshot audit fallback to feed runtime summary, got %+v", runtimeSummary)
+	}
+
+	artifactList, err := service.TaskArtifactList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	artifactItems := artifactList["items"].([]map[string]any)
+	if len(artifactItems) != 1 || artifactItems[0]["artifact_id"] != "art_restart_snapshot" {
+		t.Fatalf("expected restart snapshot artifact list fallback, got %+v", artifactItems)
+	}
+
+	auditList, err := service.SecurityAuditList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security audit list failed: %v", err)
+	}
+	auditItems := auditList["items"].([]map[string]any)
+	if len(auditItems) != 1 || auditItems[0]["audit_id"] != "audit_restart_snapshot" {
+		t.Fatalf("expected restart snapshot audit fallback, got %+v", auditItems)
+	}
+}
+
 func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured task detail approval")
 	if service.storage == nil {
@@ -11319,14 +12112,19 @@ func TestServiceStartTaskPersistsArtifactsToStore(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	records, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	taskRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to remain available")
+	}
+	runID := taskRecord.RunID
+	records, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list persisted artifacts failed: %v", err)
 	}
 	if total != 1 || len(records) != 1 {
 		t.Fatalf("expected one persisted artifact, got total=%d records=%+v", total, records)
 	}
-	if records[0].DeliveryType != "workspace_document" {
+	if records[0].RunID != runID || records[0].DeliveryType != "workspace_document" {
 		t.Fatalf("expected persisted workspace_document artifact, got %+v", records[0])
 	}
 }
@@ -14746,5 +15544,40 @@ func modelConfig() serviceconfig.ModelConfig {
 		Provider: "openai_responses",
 		ModelID:  "gpt-5.4",
 		Endpoint: "https://api.openai.com/v1/responses",
+	}
+}
+
+func TestTaskUsesAttemptScopedFormalReadsFallsBackToPrimaryRunID(t *testing.T) {
+	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_current", PrimaryRunID: "run_primary"}) {
+		t.Fatal("expected different primary/current run ids to enable attempt-scoped reads")
+	}
+	if taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_primary", PrimaryRunID: "run_primary"}) {
+		t.Fatal("expected primary attempt to keep task-scoped reads")
+	}
+	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_restart", PrimaryRunID: "run_restart", ExecutionAttempt: 2}) {
+		t.Fatal("expected legacy restart snapshots to keep attempt-scoped reads when primary_run_id collapses to run_id")
+	}
+	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_restart", ExecutionAttempt: 2}) {
+		t.Fatal("expected execution attempt fallback to keep restart-scoped reads for legacy snapshots")
+	}
+}
+
+func TestTaskRecordFromStoragePreservesExecutionAttempt(t *testing.T) {
+	task := taskRecordFromStorage(storage.TaskRunRecord{
+		TaskID:           "task_restart_storage",
+		SessionID:        "sess_restart_storage",
+		RunID:            "run_restart_storage",
+		ExecutionAttempt: 3,
+		Status:           "completed",
+		Title:            "restart storage task",
+		SourceType:       "hover_input",
+		StartedAt:        time.Date(2026, 5, 1, 8, 0, 0, 0, time.UTC),
+		UpdatedAt:        time.Date(2026, 5, 1, 8, 1, 0, 0, time.UTC),
+	})
+	if task.ExecutionAttempt != 3 {
+		t.Fatalf("expected compatibility storage reload to preserve execution attempt, got %+v", task)
+	}
+	if task.PrimaryRunID != "run_restart_storage" {
+		t.Fatalf("expected compatibility storage reload to default primary run id to current run, got %+v", task)
 	}
 }

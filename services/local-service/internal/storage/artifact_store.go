@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -47,14 +48,18 @@ func (s *inMemoryArtifactStore) SaveArtifacts(_ context.Context, records []Artif
 	return nil
 }
 
-func (s *inMemoryArtifactStore) ListArtifacts(_ context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error) {
+func (s *inMemoryArtifactStore) ListArtifacts(_ context.Context, taskID, runID string, limit, offset int) ([]ArtifactRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := make([]ArtifactRecord, 0, len(s.records))
 	for _, record := range s.records {
-		if taskID == "" || record.TaskID == taskID {
-			items = append(items, record)
+		if taskID != "" && record.TaskID != taskID {
+			continue
 		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		left := parseGovernanceTime(items[i].CreatedAt)
@@ -104,10 +109,11 @@ func (s *SQLiteArtifactStore) SaveArtifacts(ctx context.Context, records []Artif
 	for _, record := range records {
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT OR REPLACE INTO artifacts (artifact_id, task_id, artifact_type, title, path, mime_type, delivery_type, delivery_payload_json, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT OR REPLACE INTO artifacts (artifact_id, task_id, run_id, artifact_type, title, path, mime_type, delivery_type, delivery_payload_json, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			record.ArtifactID,
 			record.TaskID,
+			nullableRuntimeString(record.RunID),
 			record.ArtifactType,
 			record.Title,
 			record.Path,
@@ -126,22 +132,32 @@ func (s *SQLiteArtifactStore) SaveArtifacts(ctx context.Context, records []Artif
 }
 
 // ListArtifacts returns persisted artifacts for one task.
-func (s *SQLiteArtifactStore) ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error) {
+func (s *SQLiteArtifactStore) ListArtifacts(ctx context.Context, taskID, runID string, limit, offset int) ([]ArtifactRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM artifacts`
-	query := `SELECT artifact_id, task_id, artifact_type, title, path, mime_type, delivery_type, delivery_payload_json, created_at FROM artifacts`
-	args := []any{}
+	query := `SELECT artifact_id, task_id, COALESCE(run_id, ''), artifact_type, title, path, mime_type, delivery_type, delivery_payload_json, created_at FROM artifacts`
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
 	if taskID != "" {
-		countQuery += ` WHERE task_id = ?`
-		query += ` WHERE task_id = ?`
-		args = append(args, taskID)
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
 	}
 	query += ` ORDER BY created_at DESC, artifact_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, firstArg(taskID)...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count artifacts: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -152,7 +168,7 @@ func (s *SQLiteArtifactStore) ListArtifacts(ctx context.Context, taskID string, 
 	items := make([]ArtifactRecord, 0)
 	for rows.Next() {
 		var record ArtifactRecord
-		if err := rows.Scan(&record.ArtifactID, &record.TaskID, &record.ArtifactType, &record.Title, &record.Path, &record.MimeType, &record.DeliveryType, &record.DeliveryPayloadJSON, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.ArtifactID, &record.TaskID, &record.RunID, &record.ArtifactType, &record.Title, &record.Path, &record.MimeType, &record.DeliveryType, &record.DeliveryPayloadJSON, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan artifact record: %w", err)
 		}
 		items = append(items, record)
@@ -182,6 +198,7 @@ func (s *SQLiteArtifactStore) initialize(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS artifacts (
 			artifact_id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
+			run_id TEXT,
 			artifact_type TEXT NOT NULL,
 			title TEXT NOT NULL,
 			path TEXT NOT NULL,
@@ -193,8 +210,14 @@ func (s *SQLiteArtifactStore) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create artifacts table: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE artifacts ADD COLUMN run_id TEXT;`); err != nil && !isSQLiteDuplicateColumnError(err) {
+		return fmt.Errorf("add artifacts run_id column: %w", err)
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_artifacts_task_id ON artifacts(task_id, created_at DESC, artifact_id DESC);`); err != nil {
 		return fmt.Errorf("create artifacts task index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_artifacts_task_run_time ON artifacts(task_id, run_id, created_at DESC, artifact_id DESC);`); err != nil {
+		return fmt.Errorf("create artifacts task run index: %w", err)
 	}
 	return nil
 }
