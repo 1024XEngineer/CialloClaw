@@ -142,3 +142,77 @@ func TestMirrorConversationStoreNormalizesMissingTimestamps(t *testing.T) {
 		t.Fatalf("expected timestamps to be normalized, got %+v", items[0])
 	}
 }
+
+func TestMirrorConversationStoresAllowRepeatedTraceIDsAcrossDistinctRecords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		newStore func(t *testing.T) MirrorConversationStore
+	}{
+		{
+			name: "in-memory",
+			newStore: func(t *testing.T) MirrorConversationStore {
+				t.Helper()
+				return newInMemoryMirrorConversationStore()
+			},
+		},
+		{
+			name: "sqlite",
+			newStore: func(t *testing.T) MirrorConversationStore {
+				t.Helper()
+				store, err := NewSQLiteMirrorConversationStore(filepath.Join(t.TempDir(), "mirror-conversations-repeated-trace.db"))
+				if err != nil {
+					t.Fatalf("NewSQLiteMirrorConversationStore returned error: %v", err)
+				}
+				t.Cleanup(func() { _ = store.Close() })
+				return store
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := test.newStore(t)
+			ctx := context.Background()
+			first := MirrorConversationRecord{
+				RecordID:  "mirror_repeat_001",
+				TraceID:   "trace_repeat_001",
+				CreatedAt: "2026-04-18T10:00:00Z",
+				UpdatedAt: "2026-04-18T10:00:01Z",
+				Source:    "dashboard",
+				Trigger:   "voice_commit",
+				InputMode: "voice",
+				UserText:  "first",
+				Status:    "responded",
+			}
+			second := MirrorConversationRecord{
+				RecordID:  "mirror_repeat_002",
+				TraceID:   "trace_repeat_001",
+				CreatedAt: "2026-04-18T10:00:02Z",
+				UpdatedAt: "2026-04-18T10:00:03Z",
+				Source:    "dashboard",
+				Trigger:   "voice_commit",
+				InputMode: "voice",
+				UserText:  "second",
+				Status:    "responded",
+			}
+			if err := store.SaveMirrorConversation(ctx, first); err != nil {
+				t.Fatalf("SaveMirrorConversation first returned error: %v", err)
+			}
+			if err := store.SaveMirrorConversation(ctx, second); err != nil {
+				t.Fatalf("SaveMirrorConversation second returned error: %v", err)
+			}
+			items, total, err := store.ListMirrorConversations(ctx, "", "", "", 20, 0)
+			if err != nil {
+				t.Fatalf("ListMirrorConversations returned error: %v", err)
+			}
+			if total != 2 || len(items) != 2 {
+				t.Fatalf("expected repeated trace id to keep both records, total=%d items=%+v", total, items)
+			}
+			if items[0].TraceID != "trace_repeat_001" || items[1].TraceID != "trace_repeat_001" {
+				t.Fatalf("expected repeated trace id to round-trip, got %+v", items)
+			}
+		})
+	}
+}

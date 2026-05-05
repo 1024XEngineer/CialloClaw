@@ -208,7 +208,7 @@ func newInMemoryRecoveryPointStore() *inMemoryRecoveryPointStore {
 func (s *inMemoryRecoveryPointStore) WriteRecoveryPoint(_ context.Context, point checkpoint.RecoveryPoint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	point.Mode = normalizeRecoveryPointMode(point.Mode)
+	point.Mode = recoveryPointModeForStorage(point.Mode)
 	s.points = append(s.points, point)
 	return nil
 }
@@ -767,7 +767,7 @@ func (s *SQLiteRecoveryPointStore) WriteRecoveryPoint(ctx context.Context, point
 		point.TaskID,
 		point.Summary,
 		point.CreatedAt,
-		normalizeRecoveryPointMode(point.Mode),
+		recoveryPointModeForStorage(point.Mode),
 		string(objectsJSON),
 	)
 	if err != nil {
@@ -859,7 +859,7 @@ func (s *SQLiteRecoveryPointStore) ListRecoveryPoints(ctx context.Context, taskI
 		if err := rows.Scan(&point.RecoveryPointID, &point.TaskID, &point.Summary, &point.CreatedAt, &mode, &objectsJSON); err != nil {
 			return nil, 0, fmt.Errorf("scan recovery point: %w", err)
 		}
-		point.Mode = normalizeRecoveryPointMode(mode.String)
+		point.Mode = recoveryPointModeForStorage(mode.String)
 		if err := json.Unmarshal([]byte(objectsJSON), &point.Objects); err != nil {
 			return nil, 0, fmt.Errorf("unmarshal recovery point objects: %w", err)
 		}
@@ -882,7 +882,7 @@ func (s *SQLiteRecoveryPointStore) GetRecoveryPoint(ctx context.Context, recover
 		}
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("get recovery point: %w", err)
 	}
-	point.Mode = normalizeRecoveryPointMode(mode.String)
+	point.Mode = recoveryPointModeForStorage(mode.String)
 	if err := json.Unmarshal([]byte(objectsJSON), &point.Objects); err != nil {
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("unmarshal recovery point objects: %w", err)
 	}
@@ -957,11 +957,26 @@ func ensureRecoveryPointColumns(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func normalizeRecoveryPointMode(mode string) string {
-	if strings.TrimSpace(mode) == "manual_backup" {
-		return "manual_backup"
+// classifyRecoveryPointMode only defaults truly missing values so malformed or
+// future storage values do not get silently upgraded into auto-restorable
+// workspace snapshots.
+func classifyRecoveryPointMode(mode string) (string, bool) {
+	trimmed := strings.TrimSpace(mode)
+	switch trimmed {
+	case "", "workspace_snapshot":
+		return "workspace_snapshot", true
+	case "manual_backup":
+		return "manual_backup", true
+	default:
+		return trimmed, false
 	}
-	return "workspace_snapshot"
+}
+
+func recoveryPointModeForStorage(mode string) string {
+	if normalized, known := classifyRecoveryPointMode(mode); known {
+		return normalized
+	}
+	return strings.TrimSpace(mode)
 }
 
 func openSQLiteDatabase(databasePath string) (*sql.DB, error) {

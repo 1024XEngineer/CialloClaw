@@ -124,10 +124,13 @@ func (s *Service) persistMirrorConversationRecord(record storage.MirrorConversat
 }
 
 func mirrorConversationRecordID(traceID string) string {
-	if traceID == "" {
+	trimmed := strings.TrimSpace(traceID)
+	if trimmed == "" {
 		return fmt.Sprintf("mirror_conversation_%d", time.Now().UnixNano())
 	}
-	return fmt.Sprintf("mirror_conversation_%s", traceID)
+	// Trace IDs are request-correlation metadata, not a business uniqueness key,
+	// so persisted mirror history must append even when callers reuse a trace.
+	return fmt.Sprintf("mirror_conversation_%s_%d", trimmed, time.Now().UnixNano())
 }
 
 // ensureMirrorConversationTraceID keeps the persisted mirror history contract

@@ -65,6 +65,7 @@ func TestServiceLogExecutionListAggregatesEventsToolCallsAndAudits(t *testing.T)
 	if err := service.storage.AuditWriter().WriteAuditRecord(ctx, audit.Record{
 		AuditID:   "audit_001",
 		TaskID:    "task_001",
+		RunID:     "run_001",
 		Type:      "file",
 		Action:    "write_file",
 		Summary:   "stored audit",
@@ -85,6 +86,9 @@ func TestServiceLogExecutionListAggregatesEventsToolCallsAndAudits(t *testing.T)
 	}
 	if items[0]["source"] != "audit" || items[1]["source"] != "tool_call" || items[2]["source"] != "event" {
 		t.Fatalf("expected aggregated descending log order, got %+v", items)
+	}
+	if items[0]["run_id"] != "run_001" {
+		t.Fatalf("expected audit log entry to preserve run_id, got %+v", items[0])
 	}
 }
 
@@ -142,6 +146,7 @@ func TestServiceLogErrorListFiltersFailures(t *testing.T) {
 	if err := service.storage.AuditWriter().WriteAuditRecord(ctx, audit.Record{
 		AuditID:   "audit_failed",
 		TaskID:    "task_001",
+		RunID:     "run_001",
 		Type:      "command",
 		Action:    "run_command",
 		Summary:   "command failed",
@@ -162,6 +167,9 @@ func TestServiceLogErrorListFiltersFailures(t *testing.T) {
 	}
 	if items[0]["log_id"] != "audit:audit_failed" || items[1]["log_id"] != "event:event_failed" || items[2]["log_id"] != "tool_call:tool_failed" {
 		t.Fatalf("expected only failing log entries in descending order, got %+v", items)
+	}
+	if items[0]["run_id"] != "run_001" {
+		t.Fatalf("expected audit error log entry to preserve run_id, got %+v", items[0])
 	}
 	if items[2]["error_code"] != "17" {
 		t.Fatalf("expected tool-call error code to be preserved, got %+v", items[2])

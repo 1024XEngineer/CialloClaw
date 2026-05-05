@@ -3007,6 +3007,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 该接口只返回后端正式持久化的记录，不读取前端本地缓存
 - 返回顺序固定为 `updated_at DESC, created_at DESC, record_id DESC`
+- `record_id` 是后端生成的历史行 ID；调用方不得从 `trace_id` 推导它，也不得假设同一 `trace_id` 只会对应一条历史记录。
 
 ### agent.mirror.conversation.list 入参说明
 
@@ -3065,7 +3066,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "items": [
         {
-          "record_id": "mirror_conversation_trace_001",
+          "record_id": "mirror_conversation_1712459070000000000",
           "trace_id": "trace_001",
           "created_at": "2026-04-07T11:04:30+08:00",
           "updated_at": "2026-04-07T11:04:36+08:00",
@@ -3476,7 +3477,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `data.items[].mode = workspace_snapshot` 表示该恢复点可直接走 `agent.security.restore.apply`。
 - `data.items[].mode = manual_backup` 表示该恢复点只提供人工恢复资产，不支持直接走自动回滚。
-- 为兼容旧测试桩或历史缓存，若某个恢复点未显式返回 `mode`，调用方应按 `workspace_snapshot` 解释。
+- 为兼容旧测试桩或历史缓存，只有在某个恢复点未显式返回 `mode` 时，调用方才应按 `workspace_snapshot` 解释。
+- 若后端遇到脏数据、未知值或未来版本尚未识别的恢复模式，必须按不可自动恢复处理，不能把它们隐式升级成 `workspace_snapshot`。
 
 ### agent.security.restore_points.list 入参说明
 

@@ -147,6 +147,67 @@ func TestServiceSubmitInputSynthesizesMirrorConversationTraceIDWhenMissing(t *te
 	}
 }
 
+func TestServiceSubmitInputKeepsDistinctMirrorHistoryRowsWhenTraceIDRepeats(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Mirror reply with repeated trace id.")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	requests := []map[string]any{
+		{
+			"request_meta": map[string]any{"trace_id": "trace_mirror_reused_001"},
+			"session_id":   "session_mirror_reused_001",
+			"source":       "dashboard",
+			"trigger":      "voice_commit",
+			"input": map[string]any{
+				"type":       "text",
+				"text":       "first mirror request",
+				"input_mode": "voice",
+			},
+		},
+		{
+			"request_meta": map[string]any{"trace_id": "trace_mirror_reused_001"},
+			"session_id":   "session_mirror_reused_002",
+			"source":       "dashboard",
+			"trigger":      "voice_commit",
+			"input": map[string]any{
+				"type":       "text",
+				"text":       "second mirror request",
+				"input_mode": "voice",
+			},
+		},
+	}
+
+	for _, params := range requests {
+		if _, err := service.SubmitInput(params); err != nil {
+			t.Fatalf("SubmitInput returned error: %v", err)
+		}
+	}
+
+	history, err := service.MirrorConversationList(map[string]any{"limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("MirrorConversationList returned error: %v", err)
+	}
+	items := history["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two persisted mirror rows for reused trace id, got %+v", items)
+	}
+	if items[0]["record_id"] == items[1]["record_id"] {
+		t.Fatalf("expected reused trace id to keep distinct record ids, got %+v", items)
+	}
+	texts := map[string]bool{}
+	for _, item := range items {
+		if item["trace_id"] != "trace_mirror_reused_001" {
+			t.Fatalf("expected reused trace id to round-trip, got %+v", item)
+		}
+		text, _ := item["user_text"].(string)
+		texts[text] = true
+	}
+	if !texts["first mirror request"] || !texts["second mirror request"] {
+		t.Fatalf("expected both mirror requests to remain in history, got %+v", items)
+	}
+}
+
 func TestServiceMirrorConversationListSupportsFilters(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Mirror list filters.")
 	if service.storage == nil {

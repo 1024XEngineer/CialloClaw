@@ -686,7 +686,7 @@ CREATE TABLE recovery_points (
     task_id TEXT NOT NULL,                       -- 所属task
     summary TEXT NOT NULL,                       -- 恢复点说明
     created_at TEXT NOT NULL,                    -- 创建时间
-    mode TEXT NOT NULL DEFAULT 'workspace_snapshot', -- 恢复模式
+    mode TEXT NOT NULL DEFAULT 'workspace_snapshot', -- 恢复模式；仅缺省值可视为 workspace_snapshot，未知值在 API 层必须 fail closed
     objects_json TEXT NOT NULL,                  -- 关联对象(JSON)
     FOREIGN KEY(task_id) REFERENCES tasks(task_id)
 );
@@ -746,7 +746,7 @@ CREATE INDEX idx_retrieval_hits_task_score ON retrieval_hits(task_id, score DESC
 
 ```sql
 CREATE TABLE mirror_conversations (
-    record_id TEXT PRIMARY KEY,                  -- 会话记录ID
+    record_id TEXT PRIMARY KEY,                  -- 后端生成的会话历史行ID
     trace_id TEXT NOT NULL,                      -- 请求trace ID
     created_at TEXT NOT NULL,                    -- 首次记录时间
     updated_at TEXT NOT NULL,                    -- 最近更新时间

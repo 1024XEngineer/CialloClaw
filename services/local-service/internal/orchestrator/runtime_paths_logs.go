@@ -321,6 +321,7 @@ func executionLogRecordsFromAudits(records []audit.Record) []executionLogRecord 
 		items = append(items, executionLogRecord{
 			LogID:     "audit:" + record.AuditID,
 			TaskID:    record.TaskID,
+			RunID:     record.RunID,
 			Source:    "audit",
 			Kind:      record.Action,
 			Level:     auditLogLevel(record.Result),

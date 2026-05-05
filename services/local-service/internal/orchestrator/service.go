@@ -2694,7 +2694,7 @@ func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]a
 			"task_id":           point.TaskID,
 			"summary":           point.Summary,
 			"created_at":        point.CreatedAt,
-			"mode":              normalizeRecoveryPointMode(point.Mode),
+			"mode":              recoveryPointResponseMode(point.Mode),
 			"objects":           append([]string(nil), point.Objects...),
 		})
 	}
@@ -2715,7 +2715,7 @@ func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
-	if normalizeRecoveryPointMode(point.Mode) == "manual_backup" {
+	if !recoveryPointAllowsAutoRestore(point.Mode) {
 		return nil, ErrRecoveryPointManualOnly
 	}
 	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
@@ -5932,16 +5932,35 @@ func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
 		"task_id":           point.TaskID,
 		"summary":           point.Summary,
 		"created_at":        point.CreatedAt,
-		"mode":              normalizeRecoveryPointMode(point.Mode),
+		"mode":              recoveryPointResponseMode(point.Mode),
 		"objects":           append([]string(nil), point.Objects...),
 	}
 }
 
-func normalizeRecoveryPointMode(mode string) string {
-	if strings.TrimSpace(mode) == "manual_backup" {
-		return "manual_backup"
+// recoveryPointResponseMode keeps the wire contract on known enum values while
+// ensuring malformed or future storage values still fail closed for restore.
+func recoveryPointResponseMode(mode string) string {
+	if normalized, known := classifyRecoveryPointMode(mode); known {
+		return normalized
 	}
-	return "workspace_snapshot"
+	return "manual_backup"
+}
+
+func recoveryPointAllowsAutoRestore(mode string) bool {
+	normalized, known := classifyRecoveryPointMode(mode)
+	return known && normalized == "workspace_snapshot"
+}
+
+func classifyRecoveryPointMode(mode string) (string, bool) {
+	trimmed := strings.TrimSpace(mode)
+	switch trimmed {
+	case "", "workspace_snapshot":
+		return "workspace_snapshot", true
+	case "manual_backup":
+		return "manual_backup", true
+	default:
+		return trimmed, false
+	}
 }
 
 func restoreApplyAssessment(point checkpoint.RecoveryPoint) execution.GovernanceAssessment {

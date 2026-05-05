@@ -9317,6 +9317,39 @@ func TestServiceSecurityRestorePointsListFallsBackToStoredRecoveryPoints(t *test
 	}
 }
 
+func TestServiceSecurityRestorePointsFailClosedForUnknownStoredMode(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err := service.storage.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_unknown_mode",
+		TaskID:          "task_external",
+		Summary:         "unknown restore mode",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Mode:            "future_mode",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point failed: %v", err)
+	}
+
+	result, err := service.SecurityRestorePointsList(map[string]any{"task_id": "task_external", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one recovery point, got %+v", items)
+	}
+	if items[0]["mode"] != "manual_backup" {
+		t.Fatalf("expected unknown stored mode to fail closed on the wire, got %+v", items[0])
+	}
+	if _, err := service.SecurityRestoreApply(map[string]any{"task_id": "task_external", "recovery_point_id": "rp_unknown_mode"}); !errors.Is(err, ErrRecoveryPointManualOnly) {
+		t.Fatalf("expected unknown recovery mode to reject automatic restore, got %v", err)
+	}
+}
+
 func TestServiceSecurityRestorePointsListWithoutStorageReturnsEmptyPage(t *testing.T) {
 	service := newTestService()
 
