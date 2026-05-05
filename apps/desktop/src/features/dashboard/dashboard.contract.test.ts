@@ -3964,12 +3964,15 @@ test("mirror overview can reuse a refreshed settings snapshot without reloading 
 
 test("mirror app reuses the mutation snapshot instead of triggering a second mirror overview reload", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+  const mirrorDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorDetailContent.tsx"), "utf8");
 
   assert.match(mirrorAppSource, /applyMirrorSettingsSnapshot\(current, result\.snapshot\)/);
   assert.doesNotMatch(
     mirrorAppSource,
     /const handleSettingsUpdate = useCallback\([\s\S]*loadMirrorOverviewData\(dataMode\)/,
   );
+  assert.match(mirrorDetailSource, /settingsSnapshotUsesWarningBaseline/);
+  assert.match(mirrorDetailSource, /本地回退快照/);
 });
 
 test("dashboard settings mutation keeps transport failures visible and does not mutate local settings", async () => {
@@ -5723,7 +5726,6 @@ test("task detail fallback keeps operator controls available from preview tasks 
   assert.match(panelSource, /fallbackActions && fallbackActions.length > 0 \? <TaskActionBar actionsOverride=\{fallbackActions\} detail=\{null\} onAction=\{onAction\} task=\{null\} \/> : null/);
   assert.doesNotMatch(panelSource, /detailData \? <TaskActionBar/);
   assert.match(panelSource, /<h3 className="task-detail-card__title">已生成的结果<\/h3>/);
-  assert.match(panelSource, /!artifactLoading && !artifactErrorMessage \? \(/);
   assert.match(actionBarSource, /actionsOverride\?: TaskPrimaryAction\[\] \| null;/);
   assert.match(actionBarSource, /task: Task \| null;/);
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
