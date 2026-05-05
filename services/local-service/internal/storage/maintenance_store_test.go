@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -129,12 +130,30 @@ func TestServiceCreateMaintenanceRecoveryPoint(t *testing.T) {
 			t.Fatalf("expected maintenance recovery object %q to exist: %v", objectPath, err)
 		}
 	}
+	if runtime.GOOS != "windows" {
+		pointDir := filepath.Dir(filepath.FromSlash(point.Objects[0]))
+		assertPathPermissions(t, pointDir, maintenanceRecoveryDirMode)
+		for _, objectPath := range point.Objects {
+			assertPathPermissions(t, filepath.FromSlash(objectPath), maintenanceRecoveryFileMode)
+		}
+	}
 	items, total, err := service.RecoveryPointStore().ListRecoveryPoints(ctx, "task_maint_001", 20, 0)
 	if err != nil {
 		t.Fatalf("ListRecoveryPoints returned error: %v", err)
 	}
 	if total != 1 || len(items) != 1 || items[0].RecoveryPointID != point.RecoveryPointID {
 		t.Fatalf("expected persisted maintenance recovery point, got total=%d items=%+v", total, items)
+	}
+}
+
+func assertPathPermissions(t *testing.T, path string, expected os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat returned error for %q: %v", path, err)
+	}
+	if actual := info.Mode().Perm(); actual != expected {
+		t.Fatalf("expected %q permissions %o, got %o", path, expected, actual)
 	}
 }
 

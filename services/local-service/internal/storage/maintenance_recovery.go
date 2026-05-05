@@ -13,6 +13,8 @@ import (
 )
 
 const maintenanceRecoveryRootName = ".maintenance_recovery_points"
+const maintenanceRecoveryDirMode = 0o700
+const maintenanceRecoveryFileMode = 0o600
 
 type maintenanceRecoveryManifest struct {
 	Mode        string                     `json:"mode"`
@@ -64,7 +66,7 @@ func (s *Service) CreateMaintenanceRecoveryPoint(ctx context.Context, taskID, su
 		return checkpoint.RecoveryPoint{}, err
 	}
 	pointDir := filepath.Join(backupRoot, point.RecoveryPointID)
-	if err := os.MkdirAll(pointDir, 0o755); err != nil {
+	if err := os.MkdirAll(pointDir, maintenanceRecoveryDirMode); err != nil {
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("create maintenance recovery directory: %w", err)
 	}
 
@@ -92,7 +94,7 @@ func (s *Service) CreateMaintenanceRecoveryPoint(ctx context.Context, taskID, su
 	if err != nil {
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("encode maintenance recovery manifest: %w", err)
 	}
-	if err := os.WriteFile(manifestPath, encodedManifest, 0o644); err != nil {
+	if err := os.WriteFile(manifestPath, encodedManifest, maintenanceRecoveryFileMode); err != nil {
 		return checkpoint.RecoveryPoint{}, fmt.Errorf("write maintenance recovery manifest: %w", err)
 	}
 	point.Objects = append([]string{filepath.ToSlash(filepath.Clean(manifestPath))}, backupObjects...)
@@ -163,7 +165,7 @@ func copyMaintenanceFile(sourcePath, backupPath string) error {
 	if err != nil {
 		return fmt.Errorf("read maintenance source %s: %w", sourcePath, err)
 	}
-	if err := os.WriteFile(backupPath, content, 0o644); err != nil {
+	if err := os.WriteFile(backupPath, content, maintenanceRecoveryFileMode); err != nil {
 		return fmt.Errorf("write maintenance backup %s: %w", backupPath, err)
 	}
 	return nil
