@@ -275,6 +275,9 @@ export async function bootstrapTask(title: string) {
   if (taskResult === null) {
     throw new Error("hover text input is empty");
   }
+  if (taskResult.task === null) {
+    throw new Error("hover text input did not create a task");
+  }
 
   return taskResult.task;
 }

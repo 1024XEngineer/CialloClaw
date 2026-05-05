@@ -448,7 +448,7 @@ export interface AgentInputSubmitParams {
 }
 
 export interface AgentInputSubmitResult {
-  task: Task;
+  task: Task | null;
   bubble_message: BubbleMessage | null;
   delivery_result: DeliveryResult | null;
 }

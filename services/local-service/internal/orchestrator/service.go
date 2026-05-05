@@ -325,6 +325,12 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
+	if decision, ok := s.routeUnanchoredSubmitInput(context.Background(), snapshot, suggestion, confirmRequired); ok {
+		if decision.Route == inputRouteSocialChat {
+			return s.socialChatInputResponse(decision), nil
+		}
+		suggestion = applyInputRouteDecision(suggestion, decision)
+	}
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
 	if !suggestion.RequiresConfirm {
 		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)
@@ -984,7 +990,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	snapshot := snapshotFromTask(updatedTask)
-	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
 	if err != nil {
@@ -5978,9 +5983,9 @@ func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any
 	return merged
 }
 
-func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, error) {
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
 	if s.memory == nil {
-		return nil, memory.ErrStoreNotConfigured
+		return nil, nil, memory.ErrStoreNotConfigured
 	}
 	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
 		TaskID: taskID,
@@ -5989,13 +5994,13 @@ func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot
 		Limit:  memory.DefaultSearchLimit,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	persistedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
 	if err := s.memory.WriteRetrievalHits(context.Background(), persistedHits); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return mirrorReferencesFromRetrievalHits(persistedHits), nil
+	return mirrorReferencesFromRetrievalHits(persistedHits), persistedHits, nil
 }
 
 func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
@@ -6182,24 +6187,59 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 // debug, or storage-backed views can explain what memory lookup the task was
 // supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
-	readPlans := []map[string]any{
-		{
-			"kind":           "retrieval",
-			"backend":        s.memory.RetrievalBackend(),
-			"task_id":        taskID,
-			"run_id":         runID,
-			"query":          memoryQueryFromSnapshot(snapshot),
-			"reason":         "任务开始前准备记忆召回",
-			"intent_name":    stringValue(taskIntent, "name", "summarize"),
-			"selection_text": snapshot.SelectionText,
-			"input_text":     snapshot.Text,
-			"source_type":    snapshot.Trigger,
-		},
+	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
+	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
+	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
+	if err == nil {
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
+	}
+	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
+	readPlan := map[string]any{
+		"kind":           "retrieval",
+		"task_id":        taskID,
+		"run_id":         runID,
+		"query":          memoryQueryFromSnapshot(snapshot),
+		"reason":         "任务开始前准备记忆召回",
+		"intent_name":    stringValue(taskIntent, "name", "summarize"),
+		"selection_text": snapshot.SelectionText,
+		"input_text":     snapshot.Text,
+		"source_type":    snapshot.Trigger,
+	}
+	if memoryService != nil {
+		readPlan["backend"] = memoryService.RetrievalBackend()
+	}
+	if contextItems := retrievalContextItems(hits); len(contextItems) > 0 {
+		readPlan["retrieval_context"] = contextItems
 	}
 
-	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
-	references, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
-	s.syncTaskReadMirrorReferences(taskID, references, err)
+	return []map[string]any{readPlan}
+}
+
+func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	items := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
+		summary := strings.TrimSpace(hit.Summary)
+		if summary == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"memory_id": hit.MemoryID,
+			"source":    hit.Source,
+			"summary":   summary,
+			"score":     hit.Score,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }
 
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
@@ -7338,6 +7378,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
+		MemoryReadPlans:      cloneMapSlice(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,

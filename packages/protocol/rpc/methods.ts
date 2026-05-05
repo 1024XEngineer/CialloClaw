@@ -235,9 +235,10 @@ export interface AgentInputSubmitParams {
   };
 }
 
-// AgentInputSubmitResult 定义当前模块的接口约束。
+// AgentInputSubmitResult returns either a formal task handoff or a detached
+// lightweight chat bubble when the input does not need task creation.
 export interface AgentInputSubmitResult {
-  task: Task;
+  task: Task | null;
   bubble_message: BubbleMessage | null;
   delivery_result: DeliveryResult | null;
 }
