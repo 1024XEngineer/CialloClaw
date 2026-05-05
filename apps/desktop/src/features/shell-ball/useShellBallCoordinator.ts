@@ -1007,12 +1007,13 @@ export function createShellBallAgentBubbleItem(
       });
     }
 
-    const taskSessionId = typeof result.task.session_id === "string" ? result.task.session_id.trim() : "";
+    const task = result.task;
+    const taskSessionId = typeof task?.session_id === "string" ? task.session_id.trim() : "";
     const normalizedTaskSessionId = taskSessionId !== "" ? taskSessionId : undefined;
-    const intentConfirm = bubbleType === "intent_confirm" && result.task.intent?.name?.trim()
+    const intentConfirm = bubbleType === "intent_confirm" && task?.intent?.name?.trim()
       ? {
-          intentName: result.task.intent.name,
-          intentLabel: formatShellBallIntentLabel(result.task.intent.name),
+          intentName: task.intent.name,
+          intentLabel: formatShellBallIntentLabel(task.intent.name),
           status: "idle" as const,
           sessionId: normalizedTaskSessionId,
           pageContext: normalizedTaskSessionId
@@ -3274,9 +3275,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             if (!isShellBallInputSubmitResult(result)) {
               throw new Error("Shell-ball intent correction did not return a task result.");
             }
+            if (!result.task) {
+              throw new Error("Shell-ball intent correction returned without a task payload.");
+            }
 
-            registerShellBallTask(result.task.task_id, turnIndex, result.task.status, result.task.intent?.name ?? null);
-            const continuedOriginalTask = result.task.task_id === activeIntentCorrection.taskId;
+            const resultTask = result.task;
+            registerShellBallTask(resultTask.task_id, turnIndex, resultTask.status, resultTask.intent?.name ?? null);
+            const continuedOriginalTask = resultTask.task_id === activeIntentCorrection.taskId;
             setBubbleItems((currentItems) => {
               let nextItems = currentItems.map((item) =>
                 item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
@@ -3284,7 +3289,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                       ...item,
                       bubble: {
                         ...item.bubble,
-                        task_id: result.task.task_id,
+                        task_id: resultTask.task_id,
                       },
                     }
                   : item,
@@ -3314,7 +3319,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               );
             });
             revealBubbleRegion();
-            void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+            void autoOpenShellBallDeliveryResult(resultTask.task_id, result.delivery_result);
           } catch (error) {
             console.warn("shell-ball intent correction submit failed", error);
             enterIntentCorrectionMode({
