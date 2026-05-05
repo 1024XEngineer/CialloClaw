@@ -1587,7 +1587,7 @@ func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 		RunID:                "run_005",
 		Title:                "页面读取",
 		Intent:               map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
-		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面"},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面", BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example Page"},
 		DeliveryType:         "bubble",
 		ResultTitle:          "页面读取结果",
 		ApprovalGranted:      true,
@@ -1599,6 +1599,13 @@ func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 	}
 	if result.ToolName != "page_read" {
 		t.Fatalf("expected page_read tool, got %s", result.ToolName)
+	}
+	attachInput, ok := result.ToolInput["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected page_read tool input to carry attach hints, got %+v", result.ToolInput)
+	}
+	if attachInput["browser_kind"] != "chrome" {
+		t.Fatalf("expected page_read attach browser kind, got %+v", attachInput)
 	}
 	if result.ToolOutput["summary_output"] == nil {
 		t.Fatalf("expected sidecar tool summary output, got %+v", result.ToolOutput)
@@ -1788,6 +1795,39 @@ func TestExecuteDirectSidecarPageReadFailureReturnsMappedToolTrace(t *testing.T)
 	}
 	if result.ToolCalls[0].ErrorCode == nil || *result.ToolCalls[0].ErrorCode != tools.ToolErrorCodePlaywrightSidecarFail {
 		t.Fatalf("expected unified sidecar error code, got %+v", result.ToolCalls[0])
+	}
+}
+
+func TestResolvePageToolInputInjectsAttachHintsFromSnapshot(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com/current", WindowTitle: "Current Tab"}
+	input, ok := resolvePageToolInput("page_search", map[string]any{"url": "https://example.com/current", "query": "docs", "limit": 2.0}, snapshot)
+	if !ok {
+		t.Fatal("expected page_search tool input to resolve")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach hints in page_search input, got %+v", input)
+	}
+	if attach["browser_kind"] != "edge" {
+		t.Fatalf("expected attach browser kind edge, got %+v", attach)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["url"] != "https://example.com/current" || target["title_contains"] != "Current Tab" {
+		t.Fatalf("expected attach target to use current page snapshot, got %+v", attach)
+	}
+	if input["query"] != "docs" || input["limit"] != 2.0 {
+		t.Fatalf("expected search-specific input to survive attach injection, got %+v", input)
+	}
+}
+
+func TestResolvePageToolInputSkipsAttachWhenSnapshotDoesNotMatchRequestedPage(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/current", WindowTitle: "Current Tab"}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/other"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve")
+	}
+	if _, exists := input["attach"]; exists {
+		t.Fatalf("expected mismatched snapshot to fall back to launch path, got %+v", input)
 	}
 }
 
@@ -2896,13 +2936,14 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
 	tests := []struct {
-		name     string
-		request  Request
-		wantTool string
-		wantKey  string
+		name       string
+		request    Request
+		wantTool   string
+		wantKey    string
+		wantAttach bool
 	}{
-		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact", wantKey: "url"},
-		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom", wantKey: "url"},
+		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantKey: "url", wantAttach: true},
+		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantKey: "url", wantAttach: true},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
 		{name: "transcode_media", request: Request{Intent: map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4", "format": "mp4"}}}, wantTool: "transcode_media", wantKey: "output_path"},
 		{name: "extract_frames", request: Request{Intent: map[string]any{"name": "extract_frames", "arguments": map[string]any{"path": "clips/demo.mov", "output_dir": "frames", "limit": 2.0}}}, wantTool: "extract_frames", wantKey: "output_dir"},
@@ -2916,6 +2957,10 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 			if _, exists := input[test.wantKey]; !exists {
 				t.Fatalf("expected input key %s, got %+v", test.wantKey, input)
 			}
+			_, hasAttach := input["attach"]
+			if hasAttach != test.wantAttach {
+				t.Fatalf("expected attach=%v, got input %+v", test.wantAttach, input)
+			}
 		})
 	}
 }
@@ -2923,12 +2968,13 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
 	tests := []struct {
-		name     string
-		request  Request
-		wantTool string
+		name       string
+		request    Request
+		wantTool   string
+		wantAttach bool
 	}{
-		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact"},
-		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom"},
+		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantAttach: true},
+		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantAttach: true},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
 		{name: "normalize_recording", request: Request{TaskID: "task_004", RunID: "run_004", DeliveryType: "bubble", ResultTitle: "归一化结果", Intent: map[string]any{"name": "normalize_recording", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4"}}}, wantTool: "normalize_recording"},
 	}
@@ -2946,6 +2992,10 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 			}
 			if len(input) == 0 {
 				t.Fatalf("expected tool input, got %+v", input)
+			}
+			_, hasAttach := input["attach"]
+			if hasAttach != test.wantAttach {
+				t.Fatalf("expected attach=%v, got input %+v", test.wantAttach, input)
 			}
 		})
 	}

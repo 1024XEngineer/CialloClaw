@@ -978,40 +978,45 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 		return Result{}, false, nil
 	}
 	args := mapValue(request.Intent, "arguments")
-	toolResult, recoveryPoint, err := s.executeTool(ctx, request, s.workspace, intentName, args)
+	toolInput, ok := resolveDirectToolInput(intentName, args, request.Snapshot)
+	if !ok {
+		return Result{}, false, nil
+	}
+	toolName := intentName
+	toolResult, recoveryPoint, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
 		failedResult := Result{
 			RecoveryPoint: cloneMap(recoveryPoint),
 		}
 		if toolResult != nil {
-			failedResult.ToolCalls = []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, map[string]any{"path": stringValue(args, "path", "")})}
-			failedResult.ToolName = intentName
-			failedResult.ToolInput = mergeToolInputs(args, map[string]any{
-				"intent_name":     intentName,
+			failedResult.ToolCalls = []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)}
+			failedResult.ToolName = toolName
+			failedResult.ToolInput = mergeToolInputs(toolInput, map[string]any{
+				"intent_name":     toolName,
 				"delivery_type":   "bubble",
 				"available_tools": s.availableToolNames(),
 				"workers":         s.availableWorkers(),
 			})
-			failedResult.ToolOutput = normalizeFilesystemToolOutput(intentName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), args)
+			failedResult.ToolOutput = normalizeFilesystemToolOutput(toolName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), toolInput)
 		}
-		return failedResult, false, fmt.Errorf("execute builtin tool %s: %w", intentName, err)
+		return failedResult, false, fmt.Errorf("execute builtin tool %s: %w", toolName, err)
 	}
-	bubbleText := toolBubbleText(intentName, toolResult)
+	bubbleText := toolBubbleText(toolName, toolResult)
 	return Result{
 		Content:        bubbleText,
 		DeliveryResult: s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, ""),
 		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
 		BubbleText:     bubbleText,
 		RecoveryPoint:  cloneMap(recoveryPoint),
-		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, map[string]any{"path": stringValue(args, "path", "")})},
-		ToolName:       intentName,
-		ToolInput: mergeToolInputs(args, map[string]any{
-			"intent_name":     intentName,
+		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)},
+		ToolName:       toolName,
+		ToolInput: mergeToolInputs(toolInput, map[string]any{
+			"intent_name":     toolName,
 			"delivery_type":   "bubble",
 			"available_tools": s.availableToolNames(),
 			"workers":         s.availableWorkers(),
 		}),
-		ToolOutput: normalizeFilesystemToolOutput(intentName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), args),
+		ToolOutput: normalizeFilesystemToolOutput(toolName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), toolInput),
 	}, true, nil
 }
 
@@ -1101,23 +1106,31 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 		return "", nil, false
 	}
 
+	input, ok := resolveDirectToolInput(intentName, args, request.Snapshot)
+	if !ok {
+		return "", nil, false
+	}
+	return intentName, input, true
+}
+
+func resolveDirectToolInput(intentName string, args map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
 	switch intentName {
 	case "read_file":
 		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
 		if pathValue == "" {
-			return "", nil, false
+			return nil, false
 		}
-		return intentName, map[string]any{"path": pathValue}, true
+		return map[string]any{"path": pathValue}, true
 	case "list_dir":
 		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
 		if pathValue == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue}
 		if limit, ok := args["limit"]; ok {
 			input["limit"] = limit
 		}
-		return intentName, input, true
+		return input, true
 	case "exec_command":
 		input := map[string]any{}
 		for _, key := range []string{"command", "args", "working_dir"} {
@@ -1126,68 +1139,43 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 			}
 		}
 		if len(input) == 0 {
-			return "", nil, false
+			return nil, false
 		}
-		return intentName, input, true
+		return input, true
 	case "page_read":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return "", nil, false
-		}
-		return intentName, map[string]any{"url": urlValue}, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "page_search":
-		urlValue := stringValue(args, "url", "")
-		queryValue := stringValue(args, "query", "")
-		if urlValue == "" || queryValue == "" {
-			return "", nil, false
-		}
-		input := map[string]any{"url": urlValue, "query": queryValue}
-		if limit, ok := args["limit"]; ok {
-			input["limit"] = limit
-		}
-		return intentName, input, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "page_interact":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return "", nil, false
-		}
-		input := map[string]any{"url": urlValue}
-		if actions, ok := args["actions"]; ok {
-			input["actions"] = actions
-		}
-		return intentName, input, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "structured_dom":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return "", nil, false
-		}
-		return intentName, map[string]any{"url": urlValue}, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "extract_text", "ocr_image", "ocr_pdf":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		if pathValue == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue}
 		if language, ok := args["language"]; ok {
 			input["language"] = language
 		}
-		return intentName, input, true
+		return input, true
 	case "transcode_media", "normalize_recording":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		outputPath := stringValue(args, "output_path", "")
 		if pathValue == "" || outputPath == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue, "output_path": outputPath}
 		if format, ok := args["format"]; ok {
 			input["format"] = format
 		}
-		return intentName, input, true
+		return input, true
 	case "extract_frames":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		outputDir := stringValue(args, "output_dir", "")
 		if pathValue == "" || outputDir == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue, "output_dir": outputDir}
 		if everySeconds, ok := args["every_seconds"]; ok {
@@ -1196,9 +1184,9 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 		if limit, ok := args["limit"]; ok {
 			input["limit"] = limit
 		}
-		return intentName, input, true
+		return input, true
 	default:
-		return "", nil, false
+		return nil, false
 	}
 }
 
@@ -3187,33 +3175,20 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "page_read":
-				urlValue := stringValue(args, "url", "")
-				if urlValue != "" {
-					return intentName, map[string]any{"url": urlValue}, s.toolExecutionContext(s.workspace, request), true, nil
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
+					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "page_search":
-				urlValue := stringValue(args, "url", "")
-				queryValue := stringValue(args, "query", "")
-				if urlValue != "" && queryValue != "" {
-					input := map[string]any{"url": urlValue, "query": queryValue}
-					if limit, ok := args["limit"]; ok {
-						input["limit"] = limit
-					}
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "page_interact":
-				urlValue := stringValue(args, "url", "")
-				if urlValue != "" {
-					input := map[string]any{"url": urlValue}
-					if actions, ok := args["actions"]; ok {
-						input["actions"] = actions
-					}
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "structured_dom":
-				urlValue := stringValue(args, "url", "")
-				if urlValue != "" {
-					return intentName, map[string]any{"url": urlValue}, s.toolExecutionContext(s.workspace, request), true, nil
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
+					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "extract_text", "ocr_image", "ocr_pdf":
 				pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
@@ -3384,6 +3359,57 @@ func approvedTargetKeys(intentName string) []string {
 	default:
 		return []string{"target_path", "path", "working_dir"}
 	}
+}
+
+func resolvePageToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+	if urlValue == "" {
+		return nil, false
+	}
+	input := map[string]any{"url": urlValue}
+	switch intentName {
+	case "page_search":
+		queryValue := strings.TrimSpace(stringValue(arguments, "query", ""))
+		if queryValue == "" {
+			return nil, false
+		}
+		input["query"] = queryValue
+		if limit, ok := arguments["limit"]; ok {
+			input["limit"] = limit
+		}
+	case "page_interact":
+		if actions, ok := arguments["actions"]; ok {
+			input["actions"] = actions
+		}
+	}
+	if attach := pageAttachInput(urlValue, arguments, snapshot); len(attach) > 0 {
+		input["attach"] = attach
+	}
+	return input, true
+}
+
+func pageAttachInput(urlValue string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) map[string]any {
+	browserKind := strings.ToLower(strings.TrimSpace(firstNonEmpty(stringValue(arguments, "browser_kind", ""), snapshot.BrowserKind)))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return nil
+	}
+	pageURL := strings.TrimSpace(snapshot.PageURL)
+	if pageURL == "" || pageURL != strings.TrimSpace(urlValue) {
+		return nil
+	}
+	target := map[string]any{"url": pageURL}
+	if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
+		target["title_contains"] = windowTitle
+	}
+	attach := map[string]any{
+		"mode":         string(tools.BrowserAttachModeCDP),
+		"browser_kind": browserKind,
+		"target":       target,
+	}
+	if endpointURL := strings.TrimSpace(stringValue(arguments, "endpoint_url", "")); endpointURL != "" {
+		attach["endpoint_url"] = endpointURL
+	}
+	return attach
 }
 
 func requireAuthorizationFlag(intent map[string]any) bool {
