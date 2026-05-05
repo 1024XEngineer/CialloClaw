@@ -3,6 +3,8 @@ import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "./shellBall.types";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 
+type ShellBallFloatingSize = "small" | "medium" | "large";
+
 type ShellBallSurfaceProps = {
   bottomContent?: ReactNode;
   children?: ReactNode;
@@ -11,6 +13,7 @@ type ShellBallSurfaceProps = {
   edgeDockRevealed?: boolean;
   edgeDockSide?: "left" | "right" | null;
   fileDropActive?: boolean;
+  floatingBallSize?: ShellBallFloatingSize;
   mascotRef?: RefObject<HTMLDivElement>;
   overlayContent?: ReactNode;
   textDropActive?: boolean;
@@ -87,6 +90,7 @@ export function ShellBallSurface({
   edgeDockRevealed = false,
   edgeDockSide = null,
   fileDropActive = false,
+  floatingBallSize = "medium",
   mascotRef,
   overlayContent,
   textDropActive = false,
@@ -144,6 +148,7 @@ export function ShellBallSurface({
       className="shell-ball-surface"
       data-dashboard-transition-phase={dashboardTransitionPhase}
       data-file-drop-active={fileDropActive ? "true" : "false"}
+      data-floating-ball-size={floatingBallSize}
       onDragEnterCapture={handleDragOver}
       onDragOverCapture={handleDragOver}
       onDropCapture={handleDrop}

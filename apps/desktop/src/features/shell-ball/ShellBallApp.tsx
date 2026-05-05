@@ -38,6 +38,7 @@ import {
   setShellBallInteractiveRegions,
   setShellBallPressLock,
 } from "../../platform/shellBallWindow";
+import { loadSettings } from "../../services/settingsService";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -62,9 +63,19 @@ type ShellBallWindowAnchor = {
   y: number;
 };
 
+type ShellBallFloatingSize = "small" | "medium" | "large";
+
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
+
+export function normalizeShellBallFloatingSize(size: string | null | undefined): ShellBallFloatingSize {
+  if (size === "small" || size === "medium" || size === "large") {
+    return size;
+  }
+
+  return "medium";
+}
 
 type ShellBallClipboardPrompt = {
   text: string;
@@ -268,6 +279,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
+  const [floatingBallSize, setFloatingBallSize] = useState<ShellBallFloatingSize>(() => {
+    if (typeof window === "undefined") {
+      return "medium";
+    }
+
+    return normalizeShellBallFloatingSize(loadSettings().settings.floating_ball.size);
+  });
   const [inputFocusToken, setInputFocusToken] = useState(0);
   const [textDragActive, setTextDragActive] = useState(false);
   const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
@@ -327,6 +345,22 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
   const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function syncFloatingBallSizeFromStorage() {
+      setFloatingBallSize(normalizeShellBallFloatingSize(loadSettings().settings.floating_ball.size));
+    }
+
+    window.addEventListener("storage", syncFloatingBallSizeFromStorage);
+
+    return () => {
+      window.removeEventListener("storage", syncFloatingBallSizeFromStorage);
+    };
+  }, []);
   const {
     beginBallWindowPointerDrag,
     edgeDockState,
@@ -948,6 +982,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       edgeDockRevealed={edgeDockState.revealed}
       edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
+      floatingBallSize={floatingBallSize}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}

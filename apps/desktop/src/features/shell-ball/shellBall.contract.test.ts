@@ -32,6 +32,7 @@ import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
   isShellBallClipboardPromptActive,
+  normalizeShellBallFloatingSize,
   ShellBallApp,
   shouldArmShellBallTextDropTarget,
   shouldShowShellBallFileDropOverlay,
@@ -1037,6 +1038,9 @@ test("shell-ball surface styles keep the shell transparent and fully draggable",
   assert.doesNotMatch(shellBallSurfaceBlock, /overflow-x:\s*hidden/);
   assert.match(mascotBlock, /width:\s*clamp\(/);
   assert.match(mascotHotspotBlock, /inset:\s*0;/);
+  assert.match(shellBallStyles, /data-floating-ball-size="small"/);
+  assert.match(shellBallStyles, /data-floating-ball-size="medium"/);
+  assert.match(shellBallStyles, /data-floating-ball-size="large"/);
 });
 
 test("shell-ball helper windows avoid auto-focus behavior", () => {
@@ -6801,6 +6805,7 @@ test("shell-ball surface renders the mascot-only floating structure without the 
 test("shell-ball surface keeps drag and click on the mascot hotspot only", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallSurface, {
+      floatingBallSize: "small",
       visualState: "hover_input",
       voicePreview: null,
       motionConfig: getShellBallMotionConfig("hover_input"),
@@ -6821,8 +6826,16 @@ test("shell-ball surface keeps drag and click on the mascot hotspot only", () =>
 
   assert.match(markup, /data-shell-ball-zone="interaction"/);
   assert.match(markup, /data-shell-ball-zone="voice-hotspot"/);
+  assert.match(markup, /data-floating-ball-size="small"/);
   assert.doesNotMatch(markup, /shell-ball-surface__host-drag-zone/);
   assert.match(markup, /shell-ball-surface__interaction-zone/);
+});
+
+test("shell-ball floating size normalization falls back to medium", () => {
+  assert.equal(normalizeShellBallFloatingSize("small"), "small");
+  assert.equal(normalizeShellBallFloatingSize("large"), "large");
+  assert.equal(normalizeShellBallFloatingSize("unknown"), "medium");
+  assert.equal(normalizeShellBallFloatingSize(undefined), "medium");
 });
 
 test("shell-ball mascot hotspot policy only opens primary click for selected-text prompts", () => {

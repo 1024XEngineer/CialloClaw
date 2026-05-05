@@ -90,15 +90,16 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-surface {
   --shell-ball-helper-width: min(28rem, calc(100vw - 0.75rem));
+  --shell-ball-size-multiplier: 2;
   --shell-ball-scale: 1;
-  --shell-ball-mascot-scale: 0.66;
+  --shell-ball-mascot-scale: 1.32;
   --shell-ball-mascot-shell-height: calc((clamp(16.2rem, 30.6vw, 21.6rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-mascot-shell-width: calc((clamp(14.86rem, 27.9vw, 17.1rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-stage-anchor-x: 50%;
   --shell-ball-stage-anchor-y: 50%;
   --shell-ball-bubble-reserve-height: clamp(15.2rem, 56vh, 23rem);
-  --shell-ball-input-anchor-offset-y: 4rem;
-  --shell-ball-input-proxy-offset-y: 5.65rem;
+  --shell-ball-input-anchor-offset-y: calc(4rem * var(--shell-ball-size-multiplier));
+  --shell-ball-input-proxy-offset-y: calc(5.65rem * var(--shell-ball-size-multiplier));
   --shell-ball-voice-frame-size: 15.5rem;
   --shell-ball-transition-scale: 1;
   --shell-ball-transition-opacity: 1;
@@ -131,6 +132,21 @@ body[data-app-window="shell-ball"],
     transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
   width: 100%;
   height: 100%;
+}
+
+.shell-ball-surface[data-floating-ball-size="small"] {
+  --shell-ball-size-multiplier: 1;
+  --shell-ball-mascot-scale: 0.66;
+}
+
+.shell-ball-surface[data-floating-ball-size="medium"] {
+  --shell-ball-size-multiplier: 2;
+  --shell-ball-mascot-scale: 1.32;
+}
+
+.shell-ball-surface[data-floating-ball-size="large"] {
+  --shell-ball-size-multiplier: 3;
+  --shell-ball-mascot-scale: 1.98;
 }
 
 .shell-ball-surface[data-dashboard-transition-phase="opening"],
