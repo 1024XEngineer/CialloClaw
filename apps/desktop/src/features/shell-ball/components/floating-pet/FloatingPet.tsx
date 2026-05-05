@@ -63,9 +63,11 @@ function resolveAssetSize(assetName: FloatingPetAssetName, scale: FloatingPetLay
   };
 }
 
-function renderCenteredImage(assetName: FloatingPetAssetName, layout: FloatingPetLayerTransform, extraTransform = "") {
+function renderCenteredImage(assetName: FloatingPetAssetName, layout: FloatingPetLayerTransform, rotationDeg = 0) {
   const size = resolveAssetSize(assetName, layout.scale);
-  const transform = extraTransform.trim();
+  const centerX = layout.position.x;
+  const centerY = layout.position.y;
+  const transform = rotationDeg === 0 ? undefined : `rotate(${rotationDeg} ${centerX} ${centerY})`;
 
   return (
     <image
@@ -73,10 +75,10 @@ function renderCenteredImage(assetName: FloatingPetAssetName, layout: FloatingPe
       height={size.height}
       href={floatingPetAssets[assetName]}
       preserveAspectRatio="xMidYMid meet"
-      transform={transform === "" ? undefined : transform}
+      transform={transform}
       width={size.width}
-      x={layout.position.x - size.width / 2}
-      y={layout.position.y - size.height / 2}
+      x={centerX - size.width / 2}
+      y={centerY - size.height / 2}
     />
   );
 }
@@ -339,7 +341,7 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             transition={{ duration: tailMotion.duration, ease: "easeInOut", repeat: tailMotion.repeat, times: tailMotion.times }}
             transform={`translate(${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}
           >
-            {renderCenteredImage("tail", floatingPetInitialLayout.rootBody.tail, `rotate(${floatingPetInitialLayout.rootBody.tail.rotation})`)}
+            {renderCenteredImage("tail", floatingPetInitialLayout.rootBody.tail, floatingPetInitialLayout.rootBody.tail.rotation)}
           </motion.g>
 
           <motion.g
@@ -348,8 +350,10 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.left.repeat, times: wingMotion.left.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
             transform={`translate(${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}
           >
-            {renderCenteredImage("leftWing", floatingPetInitialLayout.rootBody.leftWing, `rotate(${floatingPetInitialLayout.rootBody.leftWing.rotation})`)}
+            {renderCenteredImage("leftWing", floatingPetInitialLayout.rootBody.leftWing, floatingPetInitialLayout.rootBody.leftWing.rotation)}
           </motion.g>
+
+          {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
           <motion.g
             animate={{ rotate: wingMotion.right.rotate }}
@@ -357,10 +361,8 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
             transform={`translate(${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}
           >
-            {renderCenteredImage("rightWing", floatingPetInitialLayout.rootBody.rightWing, `rotate(${floatingPetInitialLayout.rootBody.rightWing.rotation})`)}
+            {renderCenteredImage("rightWing", floatingPetInitialLayout.rootBody.rightWing, floatingPetInitialLayout.rootBody.rightWing.rotation)}
           </motion.g>
-
-          {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
           <g transform={`translate(${floatingPetInitialLayout.rootBody.face.position.x} ${floatingPetInitialLayout.rootBody.face.position.y})`}>
             <g transform={`translate(${floatingPetInitialLayout.rootBody.cheek.position.x} ${floatingPetInitialLayout.rootBody.cheek.position.y})`}>
