@@ -470,7 +470,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | 入口动作路由器 | 单击、双击、长按、悬停、拖拽、选中 | 标准前端动作事件 | 路由到对象承接、推荐或窗口动作 |
 | 对象识别与承接器 | 文本、文件、语音、推荐对象 | `taskObject`、对象有效性、输入摘要 | 进入意图确认或直接发起任务 |
-| 意图确认协调器 | 已识别对象、后端建议、用户修正 | 确认 payload、候选输出方式 | `agent.task.confirm` 或回退待机 |
+| 意图确认协调器 | 已识别对象、后端建议、用户修正 | 确认 payload、候选输出方式 | 显式确认走 `agent.task.confirm`，自然语言修正可续接到同 session 的 `agent.input.submit` |
 | 任务发起协调器 | start / submit / control 意图 | 标准 RPC 请求、局部 loading 状态 | 发起任务、控制任务、处理授权等待 |
 | 结果分流协调器 | `delivery_result / artifact / task` 投影 | 交付出口决策、打开动作 | 气泡、结果页、文档、任务详情入口 |
 | 推荐调度器 | 上下文感知信号、冷却策略 | 推荐请求、推荐展示节流 | 轻提示或升级成正式任务 |
@@ -1366,7 +1366,7 @@ flowchart TB
 #### 运行控制器如何承接
 - 编排器把 `Suggestion` 转成 `CreateTaskInput`；
 - 运行控制器据此种下 `Status`、`CurrentStep`、`PreferredDelivery / FallbackDelivery` 和首条 `Timeline`；
-- 若 `RequiresConfirm = true`，先停在 `confirming_intent`，等待后续 `agent.task.confirm`；
+- 若 `RequiresConfirm = true`，先停在 `confirming_intent`，等待后续 `agent.task.confirm`，或等待同 session 内的自然语言补充继续挂回该 task；
 - 若 `RequiresConfirm = false`，直接进入治理判断与执行。
 
 #### 异常处理
@@ -3202,7 +3202,7 @@ stateDiagram-v2
 
 ### 6.15 前端状态图：意图确认
 
-**说明**：这是前端承接流程和后端规划流程之间的桥接状态机，结束点通常会进入 `agent.task.confirm` 或直接执行。  
+**说明**：这是前端承接流程和后端规划流程之间的桥接状态机，结束点通常会进入显式确认、同 session 的自然语言补充续接，或直接执行。 
 **实现补充**：所有对象型入口都应复用同一确认 / 执行骨架，不允许各入口维护不同的确认状态定义；带明确说明的文件任务可直接进入主执行链路，裸文件或低置信度对象进入确认 / 补充输入，带任务特定证据的结构化补充证据可挂回 `waiting_input / confirming_intent` 任务但仍不得自动执行。
 
 ```mermaid

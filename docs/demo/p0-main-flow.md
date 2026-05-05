@@ -4,7 +4,7 @@
 
 1. 用户拖拽文件、选中文本、悬停输入或语音提交。
 2. `shell-ball` 承接当前现场并展示意图确认气泡。
-3. 前端通过 `agent.task.start` 或 `agent.task.confirm` 发起或更新任务。
+3. 前端通过 `agent.task.start`、`agent.task.confirm`，或同 session 的 `agent.input.submit` 续接来发起或更新任务。
 4. Go harness 建立 `task` 与 `run` 映射，并推进执行。
 5. 工具链执行后生成短结果或正式交付对象 `delivery_result`。
 6. artifact、audit、recovery_point 能在 dashboard 中被看到。
