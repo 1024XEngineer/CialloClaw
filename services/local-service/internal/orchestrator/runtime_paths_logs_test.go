@@ -167,3 +167,111 @@ func TestServiceLogErrorListFiltersFailures(t *testing.T) {
 		t.Fatalf("expected tool-call error code to be preserved, got %+v", items[2])
 	}
 }
+
+func TestServiceLogExecutionListPaginatesMergedSources(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "logs")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	ctx := context.Background()
+	if err := service.storage.LoopRuntimeStore().SaveEvents(ctx, []storage.EventRecord{
+		{EventID: "event_002", RunID: "run_001", TaskID: "task_001", Type: "loop.round.completed", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-18T10:06:00Z"},
+		{EventID: "event_001", RunID: "run_001", TaskID: "task_001", Type: "loop.round.completed", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-18T10:03:00Z"},
+	}); err != nil {
+		t.Fatalf("SaveEvents returned error: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(ctx, tools.ToolCallRecord{
+		ToolCallID: "tool_001",
+		RunID:      "run_001",
+		TaskID:     "task_001",
+		CreatedAt:  "2026-04-18T10:05:00Z",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		DurationMS: 9,
+	}); err != nil {
+		t.Fatalf("SaveToolCall returned error: %v", err)
+	}
+	if err := service.storage.AuditWriter().WriteAuditRecord(ctx, audit.Record{
+		AuditID:   "audit_001",
+		TaskID:    "task_001",
+		Type:      "file",
+		Action:    "write_file",
+		Summary:   "audit",
+		Target:    "workspace/out.md",
+		Result:    "success",
+		CreatedAt: "2026-04-18T10:04:00Z",
+	}); err != nil {
+		t.Fatalf("WriteAuditRecord returned error: %v", err)
+	}
+
+	result, err := service.LogExecutionList(map[string]any{"task_id": "task_001", "limit": 2, "offset": 1})
+	if err != nil {
+		t.Fatalf("LogExecutionList returned error: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected paged execution logs, got %+v", items)
+	}
+	if items[0]["log_id"] != "tool_call:tool_001" || items[1]["log_id"] != "audit:audit_001" {
+		t.Fatalf("expected merged execution page to preserve descending order, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 4 || page["has_more"] != true {
+		t.Fatalf("expected merged execution page metadata, got %+v", page)
+	}
+}
+
+func TestServiceLogErrorListPaginatesMergedFailures(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "errors")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	ctx := context.Background()
+	if err := service.storage.LoopRuntimeStore().SaveEvents(ctx, []storage.EventRecord{
+		{EventID: "event_failed_002", RunID: "run_001", TaskID: "task_001", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-18T10:06:00Z"},
+		{EventID: "event_failed_001", RunID: "run_001", TaskID: "task_001", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-18T10:03:00Z"},
+		{EventID: "event_ok", RunID: "run_001", TaskID: "task_001", Type: "loop.round.completed", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-18T10:02:00Z"},
+	}); err != nil {
+		t.Fatalf("SaveEvents returned error: %v", err)
+	}
+	if err := service.storage.ToolCallStore().SaveToolCall(ctx, tools.ToolCallRecord{
+		ToolCallID: "tool_failed_001",
+		RunID:      "run_001",
+		TaskID:     "task_001",
+		CreatedAt:  "2026-04-18T10:04:00Z",
+		ToolName:   "run_command",
+		Status:     tools.ToolCallStatusFailed,
+		ErrorCode:  intPtr(23),
+		DurationMS: 22,
+	}); err != nil {
+		t.Fatalf("SaveToolCall returned error: %v", err)
+	}
+	if err := service.storage.AuditWriter().WriteAuditRecord(ctx, audit.Record{
+		AuditID:   "audit_failed_001",
+		TaskID:    "task_001",
+		Type:      "command",
+		Action:    "run_command",
+		Summary:   "command failed",
+		Target:    "workspace/script.sh",
+		Result:    "failed",
+		CreatedAt: "2026-04-18T10:05:00Z",
+	}); err != nil {
+		t.Fatalf("WriteAuditRecord returned error: %v", err)
+	}
+
+	result, err := service.LogErrorList(map[string]any{"task_id": "task_001", "limit": 2, "offset": 1})
+	if err != nil {
+		t.Fatalf("LogErrorList returned error: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected paged error logs, got %+v", items)
+	}
+	if items[0]["log_id"] != "audit:audit_failed_001" || items[1]["log_id"] != "tool_call:tool_failed_001" {
+		t.Fatalf("expected merged error page to preserve descending order, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 4 || page["has_more"] != true {
+		t.Fatalf("expected merged error page metadata, got %+v", page)
+	}
+}

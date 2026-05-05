@@ -261,6 +261,37 @@ func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, 
 	return append([]EventRecord(nil), filtered[offset:end]...), len(filtered), nil
 }
 
+// ListErrorEvents provides the failure-only event window used by aggregated log
+// readers so they do not need to load every event row before filtering.
+func (s *inMemoryLoopRuntimeStore) ListErrorEvents(_ context.Context, taskID, runID string, limit, offset int) ([]EventRecord, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filtered := make([]EventRecord, 0, len(s.events))
+	for _, record := range s.events {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		if !eventRecordMatchesErrorLog(record) {
+			continue
+		}
+		filtered = append(filtered, record)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return parseGovernanceTime(filtered[i].CreatedAt).After(parseGovernanceTime(filtered[j].CreatedAt))
+	})
+	if offset >= len(filtered) {
+		return []EventRecord{}, len(filtered), nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(filtered) {
+		end = len(filtered)
+	}
+	return append([]EventRecord(nil), filtered[offset:end]...), len(filtered), nil
+}
+
 type SQLiteLoopRuntimeStore struct {
 	db *sql.DB
 }
@@ -559,6 +590,58 @@ func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, 
 		return nil, 0, fmt.Errorf("iterate events: %w", err)
 	}
 	return items, total, nil
+}
+
+// ListErrorEvents exposes the stored subset that matches control-panel error log
+// semantics so pagination can stay in SQLite instead of filtering in memory.
+func (s *SQLiteLoopRuntimeStore) ListErrorEvents(ctx context.Context, taskID, runID string, limit, offset int) ([]EventRecord, int, error) {
+	filters := make([]string, 0, 3)
+	filterArgs := make([]any, 0, 3)
+	if strings.TrimSpace(taskID) != "" {
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if strings.TrimSpace(runID) != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	filters = append(filters, `(LOWER(COALESCE(level, '')) = 'error' OR LOWER(type) LIKE '%failed%')`)
+	countQuery := `SELECT COUNT(1) FROM events WHERE ` + strings.Join(filters, ` AND `)
+	query := `SELECT event_id, run_id, task_id, step_id, type, level, payload_json, created_at FROM events WHERE ` + strings.Join(filters, ` AND `)
+	query += ` ORDER BY created_at DESC, event_id DESC`
+	args := append([]any(nil), filterArgs...)
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count error events: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list error events: %w", err)
+	}
+	defer rows.Close()
+	items := make([]EventRecord, 0)
+	for rows.Next() {
+		var record EventRecord
+		var stepID sql.NullString
+		if err := rows.Scan(&record.EventID, &record.RunID, &record.TaskID, &stepID, &record.Type, &record.Level, &record.PayloadJSON, &record.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan error event record: %w", err)
+		}
+		record.StepID = stepID.String
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate error events: %w", err)
+	}
+	return items, total, nil
+}
+
+func eventRecordMatchesErrorLog(record EventRecord) bool {
+	return strings.EqualFold(strings.TrimSpace(record.Level), "error") ||
+		strings.Contains(strings.ToLower(strings.TrimSpace(record.Type)), "failed")
 }
 
 func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {

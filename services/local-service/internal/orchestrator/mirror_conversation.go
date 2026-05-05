@@ -46,10 +46,11 @@ func (s *Service) beginMirrorConversationRecord(params map[string]any, snapshot 
 	if s == nil || s.storage == nil || s.storage.MirrorConversationStore() == nil {
 		return nil
 	}
-	traceID := strings.TrimSpace(requestTraceID(params))
-	if traceID == "" && strings.TrimSpace(snapshot.Text) == "" {
+	rawTraceID := strings.TrimSpace(requestTraceID(params))
+	if rawTraceID == "" && strings.TrimSpace(snapshot.Text) == "" {
 		return nil
 	}
+	traceID := ensureMirrorConversationTraceID(rawTraceID)
 	now := time.Now().Format(dateTimeLayout)
 	record := &storage.MirrorConversationRecord{
 		RecordID:  mirrorConversationRecordID(traceID),
@@ -127,6 +128,16 @@ func mirrorConversationRecordID(traceID string) string {
 		return fmt.Sprintf("mirror_conversation_%d", time.Now().UnixNano())
 	}
 	return fmt.Sprintf("mirror_conversation_%s", traceID)
+}
+
+// ensureMirrorConversationTraceID keeps the persisted mirror history contract
+// valid even when callers omit request_meta.trace_id at the loose map boundary.
+func ensureMirrorConversationTraceID(traceID string) string {
+	trimmed := strings.TrimSpace(traceID)
+	if trimmed != "" {
+		return trimmed
+	}
+	return fmt.Sprintf("trace_mirror_%d", time.Now().UnixNano())
 }
 
 func mirrorConversationRecordMap(record storage.MirrorConversationRecord) map[string]any {

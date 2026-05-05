@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,41 @@ func (s *inMemoryToolCallStore) ListToolCalls(_ context.Context, taskID, runID s
 			continue
 		}
 		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].CreatedAt == items[j].CreatedAt {
+			return items[i].ToolCallID > items[j].ToolCallID
+		}
+		return items[i].CreatedAt > items[j].CreatedAt
+	})
+	total := len(items)
+	if offset >= total {
+		return []tools.ToolCallRecord{}, total, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	return append([]tools.ToolCallRecord(nil), items[offset:end]...), total, nil
+}
+
+// ListErrorToolCalls exposes only failed/error-bearing tool calls so higher
+// level log queries can page the failure subset at the storage boundary.
+func (s *inMemoryToolCallStore) ListErrorToolCalls(_ context.Context, taskID, runID string, limit, offset int) ([]tools.ToolCallRecord, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]tools.ToolCallRecord, 0, len(s.records))
+	for _, record := range s.records {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		if !toolCallRecordMatchesErrorLog(record) {
 			continue
 		}
 		items = append(items, record)
@@ -179,6 +215,62 @@ func (s *SQLiteToolCallStore) ListToolCalls(ctx context.Context, taskID, runID s
 		return nil, 0, fmt.Errorf("iterate tool calls: %w", err)
 	}
 	return items, total, nil
+}
+
+// ListErrorToolCalls exposes only failed/error-bearing tool-call rows so merged
+// execution logs do not need to scan every stored tool call before filtering.
+func (s *SQLiteToolCallStore) ListErrorToolCalls(ctx context.Context, taskID, runID string, limit, offset int) ([]tools.ToolCallRecord, int, error) {
+	countQuery := `SELECT COUNT(1) FROM tool_calls WHERE 1 = 1`
+	query := `SELECT tool_call_id, run_id, task_id, step_id, tool_name, status, input_json, output_json, error_code, duration_ms, created_at FROM tool_calls WHERE 1 = 1`
+	args := make([]any, 0, 4)
+	countArgs := make([]any, 0, 2)
+	if taskID != "" {
+		countQuery += ` AND task_id = ?`
+		query += ` AND task_id = ?`
+		args = append(args, taskID)
+		countArgs = append(countArgs, taskID)
+	}
+	if runID != "" {
+		countQuery += ` AND run_id = ?`
+		query += ` AND run_id = ?`
+		args = append(args, runID)
+		countArgs = append(countArgs, runID)
+	}
+	countQuery += ` AND (status = 'failed' OR error_code IS NOT NULL)`
+	query += ` AND (status = 'failed' OR error_code IS NOT NULL)`
+	query += ` ORDER BY created_at DESC, tool_call_id DESC`
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count error tool calls: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list error tool calls: %w", err)
+	}
+	defer rows.Close()
+	items := make([]tools.ToolCallRecord, 0)
+	for rows.Next() {
+		record, err := scanToolCallRecord(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate error tool calls: %w", err)
+	}
+	return items, total, nil
+}
+
+func toolCallRecordMatchesErrorLog(record tools.ToolCallRecord) bool {
+	return record.ErrorCode != nil ||
+		record.Status == tools.ToolCallStatusFailed ||
+		record.Status == tools.ToolCallStatusTimeout ||
+		strings.EqualFold(strings.TrimSpace(string(record.Status)), string(tools.ToolCallStatusFailed))
 }
 
 func normalizeToolCallStatus(status tools.ToolCallStatus) string {

@@ -28,6 +28,18 @@ type executionLogRecord struct {
 	CreatedAt string
 }
 
+type errorEventLister interface {
+	ListErrorEvents(ctx context.Context, taskID, runID string, limit, offset int) ([]storage.EventRecord, int, error)
+}
+
+type errorToolCallLister interface {
+	ListErrorToolCalls(ctx context.Context, taskID, runID string, limit, offset int) ([]tools.ToolCallRecord, int, error)
+}
+
+type errorAuditLister interface {
+	ListErrorAuditRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error)
+}
+
 // SettingsRuntimePathsGet handles agent.settings.runtime_paths.get.
 func (s *Service) SettingsRuntimePathsGet(params map[string]any) (map[string]any, error) {
 	_ = params
@@ -46,12 +58,10 @@ func (s *Service) LogExecutionList(params map[string]any) (map[string]any, error
 	offset := clampListOffset(intValue(params, "offset", 0))
 	taskID := strings.TrimSpace(stringValue(params, "task_id", ""))
 	source := strings.TrimSpace(stringValue(params, "source", ""))
-	items, err := s.collectExecutionLogRecords(taskID, source)
+	items, total, err := s.collectExecutionLogRecordsPage(taskID, source, limit, offset)
 	if err != nil {
 		return nil, err
 	}
-	total := len(items)
-	items = paginateExecutionLogRecords(items, limit, offset)
 	return map[string]any{
 		"items": executionLogRecordMaps(items),
 		"page":  pageMap(limit, offset, total),
@@ -65,48 +75,206 @@ func (s *Service) LogErrorList(params map[string]any) (map[string]any, error) {
 	offset := clampListOffset(intValue(params, "offset", 0))
 	taskID := strings.TrimSpace(stringValue(params, "task_id", ""))
 	source := strings.TrimSpace(stringValue(params, "source", ""))
-	items, err := s.collectExecutionLogRecords(taskID, source)
+	items, total, err := s.collectErrorExecutionLogRecordsPage(taskID, source, limit, offset)
 	if err != nil {
 		return nil, err
 	}
-	items = filterErrorExecutionLogRecords(items)
-	total := len(items)
-	items = paginateExecutionLogRecords(items, limit, offset)
 	return map[string]any{
 		"items": executionLogRecordMaps(items),
 		"page":  pageMap(limit, offset, total),
 	}, nil
 }
 
-func (s *Service) collectExecutionLogRecords(taskID, source string) ([]executionLogRecord, error) {
+func (s *Service) collectExecutionLogRecordsPage(taskID, source string, limit, offset int) ([]executionLogRecord, int, error) {
 	if s == nil || s.storage == nil {
-		return []executionLogRecord{}, nil
+		return []executionLogRecord{}, 0, nil
 	}
 	ctx := context.Background()
-	items := make([]executionLogRecord, 0)
+	fetchLimit := executionLogCandidateLimit(limit, offset)
+	items := make([]executionLogRecord, 0, fetchLimit*3)
+	total := 0
 	if source == "" || source == "event" {
-		events, _, err := s.storage.LoopRuntimeStore().ListEvents(ctx, taskID, "", "", "", "", 0, 0)
+		events, count, err := s.storage.LoopRuntimeStore().ListEvents(ctx, taskID, "", "", "", "", fetchLimit, 0)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}
+		total += count
 		items = append(items, executionLogRecordsFromEvents(events)...)
 	}
 	if source == "" || source == "tool_call" {
-		toolCalls, _, err := s.storage.ToolCallStore().ListToolCalls(ctx, taskID, "", 0, 0)
+		toolCalls, count, err := s.storage.ToolCallStore().ListToolCalls(ctx, taskID, "", fetchLimit, 0)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}
+		total += count
 		items = append(items, executionLogRecordsFromToolCalls(toolCalls)...)
 	}
 	if source == "" || source == "audit" {
-		audits, _, err := s.storage.AuditStore().ListAuditRecords(ctx, taskID, "", 0, 0)
+		audits, count, err := s.storage.AuditStore().ListAuditRecords(ctx, taskID, "", fetchLimit, 0)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}
+		total += count
 		items = append(items, executionLogRecordsFromAudits(audits)...)
 	}
 	sortExecutionLogRecords(items)
-	return items, nil
+	return paginateExecutionLogRecords(items, limit, offset), total, nil
+}
+
+func (s *Service) collectErrorExecutionLogRecordsPage(taskID, source string, limit, offset int) ([]executionLogRecord, int, error) {
+	if s == nil || s.storage == nil {
+		return []executionLogRecord{}, 0, nil
+	}
+	ctx := context.Background()
+	fetchLimit := executionLogCandidateLimit(limit, offset)
+	items := make([]executionLogRecord, 0, fetchLimit*3)
+	total := 0
+	if source == "" || source == "event" {
+		events, count, err := listErrorEventRecords(ctx, s.storage.LoopRuntimeStore(), taskID, fetchLimit, 0)
+		if err != nil {
+			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+		}
+		total += count
+		items = append(items, executionLogRecordsFromEvents(events)...)
+	}
+	if source == "" || source == "tool_call" {
+		toolCalls, count, err := listErrorToolCallRecords(ctx, s.storage.ToolCallStore(), taskID, fetchLimit, 0)
+		if err != nil {
+			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+		}
+		total += count
+		items = append(items, executionLogRecordsFromToolCalls(toolCalls)...)
+	}
+	if source == "" || source == "audit" {
+		audits, count, err := listErrorAuditRecords(ctx, s.storage.AuditStore(), taskID, fetchLimit, 0)
+		if err != nil {
+			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+		}
+		total += count
+		items = append(items, executionLogRecordsFromAudits(audits)...)
+	}
+	sortExecutionLogRecords(items)
+	return paginateExecutionLogRecords(items, limit, offset), total, nil
+}
+
+// executionLogCandidateLimit asks each source for only the first offset+limit
+// rows. Any record ranked below that window inside its own source cannot appear
+// in the merged page window because that source already has enough newer rows to
+// keep it out of the union's first offset+limit positions.
+func executionLogCandidateLimit(limit, offset int) int {
+	if limit <= 0 {
+		return 0
+	}
+	return limit + offset
+}
+
+func listErrorEventRecords(ctx context.Context, store storage.LoopRuntimeStore, taskID string, limit, offset int) ([]storage.EventRecord, int, error) {
+	if store == nil {
+		return []storage.EventRecord{}, 0, nil
+	}
+	if lister, ok := store.(errorEventLister); ok {
+		return lister.ListErrorEvents(ctx, taskID, "", limit, offset)
+	}
+	items, _, err := store.ListEvents(ctx, taskID, "", "", "", "", 0, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	filtered := filterErrorEventRecords(items)
+	return paginateEventRecords(filtered, limit, offset), len(filtered), nil
+}
+
+func listErrorToolCallRecords(ctx context.Context, store storage.ToolCallStore, taskID string, limit, offset int) ([]tools.ToolCallRecord, int, error) {
+	if store == nil {
+		return []tools.ToolCallRecord{}, 0, nil
+	}
+	if lister, ok := store.(errorToolCallLister); ok {
+		return lister.ListErrorToolCalls(ctx, taskID, "", limit, offset)
+	}
+	items, _, err := store.ListToolCalls(ctx, taskID, "", 0, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	filtered := filterErrorToolCalls(items)
+	return paginateToolCallRecords(filtered, limit, offset), len(filtered), nil
+}
+
+func listErrorAuditRecords(ctx context.Context, store storage.AuditStore, taskID string, limit, offset int) ([]audit.Record, int, error) {
+	if store == nil {
+		return []audit.Record{}, 0, nil
+	}
+	if lister, ok := store.(errorAuditLister); ok {
+		return lister.ListErrorAuditRecords(ctx, taskID, "", limit, offset)
+	}
+	items, _, err := store.ListAuditRecords(ctx, taskID, "", 0, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	filtered := filterErrorAuditRecords(items)
+	return paginateAuditRecords(filtered, limit, offset), len(filtered), nil
+}
+
+func filterErrorEventRecords(records []storage.EventRecord) []storage.EventRecord {
+	items := make([]storage.EventRecord, 0, len(records))
+	for _, record := range records {
+		if strings.EqualFold(strings.TrimSpace(record.Level), "error") || strings.Contains(strings.ToLower(strings.TrimSpace(record.Type)), "failed") {
+			items = append(items, record)
+		}
+	}
+	return items
+}
+
+func filterErrorToolCalls(records []tools.ToolCallRecord) []tools.ToolCallRecord {
+	items := make([]tools.ToolCallRecord, 0, len(records))
+	for _, record := range records {
+		if record.ErrorCode != nil || record.Status == tools.ToolCallStatusFailed || record.Status == tools.ToolCallStatusTimeout {
+			items = append(items, record)
+		}
+	}
+	return items
+}
+
+func filterErrorAuditRecords(records []audit.Record) []audit.Record {
+	items := make([]audit.Record, 0, len(records))
+	for _, record := range records {
+		result := strings.ToLower(strings.TrimSpace(record.Result))
+		if strings.Contains(result, "fail") || strings.Contains(result, "error") || result == "denied" || result == "blocked" {
+			items = append(items, record)
+		}
+	}
+	return items
+}
+
+func paginateEventRecords(records []storage.EventRecord, limit, offset int) []storage.EventRecord {
+	if offset >= len(records) {
+		return []storage.EventRecord{}
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(records) {
+		end = len(records)
+	}
+	return append([]storage.EventRecord(nil), records[offset:end]...)
+}
+
+func paginateToolCallRecords(records []tools.ToolCallRecord, limit, offset int) []tools.ToolCallRecord {
+	if offset >= len(records) {
+		return []tools.ToolCallRecord{}
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(records) {
+		end = len(records)
+	}
+	return append([]tools.ToolCallRecord(nil), records[offset:end]...)
+}
+
+func paginateAuditRecords(records []audit.Record, limit, offset int) []audit.Record {
+	if offset >= len(records) {
+		return []audit.Record{}
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(records) {
+		end = len(records)
+	}
+	return append([]audit.Record(nil), records[offset:end]...)
 }
 
 func executionLogRecordsFromEvents(records []storage.EventRecord) []executionLogRecord {

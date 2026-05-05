@@ -170,6 +170,30 @@ func (s *inMemoryAuditStore) ListAuditRecords(_ context.Context, taskID, runID s
 	return pageAuditRecords(items, limit, offset), len(items), nil
 }
 
+// ListErrorAuditRecords exposes only failure-oriented audit rows so merged log
+// readers can keep pagination inside the storage boundary.
+func (s *inMemoryAuditStore) ListErrorAuditRecords(_ context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]audit.Record, 0)
+	for _, record := range s.records {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		if !auditRecordMatchesErrorLog(record) {
+			continue
+		}
+		items = append(items, record)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
+	})
+	return pageAuditRecords(items, limit, offset), len(items), nil
+}
+
 type inMemoryRecoveryPointStore struct {
 	mu     sync.Mutex
 	points []checkpoint.RecoveryPoint
@@ -299,6 +323,60 @@ func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID, runID s
 		return nil, 0, fmt.Errorf("iterate audit records: %w", err)
 	}
 	return items, total, nil
+}
+
+// ListErrorAuditRecords exposes only the audit subset that counts as an error
+// log record, which avoids loading successful rows before pagination.
+func (s *SQLiteAuditStore) ListErrorAuditRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error) {
+	countQuery := `SELECT COUNT(1) FROM audit_records`
+	query := `SELECT audit_id, task_id, COALESCE(run_id, ''), type, action, summary, target, result, created_at FROM audit_records`
+	filters := make([]string, 0, 3)
+	filterArgs := make([]any, 0, 2)
+	if taskID != "" {
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	filters = append(filters, `(LOWER(result) LIKE '%fail%' OR LOWER(result) LIKE '%error%' OR LOWER(result) = 'denied' OR LOWER(result) = 'blocked')`)
+	whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+	countQuery += whereClause
+	query += whereClause
+	query += ` ORDER BY created_at DESC, audit_id DESC`
+	args := append([]any(nil), filterArgs...)
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count error audit records: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list error audit records: %w", err)
+	}
+	defer rows.Close()
+	items := make([]audit.Record, 0)
+	for rows.Next() {
+		var record audit.Record
+		if err := rows.Scan(&record.AuditID, &record.TaskID, &record.RunID, &record.Type, &record.Action, &record.Summary, &record.Target, &record.Result, &record.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan error audit record: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate error audit records: %w", err)
+	}
+	return items, total, nil
+}
+
+func auditRecordMatchesErrorLog(record audit.Record) bool {
+	result := strings.ToLower(strings.TrimSpace(record.Result))
+	return strings.Contains(result, "fail") || strings.Contains(result, "error") || result == "denied" || result == "blocked"
 }
 
 func (s *SQLiteAuditStore) Close() error {

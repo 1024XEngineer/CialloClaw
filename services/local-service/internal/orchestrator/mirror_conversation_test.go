@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
@@ -106,6 +107,43 @@ func TestServiceSubmitInputPersistsMirrorConversationFailure(t *testing.T) {
 	}
 	if item["task_id"] != "task_failed_001" {
 		t.Fatalf("expected failed record to keep task linkage, got %+v", item)
+	}
+}
+
+func TestServiceSubmitInputSynthesizesMirrorConversationTraceIDWhenMissing(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Mirror reply without trace id.")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	_, err := service.SubmitInput(map[string]any{
+		"session_id": "session_mirror_generated_trace_001",
+		"source":     "dashboard",
+		"trigger":    "voice_commit",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Please summarize this report.",
+			"input_mode": "voice",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitInput returned error: %v", err)
+	}
+
+	history, err := service.MirrorConversationList(map[string]any{"limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("MirrorConversationList returned error: %v", err)
+	}
+	items := history["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one mirror conversation item, got %+v", items)
+	}
+	traceID, ok := items[0]["trace_id"].(string)
+	if !ok || strings.TrimSpace(traceID) == "" {
+		t.Fatalf("expected synthesized non-empty trace id, got %+v", items[0])
+	}
+	if !strings.HasPrefix(traceID, "trace_mirror_") {
+		t.Fatalf("expected synthesized mirror trace prefix, got %+v", items[0])
 	}
 }
 
