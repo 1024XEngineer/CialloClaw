@@ -17,6 +17,7 @@ import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/das
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import { setDesktopOnboardingPresentation } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
+import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 import { openControlPanelFromTray } from "@/platform/trayController";
 import { openOrFocusDesktopWindow } from "@/platform/windowController";
@@ -62,6 +63,7 @@ export function DashboardHome({
   voiceOpen,
 }: DashboardHomeProps) {
   const onboardingSession = useDesktopOnboardingSession();
+  const onboardingLoading = useDesktopOnboardingLoading("dashboard");
   const navigate = useNavigate();
   const [orbDragOffset, setOrbDragOffset] = useState({ x: 0, y: 0 });
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
@@ -208,6 +210,7 @@ export function DashboardHome({
           <Keyboard className="h-3.5 w-3.5" />
           Ctrl / Cmd + 1 2 3 4 5
         </div>
+        {onboardingLoading ? <div className="dashboard-orbit-home__shortcut-pill">{onboardingLoading.message}</div> : null}
       </header>
 
       <div className="dashboard-orbit-home__canvas">

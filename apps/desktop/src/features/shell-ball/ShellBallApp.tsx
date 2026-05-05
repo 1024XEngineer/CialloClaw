@@ -42,11 +42,13 @@ import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
   advanceDesktopOnboarding,
+  setDesktopOnboardingLoadingState,
   setDesktopOnboardingPresentation,
   shouldAutoStartDesktopOnboarding,
   startDesktopOnboarding,
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
+import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 
 type ShellBallAppProps = {
@@ -231,6 +233,7 @@ async function animateShellBallDashboardWindow(input: {
 export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   void isDev;
   const onboardingSession = useDesktopOnboardingSession();
+  const onboardingLoading = useDesktopOnboardingLoading("shell-ball");
   const {
     visualState,
     inputValue,
@@ -283,6 +286,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }>({
     handleDroppedFiles: () => undefined,
   });
+  const inputFocusRequestRef = useRef<() => void>(() => undefined);
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
   const {
     handleClipboardPrompt: handleCoordinatorClipboardPrompt,
@@ -398,6 +402,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     setInputFocusToken((current) => current + 1);
   }, [handleInputFocusRequest]);
+  inputFocusRequestRef.current = () => focusInlineInputField(false);
 
   const handleInlineAttachFile = useCallback(() => {
     void (async () => {
@@ -463,6 +468,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       return;
     }
 
+    void setDesktopOnboardingLoadingState({
+      message: "正在打开引导...",
+      windowLabel: "shell-ball",
+    });
     void startDesktopOnboarding("first_launch");
   }, [onboardingSession]);
 
@@ -628,14 +637,23 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         case "leave":
           setFileDropActive(false);
           return;
-        case "drop":
+        case "drop": {
           setFileDropActive(false);
           if (event.payload.paths.length === 0) {
             return;
           }
 
-          void dragDropHandlersRef.current.handleDroppedFiles(event.payload.paths);
+          const droppedPaths = event.payload.paths;
+          void (async () => {
+            try {
+              await dragDropHandlersRef.current.handleDroppedFiles(droppedPaths);
+              inputFocusRequestRef.current();
+            } catch (error) {
+              console.warn("shell-ball file drop handling failed", error);
+            }
+          })();
           return;
+        }
       }
     }).then((unlisten) => {
       if (disposed) {
@@ -1056,6 +1074,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onPressMove={handlePressMove}
       onPressEnd={handleLockedPressEnd}
       onPressCancel={handleLockedPressCancel}
-    />
+    >
+      {onboardingLoading ? <div className="shell-ball-onboarding-loading">{onboardingLoading.message}</div> : null}
+    </ShellBallSurface>
   );
 }

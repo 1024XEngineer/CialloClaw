@@ -206,6 +206,11 @@ export function createShellBallTaskStartParams(input: {
     delivery: {
       preferred: "bubble",
     },
+    options: {
+      // File drops only carry a caller preference here. The backend owns the
+      // effective confirmation decision for bare files versus pending evidence.
+      confirm_required: false,
+    },
   };
 }
 
@@ -791,7 +796,7 @@ export function useShellBallInteraction() {
       setPendingFiles(reset.nextPendingFiles);
       inputFocusedRef.current = reset.nextFocused;
       setInputFocused(reset.nextFocused);
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
       return result;
@@ -822,7 +827,7 @@ export function useShellBallInteraction() {
         sessionId: getCurrentConversationSessionId(),
       });
 
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
 

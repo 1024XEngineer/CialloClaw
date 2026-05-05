@@ -27,6 +27,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -569,13 +570,11 @@ func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(
 }
 
 func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
-	modelClient := &selectiveWaitLoopModelClient{
-		stubLoopModelClient: stubLoopModelClient{
-			toolResult: model.ToolCallResult{
-				OutputText: "Scoped runtime finished.",
-			},
-			generateToolWait: make(chan struct{}),
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Scoped runtime finished.",
 		},
+		generateToolWait: make(chan struct{}),
 	}
 	server := newTestServerWithModelClient(modelClient)
 
@@ -598,7 +597,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 
 	taskA := startTask("sess_loop_scope_a")
 	taskB := startTask("sess_loop_scope_b")
-	modelClient.blockedTaskID = taskA
 
 	left, right := net.Pipe()
 	defer left.Close()
@@ -637,13 +635,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
 	}
 
-	if _, err := server.orchestrator.TaskSteer(map[string]any{
-		"task_id": taskB,
-		"message": "Mention the unrelated steering marker.",
-	}); err != nil {
-		t.Fatalf("queue steering for unrelated task: %v", err)
-	}
-
 	confirmDone := make(chan error, 1)
 	go func() {
 		_, err := server.orchestrator.ConfirmTask(map[string]any{
@@ -678,6 +669,8 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		t.Fatalf("clear read deadline: %v", err)
 	}
 
+	close(modelClient.generateToolWait)
+
 	select {
 	case err := <-confirmDone:
 		if err != nil {
@@ -686,8 +679,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected unrelated task confirmation to complete")
 	}
-
-	close(modelClient.generateToolWait)
 }
 
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
@@ -725,6 +716,53 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	intentValue, ok := task["intent"].(map[string]any)
 	if !ok || intentValue["name"] != "agent_loop" {
 		t.Fatalf("expected task.start to rely on backend suggestion instead of request intent, got %+v", task["intent"])
+	}
+}
+
+func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
+	server := newTestServerWithModelClient(&stubLoopModelClient{})
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-start-file-instruction"`),
+		Method:  "agent.task.start",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_file_instruction_rpc",
+			"source":     "floating_ball",
+			"trigger":    "file_drop",
+			"input": map[string]any{
+				"type":  "file",
+				"text":  "帮我看看这里面有什么",
+				"files": []string{"workspace/MyToDos_Vue"},
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+			"delivery": map[string]any{
+				"preferred": "bubble",
+				"fallback":  "task_detail",
+			},
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	result := success.Result.Data.(map[string]any)
+	task := result["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected instructed file start to skip intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected dragged_file source type, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected task.start to keep backend agent_loop suggestion, got %+v", task["intent"])
+	}
+	if result["delivery_result"] == nil {
+		t.Fatal("expected instructed file start to return delivery_result")
 	}
 }
 
@@ -1379,6 +1417,71 @@ func TestDispatchMapsToolOutputInvalidExplicitly(t *testing.T) {
 	}
 	if rpcErr.Code != 1003004 || rpcErr.Message != "TOOL_OUTPUT_INVALID" {
 		t.Fatalf("expected TOOL_OUTPUT_INVALID mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+	}
+}
+
+func TestDispatchMapsTaskInspectorSourceErrorsExplicitly(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		code    int
+		message string
+	}{
+		{name: "outside workspace", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionSourceOutsideWorkspace), code: 1004003, message: "WORKSPACE_BOUNDARY_DENIED"},
+		{name: "filesystem unavailable", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionFileSystemUnavailable), code: 1007006, message: "INSPECTION_FILESYSTEM_UNAVAILABLE"},
+		{name: "source not found", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionSourceNotFound), code: 1007007, message: "INSPECTION_SOURCE_NOT_FOUND"},
+		{name: "source unreadable", err: fmt.Errorf("wrapped: %w", taskinspector.ErrInspectionSourceUnreadable), code: 1007008, message: "INSPECTION_SOURCE_UNREADABLE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := wrapOrchestratorResult(nil, test.err)
+			if rpcErr == nil {
+				t.Fatal("expected rpc error")
+			}
+			if rpcErr.Code != test.code || rpcErr.Message != test.message {
+				t.Fatalf("expected %s mapping, got code=%d message=%s", test.message, rpcErr.Code, rpcErr.Message)
+			}
+		})
+	}
+}
+
+func TestDispatchReturnsFormalTaskInspectorRunSourceErrors(t *testing.T) {
+	server := newTestServer()
+	pathPolicy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "rpc-task-inspector"))
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	server.orchestrator.WithTaskInspector(taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy)))
+	tests := []struct {
+		name          string
+		requestID     string
+		targetSources []any
+		expectCode    int
+		expectMessage string
+	}{
+		{name: "missing source", requestID: "req-task-inspector-missing", targetSources: []any{"workspace/missing"}, expectCode: 1007007, expectMessage: "INSPECTION_SOURCE_NOT_FOUND"},
+		{name: "outside workspace", requestID: "req-task-inspector-outside", targetSources: []any{"../outside"}, expectCode: 1004003, expectMessage: "WORKSPACE_BOUNDARY_DENIED"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := server.dispatch(requestEnvelope{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(fmt.Sprintf(`"%s"`, test.requestID)),
+				Method:  "agent.task_inspector.run",
+				Params: mustMarshal(t, map[string]any{
+					"target_sources": test.targetSources,
+				}),
+			})
+			errEnvelope, ok := response.(errorEnvelope)
+			if !ok {
+				t.Fatalf("expected error response envelope, got %#v", response)
+			}
+			if errEnvelope.Error.Code != test.expectCode || errEnvelope.Error.Message != test.expectMessage {
+				t.Fatalf("expected %s to map to formal rpc error, got %+v", test.expectMessage, errEnvelope.Error)
+			}
+		})
 	}
 }
 

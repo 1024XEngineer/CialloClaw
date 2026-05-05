@@ -41,6 +41,28 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type taskInspectorFailingSettingsStore struct{}
+
+func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
+	if got := truncateText("已完成总结，正在定位文件", 8); got != "已完成总结..." {
+		t.Fatalf("expected grapheme-safe chinese truncation, got %q", got)
+	}
+	if got := truncateText("定位完成📄打开结果", 8); got != "定位完成📄..." {
+		t.Fatalf("expected grapheme-safe emoji truncation, got %q", got)
+	}
+	if got := truncateText("完成e\u0301文档整理", 6); got != "完成e\u0301..." {
+		t.Fatalf("expected grapheme-safe combining-mark truncation, got %q", got)
+	}
+}
+
+func (taskInspectorFailingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
+	return errors.New("settings snapshot write failed")
+}
+
+func (taskInspectorFailingSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
+	return nil, nil
+}
+
 type stubModelClient struct {
 	output       string
 	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
@@ -540,6 +562,15 @@ func querySQLiteCount(t *testing.T, databasePath, query string, args ...any) int
 	return count
 }
 
+func querySQLiteInt(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var value int
+	if err := db.QueryRow(query, args...).Scan(&value); err != nil {
+		t.Fatalf("query sqlite int failed: %v", err)
+	}
+	return value
+}
+
 func intPtr(value int) *int {
 	return &value
 }
@@ -943,10 +974,12 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
+func TestServiceSubmitInputReturnsSocialChatWithoutTask(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{
+		output: `{"route":"social_chat","reply":"你好，我在。"}`,
+	})
 
-	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"你好", "🙂"}
 	for index, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
 			result, err := service.SubmitInput(map[string]any{
@@ -962,22 +995,133 @@ func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmati
 				t.Fatalf("submit input failed: %v", err)
 			}
 
-			task := result["task"].(map[string]any)
-			if task["status"] != "waiting_input" {
-				t.Fatalf("expected short free text clarification to keep task open, got %v", task["status"])
-			}
-			intentValue, ok := task["intent"].(map[string]any)
-			if !ok || intentValue["name"] != "agent_loop" {
-				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
+			if result["task"] != nil {
+				t.Fatalf("expected social chat not to create a task, got %+v", result["task"])
 			}
 			if result["delivery_result"] != nil {
-				t.Fatalf("expected short free text clarification not to finalize delivery_result, got %+v", result["delivery_result"])
+				t.Fatalf("expected social chat not to create delivery_result, got %+v", result["delivery_result"])
 			}
-			bubble := result["bubble_message"].(map[string]any)
-			if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
-				t.Fatalf("expected short free text clarification bubble, got %+v", bubble)
+			bubble, ok := result["bubble_message"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected social chat bubble, got %+v", result["bubble_message"])
+			}
+			if bubble["task_id"] != "" {
+				t.Fatalf("expected social chat bubble to stay detached from task, got %+v", bubble)
+			}
+			if !strings.Contains(stringValue(bubble, "text", ""), "你好") {
+				t.Fatalf("expected social chat reply bubble, got %+v", bubble)
 			}
 		})
+	}
+}
+
+func TestServiceSubmitInputRoutesUnanchoredAmbiguousTextToConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_ambiguous_text",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看下",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected ambiguous text to enter confirmation, got %v", task["status"])
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected clarification routing to defer delivery_result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestServiceSubmitInputKeepsTaskRequestAfterClassifier(t *testing.T) {
+	callCount := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			callCount++
+			output := "Translated note ready."
+			if callCount == 1 {
+				output = `{"route":"task_request","reply":""}`
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  fmt.Sprintf("req_route_%d", callCount),
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: output,
+			}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_classified_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected classified task request to execute, got %v", task["status"])
+	}
+	if callCount < 2 {
+		t.Fatalf("expected classifier and execution model calls, got %d", callCount)
+	}
+}
+
+func TestServiceSubmitInputFallsBackToTaskWhenClassifierFails(t *testing.T) {
+	callCount := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return model.GenerateTextResponse{}, errors.New("classifier unavailable")
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_classifier_fallback",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Fallback task completed.",
+			}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_classifier_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Summarize the visible note",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected classifier failure to fall back to task execution, got %v", task["status"])
+	}
+	if callCount < 2 {
+		t.Fatalf("expected classifier and fallback execution model calls, got %d", callCount)
 	}
 }
 
@@ -1850,6 +1994,192 @@ func TestTaskInspectorRunClearsStaleSourceBackedNotesWhenFilesEmpty(t *testing.T
 	items, total := service.runEngine.NotepadItems("", 10, 0)
 	if total != 0 || len(items) != 0 {
 		t.Fatalf("expected source-backed sync to clear stale runtime notes when source is empty, total=%d len=%d items=%+v", total, len(items), items)
+	}
+}
+
+func TestTaskInspectorConfigUsesTaskAutomationSettingsSource(t *testing.T) {
+	service := newTestService()
+
+	updated, err := service.TaskInspectorConfigUpdate(map[string]any{
+		"task_sources":           []any{"workspace/review", "workspace/backlog"},
+		"inspection_interval":    map[string]any{"unit": "hour", "value": 2},
+		"inspect_on_file_change": false,
+		"inspect_on_startup":     false,
+		"remind_before_deadline": false,
+		"remind_when_stale":      true,
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigUpdate returned error: %v", err)
+	}
+	effectiveConfig := updated["effective_config"].(map[string]any)
+	if !reflect.DeepEqual(effectiveConfig["task_sources"], []string{"workspace/review", "workspace/backlog"}) {
+		t.Fatalf("expected effective_config task_sources to come from task_automation, got %+v", effectiveConfig)
+	}
+
+	settings := normalizeSettingsSnapshot(service.runEngine.Settings())
+	taskAutomation := settings["task_automation"].(map[string]any)
+	expectedStoredSources := []string{
+		filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "review")),
+		filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "backlog")),
+	}
+	if !reflect.DeepEqual(taskAutomation["task_sources"], expectedStoredSources) {
+		t.Fatalf("expected task_automation settings to be updated, got %+v", taskAutomation)
+	}
+	if taskAutomation["inspect_on_file_change"] != false || taskAutomation["inspect_on_startup"] != false {
+		t.Fatalf("expected inspector toggles to persist into task_automation, got %+v", taskAutomation)
+	}
+
+	config, err := service.TaskInspectorConfigGet()
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigGet returned error: %v", err)
+	}
+	if !reflect.DeepEqual(config, effectiveConfig) {
+		t.Fatalf("expected inspector config get to mirror effective config, got config=%+v effective=%+v", config, effectiveConfig)
+	}
+	if !reflect.DeepEqual(service.runEngine.InspectorConfig()["task_sources"], []string{filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "todos"))}) {
+		t.Fatalf("expected legacy in-memory inspector config to stop being the authoritative source, got %+v", service.runEngine.InspectorConfig())
+	}
+
+	cleared, err := service.TaskInspectorConfigUpdate(map[string]any{"task_sources": []any{}})
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigUpdate clear returned error: %v", err)
+	}
+	if taskSources := cleared["effective_config"].(map[string]any)["task_sources"].([]string); len(taskSources) != 0 {
+		t.Fatalf("expected explicit empty task_sources to clear settings-backed sources, got %+v", cleared)
+	}
+}
+
+func TestTaskInspectorRunReturnsExplicitErrorForMissingSource(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "inspector missing source")
+
+	_, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/missing"}})
+	if !errors.Is(err, taskinspector.ErrInspectionSourceNotFound) {
+		t.Fatalf("expected missing source error, got %v", err)
+	}
+}
+
+func TestTaskInspectorConfigUpdatePropagatesSettingsStoreErrors(t *testing.T) {
+	service := newTestService()
+	if err := service.runEngine.WithSettingsStore(taskInspectorFailingSettingsStore{}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+
+	_, err := service.TaskInspectorConfigUpdate(map[string]any{"task_sources": []any{"workspace/review"}})
+	if err == nil || !strings.Contains(err.Error(), "settings snapshot write failed") {
+		t.Fatalf("expected TaskInspectorConfigUpdate to surface settings store failure, got %v", err)
+	}
+}
+
+func TestTaskInspectorSettingsHelpersCoverDefaultsAndCompatibilityInputs(t *testing.T) {
+	config := inspectorConfigFromSettings(nil)
+	if config["inspect_on_file_change"] != true || config["inspect_on_startup"] != true {
+		t.Fatalf("expected task inspector defaults to stay enabled, got %+v", config)
+	}
+	if config["remind_before_deadline"] != true || config["remind_when_stale"] != false {
+		t.Fatalf("expected reminder defaults to match settings contract, got %+v", config)
+	}
+
+	patch := taskAutomationSettingsPatchFromInspectorConfig(map[string]any{
+		"task_sources":           []string{"workspace/review", "", "workspace/review"},
+		"inspection_interval":    map[string]any{"unit": "day", "value": 1},
+		"inspect_on_file_change": false,
+	})
+	taskAutomation := patch["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"workspace/review", "workspace/review"}) {
+		t.Fatalf("expected helper to preserve explicit compatibility sources, got %+v", taskAutomation)
+	}
+	if taskAutomation["inspect_on_file_change"] != false {
+		t.Fatalf("expected bool toggles to survive compatibility patch, got %+v", taskAutomation)
+	}
+
+	if emptyPatch := taskAutomationSettingsPatchFromInspectorConfig(map[string]any{"task_sources": "invalid"}); len(emptyPatch) != 0 {
+		t.Fatalf("expected invalid task_sources payload to produce empty patch, got %+v", emptyPatch)
+	}
+
+	stringValues, ok := optionalStringSliceValue([]string{"workspace/a", " ", "workspace/b"})
+	if !ok || !reflect.DeepEqual(stringValues, []string{"workspace/a", "workspace/b"}) {
+		t.Fatalf("expected []string compatibility inputs to be preserved, got ok=%v values=%+v", ok, stringValues)
+	}
+	anyValues, ok := optionalStringSliceValue([]any{"workspace/a", 3, "workspace/b"})
+	if !ok || !reflect.DeepEqual(anyValues, []string{"workspace/a", "workspace/b"}) {
+		t.Fatalf("expected []any compatibility inputs to keep string sources only, got ok=%v values=%+v", ok, anyValues)
+	}
+	if values, ok := optionalStringSliceValue("invalid"); ok || values != nil {
+		t.Fatalf("expected invalid task source payload to be rejected, got ok=%v values=%+v", ok, values)
+	}
+
+	workspaceRoot := filepath.Clean(serviceconfig.DefaultWorkspaceRoot())
+	runtimeRoot := filepath.Clean(serviceconfig.DefaultRuntimeRoot())
+	if presentInspectorTaskSource("") != "" {
+		t.Fatal("expected blank task source presentation to stay empty")
+	}
+	if presentInspectorTaskSource("workspace/review") != "workspace/review" {
+		t.Fatal("expected relative compatibility path to stay unchanged")
+	}
+	if presentInspectorTaskSource(workspaceRoot) != "workspace" {
+		t.Fatalf("expected workspace root to collapse to compatibility workspace token")
+	}
+	if presented := presentInspectorTaskSource(filepath.Join(workspaceRoot, "review")); presented != "workspace/review" {
+		t.Fatalf("expected workspace child to stay workspace-relative, got %q", presented)
+	}
+	if presentInspectorTaskSource(runtimeRoot) != "." {
+		t.Fatal("expected runtime root to collapse to current-directory compatibility token")
+	}
+	if presented := presentInspectorTaskSource(filepath.Join(runtimeRoot, "notes", "manual")); presented != "notes/manual" {
+		t.Fatalf("expected runtime child to stay runtime-relative, got %q", presented)
+	}
+	outsideRoot := filepath.Join(t.TempDir(), "outside-source-root", "notes")
+	if presented := presentInspectorTaskSource(outsideRoot); presented != filepath.ToSlash(filepath.Clean(outsideRoot)) {
+		t.Fatalf("expected outside source to stay absolute, got %q", presented)
+	}
+
+	if relative, ok := relativizePathWithinRoot(workspaceRoot, workspaceRoot); !ok || relative != "" {
+		t.Fatalf("expected identical root relativization to succeed, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(workspaceRoot, "notes"), workspaceRoot); !ok || relative != "notes" {
+		t.Fatalf("expected child relativization to succeed, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(t.TempDir(), "outside"), workspaceRoot); ok || relative != "" {
+		t.Fatalf("expected outside relativization to fail, relative=%q ok=%v", relative, ok)
+	}
+	if relative, ok := relativizePathWithinRoot(filepath.Join(workspaceRoot, "notes"), ""); ok || relative != "" {
+		t.Fatalf("expected empty root relativization to fail, relative=%q ok=%v", relative, ok)
+	}
+	if !hasWindowsDriveLetterPrefix(`C:/notes`) || hasWindowsDriveLetterPrefix("notes") {
+		t.Fatal("expected drive-letter helper to distinguish windows prefixes")
+	}
+	if !isWindowsStyleAbsolutePath(`C:/notes`) || isWindowsStyleAbsolutePath(`C:notes`) {
+		t.Fatal("expected windows absolute helper to reject drive-relative paths")
+	}
+
+	if currentRuntimeWorkspaceRoot(nil) != filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot())) {
+		t.Fatal("expected nil executor workspace root to fall back to default runtime workspace")
+	}
+}
+
+func TestPreviewNeedsRestartCoversWorkspaceAndNoopCases(t *testing.T) {
+	currentSettings := map[string]any{
+		"general": map[string]any{
+			"language": "zh-CN",
+			"download": map[string]any{
+				"workspace_path": "workspace",
+			},
+		},
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{}) {
+		t.Fatal("expected empty settings patch to avoid restart")
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"language": "zh-CN"}}) {
+		t.Fatal("expected unchanged language to avoid restart")
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"download": map[string]any{"workspace_path": "workspace"}}}) {
+		t.Fatal("expected unchanged workspace_path to avoid restart")
+	}
+	if !previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"download": map[string]any{"workspace_path": "workspace-next"}}}) {
+		t.Fatal("expected changed workspace_path to require restart")
+	}
+	if !previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"language": "en-US"}}) {
+		t.Fatal("expected changed language to require restart")
 	}
 }
 
@@ -3142,6 +3472,77 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	}
 	if record.StorageWritePlan != nil || len(record.ArtifactPlans) != 0 {
 		t.Fatal("expected bubble delivery not to create document persistence plans")
+	}
+}
+
+func TestServiceStartTaskFileInstructionSkipsForcedIntentConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_file_instruction",
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "帮我看看这里面有什么",
+			"files": []any{"workspace/MyToDos_Vue"},
+		},
+		"delivery": map[string]any{
+			"preferred": "bubble",
+			"fallback":  "task_detail",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected instructed file task to execute without intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected file task to preserve dragged_file source, got %+v", task)
+	}
+	if task["intent"].(map[string]any)["name"] != "agent_loop" {
+		t.Fatalf("expected instructed file task to enter agent_loop, got %+v", task["intent"])
+	}
+	if result["delivery_result"] == nil {
+		t.Fatal("expected instructed file task to return delivery_result")
+	}
+}
+
+func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_file_needs_goal",
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []any{"workspace/MyToDos_Vue"},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected bare file task to wait for intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected bare file task to preserve dragged_file source, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected bare file task to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected bare file task to return intent confirmation bubble, got %+v", bubble)
 	}
 }
 
@@ -4940,8 +5341,9 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	if trustSummary["has_restore_point"] != true {
 		t.Fatalf("expected completed task to provide restore point, got %v", trustSummary["has_restore_point"])
 	}
-	if trustSummary["workspace_path"] != "workspace" {
-		t.Fatalf("expected workspace-relative path in trust summary, got %v", trustSummary["workspace_path"])
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
+	if trustSummary["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected trust summary workspace path %q, got %v", expectedWorkspaceRoot, trustSummary["workspace_path"])
 	}
 
 	quickActions := overview["quick_actions"].([]string)
@@ -4975,6 +5377,87 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	completedTaskID := completedResult["task"].(map[string]any)["task_id"].(string)
 	if completedTaskID == waitingTaskID {
 		t.Fatal("expected completed and waiting tasks to be distinct runtime records")
+	}
+}
+
+func TestServiceDashboardOverviewUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingRestart(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "runtime workspace summary")
+	nextWorkspaceRoot := filepath.Join(t.TempDir(), "workspace-next")
+	if _, _, _, _, err := service.runEngine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(nextWorkspaceRoot),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
+
+	result, err := service.DashboardOverviewGet(map[string]any{})
+	if err != nil {
+		t.Fatalf("dashboard overview failed: %v", err)
+	}
+
+	trustSummary := result["overview"].(map[string]any)["trust_summary"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Clean(workspaceRoot))
+	if trustSummary["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected trust summary to stay on current runtime workspace %q, got %v", expectedWorkspaceRoot, trustSummary["workspace_path"])
+	}
+}
+
+func TestBuildImpactScopeUsesCurrentRuntimeWorkspaceRootWhenSettingsPendingRestart(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "runtime workspace impact scope")
+	nextWorkspaceRoot := filepath.Join(t.TempDir(), "workspace-next")
+	if _, _, _, _, err := service.runEngine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": filepath.ToSlash(nextWorkspaceRoot),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("update settings failed: %v", err)
+	}
+
+	impactScope := service.buildImpactScope(runengine.TaskRecord{
+		DeliveryResult: map[string]any{
+			"payload": map[string]any{
+				"path": filepath.Join(workspaceRoot, "drafts", "summary.md"),
+			},
+		},
+	}, nil)
+
+	if impactScope["out_of_workspace"] != false {
+		t.Fatalf("expected current runtime workspace path to stay trusted, got %+v", impactScope)
+	}
+}
+
+func TestBuildImpactScopeMarksRuntimeTempPathsOutOfWorkspace(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime temp impact scope")
+
+	impactScope := service.buildImpactScope(runengine.TaskRecord{
+		DeliveryResult: map[string]any{
+			"payload": map[string]any{
+				"path": "temp/screen_sess_001/frame_001.png",
+			},
+		},
+	}, nil)
+
+	if impactScope["out_of_workspace"] != true {
+		t.Fatalf("expected runtime temp path to stay out of workspace, got %+v", impactScope)
+	}
+	files, _ := impactScope["files"].([]string)
+	if len(files) != 1 || files[0] != "temp/screen_sess_001/frame_001.png" {
+		t.Fatalf("expected runtime temp path to remain listed in impact scope, got %+v", impactScope)
+	}
+}
+
+func TestIsWorkspaceRelativePathKeepsArtifactsInsideWorkspaceScope(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	if !isWorkspaceRelativePath("artifacts/screen/task_001/frame.png", workspaceRoot) {
+		t.Fatal("expected workspace artifact path to remain trusted")
+	}
+	if isWorkspaceRelativePath("temp/screen_sess_001/frame.png", workspaceRoot) {
+		t.Fatal("expected runtime temp artifact path to stay outside workspace scope")
 	}
 }
 
@@ -6736,6 +7219,133 @@ func TestServiceStartTaskHitsRealMemoryAndRecordsRetrievalHit(t *testing.T) {
 	}
 	if !seenSeed {
 		t.Fatalf("expected mirror overview to expose real retrieval hit, got %+v", memoryReferences)
+	}
+}
+
+func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) {
+	var capturedInput string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			capturedInput = request.Input
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_memory_context",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "已结合历史记忆输出结果。",
+				Usage: model.TokenUsage{
+					InputTokens:  12,
+					OutputTokens: 18,
+					TotalTokens:  30,
+				},
+				LatencyMS: 21,
+			}, nil
+		},
+	})
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_context_001",
+		TaskID:          "task_seed_context_001",
+		RunID:           "run_seed_context_001",
+		Summary:         "project alpha prefers markdown bullets and concise structure",
+		CreatedAt:       time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_memory_context",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请按 project alpha markdown bullets 总结这段内容",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	if !strings.Contains(capturedInput, "历史记忆参考数据") {
+		t.Fatalf("expected execution input to include retrieved memory section, got %q", capturedInput)
+	}
+	if !strings.Contains(capturedInput, "\"summary\": \"project alpha prefers markdown bullets and concise structure\"") {
+		t.Fatalf("expected execution input to include retrieved summary text, got %q", capturedInput)
+	}
+	if strings.Contains(capturedInput, "- [summary] project alpha prefers markdown bullets and concise structure") {
+		t.Fatalf("expected retrieved memory to stay structured instead of raw prompt bullets, got %q", capturedInput)
+	}
+}
+
+func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "确认后的执行结果。")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	db, err := sql.Open("sqlite", service.storage.DatabasePath())
+	if err != nil {
+		t.Fatalf("open sqlite database failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`
+		CREATE TABLE retrieval_hit_audit (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			write_count INTEGER NOT NULL
+		);
+		INSERT INTO retrieval_hit_audit (id, write_count) VALUES (1, 0);
+		CREATE TRIGGER retrieval_hit_audit_insert
+		AFTER INSERT ON retrieval_hits
+		BEGIN
+			UPDATE retrieval_hit_audit SET write_count = write_count + 1 WHERE id = 1;
+		END;
+	`); err != nil {
+		t.Fatalf("create retrieval hit audit trigger failed: %v", err)
+	}
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_confirm_001",
+		TaskID:          "task_seed_confirm_001",
+		RunID:           "run_seed_confirm_001",
+		Summary:         "project alpha 输出格式偏向使用小标题和简洁说明",
+		CreatedAt:       time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_memory_hit",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请解释 project alpha 的输出格式",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 1 {
+		t.Fatalf("expected start task to write retrieval hits once for task %s", taskID)
+	}
+
+	if _, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	}); err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 2 {
+		t.Fatalf("expected confirmation to add exactly one retrieval-hit write for task %s", taskID)
 	}
 }
 
@@ -11279,6 +11889,59 @@ func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
 	}
 }
 
+func TestSettingsUpdateMarksWorkspacePathAsRestartRequired(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings workspace restart")
+	nextWorkspaceRoot := filepath.ToSlash(filepath.Join(t.TempDir(), "workspace-next"))
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": nextWorkspaceRoot,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	if result["apply_mode"] != "restart_required" || result["need_restart"] != true {
+		t.Fatalf("expected workspace_path update to require restart, got %+v", result)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	general := effectiveSettings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	if download["workspace_path"] != nextWorkspaceRoot {
+		t.Fatalf("expected committed workspace_path in effective settings, got %+v", effectiveSettings)
+	}
+}
+
+func TestIsWorkspaceRelativePathAcceptsFormalAbsoluteAndRelativeWorkspaceTargets(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	absPath := filepath.Join(workspaceRoot, "drafts", "summary.md")
+	if !isWorkspaceRelativePath("workspace/drafts/summary.md", workspaceRoot) {
+		t.Fatal("expected formal workspace namespace to stay trusted")
+	}
+	if !isWorkspaceRelativePath(absPath, workspaceRoot) {
+		t.Fatal("expected absolute path inside runtime workspace to stay trusted")
+	}
+	if !isWorkspaceRelativePath("drafts/summary.md", workspaceRoot) {
+		t.Fatal("expected relative workspace path to stay trusted")
+	}
+	if isWorkspaceRelativePath(filepath.Join(t.TempDir(), "outside", "summary.md"), workspaceRoot) {
+		t.Fatal("expected absolute path outside runtime workspace to be rejected")
+	}
+	if isWorkspaceRelativePath("../outside/summary.md", workspaceRoot) {
+		t.Fatal("expected upward relative path to be rejected")
+	}
+	if isWorkspaceRelativePath(`C:temp\summary.md`, workspaceRoot) {
+		t.Fatal("expected volume-prefixed relative path to be rejected")
+	}
+	if isWorkspaceRelativePath(`\temp\summary.md`, workspaceRoot) {
+		t.Fatal("expected root-relative path to be rejected")
+	}
+	if isWorkspaceRelativePath("temp", workspaceRoot) {
+		t.Fatal("expected bare runtime temp root to stay outside workspace scope")
+	}
+}
+
 func TestSettingsGetUsesStrongholdDescriptorAndOmitsLegacyDataLog(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "settings stronghold descriptor")
 	if service.storage == nil {
@@ -12088,6 +12751,174 @@ func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	}
 }
 
+func TestServiceTaskSteerRejectsActivePromptTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name   string
+		intent map[string]any
+		step   string
+	}{
+		{
+			name:   "prompt intent",
+			intent: map[string]any{"name": "summarize", "arguments": map[string]any{}},
+			step:   "generate_output",
+		},
+		{
+			name:   "agent loop prompt fallback",
+			intent: map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+			step:   "generate_output",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_prompt",
+				Title:       "Prompt task",
+				SourceType:  "hover_input",
+				Status:      "processing",
+				Intent:      testCase.intent,
+				CurrentStep: testCase.step,
+				RiskLevel:   "green",
+			})
+
+			_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Add a network impact section."})
+			if !errors.Is(err, ErrTaskStatusInvalid) {
+				t.Fatalf("expected prompt-path processing task to reject active steering, got %v", err)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 0 {
+				t.Fatalf("expected rejected steering to leave task queue empty, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
+func TestServiceTaskSteerRejectsPendingInputTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name string
+		task runengine.CreateTaskInput
+	}{
+		{
+			name: "waiting input",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_waiting_input",
+				Title:       "Waiting input task",
+				SourceType:  "hover_input",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				RiskLevel:   "green",
+			},
+		},
+		{
+			name: "confirming intent",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_confirming_intent",
+				Title:       "Confirming intent task",
+				SourceType:  "hover_input",
+				Status:      "confirming_intent",
+				Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+				CurrentStep: "intent_confirmation",
+				RiskLevel:   "green",
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(testCase.task)
+
+			_, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Use this as the formal follow-up."})
+			if !errors.Is(err, ErrTaskStatusInvalid) {
+				t.Fatalf("expected pending-input task to reject explicit steering, got %v", err)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 0 {
+				t.Fatalf("expected rejected pending-input steering to leave queue empty, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
+func TestServiceTaskSteerAllowsDeferredTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name string
+		task runengine.CreateTaskInput
+	}{
+		{
+			name: "waiting authorization",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_waiting_auth",
+				Title:       "Waiting auth task",
+				SourceType:  "hover_input",
+				Status:      "waiting_auth",
+				Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{}},
+				CurrentStep: "waiting_authorization",
+				RiskLevel:   "yellow",
+			},
+		},
+		{
+			name: "blocked queue",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_blocked",
+				Title:       "Blocked task",
+				SourceType:  "hover_input",
+				Status:      "blocked",
+				Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+				CurrentStep: "session_queue",
+				RiskLevel:   "green",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(testCase.task)
+
+			result, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Carry this instruction into the resumed task."})
+			if err != nil {
+				t.Fatalf("expected deferred task steering to succeed, got %v", err)
+			}
+			if result["task"].(map[string]any)["task_id"] != task.TaskID {
+				t.Fatalf("expected steered task id %s, got %+v", task.TaskID, result)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected deferred task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 1 || record.SteeringMessages[0] != "Carry this instruction into the resumed task." {
+				t.Fatalf("expected deferred steering to persist, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
+func TestServiceActiveExecutionStepNameTracksSteeringCapability(t *testing.T) {
+	promptService, _ := newTestServiceWithModelClient(t, stubModelClient{output: "prompt fallback"})
+	intent := map[string]any{"name": "agent_loop", "arguments": map[string]any{}}
+	if step := promptService.activeExecutionStepName(intent); step != "generate_output" {
+		t.Fatalf("expected prompt-only agent-loop intent to start generate_output, got %s", step)
+	}
+
+	loopService, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{output: "loop ready"})
+	if step := loopService.activeExecutionStepName(intent); step != "agent_loop" {
+		t.Fatalf("expected pollable tool-calling loop to start agent_loop, got %s", step)
+	}
+
+	if step := loopService.activeExecutionStepName(map[string]any{"name": "summarize"}); step != "generate_output" {
+		t.Fatalf("expected non-loop intent to start generate_output, got %s", step)
+	}
+}
+
 func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 	var activeTaskID string
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -12110,6 +12941,7 @@ func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 		Title:       "Analyze the current failure",
 		SourceType:  "hover_input",
 		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
 		CurrentStep: "agent_loop",
 		RiskLevel:   "green",
 	})
@@ -12145,6 +12977,48 @@ func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitInputQueuesNewTaskWhenActivePromptTaskCannotConsumeSteering(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Queued prompt task output.")
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_prompt_processing",
+		Title:       "Summarize release note",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "再补一版网络影响摘要",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected a separate queued task instead of prompt-path steering, got %+v", task)
+	}
+	if task["status"] != "blocked" || task["current_step"] != "session_queue" {
+		t.Fatalf("expected prompt-path follow-up to queue behind the active task, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected active task to remain in runtime")
+	}
+	if len(record.SteeringMessages) != 0 {
+		t.Fatalf("expected active prompt task not to accept unconsumable steering, got %+v", record.SteeringMessages)
+	}
+}
+
 func TestServiceStartTaskNotificationIncludesSessionID(t *testing.T) {
 	service := newTestService()
 
@@ -12177,17 +13051,25 @@ func TestServiceStartTaskNotificationIncludesSessionID(t *testing.T) {
 	}
 }
 
-func TestServiceStartTaskRoutesFileAttachmentIntoExistingTask(t *testing.T) {
+func TestServiceStartTaskDescribedFileDoesNotAttachToProcessingTask(t *testing.T) {
 	var activeTaskID string
+	continuationClassifierCalled := false
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_continuation_classifier" {
+				continuationClassifierCalled = true
+			}
+			outputText := "Attachment summary ready."
+			if request.TaskID == "task_continuation_classifier" {
+				outputText = fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"the file is supplementary evidence for the same task"}`, activeTaskID)
+			}
 			return model.GenerateTextResponse{
 				TaskID:     request.TaskID,
 				RunID:      request.RunID,
 				RequestID:  "req_continue_file",
 				Provider:   "openai_responses",
 				ModelID:    "gpt-5.4",
-				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"the file is supplementary evidence for the same task"}`, activeTaskID),
+				OutputText: outputText,
 				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
 				LatencyMS:  25,
 			}, nil
@@ -12209,22 +13091,931 @@ func TestServiceStartTaskRoutesFileAttachmentIntoExistingTask(t *testing.T) {
 		"trigger": "file_drop",
 		"input": map[string]any{
 			"type":  "file",
+			"text":  "重点结合这个日志继续分析",
 			"files": []string{"logs/network.log"},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
 		},
 	})
 	if err != nil {
 		t.Fatalf("start file follow-up failed: %v", err)
 	}
+	if continuationClassifierCalled {
+		t.Fatal("expected structured evidence for a processing task to bypass model continuation")
+	}
 	task := followUpResult["task"].(map[string]any)
-	if task["task_id"] != activeTaskID {
-		t.Fatalf("expected file follow-up to stay on task %s, got %+v", activeTaskID, task)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected file follow-up to open a new task instead of attaching to %s, got %+v", activeTaskID, task)
 	}
 	record, ok := service.runEngine.GetTask(activeTaskID)
 	if !ok {
-		t.Fatal("expected continued file task to remain in runtime")
+		t.Fatal("expected original processing task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original processing task snapshot to remain unchanged, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceStartTaskDescribedFileStartsNewTaskWithoutPendingEvidence(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
+
+	waitingTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_pending_unanchored",
+		Title:       "Waiting for build dashboard evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": waitingTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "summarize this attachment",
+			"files": []string{"logs/network.log"},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start described file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == waitingTask.TaskID {
+		t.Fatalf("expected unanchored described file to open a fresh task, got %+v", task)
+	}
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected described file task to execute as fresh work, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(waitingTask.TaskID)
+	if !ok {
+		t.Fatal("expected original waiting task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original waiting task not to receive unrelated files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceStartTaskShellBallAnchorDoesNotContinuePendingFileTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
+
+	waitingTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_shell_ball_pending_file",
+		Title:       "Waiting for additional intake details",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": waitingTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "summarize this attachment",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name":     "desktop",
+				"title":        "Quick Intake",
+				"url":          "local://shell-ball",
+				"window_title": "Shell Ball",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start shell-ball described file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == waitingTask.TaskID {
+		t.Fatalf("expected shell-ball intake anchor not to continue pending task, got %+v", task)
+	}
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected shell-ball described file task to execute as fresh work, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(waitingTask.TaskID)
+	if !ok {
+		t.Fatal("expected original waiting task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original waiting task not to receive shell-ball file intake, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestTaskContinuationEvidenceIgnoresShellBallAnchorMatches(t *testing.T) {
+	evidence := buildTaskContinuationEvidence(
+		contextsvc.TaskContextSnapshot{
+			InputType:   "file",
+			Files:       []string{"logs/network.log"},
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+		contextsvc.TaskContextSnapshot{
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+	)
+
+	if !evidence.StructuredSupplement {
+		t.Fatal("expected file input to remain structured evidence")
+	}
+	if evidence.HasStrongAnchor || hasTaskSpecificContinuationEvidence(evidence) {
+		t.Fatalf("expected shell-ball default context not to count as task-specific anchor, got %+v", evidence)
+	}
+	if evidence.HasConflictingAnchor {
+		t.Fatalf("expected shell-ball default context not to conflict with itself, got %+v", evidence)
+	}
+}
+
+func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *testing.T) {
+	var activeTaskID string
+	modelCalled := false
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_continue",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_force_confirm",
+		Title:       "Analyze the current service failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	activeTaskID = activeTask.TaskID
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "先让我确认再处理这个文件",
+			"files": []string{"logs/network.log"},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required task start to bypass continuation classification")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected confirm-required file task to create a new task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected confirm-required file task to wait for intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected confirm-required file task to preserve dragged_file source, got %+v", task)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected confirm-required file task to defer delivery_result, got %+v", startResult["delivery_result"])
+	}
+}
+
+func TestServiceSubmitInputConfirmRequiredTextContinuesPendingTask(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_text_follow_up",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"model should not decide plain confirmation routing"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirm_text_waiting",
+		Title:       "Waiting for clarification",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit confirm-required text follow-up failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required text follow-up to use deterministic pending continuation")
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected text follow-up to remain on waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected continued text follow-up to stay behind confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected continued text follow-up to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected continued text task to remain in runtime")
+	}
+	if record.Snapshot.Text != "Use the latest customer impact numbers." {
+		t.Fatalf("expected continued task to keep text follow-up, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_implicit_text_follow_up",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"model should not decide implicit plain confirmation routing"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirm_text_implicit",
+		Title:       "Waiting for build clarification",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit implicit confirm-required text follow-up failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected implicit confirm-required text follow-up to use deterministic pending continuation")
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected implicit text follow-up to remain on waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected implicit text follow-up to stay behind confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected implicit text follow-up to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected implicit continued text task to remain in runtime")
+	}
+	if record.Snapshot.Text != "Use the latest customer impact numbers." {
+		t.Fatalf("expected implicit continued task to keep text follow-up, got %+v", record.Snapshot)
+	}
+	if record.Snapshot.PageURL != "https://example.com/build" || record.Snapshot.AppName != "Chrome" {
+		t.Fatalf("expected implicit continued task to preserve original context anchors, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *testing.T) {
+	var modelTaskIDs []string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelTaskIDs = append(modelTaskIDs, request.TaskID)
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirming_text_follow_up",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Task should not execute before formal confirmation.",
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirming_text_follow_up",
+		Title:       "Confirm build analysis",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Intent: map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			InputType:   "text",
+			Text:        "Analyze the build failure.",
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit plain text follow-up for confirming task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected text follow-up to remain on confirming task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected plain text follow-up to stay behind confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected plain text follow-up to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected confirming task to remain in runtime")
+	}
+	if record.Status != "confirming_intent" || record.CurrentStep != "intent_confirmation" {
+		t.Fatalf("expected runtime task to keep confirmation gate, got %+v", record)
+	}
+	if !strings.Contains(record.Snapshot.Text, "Analyze the build failure.") ||
+		!strings.Contains(record.Snapshot.Text, "Use the latest customer impact numbers.") {
+		t.Fatalf("expected runtime task to retain original and follow-up text, got %+v", record.Snapshot)
+	}
+	if len(modelTaskIDs) > 0 {
+		t.Fatalf("expected plain text follow-up to keep confirmation gate without model execution, got model calls %v", modelTaskIDs)
+	}
+}
+func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitConfirmation(t *testing.T) {
+	var activeTaskID string
+	var classifierCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_continuation_classifier" {
+				classifierCalled = true
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_implicit_plain_text_should_not_continue",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"model must not choose unanchored implicit pending text"}`, activeTaskID),
+					Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+					LatencyMS:  25,
+				}, nil
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_implicit_plain_text_new_task",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Translated email ready.",
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_plain_text_implicit_waiting",
+		Title:       "Waiting for build clarification",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	activeTaskID = activeTask.TaskID
+
+	result, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this email.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start implicit plain text new task failed: %v", err)
+	}
+	if classifierCalled {
+		t.Fatal("expected implicit plain text without explicit confirmation or anchors to bypass model continuation")
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected unrelated implicit plain text to open a new task, got %+v", task)
+	}
+	if task["session_id"] == activeTask.SessionID {
+		t.Fatalf("expected unrelated implicit plain text to use a fresh session, got %+v", task)
+	}
+}
+
+func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *testing.T) {
+	runtimeUpdatedAt := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
+	runtimeTask := runengine.TaskRecord{
+		TaskID:      "task_001",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		UpdatedAt:   runtimeUpdatedAt,
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	}
+	storageTask := runengine.TaskRecord{
+		TaskID:      "task_001",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		UpdatedAt:   runtimeUpdatedAt.Add(time.Second),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			InputType:   "file",
+			Text:        "Continue with the attached log.",
+			Files:       []string{"logs/network.log"},
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+	}
+
+	selected := fresherTaskRecord(runtimeTask, storageTask)
+	if selected.Status != storageTask.Status ||
+		selected.CurrentStep != storageTask.CurrentStep ||
+		!selected.UpdatedAt.Equal(storageTask.UpdatedAt) {
+		t.Fatalf("expected newer storage task state to remain selected, got %+v", selected)
+	}
+	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
+		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
+		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {
+		t.Fatalf("expected runtime snapshot anchors to fill the newer partial storage snapshot, got %+v", selected.Snapshot)
+	}
+	if selected.Snapshot.Text != storageTask.Snapshot.Text ||
+		len(selected.Snapshot.Files) != 1 ||
+		selected.Snapshot.Files[0] != storageTask.Snapshot.Files[0] {
+		t.Fatalf("expected newer storage snapshot payload to stay selected, got %+v", selected.Snapshot)
+	}
+}
+
+func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing.T) {
+	var activeTaskID string
+	modelCalled := false
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_waiting_input",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_waiting_input",
+		Title:       "等待补充分析文件",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	activeTaskID = activeTask.TaskID
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "Chrome",
+				"title":    "Build Dashboard",
+				"url":      "https://example.com/build",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("continue waiting-input file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required structured follow-up to use deterministic continuation")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != activeTaskID {
+		t.Fatalf("expected structured file follow-up to remain on waiting task %s, got %+v", activeTaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected continued file follow-up to stay behind confirmation, got %+v", task)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected continued file follow-up to defer delivery_result, got %+v", startResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected continued waiting-input task to remain in runtime")
 	}
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
-		t.Fatalf("expected file follow-up to merge snapshot files, got %+v", record.Snapshot.Files)
+		t.Fatalf("expected continued waiting-input task to retain file evidence, got %+v", record.Snapshot.Files)
+	}
+	if record.Snapshot.PageURL != "https://example.com/build" || record.Snapshot.AppName != "Chrome" {
+		t.Fatalf("expected continued file intake to preserve original page context, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceStartTaskStructuredSupplementContinuesPendingTaskWithoutAutoExecution(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_structured_pending_supplement",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"text":"model should not execute a structured pending-task supplement"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_structured_waiting_input",
+		Title:       "Waiting for build dashboard evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "Use this log as supporting evidence.",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "Chrome",
+				"title":    "Build Dashboard",
+				"url":      "https://example.com/build",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("continue structured supplement failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected structured pending supplement to wait for confirmation instead of executing")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected structured supplement to remain on waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected structured supplement to stay behind confirmation, got %+v", task)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected structured supplement to defer delivery_result, got %+v", startResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected structured supplement task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected structured supplement to retain file evidence, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceStartTaskStructuredSupplementResumesWaitingTaskWithConfirmedIntent(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Log analysis ready.")
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_structured_waiting_confirmed_intent",
+		Title:       "Analyze the build failure after the log is attached",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:        "Analyze the build failure after the log is attached.",
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "Chrome",
+				"title":    "Build Dashboard",
+				"url":      "https://example.com/build",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume structured supplement failed: %v", err)
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected structured evidence to resume waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected structured evidence to resume execution, got %+v", task)
+	}
+	if startResult["delivery_result"] == nil {
+		t.Fatalf("expected resumed structured evidence to return delivery_result, got %+v", startResult)
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected resumed structured task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected resumed task to retain file evidence, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceStartTaskConfirmRequiredFileContinuesUniquePendingTaskAmongCandidates(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_multi_candidate",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"model should not decide anchored confirmation routing"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	targetTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_multi_waiting",
+		Title:       "Waiting for build dashboard evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	otherTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   targetTask.SessionID,
+		Title:       "Waiting for issue tracker evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Issue Tracker",
+			PageURL:     "https://example.com/issues",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Issue Tracker",
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": targetTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name":     "Chrome",
+				"title":        "Build Dashboard",
+				"url":          "https://example.com/build",
+				"window_title": "Browser - Build Dashboard",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("continue unique multi-candidate file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected unique anchored confirmation routing to avoid model continuation")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] != targetTask.TaskID {
+		t.Fatalf("expected file evidence to continue target task %s, got %+v", targetTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected continued file evidence to stay behind confirmation, got %+v", task)
+	}
+	unchangedOther, ok := service.runEngine.GetTask(otherTask.TaskID)
+	if !ok {
+		t.Fatal("expected other candidate to remain in runtime")
+	}
+	if len(unchangedOther.Snapshot.Files) != 0 {
+		t.Fatalf("expected non-matching candidate not to receive file evidence, got %+v", unchangedOther.Snapshot.Files)
+	}
+}
+
+func TestServiceStartTaskConfirmRequiredFileStartsNewTaskWithoutPendingEvidence(t *testing.T) {
+	var activeTaskID string
+	modelCalled := false
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_unanchored_file",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_waiting_input",
+		Title:       "等待补充分析文件",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	activeTaskID = activeTask.TaskID
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "desktop",
+				"title":    "Quick Intake",
+				"url":      "local://shell-ball",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start unanchored confirm-required file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required unanchored file to avoid model continuation")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected unanchored file intake to open a new task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected unanchored file intake to wait for confirmation, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected original waiting task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original waiting task not to receive unrelated files, got %+v", record.Snapshot.Files)
 	}
 }
 

@@ -217,7 +217,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 4.6 返回规则
 
-- 任务类接口：统一返回 `task`，按需附带 `delivery_result`、`bubble_message`
+- 任务类接口：统一返回 `task`，按需附带 `delivery_result`、`bubble_message`；`agent.input.submit` 对无任务锚点的纯社交 / 闲聊输入可返回 `task = null`
 - 列表类接口：统一返回 `items` + `page`
 - 安全类接口：统一返回 `approval_request / authorization_record / audit_record / recovery_point`，按需附带 `impact_scope`
 - 设置类接口：统一返回 `effective_settings` 或 `setting_item`、`apply_mode`、`need_restart`
@@ -462,6 +462,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1007003` `DOCKER_BACKEND_UNAVAILABLE`
 - `1007004` `SANDBOX_PROFILE_INVALID`
 - `1007005` `PATH_POLICY_VIOLATION`
+- `1007006` `INSPECTION_FILESYSTEM_UNAVAILABLE`
+- `1007007` `INSPECTION_SOURCE_NOT_FOUND`
+- `1007008` `INSPECTION_SOURCE_UNREADABLE`
 
 ##### 模型与前馈配置
 
@@ -597,9 +600,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **系统处理**：
   - 统一承接语音转写文本和轻量输入文本
   - 结合当前页面、选中文本、附带文件做上下文识别
-  - 创建 `task`，并直接进入处理或等待必要补充输入
+  - 对正式工作请求创建或续接 `task`，并直接进入处理或等待必要补充输入
+  - 对无任务锚点的纯社交 / 闲聊输入，可仅返回脱离 `task` 的轻量气泡
 - **入参**：会话信息、触发来源、输入内容、上下文、语音元信息、执行偏好
-- **出参**：任务对象、气泡消息、按需附带正式交付结果
+- **出参**：任务对象或 `null`、气泡消息、按需附带正式交付结果
 
 ### agent.input.submit 入参说明
 
@@ -616,6 +620,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.page`               | 当前页面上下文                 |
 | `context.page.title`         | 当前页面标题                   |
 | `context.page.url`           | 当前页面 URL                   |
+| `context.page.browser_kind`  | 当前浏览器分类，取值为 `chrome / edge / other_browser / non_browser` |
+| `context.page.process_path`  | 当前宿主进程路径               |
+| `context.page.process_id`    | 当前宿主进程 ID                |
 | `context.page.app_name`      | 当前宿主应用名                 |
 | `context.page.window_title`  | 当前窗口标题                   |
 | `context.page.visible_text`  | 当前页面可见文本摘录           |
@@ -626,15 +633,22 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.behavior.last_action` | 最近行为信号，例如 `copy`    |
 | `context.behavior.dwell_millis` | 当前场景停留时长             |
 | `voice_meta`                 | 语音会话元信息                 |
+| `options.confirm_required`   | 是否强制先进入意图确认         |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
 
 补充约束：
 
+- 为保持既有协议字面量兼容性，非 Chrome / Edge 的浏览器宿主继续使用 `other_browser`；当前它仅表示“浏览器宿主存在，但不在 Chromium takeover v1 的正式支持范围内”。
+- 正式 `context.page.url` / `input.page_context.url` 进入任务或 RPC 载荷前应统一去除凭据、query 与 hash，避免把易变或敏感 URL 片段冻结进正式上下文。
+- `floating_ball` 来源的普通文本/语音提交（`hover_text_input`、`voice_commit`）应尽力补齐当前前台窗口的 `context.page` 附着提示；`dashboard / tray_panel` 的普通文本输入则仍按显式视觉上下文请求决定是否补齐前台页面信息。
 - 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
+- 当普通文本被判定为无任务锚点的纯社交 / 闲聊输入时，后端可返回 `data.task = null`、`data.delivery_result = null` 与 `task_id` 为空的 `bubble_message`；前端只能把它当作轻量承接反馈，不得写入正式任务链、任务详情或正式交付出口。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
+- 若同一 `session` 内只有一个 `waiting_input / confirming_intent` 任务，普通文本补充可续接到该任务；`options.confirm_required = true` 只表示本次补充后仍需确认，不应把普通文本补充机械拆成新 task。
+- 文件、选区、错误等结构化补充证据若要续接旧 task，仍必须存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage。
 
 ### agent.input.submit 入参示例
 
@@ -688,17 +702,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 | 字段                     | 中文说明                         |
 | ------------------------ | -------------------------------- |
-| `data.task.task_id`      | 新建任务 ID                      |
-| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID     |
-| `data.task.title`        | 任务标题                         |
-| `data.task.source_type`  | 任务来源类型                     |
-| `data.task.status`       | 当前任务状态                     |
-| `data.task.current_step` | 当前步骤                         |
+| `data.task`              | 正式任务对象；纯社交 / 闲聊输入可返回 `null` |
+| `data.task.task_id`      | 新建或续接任务 ID，仅当 `data.task` 非空时存在 |
+| `data.task.session_id`   | 后端最终采用的隐藏协作会话 ID，仅当 `data.task` 非空时存在 |
+| `data.task.title`        | 任务标题，仅当 `data.task` 非空时存在 |
+| `data.task.source_type`  | 任务来源类型，仅当 `data.task` 非空时存在 |
+| `data.task.status`       | 当前任务状态，仅当 `data.task` 非空时存在 |
+| `data.task.current_step` | 当前步骤，仅当 `data.task` 非空时存在 |
 | `data.bubble_message`    | 气泡承接内容                     |
 | `data.delivery_result`   | 若后端已直接完成，可返回正式交付 |
 | `meta.server_time`       | 服务端响应时间                   |
 
 ### agent.input.submit 出参示例
+
+正式任务请求示例：
 
 ```json
 {
@@ -719,6 +736,31 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_001",
         "type": "status",
         "text": "已接收你的输入，正在整理当前页面内容。"
+      },
+      "delivery_result": null
+    },
+    "meta": {
+      "server_time": "2026-04-07T10:20:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+纯社交 / 闲聊输入示例：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_input_chat_001",
+  "result": {
+    "data": {
+      "task": null,
+      "bubble_message": {
+        "bubble_id": "bubble_chat_001",
+        "task_id": "",
+        "type": "result",
+        "text": "你好，我在。"
       },
       "delivery_result": null
     },
@@ -755,11 +797,14 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `source`                   | 来源位置，取值来自 `request_source` |
 | `trigger`                  | 触发动作，取值来自 `request_trigger` |
 | `input.type`               | 输入对象类型，取值来自 `input_type` |
-| `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
+| `input.text`               | 当 `input.type = text_selection` 时表示选中文本内容；当 `input.type = file` 时可表示用户对附件的明确说明 |
 | `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
 | `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
 | `input.page_context.title` | 当前页面标题，可用于页面级任务标题与上下文冻结 |
 | `input.page_context.url`   | 当前页面 URL |
+| `input.page_context.browser_kind` | 当前浏览器分类，取值为 `chrome / edge / other_browser / non_browser` |
+| `input.page_context.process_path` | 当前宿主进程路径 |
+| `input.page_context.process_id` | 当前宿主进程 ID |
 | `input.page_context.app_name` | 当前宿主应用名 |
 | `input.page_context.window_title` | 当前窗口标题 |
 | `input.page_context.visible_text` | 当前页面可见文本摘录 |
@@ -771,16 +816,21 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.behavior.dwell_millis` | 当前场景停留时长 |
 | `delivery.preferred`       | 优先交付方式 |
 | `delivery.fallback`        | 兜底交付方式 |
+| `options.confirm_required` | 是否强制先进入意图确认；不用于绕过风险授权 |
 
 补充约束：
 
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
+- `options.confirm_required = true` 仅表示调用方要求先进入意图确认；`false` 或省略只表示不强制确认，不得跳过风险授权、审计、恢复点或必要澄清。
+- 当 `input.type = file` 且 `input.text` 已包含用户对附件的明确说明时，后端应直接进入 Agent Loop / 治理 / 执行链路，不应重复返回通用意图确认气泡。
+- 当 `input.type = file` 但缺少明确说明时，后端仍可进入意图确认或补充输入状态，避免对裸附件直接执行不明确任务。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
 - `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
-- 当后端在正式主链路中已经解析出结构化意图或视觉任务信号时，不得仅凭“当前只有一个 waiting task”就把新输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或本次输入本身就是结构化补充证据时，才允许视为旧 task 的 continuation。
+- 当后端在正式主链路中已经解析出结构化意图或视觉任务信号时，不得仅凭“当前只有一个 waiting task”或“本次输入是结构化对象”就把新输入并回旧 task；只有存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage 时，才允许视为旧 task 的 continuation；多候选场景下只有存在唯一任务特定匹配时才允许续接。
+- 悬浮球默认入口锚点（如 `desktop / local://shell-ball`）只表示输入从悬浮球进入系统，不得作为共享页面 / 窗口 / App 锚点来证明 continuation。
 - continuation 分类发给模型的信号必须至少带上当前输入解析后的 `intent_name / delivery_type` 和候选 task 的 `intent_name / delivery_type`；仅靠 `explicit_intent_present=true` 之类布尔位不足以支撑正式路由判断。
 
 ### agent.task.start 入参示例
@@ -2012,9 +2062,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### 8.2.6 `agent.task.steer`
 
+- **状态边界**：`agent.task.steer` 只用于可延迟消费 steering 的任务状态。`processing` 必须是可轮询的 `agent_loop` 执行路径；`waiting_auth` 与 `blocked` 可先记录到恢复执行；`waiting_input / confirming_intent / paused / terminal` 必须拒绝，让客户端改走 `agent.input.submit`、确认或控制链路。
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户在任务运行中补充新的 follow-up 指令时
-- **系统处理**：把新的 steering 文本写入当前 task 的运行态，并允许 Agent Loop 在后续轮次主动消费
+- **系统处理**：把新的 steering 文本写入当前 task 的运行态，并允许 Agent Loop 在后续轮次主动消费；若当前 `processing` task 不是可轮询的 `agent_loop` 执行路径，则不得返回“已记录”假确认，应让普通输入创建 / 排队新 task，或等后续恢复执行路径消费已经排队的 steering。
 - **入参**：任务 ID、追加消息
 - **出参**：更新后的任务对象、状态气泡
 
@@ -2105,7 +2156,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户进入巡检配置页时
-- **系统处理**：返回当前巡检配置
+- **系统处理**：返回当前巡检配置；当前实现从 `settings.task_automation` 读取正式真源，`agent.task_inspector.config.*` 作为巡检配置兼容入口存在，不再维护独立于 settings snapshot 的第二份正式配置
 - **入参**：无业务入参
 - **出参**：巡检配置快照
 
@@ -2168,7 +2219,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户修改巡检配置并保存时
-- **系统处理**：写入巡检配置，返回生效结果
+- **系统处理**：写入巡检配置，返回生效结果；当前实现把该更新收口到 `settings.task_automation`，避免巡检配置与正式 settings snapshot 分裂
 - **入参**：巡检来源、巡检频率、触发开关
 - **出参**：已生效配置
 
@@ -2250,9 +2301,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户手动点击“立即巡检”时
-- **系统处理**：执行一次任务巡检并返回摘要
+- **系统处理**：执行一次任务巡检并返回摘要；当 `target_sources` 未提供时，服务端回退到 `settings.task_automation.task_sources`。若来源目录不存在、越界或不可访问，接口返回正式错误而不是成功的 `0/0/0` 摘要
 - **入参**：触发原因、目标来源
 - **出参**：巡检摘要、建议
+- **常见错误**：`1004003 WORKSPACE_BOUNDARY_DENIED`、`1007006 INSPECTION_FILESYSTEM_UNAVAILABLE`、`1007007 INSPECTION_SOURCE_NOT_FOUND`、`1007008 INSPECTION_SOURCE_UNREADABLE`
 
 ### agent.task_inspector.run 入参说明
 
@@ -3643,6 +3695,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
 - `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
+- 打包版默认 `general.download.workspace_path` 会解析为用户本机的 `AppLocalData/CialloClaw/workspace`，历史 `workspace` 相对占位值会在 settings snapshot 读取时迁移到该绝对目录。
+- 打包版默认 `task_automation.task_sources` 会解析为 `${workspace_path}/todos`；settings snapshot 读取时仅会把历史默认占位值（`workspace/todos` 或旧的 `D:/workspace/todos`）迁移到该绝对目录，用户自定义的 `workspace/...` 多根来源会保持原样。
+- 桌面宿主 `desktop_get_runtime_defaults` 会同时暴露当前运行时 `data_path`，用于控制面板展示本地存储位置并打开正式 `data` 目录。
+- `general.download.workspace_path` 当前不会热重建 bootstrap 时已经绑定的 workspace runtime（例如文件系统、执行后端与 execution workspace）；更新该字段会写入正式 settings snapshot，并返回 `apply_mode = restart_required` 与 `need_restart = true`，用于显式提示“重启后端后生效”。
+- 桌面宿主侧 `desktop_open_local_path`、`desktop_reveal_local_path` 只允许使用当前 bootstrap 生效的 `workspace root` 或宿主明确白名单的 runtime 子目录（当前仅接受 `temp/...` 前缀，并解析到 runtime temp 目录）；source-note 路径解析允许使用当前 `workspace root` 或宿主 `runtime root`。这些路径解析都不再回退到编译时 repo root，也不会因为待重启的 `workspace_path` 草稿而漂移本地打开范围。
+- 仪表盘 `trust_summary.workspace_path` 与 `out_of_workspace` 判断展示的是当前运行时真实生效的 workspace 根目录，而不是待重启后才会生效的 settings 草稿值。
 
 ### agent.settings.update 入参说明
 

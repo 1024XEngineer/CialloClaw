@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
@@ -26,6 +29,14 @@ var (
 	ErrTaskStatusInvalid   = errors.New("task status invalid")
 	ErrTaskAlreadyFinished = errors.New("task already finished")
 )
+
+func defaultSettingsWorkspaceRoot() string {
+	return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
+}
+
+func defaultSettingsTaskSourcePath() string {
+	return filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), "todos"))
+}
 
 // TaskRecord is the canonical in-memory record that bridges external task
 // semantics with internal run execution state.
@@ -246,7 +257,7 @@ func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 		sessionOrder:  []string{},
 		notepadClaims: map[string]struct{}{},
 		inspector: InspectorConfig{
-			TaskSources:          []string{defaultTaskSourcePath},
+			TaskSources:          []string{defaultSettingsTaskSourcePath()},
 			InspectionInterval:   map[string]any{"unit": "minute", "value": 15},
 			InspectOnFileChange:  true,
 			InspectOnStartup:     true,
@@ -1397,6 +1408,11 @@ func resumeStepForTask(record *TaskRecord) string {
 	if record == nil {
 		return "generate_output"
 	}
+	if currentStep := strings.TrimSpace(record.CurrentStep); currentStep != "" && currentStep != "human_in_loop" {
+		// Pause/resume must preserve the step that was actually running. Intent
+		// alone can overstate agent-loop capability after prompt fallback.
+		return currentStep
+	}
 	if stringValue(record.Intent, "name", "") == "agent_loop" {
 		return "agent_loop"
 	}
@@ -1679,6 +1695,16 @@ func (e *Engine) UpdateSettings(values map[string]any) (map[string]any, []string
 				if !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage) {
 					applyMode = "restart_required"
 					needRestart = true
+				}
+			}
+			if downloadPatch, ok := sectionPatch["download"].(map[string]any); ok {
+				currentDownload := cloneMap(mapValue(previousSection, "download"))
+				if nextWorkspacePath, ok := downloadPatch["workspace_path"]; ok {
+					currentWorkspacePath, hasCurrentWorkspacePath := currentDownload["workspace_path"]
+					if !hasCurrentWorkspacePath || !reflect.DeepEqual(currentWorkspacePath, nextWorkspacePath) {
+						applyMode = "restart_required"
+						needRestart = true
+					}
 				}
 			}
 		}
@@ -2925,7 +2951,7 @@ func buildDefaultSettings() map[string]any {
 			"voice_notification_enabled": true,
 			"voice_type":                 "default_female",
 			"download": map[string]any{
-				"workspace_path":            defaultWorkspaceRoot,
+				"workspace_path":            defaultSettingsWorkspaceRoot(),
 				"ask_before_save_each_file": true,
 			},
 		},
@@ -2945,7 +2971,7 @@ func buildDefaultSettings() map[string]any {
 			"inspect_on_startup":     true,
 			"inspect_on_file_change": true,
 			"inspection_interval":    map[string]any{"unit": "minute", "value": 15},
-			"task_sources":           []string{defaultTaskSourcePath},
+			"task_sources":           []string{defaultSettingsTaskSourcePath()},
 			"remind_before_deadline": true,
 			"remind_when_stale":      false,
 		},
@@ -3033,7 +3059,142 @@ func normalizeSettingsPatch(values map[string]any) map[string]any {
 		models["credentials"] = credentials
 		normalized["models"] = models
 	}
+	normalized = migrateLegacyWorkspaceSettings(normalized)
 	return normalized
+}
+
+func migrateLegacyWorkspaceSettings(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return values
+	}
+	general := cloneMap(mapValue(values, "general"))
+	if len(general) > 0 {
+		download := cloneMap(mapValue(general, "download"))
+		if len(download) > 0 {
+			if migrated, changed := migrateWorkspaceRootSetting(download["workspace_path"]); changed {
+				download["workspace_path"] = migrated
+				general["download"] = download
+				values["general"] = general
+			}
+		}
+	}
+	taskAutomation := cloneMap(mapValue(values, "task_automation"))
+	if len(taskAutomation) > 0 {
+		if migrated, changed := migrateTaskSourceSettings(taskAutomation["task_sources"]); changed {
+			taskAutomation["task_sources"] = migrated
+			values["task_automation"] = taskAutomation
+		}
+	}
+	return values
+}
+
+func migrateWorkspaceRootSetting(rawValue any) (string, bool) {
+	value, ok := rawValue.(string)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", false
+	}
+	// Windows drive-relative inputs (for example `C:workspace`) are not stable
+	// runtime roots, so migration resets them the same way as any other unsafe
+	// legacy-relative workspace placeholder.
+	if hasWindowsDriveLetterPrefix(trimmed) && !isWindowsStyleAbsolutePath(trimmed) {
+		return defaultSettingsWorkspaceRoot(), true
+	}
+	if isRuntimeAbsolutePathLike(trimmed) {
+		cleaned := filepath.ToSlash(filepath.Clean(trimmed))
+		return cleaned, cleaned != trimmed
+	}
+	normalized := path.Clean(strings.ReplaceAll(trimmed, "\\", "/"))
+	if normalized == "." || normalized == defaultWorkspaceRoot {
+		return defaultSettingsWorkspaceRoot(), true
+	}
+	if !isSafeRuntimeRelativePath(normalized) {
+		return defaultSettingsWorkspaceRoot(), true
+	}
+	return filepath.ToSlash(filepath.Join(serviceconfig.DefaultRuntimeRoot(), filepath.FromSlash(normalized))), true
+}
+
+func migrateTaskSourceSettings(rawValue any) ([]string, bool) {
+	_, recognizedString := rawValue.([]string)
+	_, recognizedAny := rawValue.([]any)
+	if !recognizedString && !recognizedAny {
+		return nil, false
+	}
+	sources := stringSlice(rawValue)
+	result := make([]string, 0, len(sources))
+	changed := false
+	for _, source := range sources {
+		migrated, migratedChanged := migrateTaskSourceSetting(source)
+		if strings.TrimSpace(migrated) == "" {
+			continue
+		}
+		result = append(result, migrated)
+		changed = changed || migratedChanged
+	}
+	return dedupeStrings(result), changed
+}
+
+func migrateTaskSourceSetting(source string) (string, bool) {
+	trimmed := strings.TrimSpace(source)
+	if trimmed == "" {
+		return "", false
+	}
+	// Drive-relative task sources must be dropped during migration because they do
+	// not bind to a stable runtime workspace across platforms or launches.
+	if hasWindowsDriveLetterPrefix(trimmed) && !isWindowsStyleAbsolutePath(trimmed) {
+		return "", true
+	}
+	if isRuntimeAbsolutePathLike(trimmed) {
+		cleaned := filepath.ToSlash(filepath.Clean(trimmed))
+		return cleaned, cleaned != trimmed
+	}
+	normalized := path.Clean(strings.ReplaceAll(trimmed, "\\", "/"))
+	if normalized == "." || normalized == defaultWorkspaceRoot {
+		return defaultSettingsWorkspaceRoot(), true
+	}
+	if strings.HasPrefix(normalized, defaultWorkspaceRoot+"/") {
+		return filepath.ToSlash(filepath.Join(serviceconfig.DefaultWorkspaceRoot(), filepath.FromSlash(strings.TrimPrefix(normalized, defaultWorkspaceRoot+"/")))), true
+	}
+	if !isSafeRuntimeRelativePath(normalized) {
+		return "", true
+	}
+	return filepath.ToSlash(filepath.Join(serviceconfig.DefaultRuntimeRoot(), filepath.FromSlash(normalized))), true
+}
+
+func isSafeRuntimeRelativePath(normalized string) bool {
+	if normalized == ".." || strings.HasPrefix(normalized, "../") {
+		return false
+	}
+	if hasWindowsDriveLetterPrefix(normalized) || filepath.VolumeName(filepath.FromSlash(normalized)) != "" {
+		return false
+	}
+	return !strings.HasPrefix(normalized, "/")
+}
+
+// isRuntimeAbsolutePathLike keeps migration semantics host-independent so a
+// Windows-style absolute path remains absolute even when the snapshot is loaded
+// on a Unix host during tests or cross-platform maintenance flows.
+func isRuntimeAbsolutePathLike(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if hasWindowsDriveLetterPrefix(trimmed) {
+		return isWindowsStyleAbsolutePath(trimmed)
+	}
+	return filepath.IsAbs(trimmed)
+}
+
+func hasWindowsDriveLetterPrefix(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	letter := value[0]
+	return ((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z')) && value[1] == ':'
+}
+
+func isWindowsStyleAbsolutePath(value string) bool {
+	return hasWindowsDriveLetterPrefix(value) && len(value) >= 3 && (value[2] == '\\' || value[2] == '/')
 }
 
 func mapValue(values map[string]any, path ...string) map[string]any {

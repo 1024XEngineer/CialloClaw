@@ -1,21 +1,18 @@
 .note-preview-page {
-  --note-accent: #d88e63;
-  --note-accent-strong: #86573b;
+  --note-accent: var(--cc-module-notes);
+  --note-accent-strong: var(--cc-module-notes-strong);
   --note-canvas-inset: clamp(0.35rem, 0.85vw, 0.72rem);
   --note-canvas-radius: clamp(2.35rem, 4vw, 3.45rem);
-  --note-grid-line: rgba(122, 92, 65, 0.07);
-  --note-line: rgba(122, 92, 65, 0.18);
-  --note-ink: #35271b;
-  --note-copy: rgba(72, 56, 44, 0.72);
-  --note-paper: rgba(255, 250, 243, 0.9);
-  --note-paper-strong: rgba(255, 252, 247, 0.96);
+  --note-grid-line: rgba(126, 101, 76, 0.07);
+  --note-line: var(--cc-line);
+  --note-ink: var(--cc-ink);
+  --note-copy: var(--cc-ink-muted);
+  --note-paper: var(--cc-paper);
+  --note-paper-strong: var(--cc-paper-strong);
   --note-shadow: rgba(106, 73, 40, 0.16);
   --note-shadow-strong: rgba(82, 53, 29, 0.22);
   background:
-    radial-gradient(circle at 14% 16%, rgba(255, 255, 255, 0.74), transparent 24%),
-    radial-gradient(circle at 86% 14%, rgba(252, 227, 203, 0.42), transparent 22%),
-    radial-gradient(circle at 50% 54%, rgba(255, 245, 232, 0.38), transparent 32%),
-    linear-gradient(180deg, #f7f1ea 0%, #ecdfd0 52%, #e2d3c2 100%);
+    var(--cc-page-bg);
   box-sizing: border-box;
   color: var(--note-ink);
   display: grid;
@@ -230,7 +227,7 @@
 
 .note-preview-page__title-row h1 {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: clamp(1.55rem, 2.05vw, 2.2rem);
   font-weight: 700;
   letter-spacing: -0.05em;
@@ -304,7 +301,7 @@
 
 .note-preview-page__summary-item strong {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: 1.08rem;
   font-weight: 700;
   letter-spacing: -0.06em;
@@ -380,7 +377,7 @@
 
 .note-source-studio__title-row h2 {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: clamp(1.15rem, 1.5vw, 1.45rem);
   letter-spacing: -0.04em;
   line-height: 1;
@@ -661,7 +658,7 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.66);
   color: var(--note-ink);
   height: 100%;
-  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.9rem;
   line-height: 1.6;
   min-height: 0;
@@ -786,7 +783,7 @@
 
 .note-preview-page__rail-dropzone-title {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: 1rem;
   font-weight: 700;
   line-height: 1.08;
@@ -939,7 +936,7 @@
 .note-preview-shell__header .dashboard-card__kicker,
 .note-preview-finished-group__title {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.03em;
@@ -1145,7 +1142,7 @@
 
 .note-preview-card__title,
 .note-preview-page__board-card-title {
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: 1.02rem;
   font-weight: 700;
   letter-spacing: -0.03em;
@@ -1288,7 +1285,7 @@
 
 .note-preview-page__board-stat strong {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: 0.98rem;
   font-weight: 700;
   letter-spacing: -0.04em;
@@ -1443,7 +1440,7 @@
 
 .note-preview-page__drag-ghost-title {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: 1rem;
   font-weight: 700;
   line-height: 1.28;
@@ -1497,7 +1494,7 @@
 
 .note-source-modal__title {
   color: var(--note-ink);
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: var(--cc-font-display);
   font-size: clamp(1.25rem, 1.7vw, 1.7rem);
   font-weight: 700;
   letter-spacing: -0.04em;

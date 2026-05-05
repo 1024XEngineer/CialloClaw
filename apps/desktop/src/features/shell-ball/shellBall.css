@@ -103,18 +103,18 @@ body[data-app-window="shell-ball"],
   --shell-ball-voice-frame-size: 15.5rem;
   --shell-ball-transition-scale: 1;
   --shell-ball-transition-opacity: 1;
-  --shell-ball-paper: rgba(255, 251, 244, 0.88);
-  --shell-ball-paper-strong: rgba(255, 253, 249, 0.96);
-  --shell-ball-paper-soft: rgba(251, 246, 238, 0.72);
-  --shell-ball-line: rgba(120, 105, 81, 0.16);
-  --shell-ball-line-strong: rgba(120, 105, 81, 0.28);
-  --shell-ball-ink: #24313a;
-  --shell-ball-copy: #51606c;
-  --shell-ball-copy-soft: rgba(81, 96, 108, 0.78);
-  --shell-ball-warm: #c18d46;
-  --shell-ball-sky: #6a91c8;
-  --shell-ball-teal: #4f9da7;
-  --shell-ball-slate: #8f9aa5;
+  --shell-ball-paper: var(--cc-paper);
+  --shell-ball-paper-strong: var(--cc-paper-strong);
+  --shell-ball-paper-soft: var(--cc-paper-soft);
+  --shell-ball-line: var(--cc-line);
+  --shell-ball-line-strong: var(--cc-line-strong);
+  --shell-ball-ink: var(--cc-ink);
+  --shell-ball-copy: var(--cc-ink-soft);
+  --shell-ball-copy-soft: var(--cc-ink-muted);
+  --shell-ball-warm: var(--cc-honey);
+  --shell-ball-sky: var(--cc-sky);
+  --shell-ball-teal: var(--cc-sage);
+  --shell-ball-slate: #a4adb4;
   color: var(--shell-ball-ink);
   display: block;
   margin: 0;
@@ -691,6 +691,19 @@ body[data-app-window="shell-ball"],
   pointer-events: none;
   position: absolute;
   z-index: 7;
+}
+
+.shell-ball-onboarding-loading {
+  align-self: center;
+  backdrop-filter: blur(12px);
+  background: rgba(255, 250, 245, 0.88);
+  border: 1px solid rgba(202, 176, 149, 0.28);
+  border-radius: 999px;
+  box-shadow: 0 18px 34px -24px rgba(38, 27, 19, 0.34);
+  color: rgba(56, 44, 33, 0.92);
+  justify-self: center;
+  padding: 0.5rem 0.85rem;
+  pointer-events: none;
 }
 
 .shell-ball-input-bar,

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
@@ -31,6 +33,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -52,6 +55,8 @@ const (
 	executionSegmentInitial = "initial"
 	executionSegmentResume  = "resume"
 	executionSegmentRestart = "restart"
+	subjectPreviewMaxLength = 24
+	resultPreviewMaxLength  = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
@@ -301,21 +306,30 @@ func (s *Service) RunEngine() *runengine.Engine {
 // waits for more input, asks for confirmation, or runs immediately.
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil); err != nil {
+	options := mapValue(params, "options")
+	confirmRequired := boolValue(options, "confirm_required", false)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: confirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
 	} else if strings.TrimSpace(resolvedSessionID) != "" {
 		params = withResolvedSessionID(params, resolvedSessionID)
 	}
-	options := mapValue(params, "options")
-	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
 		return handledResponse, nil
+	}
+	if decision, ok := s.routeUnanchoredSubmitInput(context.Background(), snapshot, suggestion, confirmRequired); ok {
+		if decision.Route == inputRouteSocialChat {
+			return s.socialChatInputResponse(decision), nil
+		}
+		suggestion = applyInputRouteDecision(suggestion, decision)
 	}
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
 	if !suggestion.RequiresConfirm {
@@ -414,7 +428,13 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+	options := mapValue(params, "options")
+	forceConfirmRequired := boolValue(options, "confirm_required", false)
+	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent, taskContinuationOptions{
+		ConfirmRequired:      confirmRequired,
+		ForceConfirmRequired: forceConfirmRequired,
+	}); err != nil {
 		return nil, err
 	} else if handled {
 		return response, nil
@@ -426,8 +446,15 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	} else if handled {
 		return handledResponse, nil
 	}
-	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
+	suggestion := s.intent.Suggest(snapshot, explicitIntent, confirmRequired)
+	fallbackConfirmRequired := confirmRequired
+	// Screen inference already carries its own authorization boundary; only an
+	// explicit caller request should turn an unavailable screen path back into
+	// intent confirmation.
+	if stringValue(suggestion.Intent, "name", "") == "screen_analyze" && !forceConfirmRequired {
+		fallbackConfirmRequired = suggestion.RequiresConfirm
+	}
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, fallbackConfirmRequired)
 	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
 		return nil, err
 	} else if handled {
@@ -502,6 +529,28 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		response["delivery_result"] = nil
 	}
 	return response, nil
+}
+
+// taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.
+// Object-based task starts with their own instruction can enter the Agent Loop
+// directly, while bare objects still stop for intent confirmation.
+func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, forceConfirm bool) bool {
+	if forceConfirm {
+		return true
+	}
+	if len(explicitIntent) > 0 {
+		return false
+	}
+	return !taskStartHasExplicitGoal(snapshot)
+}
+
+func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
+	switch snapshot.InputType {
+	case "file":
+		return strings.TrimSpace(snapshot.Text) != ""
+	default:
+		return false
+	}
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
@@ -584,7 +633,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 }
 
 func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
-	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), 18)
+	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), subjectPreviewMaxLength)
 }
 
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
@@ -692,9 +741,9 @@ func isClipScreenSourcePath(pathValue string) bool {
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, 18))
+		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
 	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, 18))
+	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
@@ -941,7 +990,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	snapshot := snapshotFromTask(updatedTask)
-	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
 	if err != nil {
@@ -1537,6 +1585,9 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !taskCanAcceptExplicitSteering(task) {
+		return nil, ErrTaskStatusInvalid
+	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已记录新的补充要求，后续执行会纳入该指令。", time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.AppendSteeringMessage(task.TaskID, message, bubble)
 	if !changed {
@@ -1546,6 +1597,24 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 		"task":           taskMap(updatedTask),
 		"bubble_message": bubble,
 	}, nil
+}
+
+func taskCanAcceptExplicitSteering(task runengine.TaskRecord) bool {
+	switch task.Status {
+	case "processing":
+		// Active processing tasks can only consume steering when the running
+		// agent loop polls between rounds. Other processing paths must finish or
+		// queue a separate task instead of pretending the guidance was consumed.
+		return taskCanConsumeActiveSteering(task)
+	case "waiting_auth", "blocked":
+		// Deferred execution paths can carry explicit steering until approval or
+		// queue release resumes the task. Pending-input states are intentionally
+		// rejected so callers re-enter agent.input.submit and merge the text into
+		// the formal continuation snapshot instead of hiding it in runtime notes.
+		return true
+	default:
+		return false
+	}
 }
 
 // TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready
@@ -1874,12 +1943,16 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 
 // TaskInspectorConfigGet handles agent.task_inspector.config.get.
 func (s *Service) TaskInspectorConfigGet() (map[string]any, error) {
-	return s.runEngine.InspectorConfig(), nil
+	return inspectorConfigFromSettings(s.runEngine.Settings()), nil
 }
 
 // TaskInspectorConfigUpdate handles agent.task_inspector.config.update.
 func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]any, error) {
-	effective := s.runEngine.UpdateInspectorConfig(params)
+	settingsPatch := taskAutomationSettingsPatchFromInspectorConfig(params)
+	if _, _, _, _, err := s.runEngine.UpdateSettings(settingsPatch); err != nil {
+		return nil, err
+	}
+	effective := inspectorConfigFromSettings(s.runEngine.Settings())
 	return map[string]any{
 		"updated":          true,
 		"effective_config": effective,
@@ -1889,13 +1962,13 @@ func (s *Service) TaskInspectorConfigUpdate(params map[string]any) (map[string]a
 // TaskInspectorRun handles agent.task_inspector.run and returns the inspection
 // summary plus suggestions.
 func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error) {
-	config := s.runEngine.InspectorConfig()
+	config := inspectorConfigFromSettings(s.runEngine.Settings())
 	targetSources := stringSliceValue(params["target_sources"])
 	notepadItems, _ := s.runEngine.NotepadItems("", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 
-	result := s.inspector.Run(taskinspector.RunInput{
+	result, err := s.inspector.Run(taskinspector.RunInput{
 		Reason:          stringValue(params, "reason", ""),
 		TargetSources:   targetSources,
 		Config:          config,
@@ -1903,6 +1976,9 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		FinishedTasks:   finishedTasks,
 		NotepadItems:    notepadItems,
 	})
+	if err != nil {
+		return nil, err
+	}
 	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
 			return nil, err
@@ -2088,7 +2164,7 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 			"risk_level":             aggregateRiskLevel(allTasks, pendingApprovals, s.risk.DefaultLevel()),
 			"pending_authorizations": pendingTotal,
 			"has_restore_point":      hasRestorePoint,
-			"workspace_path":         workspacePathFromSettings(s.runEngine.Settings()),
+			"workspace_path":         currentRuntimeWorkspaceRoot(s.executor),
 		}
 	}
 
@@ -3125,7 +3201,7 @@ func (s *Service) drainSessionQueue(sessionID string) error {
 			"前序任务已完成，当前会话中的下一个任务开始执行。",
 			nextTask.UpdatedAt.Format(dateTimeLayout),
 		)
-		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, executionStepName(nextTask.Intent), bubble)
+		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, s.activeExecutionStepName(nextTask.Intent), bubble)
 		if !changed {
 			return ErrTaskNotFound
 		}
@@ -3467,19 +3543,65 @@ func mergeTaskLists(runtimeTasks, storageTasks []runengine.TaskRecord) []runengi
 }
 
 func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	selected := storageTask
 	if runtimeTask.UpdatedAt.After(storageTask.UpdatedAt) {
-		return runtimeTask
+		selected = runtimeTask
+	} else if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
+		selected = storageTask
+	} else if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
+		selected = runtimeTask
+	} else if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
+		selected = storageTask
 	}
-	if storageTask.UpdatedAt.After(runtimeTask.UpdatedAt) {
-		return storageTask
+	return taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask)
+}
+
+func taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
+	// Snapshot anchors are continuation evidence, not freshness state; keep the
+	// fresher task fields and only fill missing anchors from the alternate
+	// copies. A partial fresher snapshot can still carry text or files while
+	// missing the page/window anchors needed for follow-up routing.
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, runtimeTask.Snapshot)
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, storageTask.Snapshot)
+	return selected
+}
+
+func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	if isEmptySnapshot(selected) {
+		if isEmptySnapshot(fallback) {
+			return selected
+		}
+		return cloneTaskSnapshot(fallback)
 	}
-	if runtimeTask.FinishedAt != nil && storageTask.FinishedAt == nil {
-		return runtimeTask
+	if isEmptySnapshot(fallback) {
+		return cloneTaskSnapshot(selected)
 	}
-	if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
-		return storageTask
+	merged := cloneTaskSnapshot(selected)
+	if isShellBallIntakeAnchor(merged) && !isShellBallIntakeAnchor(fallback) {
+		// Shell-ball intake context is not a task-specific anchor. Treat it as
+		// missing when another persisted copy still has the real page/window
+		// anchors needed for continuation routing.
+		merged.PageTitle = ""
+		merged.PageURL = ""
+		merged.AppName = ""
+		merged.WindowTitle = ""
 	}
-	return storageTask
+	if strings.TrimSpace(merged.PageTitle) == "" {
+		merged.PageTitle = fallback.PageTitle
+	}
+	if strings.TrimSpace(merged.PageURL) == "" {
+		merged.PageURL = fallback.PageURL
+	}
+	if strings.TrimSpace(merged.AppName) == "" {
+		merged.AppName = fallback.AppName
+	}
+	if strings.TrimSpace(merged.WindowTitle) == "" {
+		merged.WindowTitle = fallback.WindowTitle
+	}
+	if strings.TrimSpace(merged.HoverTarget) == "" {
+		merged.HoverTarget = fallback.HoverTarget
+	}
+	return merged
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
@@ -3898,16 +4020,28 @@ func mergeSettingsPreview(target map[string]any, patch map[string]any) {
 
 func previewNeedsRestart(currentSettings, patch map[string]any) bool {
 	generalPatch := cloneMap(mapValue(patch, "general"))
-	if len(generalPatch) == 0 {
-		return false
+	if len(generalPatch) > 0 {
+		nextLanguage, ok := generalPatch["language"]
+		if ok {
+			currentGeneral := cloneMap(mapValue(currentSettings, "general"))
+			currentLanguage, hasCurrentLanguage := currentGeneral["language"]
+			if !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage) {
+				return true
+			}
+		}
+		downloadPatch := cloneMap(mapValue(generalPatch, "download"))
+		if len(downloadPatch) > 0 {
+			nextWorkspacePath, ok := downloadPatch["workspace_path"]
+			if ok {
+				currentDownload := cloneMap(mapValue(mapValue(currentSettings, "general"), "download"))
+				currentWorkspacePath, hasCurrentWorkspacePath := currentDownload["workspace_path"]
+				if !hasCurrentWorkspacePath || !reflect.DeepEqual(currentWorkspacePath, nextWorkspacePath) {
+					return true
+				}
+			}
+		}
 	}
-	nextLanguage, ok := generalPatch["language"]
-	if !ok {
-		return false
-	}
-	currentGeneral := cloneMap(mapValue(currentSettings, "general"))
-	currentLanguage, hasCurrentLanguage := currentGeneral["language"]
-	return !hasCurrentLanguage || !reflect.DeepEqual(currentLanguage, nextLanguage)
+	return false
 }
 
 func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []string) string {
@@ -3918,6 +4052,133 @@ func previewApplyMode(currentSettings, patch map[string]any, updatedKeys []strin
 		return "next_task_effective"
 	}
 	return "immediate"
+}
+
+func inspectorConfigFromSettings(settings map[string]any) map[string]any {
+	taskAutomation := cloneMap(mapValue(normalizeSettingsSnapshot(settings), "task_automation"))
+	if taskAutomation == nil {
+		taskAutomation = map[string]any{}
+	}
+	return map[string]any{
+		"task_sources":           inspectorTaskSourcesFromSettings(taskAutomation["task_sources"]),
+		"inspection_interval":    cloneMap(mapValue(taskAutomation, "inspection_interval")),
+		"inspect_on_file_change": boolValue(taskAutomation, "inspect_on_file_change", true),
+		"inspect_on_startup":     boolValue(taskAutomation, "inspect_on_startup", true),
+		"remind_before_deadline": boolValue(taskAutomation, "remind_before_deadline", true),
+		"remind_when_stale":      boolValue(taskAutomation, "remind_when_stale", false),
+	}
+}
+
+// inspectorTaskSourcesFromSettings keeps compatibility RPCs aligned with the
+// formal task_automation snapshot shape while preserving workspace-relative
+// sources instead of eagerly migrating them to runtime absolute paths.
+func inspectorTaskSourcesFromSettings(rawValue any) []string {
+	sources, recognized := optionalStringSliceValue(rawValue)
+	if recognized {
+		result := make([]string, 0, len(sources))
+		for _, source := range sources {
+			result = append(result, presentInspectorTaskSource(source))
+		}
+		return result
+	}
+	return stringSliceValue(rawValue)
+}
+
+// presentInspectorTaskSource maps persisted runtime-absolute task sources back to
+// the compatibility RPC shape expected by desktop inspector settings so the UI
+// continues to reason about workspace-formal paths instead of host-specific
+// runtime locations.
+func presentInspectorTaskSource(source string) string {
+	trimmed := strings.TrimSpace(source)
+	if trimmed == "" {
+		return ""
+	}
+	if !filepath.IsAbs(trimmed) {
+		return trimmed
+	}
+	cleanSource := filepath.Clean(trimmed)
+	workspaceRoot := filepath.Clean(serviceconfig.DefaultWorkspaceRoot())
+	if relative, ok := relativizePathWithinRoot(cleanSource, workspaceRoot); ok {
+		if relative == "" {
+			return "workspace"
+		}
+		return filepath.ToSlash(path.Join("workspace", filepath.ToSlash(relative)))
+	}
+	runtimeRoot := filepath.Clean(serviceconfig.DefaultRuntimeRoot())
+	if relative, ok := relativizePathWithinRoot(cleanSource, runtimeRoot); ok {
+		if relative == "" {
+			return "."
+		}
+		return filepath.ToSlash(relative)
+	}
+	return filepath.ToSlash(cleanSource)
+}
+
+func relativizePathWithinRoot(candidate, root string) (string, bool) {
+	if root == "" {
+		return "", false
+	}
+	if candidate == root {
+		return "", true
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", false
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return relative, true
+}
+
+func taskAutomationSettingsPatchFromInspectorConfig(params map[string]any) map[string]any {
+	patch := map[string]any{}
+	if rawSources, ok := params["task_sources"]; ok {
+		if sources, recognized := optionalStringSliceValue(rawSources); recognized {
+			patch["task_sources"] = sources
+		}
+	}
+	if interval := cloneMap(mapValue(params, "inspection_interval")); len(interval) > 0 {
+		patch["inspection_interval"] = interval
+	}
+	for _, key := range []string{"inspect_on_file_change", "inspect_on_startup", "remind_before_deadline", "remind_when_stale"} {
+		if value, ok := params[key].(bool); ok {
+			patch[key] = value
+		}
+	}
+	if len(patch) == 0 {
+		return map[string]any{}
+	}
+	return map[string]any{"task_automation": patch}
+}
+
+// optionalStringSliceValue preserves the difference between an omitted field and
+// an explicitly empty list so compatibility RPCs can clear task sources without
+// leaving stale workspace scan roots behind.
+func optionalStringSliceValue(rawValue any) ([]string, bool) {
+	switch values := rawValue.(type) {
+	case []string:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			result = append(result, value)
+		}
+		return result, true
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, rawItem := range values {
+			item, ok := rawItem.(string)
+			if !ok || strings.TrimSpace(item) == "" {
+				continue
+			}
+			result = append(result, item)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func strongholdStatusFromStorage(store *storage.Service) map[string]any {
@@ -4771,18 +5032,17 @@ func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
 	return task.UpdatedAt.Format(dateTimeLayout)
 }
 
-// workspacePathFromSettings extracts the current workspace path from the
-// settings snapshot.
-func workspacePathFromSettings(settings map[string]any) string {
-	general, ok := settings["general"].(map[string]any)
-	if !ok {
-		return "workspace"
+// currentRuntimeWorkspaceRoot returns the workspace root that the currently
+// running local-service instance is actually using. This avoids displaying or
+// evaluating against a pending settings value before the required restart
+// rebuilds bootstrap-scoped dependencies.
+func currentRuntimeWorkspaceRoot(executorService *execution.Service) string {
+	if executorService != nil {
+		if workspaceRoot := strings.TrimSpace(executorService.WorkspaceRoot()); workspaceRoot != "" {
+			return filepath.ToSlash(filepath.Clean(workspaceRoot))
+		}
 	}
-	download, ok := general["download"].(map[string]any)
-	if !ok {
-		return "workspace"
-	}
-	return stringValue(download, "workspace_path", "workspace")
+	return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
 }
 
 // defaultIntentMap creates a minimal default intent payload for notepad
@@ -5723,9 +5983,9 @@ func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any
 	return merged
 }
 
-func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, error) {
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
 	if s.memory == nil {
-		return nil, memory.ErrStoreNotConfigured
+		return nil, nil, memory.ErrStoreNotConfigured
 	}
 	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
 		TaskID: taskID,
@@ -5734,13 +5994,13 @@ func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot
 		Limit:  memory.DefaultSearchLimit,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	persistedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
 	if err := s.memory.WriteRetrievalHits(context.Background(), persistedHits); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return mirrorReferencesFromRetrievalHits(persistedHits), nil
+	return mirrorReferencesFromRetrievalHits(persistedHits), persistedHits, nil
 }
 
 func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
@@ -5863,12 +6123,55 @@ func targetPathFromIntent(taskIntent map[string]any) string {
 }
 
 func isWorkspaceRelativePath(filePath, workspaceRoot string) bool {
-	normalizedRoot := strings.Trim(strings.ReplaceAll(workspaceRoot, "\\", "/"), "/")
-	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
-	if normalizedRoot == "" {
-		normalizedRoot = "workspace"
+	trimmedPath := strings.TrimSpace(filePath)
+	if trimmedPath == "" {
+		return false
 	}
-	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
+	if hasWindowsDriveLetterPrefix(trimmedPath) {
+		if !isWindowsStyleAbsolutePath(trimmedPath) {
+			return false
+		}
+	}
+	if !filepath.IsAbs(trimmedPath) && !isWindowsStyleAbsolutePath(trimmedPath) {
+		if strings.HasPrefix(trimmedPath, "\\") || strings.HasPrefix(trimmedPath, "/") {
+			return false
+		}
+	}
+	normalizedPath := strings.Trim(strings.ReplaceAll(filePath, "\\", "/"), "/")
+	if normalizedPath == "" {
+		return false
+	}
+	if normalizedPath == "workspace" || strings.HasPrefix(normalizedPath, "workspace/") {
+		return true
+	}
+	if filepath.IsAbs(trimmedPath) || isWindowsStyleAbsolutePath(trimmedPath) {
+		cleanRoot := filepath.Clean(strings.TrimSpace(workspaceRoot))
+		if cleanRoot == "" {
+			return false
+		}
+		cleanPath := filepath.Clean(trimmedPath)
+		rootWithSeparator := cleanRoot + string(filepath.Separator)
+		return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, rootWithSeparator)
+	}
+	cleanRelative := path.Clean(normalizedPath)
+	// Runtime temp artifacts remain openable from the desktop host, but governance
+	// must not classify them as workspace-contained when computing trust scope.
+	if cleanRelative == "temp" || strings.HasPrefix(cleanRelative, "temp/") {
+		return false
+	}
+	return cleanRelative != ".." && !strings.HasPrefix(cleanRelative, "../")
+}
+
+func hasWindowsDriveLetterPrefix(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	letter := value[0]
+	return ((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z')) && value[1] == ':'
+}
+
+func isWindowsStyleAbsolutePath(value string) bool {
+	return hasWindowsDriveLetterPrefix(value) && len(value) >= 3 && (value[2] == '\\' || value[2] == '/')
 }
 
 func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
@@ -5884,24 +6187,59 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 // debug, or storage-backed views can explain what memory lookup the task was
 // supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
-	readPlans := []map[string]any{
-		{
-			"kind":           "retrieval",
-			"backend":        s.memory.RetrievalBackend(),
-			"task_id":        taskID,
-			"run_id":         runID,
-			"query":          memoryQueryFromSnapshot(snapshot),
-			"reason":         "任务开始前准备记忆召回",
-			"intent_name":    stringValue(taskIntent, "name", "summarize"),
-			"selection_text": snapshot.SelectionText,
-			"input_text":     snapshot.Text,
-			"source_type":    snapshot.Trigger,
-		},
+	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
+	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
+	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
+	if err == nil {
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
+	}
+	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
+	readPlan := map[string]any{
+		"kind":           "retrieval",
+		"task_id":        taskID,
+		"run_id":         runID,
+		"query":          memoryQueryFromSnapshot(snapshot),
+		"reason":         "任务开始前准备记忆召回",
+		"intent_name":    stringValue(taskIntent, "name", "summarize"),
+		"selection_text": snapshot.SelectionText,
+		"input_text":     snapshot.Text,
+		"source_type":    snapshot.Trigger,
+	}
+	if memoryService != nil {
+		readPlan["backend"] = memoryService.RetrievalBackend()
+	}
+	if contextItems := retrievalContextItems(hits); len(contextItems) > 0 {
+		readPlan["retrieval_context"] = contextItems
 	}
 
-	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
-	references, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
-	s.syncTaskReadMirrorReferences(taskID, references, err)
+	return []map[string]any{readPlan}
+}
+
+func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	items := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
+		summary := strings.TrimSpace(hit.Summary)
+		if summary == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"memory_id": hit.MemoryID,
+			"source":    hit.Source,
+			"summary":   summary,
+			"score":     hit.Score,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }
 
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
@@ -5962,7 +6300,7 @@ func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution m
 		return cloneMap(impactScope)
 	}
 	files := deriveImpactScopeFiles(task, pendingExecution, s.delivery)
-	workspacePath := workspacePathFromSettings(s.runEngine.Settings())
+	workspacePath := currentRuntimeWorkspaceRoot(s.executor)
 	outOfWorkspace := false
 	for _, filePath := range files {
 		if !isWorkspaceRelativePath(filePath, workspacePath) {
@@ -6092,9 +6430,9 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
 	}
 	if len(perceptionSummary) == 0 {
-		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, resultPreviewMaxLength))
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, resultPreviewMaxLength))
 }
 
 // resultSpecFromIntent returns the default result title, preview text, and
@@ -6977,16 +7315,13 @@ func intValue(values map[string]any, key string, fallback int) int {
 // truncateText trims text to a fixed length for recommendation and memory
 // query surfaces.
 func truncateText(value string, maxLength int) string {
-	if len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength] + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
 // payloads.
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, executionStepName(taskIntent), "开始生成正式结果")
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
@@ -7043,6 +7378,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		AttemptIndex:         executionAttemptIndex(task, processingTask),
 		SegmentKind:          executionSegmentKind(task, processingTask),
 		Snapshot:             snapshot,
+		MemoryReadPlans:      cloneMapSlice(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,
@@ -7652,6 +7988,17 @@ func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
 
 func executionStepName(taskIntent map[string]any) string {
 	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
+	}
+	return "generate_output"
+}
+
+// activeExecutionStepName records the execution step that can actually consume
+// live follow-up steering. Agent-loop intent may still fall back to prompt
+// generation, so processing tasks must not advertise a pollable loop unless the
+// executor confirms that runtime mode.
+func (s *Service) activeExecutionStepName(taskIntent map[string]any) string {
+	if s != nil && s.executor != nil && s.executor.CanConsumeActiveSteering(taskIntent) {
 		return "agent_loop"
 	}
 	return "generate_output"

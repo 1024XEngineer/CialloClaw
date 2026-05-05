@@ -9,15 +9,6 @@
     "beforeDevCommand": "node ./src-tauri/scripts/runWithSidecar.mjs dev",
     "beforeBuildCommand": "node ./src-tauri/scripts/runWithSidecar.mjs build"
   },
-  "bundle": {
-    "icon": [
-      "icons/icon.png",
-      "icons/icon.ico"
-    ],
-    "externalBin": [
-      "binaries/local-service"
-    ]
-  },
   "app": {
     "windows": [
       {
@@ -41,21 +32,6 @@
         "decorations": false,
         "visible": false,
         "url": "dashboard.html"
-      },
-      {
-        "label": "onboarding",
-        "title": "CialloClaw Onboarding",
-        "width": 1280,
-        "height": 860,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "shadow": false,
-        "visible": false,
-        "focus": false,
-        "url": "onboarding.html"
       }
     ]
   }

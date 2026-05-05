@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// ScreenCapturePayload describes one desktop screenshot stored in the workspace
+/// ScreenCapturePayload describes one desktop screenshot stored in the runtime
 /// temp folder for later review.
 #[derive(Clone, Serialize)]
 pub struct ScreenCapturePayload {

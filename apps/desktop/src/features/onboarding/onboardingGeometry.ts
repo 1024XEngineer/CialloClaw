@@ -17,7 +17,11 @@ export type DesktopOnboardingHighlight = {
 export async function resolveDesktopOnboardingMonitorFrame() {
   const currentWindow = getCurrentWindow();
   const outerPosition = await currentWindow.outerPosition();
-  const monitor = await monitorFromPoint(outerPosition.x, outerPosition.y);
+  const outerSize = await currentWindow.outerSize();
+  const monitor = await monitorFromPoint(
+    Math.round(outerPosition.x + outerSize.width / 2),
+    Math.round(outerPosition.y + outerSize.height / 2),
+  );
 
   if (monitor === null) {
     return null;
@@ -35,8 +39,8 @@ export async function resolveDesktopOnboardingMonitorFrame() {
 }
 
 /**
- * Projects a DOM rect from the current business window into the monitor-relative
- * coordinate space consumed by the onboarding overlay window.
+ * Projects a DOM rect from the current business window into monitor-relative
+ * coordinates used to place the onboarding card window near the target.
  *
  * @param rect Client rect measured inside the current business window.
  * @param monitorFrame The logical monitor frame used by the onboarding window.

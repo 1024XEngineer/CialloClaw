@@ -3,6 +3,7 @@ module github.com/cialloclaw/cialloclaw
 go 1.26
 
 require github.com/Microsoft/go-winio v0.6.2
+require github.com/rivo/uniseg v0.4.7
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -16,6 +17,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

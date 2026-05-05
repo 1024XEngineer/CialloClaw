@@ -83,6 +83,74 @@ function loadDashboardTaskDetailNavigationSource() {
   return readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardTaskDetailNavigation.ts"), "utf8");
 }
 
+function loadDashboardOpeningTransitionModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/app/dashboard/dashboardOpeningTransition.js")) as {
+      DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS: number;
+      createDashboardOpeningTransitionController: (environment: {
+        cancelAnimationFrame: (handle: number) => void;
+        clearTimeout: (handle: number) => void;
+        hasFocus: () => boolean;
+        getVisibilityState: () => DocumentVisibilityState;
+        requestAnimationFrame: (callback: FrameRequestCallback) => number;
+        setIsOpening: (value: boolean) => void;
+        setTimeout: (callback: () => void, timeoutMs: number) => number;
+      }) => {
+        dispose: () => void;
+        handleVisibilityChange: () => boolean;
+        handleWindowFocusChanged: (focused: boolean) => boolean;
+        restoreIfNeeded: () => boolean;
+        trigger: () => void;
+      };
+    },
+  );
+}
+
+function loadDashboardWindowErrorBoundaryModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/app/dashboard/DashboardWindowErrorBoundary.js")) as {
+      DashboardWindowErrorBoundary: (props: { children: unknown }) => {
+        props: { children: unknown };
+        type: {
+          new (props: { children: unknown }): {
+            componentDidCatch: (error: Error, errorInfo: { componentStack: string }) => void;
+            props: { children: unknown };
+            render: () => unknown;
+            state: { hasError: boolean };
+          };
+          getDerivedStateFromError: () => { hasError: boolean };
+        };
+      };
+    },
+  );
+}
+
+function instantiateDashboardWindowErrorBoundary(
+  DashboardWindowErrorBoundary: (props: { children: unknown }) => {
+    props: { children: unknown };
+    type: {
+      new (props: { children: unknown }): {
+          componentDidCatch: (error: Error, errorInfo: { componentStack: string }) => void;
+          props: { children: unknown };
+          render: () => unknown;
+          state: { hasError: boolean };
+        };
+        getDerivedStateFromError: () => { hasError: boolean };
+      };
+  },
+) {
+  const renderedBoundary = DashboardWindowErrorBoundary({ children: null });
+  const BoundaryImplementation = renderedBoundary.type;
+
+  return {
+    BoundaryImplementation,
+    create(props: { children: unknown }) {
+      const element = DashboardWindowErrorBoundary(props);
+      return new BoundaryImplementation(element.props);
+    },
+  };
+}
+
 function loadConversationSessionServiceModule() {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/conversationSessionService.ts");
@@ -127,6 +195,10 @@ function loadNotePageQueryModule() {
 type DashboardContractDesktopLocalPathOverrides = {
   openDesktopLocalPath?: (path: string) => Promise<void>;
   revealDesktopLocalPath?: (path: string) => Promise<void>;
+};
+
+type DashboardContractDesktopHostOverrides = {
+  invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> | unknown;
 };
 
 function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
@@ -221,9 +293,31 @@ function loadTaskPageMapperModule() {
   );
 }
 
-function loadSettingsServiceModule() {
-  return withDesktopAliasRuntime((requireFn) =>
-    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js")) as {
+function loadSettingsServiceModule(desktopHost?: DashboardContractDesktopHostOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
+    delete requireFn.cache[modulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
+
+    return requireFn(modulePath) as {
+      loadDesktopRuntimeDefaultsSnapshot: () => Promise<{
+        data_path: string;
+        workspace_path: string;
+        task_sources: string[];
+      } | null>;
+      loadHydratedSettings: () => Promise<{
+        settings: {
+          general: {
+            download: {
+              workspace_path: string;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+          };
+        };
+      }>;
       loadSettings: () => {
         settings: {
           models: {
@@ -258,21 +352,305 @@ function loadSettingsServiceModule() {
               value: number;
             };
           };
+          task_automation: {
+            task_sources: string[];
+          };
         };
       };
       saveSettings: (settings: unknown) => void;
-    },
+    };
+  },
+    undefined,
+    undefined,
+    desktopHost,
   );
 }
 
-function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
+function loadNoteSourceServiceModule(
+  rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
+) {
+  return withDesktopAliasRuntime(
+    (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/notes/noteSource.service.ts");
+      const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+      const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
+      const sourceNotesModulePath = resolve(desktopRoot, "src/platform/desktopSourceNotes.ts");
+      delete requireFn.cache[modulePath];
+      delete requireFn.cache[settingsModulePath];
+      delete requireFn.cache[runtimeDefaultsModulePath];
+      delete requireFn.cache[sourceNotesModulePath];
+
+      return requireFn(modulePath) as {
+        loadNoteSourceConfig: () => Promise<{
+          task_sources: string[];
+        }>;
+      };
+    },
+    rpcMethods,
+    undefined,
+    desktopHost,
+  );
+}
+
+function loadControlPanelServiceModule(
+  rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
+) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/controlPanelService.ts");
+    const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[settingsModulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
+      buildControlPanelRestoreDefaultsData: (data: {
+        source: "rpc";
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        providerApiKeyInput: string;
+        securitySummary: {
+          security_status: string;
+          pending_authorizations: number;
+          latest_restore_point: null;
+          token_cost_summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          };
+        };
+        warnings?: string[];
+      }, persisted: {
+        source: "rpc";
+        providerApiKeyInput: string;
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        securitySummary: {
+          security_status: string;
+          pending_authorizations: number;
+          latest_restore_point: null;
+          token_cost_summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          };
+        };
+        warnings?: string[];
+      }) => {
+        source: "rpc";
+        providerApiKeyInput: string;
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        warnings?: string[];
+      };
       loadControlPanelData: () => Promise<{
         source: "rpc";
+        runtimeWorkspacePath: string | null;
         settings: {
           general: {
             voice_type: string;
@@ -390,13 +768,17 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
         tool_calling_ready: boolean;
       }>;
     };
-  }, rpcMethods);
+  }, rpcMethods, undefined, desktopHost);
 }
 
-function loadControlPanelAboutServiceModule() {
+function loadControlPanelAboutServiceModule(desktopHost?: DashboardContractDesktopHostOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/controlPanelAboutService.ts");
+    const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[settingsModulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
       getControlPanelAboutFeedbackChannels: () => Array<
@@ -421,11 +803,17 @@ function loadControlPanelAboutServiceModule() {
       getControlPanelAboutFallbackSnapshot: () => {
         appName: string;
         appVersion: string;
+        localDataPath: string | null;
       };
+      loadControlPanelAboutSnapshot: () => Promise<{
+        appName: string;
+        appVersion: string;
+        localDataPath: string | null;
+      }>;
       copyControlPanelAboutValue: (value: string, successMessage: string) => Promise<string>;
-      runControlPanelAboutAction: (action: "share") => Promise<string>;
+      runControlPanelAboutAction: (action: "open_data_directory" | "share") => Promise<string>;
     };
-  });
+  }, undefined, undefined, desktopHost);
 }
 
 function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
@@ -585,6 +973,40 @@ function loadMirrorServiceModule() {
   });
 }
 
+function findRenderedElement(
+  node: unknown,
+  predicate: (element: { props: Record<string, unknown>; type: unknown }) => boolean,
+): { props: Record<string, unknown>; type: unknown } | null {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const match = findRenderedElement(item, predicate);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+
+  const maybeElement = node as { props?: Record<string, unknown>; type?: unknown };
+  if (!maybeElement.props || !("type" in maybeElement)) {
+    return null;
+  }
+
+  const element = {
+    props: maybeElement.props,
+    type: maybeElement.type,
+  };
+  if (predicate(element)) {
+    return element;
+  }
+
+  return findRenderedElement(element.props.children, predicate);
+}
+
 type DashboardContractRpcMethodOverrides = {
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
@@ -606,16 +1028,19 @@ function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
 ): Promise<T>;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
 ): T;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T | Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
 ): T | Promise<T> {
   const NodeModule = require("node:module") as {
     _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -637,6 +1062,20 @@ function withDesktopAliasRuntime<T>(
       const emittedCandidates = [`${emittedBasePath}.js`, resolve(emittedBasePath, "index.js")];
 
       for (const candidate of emittedCandidates) {
+        if (existsSync(candidate)) {
+          return candidate;
+        }
+      }
+
+      const sourceBasePath = resolve(desktopRoot, "src", modulePath);
+      const sourceCandidates = [
+        `${sourceBasePath}.ts`,
+        `${sourceBasePath}.tsx`,
+        resolve(sourceBasePath, "index.ts"),
+        resolve(sourceBasePath, "index.tsx"),
+      ];
+
+      for (const candidate of sourceCandidates) {
         if (existsSync(candidate)) {
           return candidate;
         }
@@ -668,6 +1107,14 @@ function withDesktopAliasRuntime<T>(
   NodeModule._load = function loadDesktopRuntime(request: string, parent: unknown, isMain: boolean) {
     if (request === "@cialloclaw/protocol") {
       return originalLoad(resolve(protocolRoot, "types/core.ts"), parent, isMain);
+    }
+
+    if (request === "@tauri-apps/api/core") {
+      return {
+        invoke:
+          desktopHost?.invoke ??
+          (() => Promise.reject(new Error("invoke should not run in dashboard contract tests"))),
+      };
     }
 
     if (request === "@/rpc/methods") {
@@ -1527,6 +1974,652 @@ test("settings service ignores stale legacy settings aliases when models are alr
   }
 });
 
+test("settings service falls back to neutral placeholders before runtime hydration", () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const loaded = loadSettings();
+    assert.equal(loaded.settings.general.download.workspace_path, "workspace");
+    assert.deepEqual(loaded.settings.task_automation.task_sources, ["workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service hydrates runtime defaults before loading fallback snapshots", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const settingsService = loadSettingsServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+    const hydrated = await settingsService.loadHydratedSettings();
+
+    assert.equal(hydrated.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service exposes the trusted runtime data directory snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const settingsService = loadSettingsServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          data_path: "/Users/runtime/CialloClaw/data",
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+
+    const runtimeDefaults = await settingsService.loadDesktopRuntimeDefaultsSnapshot();
+
+    assert.deepEqual(runtimeDefaults, {
+      data_path: "/Users/runtime/CialloClaw/data",
+      workspace_path: "/Users/runtime/CialloClaw/workspace",
+      task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service rejects cached runtime workspace snapshots when host hydration fails", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.runtime-defaults",
+      JSON.stringify({
+        workspace_path: "/cached/runtime/workspace",
+        task_sources: ["/cached/runtime/workspace/todos"],
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => {
+        throw new Error("desktop runtime defaults unavailable");
+      },
+    });
+
+    const runtimeDefaults = await settingsService.loadDesktopRuntimeDefaultsSnapshot();
+
+    assert.equal(runtimeDefaults, null);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service loadHydratedSettings keeps existing snapshot when host hydration fails", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "/cached/workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["/cached/workspace/todos"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => {
+        throw new Error("desktop runtime defaults unavailable");
+      },
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.equal(hydrated.settings.general.download.workspace_path, "/cached/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/cached/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service preserves user-owned workspace-relative task sources during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/review"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.equal(hydrated.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service preserves multi-root workspace-relative task sources during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/backlog", "workspace/review"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["workspace/backlog", "workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service rewrites only the legacy single-root task source placeholder during runtime hydration", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => ({
+        workspace_path: "/Users/runtime/CialloClaw/workspace",
+        task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+      }),
+    });
+
+    const hydrated = await settingsService.loadHydratedSettings();
+    assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["d:/workspace/todos"],
+          },
+        },
+      }),
+    );
+    const rewrittenWindowsLegacy = await settingsService.loadHydratedSettings();
+    assert.deepEqual(rewrittenWindowsLegacy.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config prefers hydrated unix task sources over legacy workspace snapshots", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["workspace/todos"],
+        }),
+      },
+      {
+        invoke: async (command) => {
+          assert.equal(command, "desktop_get_runtime_defaults");
+          return {
+            workspace_path: "/Users/runtime/CialloClaw/workspace",
+            task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+          };
+        },
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config keeps remote task sources when cached settings are not absolute", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule({
+      getTaskInspectorConfig: async () => ({
+        task_sources: ["workspace/review"],
+      }),
+    });
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config keeps remote task sources when cached settings are explicitly empty", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: [],
+          },
+        },
+      }),
+    );
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule({
+      getTaskInspectorConfig: async () => ({
+        task_sources: ["workspace/review"],
+      }),
+    });
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["workspace/review"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config surfaces rpc transport failures with the localized retry copy", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule({
+      getTaskInspectorConfig: async () => {
+        throw new Error("transport is not wired");
+      },
+    });
+
+    await assert.rejects(loadNoteSourceConfig(), /当前无法读取任务来源配置，请稍后重试。/);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source config prefers cached task sources when the backend returns an empty list", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => ({
+          task_sources: [],
+        }),
+      },
+      {
+        invoke: async () => ({
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        }),
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("control panel about service exposes fallback metadata and feedback channel config", () => {
   const { getControlPanelAboutFallbackSnapshot, getControlPanelAboutFeedbackChannels } = loadControlPanelAboutServiceModule();
   const fallback = getControlPanelAboutFallbackSnapshot();
@@ -1535,6 +2628,7 @@ test("control panel about service exposes fallback metadata and feedback channel
   assert.deepEqual(fallback, {
     appName: "CialloClaw",
     appVersion: "0.1.0",
+    localDataPath: null,
   });
   assert.deepEqual(feedbackChannels, [
     {
@@ -1565,11 +2659,66 @@ test("control panel about service exposes fallback metadata and feedback channel
   ]);
 });
 
-test("control panel about helpers copy feedback and share links", async () => {
-  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
+test("control panel about snapshot reuses the trusted runtime data directory", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadControlPanelAboutSnapshot } = loadControlPanelAboutServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          data_path: "/Users/runtime/CialloClaw/data",
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+
+    const snapshot = await loadControlPanelAboutSnapshot();
+
+    assert.equal(snapshot.appName, "CialloClaw");
+    assert.equal(snapshot.appVersion, "0.1.0");
+    assert.equal(snapshot.localDataPath, "/Users/runtime/CialloClaw/data");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel about helpers open the data directory and share links", async () => {
   const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
   const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const copiedValues: string[] = [];
+  const invokedCommands: string[] = [];
+
+  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule({
+    invoke: async (command) => {
+      invokedCommands.push(command);
+      return undefined;
+    },
+  });
 
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
@@ -1582,12 +2731,22 @@ test("control panel about helpers copy feedback and share links", async () => {
     },
   });
 
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      __TAURI_INTERNALS__: {},
+    },
+  });
+
   try {
     const feedbackCopy = await copyControlPanelAboutValue("https://github.com/1024XEngineer/CialloClaw/issues", "已复制反馈渠道链接。");
+    const openFeedback = await runControlPanelAboutAction("open_data_directory");
     const shareFeedback = await runControlPanelAboutAction("share");
 
     assert.equal(feedbackCopy, "已复制反馈渠道链接。");
+    assert.equal(openFeedback, "已在系统中打开本地存储目录。");
     assert.equal(shareFeedback, "已复制分享链接。");
+    assert.deepEqual(invokedCommands, ["desktop_open_runtime_data_path"]);
     assert.deepEqual(copiedValues, [
       "https://github.com/1024XEngineer/CialloClaw/issues",
       "https://github.com/1024XEngineer/CialloClaw",
@@ -1614,8 +2773,13 @@ test("control panel app wires the about navigation without update-only fields", 
   assert.match(controlPanelAppSource, /type ControlPanelSectionId = .*"about"/);
   assert.match(controlPanelAppSource, /navLabel: "关于"/);
   assert.match(controlPanelAppSource, /case "about":/);
+  assert.match(controlPanelAppSource, /title="本地存储位置"/);
   assert.match(controlPanelAppSource, /title="帮助与反馈"/);
   assert.match(controlPanelAppSource, /title="版本信息"/);
+  assert.match(controlPanelAppSource, /title="恢复默认设置"/);
+  assert.match(controlPanelAppSource, /数据目录/);
+  assert.match(controlPanelAppSource, /打开目录/);
+  assert.match(controlPanelAppSource, /恢复默认设置/);
   assert.match(controlPanelAppSource, /应用内新手引导/);
   assert.match(controlPanelAppSource, /反馈渠道/);
   assert.match(controlPanelAppSource, /CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS/);
@@ -1639,7 +2803,191 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const \[aboutActionFeedback, setAboutActionFeedback\] = useState<string \| null>\(null\);/);
   assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
   assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /const localDataPath = normalizeDisplayPath\(aboutSnapshot\.localDataPath \?\? ""\);/);
+  assert.match(controlPanelAppSource, /handleAboutAction\("open_data_directory"\)/);
+  assert.match(controlPanelAppSource, /const \[isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming\] = useState\(false\);/);
+  assert.match(controlPanelAppSource, /const restoreDraft = buildControlPanelRestoreDefaultsData\(draft, persistedPanelData\);/);
+  assert.match(controlPanelAppSource, /validateModel: false/);
+  assert.match(controlPanelAppSource, /不会删除任务历史、记忆内容、本地文件/);
+  assert.match(controlPanelAppSource, /恢复默认设置/);
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
+  assert.match(controlPanelAppSource, /const settings = \(await loadHydratedSettings\(\)\)\.settings;/);
+  assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
+});
+
+test("control panel workspace section opens the trusted runtime directory instead of editing draft paths", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /loadDesktopRuntimeDefaultsSnapshot/);
+  assert.match(controlPanelAppSource, /openDesktopLocalPath/);
+  assert.match(controlPanelAppSource, /const handleOpenCurrentWorkspaceDirectory = async \(\) =>/);
+  assert.match(controlPanelAppSource, /runtimeWorkspacePathLabel/);
+  assert.match(controlPanelAppSource, /打开当前目录/);
+  assert.doesNotMatch(controlPanelAppSource, /value=\{draft\.settings\.general\.download\.workspace_path\}/);
+  assert.doesNotMatch(controlPanelAppSource, /workspace_path: event\.target\.value/);
+});
+test("control panel keeps budget rows in the safety page instead of duplicating them", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /title="模型与安全摘要"/);
+  assert.match(controlPanelAppSource, /label="安全状态"/);
+  assert.match(controlPanelAppSource, /label="待确认授权"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="今日成本"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="单任务上限"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="当日上限"/);
+});
+
+test("control panel restore-default helper preserves the persisted workspace, task-source, and model-route boundaries", () => {
+  const { buildControlPanelRestoreDefaultsData } = loadControlPanelServiceModule();
+
+  const persisted: Parameters<typeof buildControlPanelRestoreDefaultsData>[1] = {
+    source: "rpc",
+    providerApiKeyInput: "",
+    settings: {
+      general: {
+        language: "en-US",
+        auto_launch: false,
+        theme_mode: "dark",
+        voice_notification_enabled: false,
+        voice_type: "custom_voice",
+        download: {
+          workspace_path: "D:/SavedWorkspace",
+          ask_before_save_each_file: false,
+        },
+      },
+      floating_ball: {
+        auto_snap: false,
+        idle_translucent: false,
+        position_mode: "fixed",
+        size: "large",
+      },
+      memory: {
+        enabled: false,
+        lifecycle: "7d",
+        work_summary_interval: {
+          unit: "hour",
+          value: 4,
+        },
+        profile_refresh_interval: {
+          unit: "day",
+          value: 3,
+        },
+      },
+      task_automation: {
+        task_sources: ["D:/saved-todos"],
+        inspection_interval: {
+          unit: "hour",
+          value: 2,
+        },
+        inspect_on_file_change: false,
+        inspect_on_startup: false,
+        remind_before_deadline: false,
+        remind_when_stale: true,
+      },
+      models: {
+        provider: "anthropic",
+        provider_api_key_configured: true,
+        budget_auto_downgrade: false,
+        base_url: "https://api.anthropic.com",
+        model: "claude-3-7-sonnet",
+        stronghold: {
+          backend: "stronghold",
+          available: true,
+          fallback: false,
+          initialized: true,
+          formal_store: true,
+        },
+      },
+    },
+    inspector: {
+      task_sources: ["D:/saved-todos"],
+      inspection_interval: {
+        unit: "hour",
+        value: 2,
+      },
+      inspect_on_file_change: false,
+      inspect_on_startup: false,
+      remind_before_deadline: false,
+      remind_when_stale: true,
+    },
+    securitySummary: {
+      security_status: "normal",
+      pending_authorizations: 0,
+      latest_restore_point: null,
+      token_cost_summary: {
+        current_task_tokens: 0,
+        current_task_cost: 0,
+        today_tokens: 0,
+        today_cost: 0,
+        single_task_limit: 50000,
+        daily_limit: 300000,
+        budget_auto_downgrade: false,
+      },
+    },
+    warnings: ["stale warning"],
+  };
+
+  const draft: Parameters<typeof buildControlPanelRestoreDefaultsData>[0] = {
+    ...persisted,
+    providerApiKeyInput: "sk-unsaved-secret",
+    settings: {
+      ...persisted.settings,
+      general: {
+        ...persisted.settings.general,
+        download: {
+          ...persisted.settings.general.download,
+          workspace_path: "D:/UnsavedWorkspace",
+        },
+      },
+      task_automation: {
+        ...persisted.settings.task_automation,
+        task_sources: ["D:/unsaved-todos"],
+      },
+      models: {
+        ...persisted.settings.models,
+        provider: "openai-compatible",
+        base_url: "https://draft.example.com/v1",
+        model: "draft-model",
+      },
+    },
+    inspector: {
+      ...persisted.inspector,
+      task_sources: ["D:/unsaved-todos"],
+    },
+  };
+
+  const restored = buildControlPanelRestoreDefaultsData(
+    draft,
+    persisted,
+  );
+
+  assert.equal(restored.providerApiKeyInput, "");
+  assert.equal(restored.settings.general.language, "zh-CN");
+  assert.equal(restored.settings.general.download.workspace_path, "D:/SavedWorkspace");
+  assert.equal(restored.settings.general.download.ask_before_save_each_file, true);
+  assert.equal(restored.settings.floating_ball.size, "medium");
+  assert.equal(restored.settings.memory.enabled, true);
+  assert.equal(restored.settings.memory.lifecycle, "30d");
+  assert.equal(restored.settings.models.provider, "anthropic");
+  assert.equal(restored.settings.models.base_url, "https://api.anthropic.com");
+  assert.equal(restored.settings.models.model, "claude-3-7-sonnet");
+  assert.equal(restored.settings.models.budget_auto_downgrade, true);
+  assert.equal(restored.settings.models.provider_api_key_configured, true);
+  assert.deepEqual(restored.settings.models.stronghold, {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  });
+  assert.deepEqual(restored.settings.task_automation.task_sources, ["D:/saved-todos"]);
+  assert.deepEqual(restored.inspector.task_sources, ["D:/saved-todos"]);
+  assert.deepEqual(restored.inspector.inspection_interval, { unit: "minute", value: 15 });
+  assert.equal(restored.inspector.inspect_on_startup, true);
+  assert.equal(restored.inspector.inspect_on_file_change, true);
+  assert.equal(restored.inspector.remind_before_deadline, true);
+  assert.equal(restored.inspector.remind_when_stale, false);
+  assert.deepEqual(restored.warnings, []);
 });
 
 test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
@@ -1861,6 +3209,275 @@ test("dashboard settings mutation reloads only the touched memory scope after rp
     assert.equal(result.source, "rpc");
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel data keeps the trusted runtime workspace separate from the formal settings snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadControlPanelData } = loadControlPanelServiceModule(
+      {
+        getSecuritySummary: async () => ({
+          summary: {
+            security_status: "normal",
+            pending_authorizations: 0,
+            latest_restore_point: null,
+            token_cost_summary: {
+              current_task_tokens: 0,
+              current_task_cost: 0,
+              today_tokens: 0,
+              today_cost: 0,
+              single_task_limit: 50000,
+              daily_limit: 300000,
+              budget_auto_downgrade: true,
+            },
+          },
+        }),
+        getSettings: async () => ({
+          settings: {
+            general: {
+              language: "zh-CN",
+              auto_launch: true,
+              theme_mode: "follow_system",
+              voice_notification_enabled: true,
+              voice_type: "default_female",
+              download: {
+                workspace_path: "D:/pending-workspace",
+                ask_before_save_each_file: true,
+              },
+            },
+            floating_ball: {
+              auto_snap: true,
+              idle_translucent: true,
+              position_mode: "draggable",
+              size: "medium",
+            },
+            memory: {
+              enabled: true,
+              lifecycle: "30d",
+              work_summary_interval: { unit: "day", value: 7 },
+              profile_refresh_interval: { unit: "week", value: 2 },
+            },
+            task_automation: {
+              inspect_on_startup: true,
+              inspect_on_file_change: true,
+              inspection_interval: { unit: "minute", value: 15 },
+              task_sources: ["D:/pending-workspace/todos"],
+              remind_before_deadline: true,
+              remind_when_stale: false,
+            },
+            models: {
+              provider: "openai",
+              credentials: {
+                budget_auto_downgrade: true,
+                provider_api_key_configured: false,
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-4.1-mini",
+                stronghold: {
+                  backend: "stronghold",
+                  available: true,
+                  fallback: false,
+                  initialized: true,
+                  formal_store: true,
+                },
+              },
+            },
+          },
+        }),
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["D:/pending-workspace/todos"],
+          inspection_interval: { unit: "minute", value: 15 },
+          inspect_on_file_change: true,
+          inspect_on_startup: true,
+          remind_before_deadline: true,
+          remind_when_stale: false,
+        }),
+      },
+      {
+        invoke: async (command) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime-workspace",
+              task_sources: ["D:/runtime-workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop host command: ${command}`);
+        },
+      },
+    );
+
+    const loaded = await loadControlPanelData();
+
+    assert.equal(loaded.runtimeWorkspacePath, "D:/runtime-workspace");
+    assert.equal(loaded.settings.general.download.workspace_path, "D:/pending-workspace");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel data clears stale runtime workspace paths when host verification fails", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.runtime-defaults",
+      JSON.stringify({
+        workspace_path: "D:/stale-runtime-workspace",
+        task_sources: ["D:/stale-runtime-workspace/todos"],
+      }),
+    );
+
+    const { loadControlPanelData } = loadControlPanelServiceModule(
+      {
+        getSecuritySummary: async () => ({
+          summary: {
+            security_status: "normal",
+            pending_authorizations: 0,
+            latest_restore_point: null,
+            token_cost_summary: {
+              current_task_tokens: 0,
+              current_task_cost: 0,
+              today_tokens: 0,
+              today_cost: 0,
+              single_task_limit: 50000,
+              daily_limit: 300000,
+              budget_auto_downgrade: true,
+            },
+          },
+        }),
+        getSettings: async () => ({
+          settings: {
+            general: {
+              language: "zh-CN",
+              auto_launch: true,
+              theme_mode: "follow_system",
+              voice_notification_enabled: true,
+              voice_type: "default_female",
+              download: {
+                workspace_path: "D:/pending-workspace",
+                ask_before_save_each_file: true,
+              },
+            },
+            floating_ball: {
+              auto_snap: true,
+              idle_translucent: true,
+              position_mode: "draggable",
+              size: "medium",
+            },
+            memory: {
+              enabled: true,
+              lifecycle: "30d",
+              work_summary_interval: { unit: "day", value: 7 },
+              profile_refresh_interval: { unit: "week", value: 2 },
+            },
+            task_automation: {
+              inspect_on_startup: true,
+              inspect_on_file_change: true,
+              inspection_interval: { unit: "minute", value: 15 },
+              task_sources: ["D:/pending-workspace/todos"],
+              remind_before_deadline: true,
+              remind_when_stale: false,
+            },
+            models: {
+              provider: "openai",
+              credentials: {
+                budget_auto_downgrade: true,
+                provider_api_key_configured: false,
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-4.1-mini",
+                stronghold: {
+                  backend: "stronghold",
+                  available: true,
+                  fallback: false,
+                  initialized: true,
+                  formal_store: true,
+                },
+              },
+            },
+          },
+        }),
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["D:/pending-workspace/todos"],
+          inspection_interval: { unit: "minute", value: 15 },
+          inspect_on_file_change: true,
+          inspect_on_startup: true,
+          remind_before_deadline: true,
+          remind_when_stale: false,
+        }),
+      },
+      {
+        invoke: async (command) => {
+          if (command === "desktop_get_runtime_defaults") {
+            throw new Error("desktop runtime defaults unavailable");
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop host command: ${command}`);
+        },
+      },
+    );
+
+    const loaded = await loadControlPanelData();
+
+    assert.equal(loaded.runtimeWorkspacePath, null);
+    assert.equal(loaded.settings.general.download.workspace_path, "D:/pending-workspace");
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -3503,6 +5120,267 @@ test("dashboard task-detail routing deduplicates retry request ids and accepts t
   assert.match(taskPageSource, /const detailRouteState = readDashboardTaskDetailRouteState\(location\.state\);[\s\S]*if \(detailRouteState\) \{[\s\S]*setSelectedTaskId\(detailRouteState\.focusTaskId\);[\s\S]*navigate\(location\.pathname, \{ replace: true, state: null \}\);[\s\S]*return;/);
   assert.doesNotMatch(taskPageSource, /detailRouteState && allTasks\.some\(\(item\) => item\.task\.task_id === detailRouteState\.focusTaskId\)/);
   assert.match(taskPageSource, /if \(selectedTaskId && detailOpen\) \{/);
+});
+
+test("dashboard opening mask replays after Tauri window focus returns from hidden desktop sessions", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+
+  assert.match(dashboardRootSource, /createDashboardOpeningTransitionController/);
+  assert.match(dashboardRootSource, /const handleVisibilityChange = \(\) => \{/);
+  assert.match(dashboardRootSource, /\.onFocusChanged\(\(\{ payload: focused \}\) => \{/);
+  assert.match(dashboardRootSource, /openingTransitionController\.handleWindowFocusChanged\(focused\);/);
+});
+
+test("dashboard opening transition controller replays focus and visibility recovery at runtime", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  const cancelledFrames: number[] = [];
+  const clearedTimeouts: number[] = [];
+  const frameCallbacks = new Map<number, FrameRequestCallback>();
+  const timeoutCallbacks = new Map<number, () => void>();
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "visible";
+  let hasFocus = true;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: (handle) => {
+      if (handle > 0) {
+        cancelledFrames.push(handle);
+        frameCallbacks.delete(handle);
+      }
+    },
+    clearTimeout: (handle) => {
+      if (handle > 0) {
+        clearedTimeouts.push(handle);
+        timeoutCallbacks.delete(handle);
+      }
+    },
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: (callback) => {
+      const handle = nextHandle++;
+      frameCallbacks.set(handle, callback);
+      return handle;
+    },
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (callback, timeoutMs) => {
+      const handle = nextHandle++;
+      timeoutDurations.push(timeoutMs);
+      timeoutCallbacks.set(handle, callback);
+      return handle;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  controller.handleWindowFocusChanged(false);
+  assert.equal(cancelledFrames.length, 1);
+  assert.equal(clearedTimeouts.length, 1);
+
+  controller.handleWindowFocusChanged(true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+  assert.equal(frameCallbacks.size, 1);
+  Array.from(frameCallbacks.values()).at(-1)?.(16.7);
+  assert.deepEqual(openingStates, [true, true, false]);
+
+  controller.handleWindowFocusChanged(false);
+  visibilityState = "hidden";
+  controller.handleWindowFocusChanged(true);
+  assert.deepEqual(openingStates, [true, true, false]);
+
+  visibilityState = "visible";
+  controller.handleVisibilityChange();
+  assert.deepEqual(openingStates, [true, true, false, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+  Array.from(timeoutCallbacks.values()).at(-1)?.();
+  assert.deepEqual(openingStates, [true, true, false, true, false]);
+
+  controller.dispose();
+  assert.equal(cancelledFrames.length, 3);
+  assert.equal(clearedTimeouts.length, 3);
+});
+
+test("dashboard opening transition controller replays the opening mask for windows mounted while hidden", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  const frameCallbacks = new Map<number, FrameRequestCallback>();
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "hidden";
+  let hasFocus = false;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: (handle) => {
+      frameCallbacks.delete(handle);
+    },
+    clearTimeout: () => {},
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: (callback) => {
+      const handle = nextHandle++;
+      frameCallbacks.set(handle, callback);
+      return handle;
+    },
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (_callback, timeoutMs) => {
+      timeoutDurations.push(timeoutMs);
+      return nextHandle++;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  visibilityState = "visible";
+  assert.equal(controller.handleVisibilityChange(), true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+});
+
+test("dashboard opening transition controller replays the opening mask for windows mounted while unfocused", () => {
+  const {
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    createDashboardOpeningTransitionController,
+  } = loadDashboardOpeningTransitionModule();
+  const openingStates: boolean[] = [];
+  const timeoutDurations: number[] = [];
+  let nextHandle = 1;
+  let visibilityState: DocumentVisibilityState = "visible";
+  let hasFocus = false;
+
+  const controller = createDashboardOpeningTransitionController({
+    cancelAnimationFrame: () => {},
+    clearTimeout: () => {},
+    hasFocus: () => hasFocus,
+    getVisibilityState: () => visibilityState,
+    requestAnimationFrame: () => nextHandle++,
+    setIsOpening: (value) => {
+      openingStates.push(value);
+    },
+    setTimeout: (_callback, timeoutMs) => {
+      timeoutDurations.push(timeoutMs);
+      return nextHandle++;
+    },
+  });
+
+  controller.trigger();
+  assert.deepEqual(openingStates, [true]);
+  assert.deepEqual(timeoutDurations, [DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS]);
+
+  hasFocus = true;
+  assert.equal(controller.handleWindowFocusChanged(true), true);
+  assert.deepEqual(openingStates, [true, true]);
+  assert.deepEqual(timeoutDurations, [
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+    DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS,
+  ]);
+});
+
+test("dashboard entry keeps a window-level error boundary so runtime faults do not collapse into a blank shell", () => {
+  const dashboardMainSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/main.tsx"), "utf8");
+  const dashboardErrorBoundarySource = readFileSync(
+    resolve(desktopRoot, "src/app/dashboard/DashboardWindowErrorBoundary.tsx"),
+    "utf8",
+  );
+
+  assert.match(dashboardMainSource, /DashboardWindowErrorBoundary/);
+  assert.match(
+    dashboardMainSource,
+    /<DashboardWindowErrorBoundary>[\s\S]*<AppProviders>[\s\S]*<DashboardRoot \/>[\s\S]*<\/AppProviders>[\s\S]*<\/DashboardWindowErrorBoundary>/,
+  );
+  assert.match(dashboardErrorBoundarySource, /export function DashboardWindowErrorBoundary/);
+  assert.match(dashboardErrorBoundarySource, /class DashboardWindowErrorBoundaryImpl extends Component/);
+  assert.match(dashboardErrorBoundarySource, /static getDerivedStateFromError/);
+  assert.match(dashboardErrorBoundarySource, /window\.location\.reload\(\)/);
+  assert.match(dashboardErrorBoundarySource, /dashboard window render failed/);
+});
+
+test("dashboard window error boundary renders a recovery fallback and reload action after runtime faults", () => {
+  const { DashboardWindowErrorBoundary } = loadDashboardWindowErrorBoundaryModule();
+  const child = { props: { id: "child" }, type: "mock-child" };
+  const { BoundaryImplementation, create } = instantiateDashboardWindowErrorBoundary(DashboardWindowErrorBoundary);
+  const boundary = create({ children: child });
+  const originalConsoleError = console.error;
+  const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const consoleMessages: unknown[][] = [];
+  let reloadCalls = 0;
+
+  try {
+    console.error = (...args: unknown[]) => {
+      consoleMessages.push(args);
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          reload: () => {
+            reloadCalls += 1;
+          },
+        },
+      },
+      writable: true,
+    });
+
+    assert.equal(boundary.render(), child);
+
+    boundary.componentDidCatch(new Error("dashboard exploded"), {
+      componentStack: "\n    at DashboardRoot",
+    });
+    assert.equal(consoleMessages.length, 1);
+    assert.match(String(consoleMessages[0][0]), /dashboard window render failed/);
+
+    boundary.state = {
+      ...boundary.state,
+      ...BoundaryImplementation.getDerivedStateFromError(),
+    };
+
+    const fallbackTree = boundary.render();
+    const title = findRenderedElement(
+      fallbackTree,
+      (element) => element.type === "h1" && element.props.children === "仪表盘需要恢复",
+    );
+    const reloadButton = findRenderedElement(
+      fallbackTree,
+      (element) => element.props.type === "button" && typeof element.props.onClick === "function",
+    );
+
+    assert.ok(title);
+    assert.ok(reloadButton);
+    (reloadButton.props.onClick as () => void)();
+    assert.equal(reloadCalls, 1);
+  } finally {
+    console.error = originalConsoleError;
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    } else {
+      delete (globalThis as { window?: unknown }).window;
+    }
+  }
 });
 
 test("conversation session reuse expires after the backend freshness window", () => {

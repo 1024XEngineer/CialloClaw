@@ -11,6 +11,7 @@ import (
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -516,8 +517,5 @@ func int64Value(values map[string]any, key string) int64 {
 
 func truncateText(value string, maxLength int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength] + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
