@@ -52,6 +52,7 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	if err := authorizationStore.WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_mem_001",
 		TaskID:                "task_001",
+		RunID:                 "run_001",
 		ApprovalID:            "appr_mem_001",
 		Decision:              "allow_once",
 		Operator:              "user",
@@ -63,6 +64,7 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	if err := authorizationStore.WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_mem_002",
 		TaskID:                "task_001",
+		RunID:                 "run_002",
 		ApprovalID:            "appr_mem_002",
 		Decision:              "deny_once",
 		Operator:              "user",
@@ -70,7 +72,7 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write second in-memory authorization record failed: %v", err)
 	}
-	authorizationItems, authorizationTotal, err := authorizationStore.ListAuthorizationRecords(context.Background(), "task_001", 10, 0)
+	authorizationItems, authorizationTotal, err := authorizationStore.ListAuthorizationRecords(context.Background(), "task_001", "", 10, 0)
 	if err != nil || authorizationTotal != 2 || len(authorizationItems) != 2 {
 		t.Fatalf("unexpected in-memory authorization list: total=%d items=%+v err=%v", authorizationTotal, authorizationItems, err)
 	}
@@ -91,7 +93,7 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write in-memory audit failed: %v", err)
 	}
-	auditItems, auditTotal, err := auditStore.ListAuditRecords(context.Background(), "task_001", 10, 0)
+	auditItems, auditTotal, err := auditStore.ListAuditRecords(context.Background(), "task_001", "", 10, 0)
 	if err != nil || auditTotal != 1 || len(auditItems) != 1 {
 		t.Fatalf("unexpected in-memory audit list: total=%d items=%+v err=%v", auditTotal, auditItems, err)
 	}
@@ -208,6 +210,7 @@ func TestInMemoryAuthorizationDecisionIsAtomic(t *testing.T) {
 	if err := authorizationStore.WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_atomic_001",
 		TaskID:                "task_atomic_001",
+		RunID:                 "run_atomic_001",
 		ApprovalID:            "appr_atomic_001",
 		Decision:              "allow_once",
 		Operator:              "user",
@@ -223,7 +226,7 @@ func TestInMemoryAuthorizationDecisionIsAtomic(t *testing.T) {
 	if approvalItems[0].Status != "approved" {
 		t.Fatalf("expected in-memory approval to be updated atomically, got %+v", approvalItems[0])
 	}
-	authorizationItems, authorizationTotal, err := authorizationStore.ListAuthorizationRecords(context.Background(), "task_atomic_001", 10, 0)
+	authorizationItems, authorizationTotal, err := authorizationStore.ListAuthorizationRecords(context.Background(), "task_atomic_001", "", 10, 0)
 	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
 		t.Fatalf("unexpected in-memory authorization decision history: total=%d items=%+v err=%v", authorizationTotal, authorizationItems, err)
 	}
@@ -231,6 +234,7 @@ func TestInMemoryAuthorizationDecisionIsAtomic(t *testing.T) {
 	err = authorizationStore.WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_atomic_002",
 		TaskID:                "task_atomic_001",
+		RunID:                 "run_atomic_missing",
 		ApprovalID:            "appr_missing",
 		Decision:              "deny_once",
 		Operator:              "user",
@@ -239,7 +243,7 @@ func TestInMemoryAuthorizationDecisionIsAtomic(t *testing.T) {
 	if !errors.Is(err, ErrApprovalRequestNotFound) {
 		t.Fatalf("expected missing approval to fail atomic write, got %v", err)
 	}
-	authorizationItems, authorizationTotal, err = authorizationStore.ListAuthorizationRecords(context.Background(), "task_atomic_001", 10, 0)
+	authorizationItems, authorizationTotal, err = authorizationStore.ListAuthorizationRecords(context.Background(), "task_atomic_001", "", 10, 0)
 	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
 		t.Fatalf("expected failed in-memory atomic write to leave history unchanged, total=%d items=%+v err=%v", authorizationTotal, authorizationItems, err)
 	}

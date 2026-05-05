@@ -81,11 +81,14 @@ func (s *recordingLoopRuntimeStore) GetRun(_ context.Context, runID string) (sto
 	return storage.RunRecord{}, sql.ErrNoRows
 }
 
-func (s *recordingLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID string, limit, offset int) ([]storage.DeliveryResultRecord, int, error) {
+func (s *recordingLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID, runID string, limit, offset int) ([]storage.DeliveryResultRecord, int, error) {
 	items := make([]storage.DeliveryResultRecord, 0, len(s.deliveryResults))
 	for index := len(s.deliveryResults) - 1; index >= 0; index-- {
 		record := s.deliveryResults[index]
 		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
 			continue
 		}
 		items = append(items, record)
@@ -109,11 +112,14 @@ func (s *recordingLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, task
 	return nil
 }
 
-func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (storage.DeliveryResultRecord, bool, error) {
+func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID, runID string) (storage.DeliveryResultRecord, bool, error) {
 	var latest storage.DeliveryResultRecord
 	found := false
 	for _, record := range s.deliveryResults {
-		if record.TaskID != taskID {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
 			continue
 		}
 		if !found || record.CreatedAt > latest.CreatedAt {
@@ -124,8 +130,16 @@ func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, t
 	return latest, found, nil
 }
 
-func (s *recordingLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID string) ([]storage.CitationRecord, error) {
-	return append([]storage.CitationRecord(nil), s.citationsByTask[taskID]...), nil
+func (s *recordingLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID, runID string) ([]storage.CitationRecord, error) {
+	source := s.citationsByTask[taskID]
+	items := make([]storage.CitationRecord, 0, len(source))
+	for _, record := range source {
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
+	}
+	return items, nil
 }
 
 func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]storage.EventRecord, int, error) {
@@ -2203,7 +2217,7 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(artifactPath))); err != nil {
 		t.Fatalf("expected promoted artifact file to exist, got %v", err)
 	}
-	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", 20, 0)
+	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", "", 20, 0)
 	if err != nil || total != 1 || len(records) != 1 {
 		t.Fatalf("expected persisted screen artifact record, total=%d len=%d err=%v", total, len(records), err)
 	}
@@ -2504,12 +2518,12 @@ func TestScreenHelpersCoverNilAndPendingBranches(t *testing.T) {
 	if got := service.screenAnalysisRecoveryPoint(context.Background(), "task_screen_none", map[string]any{"paths": []string{}}, nil); got != nil {
 		t.Fatalf("expected no recovery point without cleanup objects, got %+v", got)
 	}
-	auditRecord := service.screenAnalysisAuditRecord("task_screen_audit", tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_extra", CaptureMode: tools.ScreenCaptureModeKeyframe, Source: "voice", Path: "temp/screen_sess_extra/frame.png"}, "screen preview")
-	if auditRecord["action"] != "screen.capture.keyframe_analyze" {
+	auditRecord := service.screenAnalysisAuditRecord("task_screen_audit", "run_screen_audit", tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_extra", CaptureMode: tools.ScreenCaptureModeKeyframe, Source: "voice", Path: "temp/screen_sess_extra/frame.png"}, "screen preview")
+	if auditRecord["action"] != "screen.capture.keyframe_analyze" || auditRecord["run_id"] != "run_screen_audit" {
 		t.Fatalf("expected keyframe audit action, got %+v", auditRecord)
 	}
-	clipAudit := service.screenAnalysisAuditRecord("task_screen_clip", tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_clip", CaptureMode: tools.ScreenCaptureModeClip, Source: "voice", Path: "temp/screen_sess_clip/clip.webm"}, "clip preview")
-	if clipAudit["action"] != "screen.capture.clip_analyze" {
+	clipAudit := service.screenAnalysisAuditRecord("task_screen_clip", "run_screen_clip", tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_clip", CaptureMode: tools.ScreenCaptureModeClip, Source: "voice", Path: "temp/screen_sess_clip/clip.webm"}, "clip preview")
+	if clipAudit["action"] != "screen.capture.clip_analyze" || clipAudit["run_id"] != "run_screen_clip" {
 		t.Fatalf("expected clip audit action, got %+v", clipAudit)
 	}
 	if got := service.screenAnalysisTraceSummary(tools.ScreenFrameCandidate{}, nil); got != nil {
@@ -2519,7 +2533,7 @@ func TestScreenHelpersCoverNilAndPendingBranches(t *testing.T) {
 		t.Fatalf("expected nil eval summary when analysis missing, got %+v", got)
 	}
 	service.audit = nil
-	if got := service.screenAnalysisAuditRecord("task_screen_noaudit", tools.ScreenFrameCandidate{}, "preview"); got != nil {
+	if got := service.screenAnalysisAuditRecord("task_screen_noaudit", "run_screen_noaudit", tools.ScreenFrameCandidate{}, "preview"); got != nil {
 		t.Fatalf("expected nil audit record when audit service unavailable, got %+v", got)
 	}
 	service.checkpoint = nil
