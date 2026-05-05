@@ -40,6 +40,52 @@ export type FloatingPetCheekLayout = FloatingPetLayerTransform & {
   };
 };
 
+export type FloatingPetFaceLayout = FloatingPetLayerTransform & {
+  beak: FloatingPetLayerTransform & {
+    beakClosed: FloatingPetLayerTransform;
+    beakOpen: FloatingPetLayerTransform;
+  };
+  cheek: FloatingPetLayerTransform & {
+    cheekLeft: FloatingPetCheekLayout;
+    cheekRight: FloatingPetCheekLayout;
+  };
+  eyes: FloatingPetLayerTransform & {
+    eyeClosedLeft: FloatingPetLayerTransform;
+    eyeClosedRight: FloatingPetLayerTransform;
+    eyeOpenLeft: FloatingPetLayerTransform;
+    eyeOpenRight: FloatingPetLayerTransform;
+  };
+};
+
+export type FloatingPetBubbleLayout = FloatingPetLayerTransform & {
+  effects: {
+    bubbleAlert: FloatingPetLayerTransform;
+    bubbleListening: FloatingPetLayerTransform;
+    bubbleSafe: FloatingPetLayerTransform;
+    bubbleThinking: FloatingPetLayerTransform;
+  };
+};
+
+export type FloatingPetRootBodyLayout = FloatingPetLayerTransform & {
+  body: FloatingPetLayerTransform;
+  cheek: FloatingPetFaceLayout["cheek"];
+  eyes: FloatingPetFaceLayout["eyes"];
+  beak: FloatingPetFaceLayout["beak"];
+  face: FloatingPetLayerTransform;
+  leftBone: FloatingPetBoneLayout;
+  leftWing: FloatingPetLayerTransform;
+  rightBone: FloatingPetBoneLayout;
+  rightWing: FloatingPetLayerTransform;
+  tail: FloatingPetLayerTransform;
+  tailBone: FloatingPetBoneLayout;
+};
+
+export type FloatingPetInitialLayout = {
+  bubble: FloatingPetBubbleLayout;
+  rootBody: FloatingPetRootBodyLayout;
+  sparkle: FloatingPetLayerTransform;
+};
+
 export const FLOATING_PET_STAGE_SIZE = 500;
 export const FLOATING_PET_LOOP_DURATION_S = 2;
 export const FLOATING_PET_QUICK_TAIL_DURATION_S = 1;
@@ -82,99 +128,133 @@ export const floatingPetAssetDimensions: Record<FloatingPetAssetName, { width: n
   tail: { width: 1254, height: 1254 },
 };
 
-export const floatingPetInitialLayout = {
-  effects: {
-    bubbleAlert: {
-      opacity: 0,
-      position: { x: -22, y: 6 },
-      rotation: 0,
-      scale: { x: 16.6, y: 16.6 },
-    },
-    bubbleListening: {
-      opacity: 0,
-      position: { x: -23.5, y: 5 },
-      rotation: 0,
-      scale: { x: 16.9, y: 16.9 },
-    },
-    bubbleSafe: {
-      opacity: 0,
-      position: { x: -23, y: 7.5 },
-      rotation: 0,
-      scale: { x: 12.3, y: 12 },
-    },
-    bubbleThinking: {
-      opacity: 0,
-      position: { x: 0, y: 0 },
-      rotation: 0,
-      scale: { x: 21.6, y: 21.6 },
-    },
-    sparkle: {
-      opacity: 0,
-      position: { x: 107.5, y: 165 },
-      rotation: 0,
-      scale: { x: 19, y: 19 },
+export const floatingPetInitialLayout: FloatingPetInitialLayout = {
+  bubble: {
+    opacity: 1,
+    position: { x: 100, y: 152 },
+    rotation: 0,
+    scale: { x: 100, y: 100 },
+    effects: {
+      bubbleAlert: {
+        opacity: 0,
+        position: { x: -22, y: 6 },
+        rotation: 0,
+        scale: { x: 16.6, y: 16.6 },
+      },
+      bubbleListening: {
+        opacity: 0,
+        position: { x: -23.5, y: 5 },
+        rotation: 0,
+        scale: { x: 16.9, y: 16.9 },
+      },
+      bubbleSafe: {
+        opacity: 0,
+        position: { x: -23, y: 7.5 },
+        rotation: 0,
+        scale: { x: 12.3, y: 12 },
+      },
+      bubbleThinking: {
+        opacity: 0,
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        scale: { x: 21.6, y: 21.6 },
+      },
     },
   },
+  sparkle: {
+    opacity: 0,
+    position: { x: 107.5, y: 165 },
+    rotation: 0,
+    scale: { x: 19, y: 19 },
+  },
   rootBody: {
-    beakClosed: {
-      opacity: 1,
-      position: { x: 0, y: 0 },
-      rotation: 0,
-      scale: { x: 9.7, y: 9.7 },
-    },
-    beakOpen: {
-      opacity: 0,
-      position: { x: 0, y: 0 },
-      rotation: 0,
-      scale: { x: 10.3, y: 10.3 },
-    },
+    opacity: 1,
+    position: { x: 235.83, y: 248.84 },
+    rotation: 0,
+    scale: { x: 100, y: 100 },
     body: {
       opacity: 1,
       position: { x: -1.39, y: 0 },
       rotation: 0,
       scale: { x: 24.4, y: 24.4 },
     },
-    cheekLeft: {
-      fill: "#FACAC4",
-      fillOpacity: 0.8,
+    face: {
       opacity: 1,
-      position: { x: -60.53, y: -0.25 },
+      position: { x: -26.31, y: -12.94 },
       rotation: 0,
-      scale: { x: 88.5, y: 100 },
-      size: { w: 29, h: 15.5 },
+      scale: { x: 100, y: 100 },
     },
-    cheekRight: {
-      fill: "#FACAC4",
-      fillOpacity: 0.8,
+    beak: {
       opacity: 1,
-      position: { x: 60.97, y: -0.25 },
+      position: { x: -0.03, y: 0 },
       rotation: 0,
-      scale: { x: 85.4, y: 100 },
-      size: { w: 29, h: 15.5 },
+      scale: { x: 100, y: 100 },
+      beakClosed: {
+        opacity: 1,
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        scale: { x: 9.7, y: 9.7 },
+      },
+      beakOpen: {
+        opacity: 0,
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        scale: { x: 10.3, y: 10.3 },
+      },
     },
-    eyeClosedLeft: {
-      opacity: 0,
-      position: { x: -30, y: 2 },
-      rotation: 0,
-      scale: { x: 13, y: 13 },
-    },
-    eyeClosedRight: {
-      opacity: 0,
-      position: { x: 28, y: 2 },
-      rotation: 0,
-      scale: { x: 13, y: 13 },
-    },
-    eyeOpenLeft: {
+    eyes: {
       opacity: 1,
-      position: { x: -29.76, y: 0.5 },
+      position: { x: 3.24, y: -9.5 },
       rotation: 0,
-      scale: { x: 14.9, y: 14.9 },
+      scale: { x: 100, y: 100 },
+      eyeClosedLeft: {
+        opacity: 0,
+        position: { x: -30, y: 2 },
+        rotation: 0,
+        scale: { x: 13, y: 13 },
+      },
+      eyeClosedRight: {
+        opacity: 0,
+        position: { x: 28, y: 2 },
+        rotation: 0,
+        scale: { x: 13, y: 13 },
+      },
+      eyeOpenLeft: {
+        opacity: 1,
+        position: { x: -29.76, y: 0.5 },
+        rotation: 0,
+        scale: { x: 14.9, y: 14.9 },
+      },
+      eyeOpenRight: {
+        opacity: 1,
+        position: { x: 28.24, y: 1.5 },
+        rotation: 0,
+        scale: { x: 14.9, y: 14.9 },
+      },
     },
-    eyeOpenRight: {
+    cheek: {
       opacity: 1,
-      position: { x: 28.24, y: 1.5 },
+      position: { x: 0, y: 6.25 },
       rotation: 0,
-      scale: { x: 14.9, y: 14.9 },
+      scale: { x: 100, y: 100 },
+      cheekLeft: {
+        fill: "#FACAC4",
+        fillOpacity: 0.8,
+        opacity: 1,
+        position: { x: -60.53, y: -0.25 },
+        rotation: 0,
+        scale: { x: 88.5, y: 100 },
+        size: { w: 29, h: 15.5 },
+      },
+      cheekRight: {
+        fill: "#FACAC4",
+        fillOpacity: 0.8,
+        opacity: 1,
+        position: { x: 60.97, y: -0.25 },
+        rotation: 0,
+        scale: { x: 85.4, y: 100 },
+        size: { w: 29, h: 15.5 },
+      },
     },
     leftBone: {
       length: 85.76,
@@ -216,7 +296,4 @@ export const floatingPetInitialLayout = {
       scale: { x: 100, y: 100 },
     },
   },
-} as const satisfies {
-  effects: Record<string, FloatingPetLayerTransform>;
-  rootBody: Record<string, FloatingPetBoneLayout | FloatingPetCheekLayout | FloatingPetLayerTransform>;
 };

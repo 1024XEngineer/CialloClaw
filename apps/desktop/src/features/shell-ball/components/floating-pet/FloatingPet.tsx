@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/utils/cn";
 import styles from "./FloatingPet.module.css";
@@ -7,6 +7,7 @@ import {
   floatingPetAssetDimensions,
   FLOATING_PET_EFFECT_END_DURATION_S,
   FLOATING_PET_EYE_BREATH_DURATION_S,
+  FLOATING_PET_HAPPY_DURATION_MS,
   FLOATING_PET_HAPPY_END_DURATION_S,
   FLOATING_PET_LOOP_DURATION_S,
   FLOATING_PET_QUICK_TAIL_DURATION_S,
@@ -14,8 +15,6 @@ import {
   floatingPetAssets,
   floatingPetInitialLayout,
   type FloatingPetAssetName,
-  type FloatingPetBoneLayout,
-  type FloatingPetCheekLayout,
   type FloatingPetLayerTransform,
   type FloatingPetMode,
 } from "./petAssets";
@@ -30,16 +29,14 @@ type FloatingPetProps = {
 
 type FloatingPetEffectName = "sparkle" | "bubbleAlert" | "bubbleSafe" | "bubbleThinking" | "bubbleListening";
 
-const FLOATING_PET_BASELINE_BODY_Y = -1.06;
-const FLOATING_PET_BODY_UP_Y = -7.5;
-const FLOATING_PET_BODY_END_Y = -1;
 const HAPPY_FACE_TIMES = [0, 10 / 120, 15 / 120, 45 / 120, 50 / 120, 1] as const;
 const BREATH_EYE_TIMES = [0, 30 / 300, 40 / 300, 50 / 300, 1] as const;
 const QUICK_CLAP_TIMES = [0, 0.25, 0.5, 0.75, 1] as const;
-const LISTEN_EFFECT_TIMES = [0, 10 / 120, 0.5, 1] as const;
 const EFFECT_LOOP_TIMES = [0, 10 / 120, 0.5, 1] as const;
-const HAPPY_EFFECT_TIMES = [0, 10 / 120, 0.5, 1] as const;
-const EFFECT_EXIT_TIMES = [0, 1] as const;
+const LISTEN_EFFECT_TIMES = [0, 10 / 120, 0.5, 1] as const;
+const ROOT_BODY_UPDOWN_Y = [248.94, 242.5, 249];
+const ROOT_BODY_BASE_X = floatingPetInitialLayout.rootBody.position.x;
+const ROOT_BODY_BASE_Y = floatingPetInitialLayout.rootBody.position.y;
 
 const MODE_TO_EFFECT: Partial<Record<FloatingPetMode, FloatingPetEffectName>> = {
   alert: "bubbleAlert",
@@ -49,347 +46,56 @@ const MODE_TO_EFFECT: Partial<Record<FloatingPetMode, FloatingPetEffectName>> = 
   think: "bubbleThinking",
 };
 
-const EFFECT_TO_ASSET: Record<FloatingPetEffectName, string> = {
-  bubbleAlert: floatingPetAssets.bubbleAlert,
-  bubbleListening: floatingPetAssets.bubbleListening,
-  bubbleSafe: floatingPetAssets.bubbleSafe,
-  bubbleThinking: floatingPetAssets.bubbleThinking,
-  sparkle: floatingPetAssets.sparkle,
+const EFFECT_TO_ASSET: Record<FloatingPetEffectName, FloatingPetAssetName> = {
+  bubbleAlert: "bubbleAlert",
+  bubbleListening: "bubbleListening",
+  bubbleSafe: "bubbleSafe",
+  bubbleThinking: "bubbleThinking",
+  sparkle: "sparkle",
 };
 
-const EFFECT_TO_LAYOUT: Record<FloatingPetEffectName, FloatingPetLayerTransform> = {
-  bubbleAlert: floatingPetInitialLayout.effects.bubbleAlert,
-  bubbleListening: floatingPetInitialLayout.effects.bubbleListening,
-  bubbleSafe: floatingPetInitialLayout.effects.bubbleSafe,
-  bubbleThinking: floatingPetInitialLayout.effects.bubbleThinking,
-  sparkle: floatingPetInitialLayout.effects.sparkle,
-};
-
-function toStagePercent(value: number) {
-  return `${(value / FLOATING_PET_STAGE_SIZE) * 100}%`;
-}
-
-function toScalePercent(value: number) {
-  return `${value}%`;
-}
-
-function toCenterOffset(value: number) {
-  if (value === 0) {
-    return "50%";
-  }
-
-  const offset = toStagePercent(Math.abs(value));
-  return value > 0 ? `calc(50% + ${offset})` : `calc(50% - ${offset})`;
-}
-
-function resolveStageLayerStyle(layout: FloatingPetLayerTransform): CSSProperties {
-  return {
-    left: toCenterOffset(layout.position.x),
-    opacity: layout.opacity,
-    top: toCenterOffset(layout.position.y),
-  };
-}
-
-function resolveAssetLayerStyle(assetName: FloatingPetAssetName, layout: FloatingPetLayerTransform): CSSProperties {
+function resolveAssetSize(assetName: FloatingPetAssetName, scale: FloatingPetLayerTransform["scale"]) {
   const asset = floatingPetAssetDimensions[assetName];
 
   return {
-    ...resolveStageLayerStyle(layout),
-    height: toStagePercent(asset.height * (layout.scale.y / 100)),
-    width: toStagePercent(asset.width * (layout.scale.x / 100)),
+    height: asset.height * (scale.y / 100),
+    width: asset.width * (scale.x / 100),
   };
 }
 
-function resolveCheekStyle(layout: FloatingPetCheekLayout): CSSProperties {
-  return {
-    background: layout.fill,
-    height: toStagePercent(layout.size.h * (layout.scale.y / 100)),
-    left: toCenterOffset(layout.position.x),
-    opacity: layout.fillOpacity,
-    top: toCenterOffset(layout.position.y),
-    width: toStagePercent(layout.size.w * (layout.scale.x / 100)),
-  };
+function renderCenteredImage(assetName: FloatingPetAssetName, layout: FloatingPetLayerTransform, extraTransform = "") {
+  const size = resolveAssetSize(assetName, layout.scale);
+  const transform = extraTransform.trim();
+
+  return (
+    <image
+      className={styles.svgAsset}
+      height={size.height}
+      href={floatingPetAssets[assetName]}
+      preserveAspectRatio="xMidYMid meet"
+      transform={transform === "" ? undefined : transform}
+      width={size.width}
+      x={layout.position.x - size.width / 2}
+      y={layout.position.y - size.height / 2}
+    />
+  );
 }
 
-function resolveBoneTransformOrigin(assetName: FloatingPetAssetName, bone: FloatingPetBoneLayout, layer: FloatingPetLayerTransform) {
-  const asset = floatingPetAssetDimensions[assetName];
-  const width = asset.width * (layer.scale.x / 100);
-  const height = asset.height * (layer.scale.y / 100);
-  const originX = ((bone.position.x - layer.position.x) / width + 0.5) * 100;
-  const originY = ((bone.position.y - layer.position.y) / height + 0.5) * 100;
-
-  return `${originX}% ${originY}%`;
-}
-
-function resolveBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
-  const restY = toStagePercent(FLOATING_PET_BASELINE_BODY_Y);
-
-  if (mode === "happy") {
-    return {
-      animate: {
-        rotate: [0, -4.295, 0],
-        y: restY,
-      },
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        times: [0, 0.5, 1],
-      },
-    };
-  }
-
-  if (mode === "listen") {
-    return {
-      animate: {
-        rotate: listenLocked ? 0 : -4.295,
-        y: restY,
-      },
-      transition: {
-        duration: 0.45,
-        ease: "easeInOut" as const,
-      },
-    };
-  }
-
-  return {
-    animate: {
-      rotate: 0,
-      y: [restY, toStagePercent(FLOATING_PET_BODY_UP_Y), toStagePercent(FLOATING_PET_BODY_END_Y)],
-    },
-    transition: {
-      duration: FLOATING_PET_LOOP_DURATION_S,
-      ease: "easeInOut" as const,
-      repeat: Number.POSITIVE_INFINITY,
-      times: [0, 0.5, 1],
-    },
-  };
-}
-
-function resolveWingMotion(mode: FloatingPetMode, listenLocked: boolean) {
-  if (mode === "happy") {
-    return {
-      left: {
-        animate: [104.149, 113.022, 104.149, 115.787, 104.149],
-        transition: {
-          duration: FLOATING_PET_LOOP_DURATION_S,
-          ease: "easeInOut" as const,
-          times: QUICK_CLAP_TIMES,
-        },
-      },
-      right: {
-        animate: [63.113, 48.691, 58.465, 48.212, 63.113],
-        transition: {
-          duration: FLOATING_PET_LOOP_DURATION_S,
-          ease: "easeInOut" as const,
-          times: QUICK_CLAP_TIMES,
-        },
-      },
-    };
-  }
-
-  if (mode === "alert" || mode === "safe" || (mode === "listen" && !listenLocked)) {
-    return {
-      left: {
-        animate: [104.149, 113.022, 104.149, 115.787, 104.149],
-        transition: {
-          duration: FLOATING_PET_LOOP_DURATION_S,
-          ease: "easeInOut" as const,
-          repeat: Number.POSITIVE_INFINITY,
-          times: QUICK_CLAP_TIMES,
-        },
-      },
-      right: {
-        animate: [63.113, 48.691, 58.465, 48.212, 63.113],
-        transition: {
-          duration: FLOATING_PET_LOOP_DURATION_S,
-          ease: "easeInOut" as const,
-          repeat: Number.POSITIVE_INFINITY,
-          times: QUICK_CLAP_TIMES,
-        },
-      },
-    };
-  }
-
-  return {
-    left: {
-      animate: [104.149, 106.587, 104.149],
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        repeat: Number.POSITIVE_INFINITY,
-        times: [0, 0.5, 1],
-      },
-    },
-    right: {
-      animate: [63.113, 60.62, 63.113],
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        repeat: Number.POSITIVE_INFINITY,
-        times: [0, 0.5, 1],
-      },
-    },
-  };
-}
-
-function resolveTailMotion(mode: FloatingPetMode, listenLocked: boolean) {
-  if (mode === "alert" || mode === "safe" || mode === "happy" || (mode === "listen" && !listenLocked)) {
-    return {
-      animate: [28.402, 22.019, 28.402],
-      transition: {
-        duration: FLOATING_PET_QUICK_TAIL_DURATION_S,
-        ease: "easeInOut" as const,
-        repeat: Number.POSITIVE_INFINITY,
-        times: [0, 0.5, 1],
-      },
-    };
-  }
-
-  return {
-    animate: [28.402, 24.101, 28.402],
-    transition: {
-      duration: FLOATING_PET_LOOP_DURATION_S,
-      ease: "easeInOut" as const,
-      repeat: Number.POSITIVE_INFINITY,
-      times: [0, 0.5, 1],
-    },
-  };
-}
-
-function resolveOpenEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
-  if (eyesClosed) {
-    return {
-      animate: {
-        opacity: 0,
-        scaleY: 1,
-      },
-      transition: { duration: 0.18, ease: "easeInOut" as const },
-    };
-  }
-
-  if (mode === "happy") {
-    return {
-      animate: {
-        opacity: [1, 1, 0, 0, 1, 1],
-        scaleY: [1, 2 / 14.9, 2 / 14.9, 2 / 14.9, 2 / 14.9, 1],
-      },
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        times: HAPPY_FACE_TIMES,
-      },
-    };
-  }
-
-  return {
-    animate: {
-      opacity: 1,
-      scaleY: [1, 1, 5 / 14.9, 1, 1],
-    },
-    transition: {
-      duration: FLOATING_PET_EYE_BREATH_DURATION_S,
-      ease: "easeInOut" as const,
-      repeat: Number.POSITIVE_INFINITY,
-      times: BREATH_EYE_TIMES,
-    },
-  };
-}
-
-function resolveClosedEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
-  if (eyesClosed) {
-    return {
-      animate: { opacity: 1, rotate: 180 },
-      transition: { duration: 0.18, ease: "easeInOut" as const },
-    };
-  }
-
-  if (mode === "happy") {
-    return {
-      animate: {
-        opacity: [0, 0, 1, 1, 0, 0],
-        rotate: [180, 180, 180, 180, 180, 180],
-      },
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        times: HAPPY_FACE_TIMES,
-      },
-    };
-  }
-
-  return {
-    animate: { opacity: 0, rotate: 180 },
-    transition: { duration: 0.18, ease: "easeInOut" as const },
-  };
-}
-
-function resolveBeakClosedAnimation(mode: FloatingPetMode) {
-  if (mode === "happy") {
-    return {
-      animate: { opacity: [1, 1, 0, 0, 1, 1] },
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        times: HAPPY_FACE_TIMES,
-      },
-    };
-  }
-
-  return {
-    animate: { opacity: 1 },
-    transition: { duration: 0.18, ease: "easeInOut" as const },
-  };
-}
-
-function resolveBeakOpenAnimation(mode: FloatingPetMode) {
-  if (mode === "happy") {
-    return {
-      animate: { opacity: [0, 0, 1, 1, 0, 0] },
-      transition: {
-        duration: FLOATING_PET_LOOP_DURATION_S,
-        ease: "easeInOut" as const,
-        times: HAPPY_FACE_TIMES,
-      },
-    };
-  }
-
-  return {
-    animate: { opacity: 0 },
-    transition: { duration: 0.18, ease: "easeInOut" as const },
-  };
-}
-
-function renderAnimatedEffect(effectName: FloatingPetEffectName, phase: "active" | "exit") {
-  const layout = EFFECT_TO_LAYOUT[effectName];
-  const sharedStyle = resolveStageLayerStyle(layout);
+function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active" | "exit") {
+  const layout = effectName === "sparkle" ? floatingPetInitialLayout.sparkle : floatingPetInitialLayout.bubble.effects[effectName];
+  const assetName = EFFECT_TO_ASSET[effectName];
 
   if (effectName === "sparkle") {
     return {
       animate:
         phase === "active"
-          ? {
-              opacity: [0, 1, 1, 1],
-              scaleX: [1, 22 / 19, 24 / 19, 22 / 19],
-              scaleY: [1, 22 / 19, 24 / 19, 22 / 19],
-            }
-          : {
-              opacity: [1, 0],
-              scaleX: [22 / 19, 1],
-              scaleY: [22 / 19, 1],
-            },
-      style: sharedStyle,
-      transition:
-        phase === "active"
-          ? {
-              duration: FLOATING_PET_LOOP_DURATION_S,
-              ease: "easeInOut" as const,
-              times: HAPPY_EFFECT_TIMES,
-            }
-          : {
-              duration: FLOATING_PET_HAPPY_END_DURATION_S,
-              ease: "easeInOut" as const,
-              times: EFFECT_EXIT_TIMES,
-            },
+          ? { opacity: [0, 1, 1, 1], scale: [1, 22 / 19, 24 / 19, 22 / 19] }
+          : { opacity: [1, 0], scale: [22 / 19, 1] },
+      assetName,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_HAPPY_END_DURATION_S,
+      layout,
+      repeat: phase === "active" ? 0 : 0,
+      times: EFFECT_LOOP_TIMES,
     };
   }
 
@@ -397,30 +103,13 @@ function renderAnimatedEffect(effectName: FloatingPetEffectName, phase: "active"
     return {
       animate:
         phase === "active"
-          ? {
-              opacity: [0, 1, 1, 1],
-              scaleX: [1, 1, 18 / 16.9, 1],
-              scaleY: [1, 1, 18 / 16.9, 1],
-            }
-          : {
-              opacity: [1, 0],
-              scaleX: [1, 1],
-              scaleY: [1, 1],
-            },
-      style: sharedStyle,
-      transition:
-        phase === "active"
-          ? {
-              duration: FLOATING_PET_LOOP_DURATION_S,
-              ease: "easeInOut" as const,
-              repeat: Number.POSITIVE_INFINITY,
-              times: LISTEN_EFFECT_TIMES,
-            }
-          : {
-              duration: FLOATING_PET_EFFECT_END_DURATION_S,
-              ease: "easeInOut" as const,
-              times: EFFECT_EXIT_TIMES,
-            },
+          ? { opacity: [0, 1, 1, 1], scale: [1, 1, 18 / 16.9, 1] }
+          : { opacity: [1, 0], scale: [1, 1] },
+      assetName,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+      layout,
+      repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
+      times: LISTEN_EFFECT_TIMES,
     };
   }
 
@@ -428,30 +117,13 @@ function renderAnimatedEffect(effectName: FloatingPetEffectName, phase: "active"
     return {
       animate:
         phase === "active"
-          ? {
-              opacity: [0, 1, 1, 1],
-              scaleX: [1, 12.4 / 12.3, 14 / 12.3, 12.4 / 12.3],
-              scaleY: [1, 12.4 / 12, 14 / 12, 12.4 / 12],
-            }
-          : {
-              opacity: [1, 0],
-              scaleX: [12.4 / 12.3, 12.4 / 12.3],
-              scaleY: [12.4 / 12, 12.4 / 12],
-            },
-      style: sharedStyle,
-      transition:
-        phase === "active"
-          ? {
-              duration: FLOATING_PET_LOOP_DURATION_S,
-              ease: "easeInOut" as const,
-              repeat: Number.POSITIVE_INFINITY,
-              times: EFFECT_LOOP_TIMES,
-            }
-          : {
-              duration: FLOATING_PET_EFFECT_END_DURATION_S,
-              ease: "easeInOut" as const,
-              times: EFFECT_EXIT_TIMES,
-            },
+          ? { opacity: [0, 1, 1, 1], scaleX: [1, 12.4 / 12.3, 14 / 12.3, 12.4 / 12.3], scaleY: [1, 12.4 / 12, 14 / 12, 12.4 / 12] }
+          : { opacity: [1, 0], scaleX: [1, 1], scaleY: [1, 1] },
+      assetName,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+      layout,
+      repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
+      times: EFFECT_LOOP_TIMES,
     };
   }
 
@@ -459,110 +131,169 @@ function renderAnimatedEffect(effectName: FloatingPetEffectName, phase: "active"
     return {
       animate:
         phase === "active"
-          ? {
-              opacity: [0, 1, 1, 1],
-              scaleX: [1, 21.7 / 21.6, 24 / 21.6, 21.7 / 21.6],
-              scaleY: [1, 21.7 / 21.6, 24 / 21.6, 21.7 / 21.6],
-            }
-          : {
-              opacity: [1, 0],
-              scaleX: [1, 1],
-              scaleY: [1, 1],
-            },
-      style: sharedStyle,
-      transition:
-        phase === "active"
-          ? {
-              duration: FLOATING_PET_LOOP_DURATION_S,
-              ease: "easeInOut" as const,
-              repeat: Number.POSITIVE_INFINITY,
-              times: EFFECT_LOOP_TIMES,
-            }
-          : {
-              duration: FLOATING_PET_EFFECT_END_DURATION_S,
-              ease: "easeInOut" as const,
-              times: EFFECT_EXIT_TIMES,
-            },
+          ? { opacity: [0, 1, 1, 1], scale: [1, 21.7 / 21.6, 24 / 21.6, 21.7 / 21.6] }
+          : { opacity: [1, 0], scale: [1, 1] },
+      assetName,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+      layout,
+      repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
+      times: EFFECT_LOOP_TIMES,
     };
   }
 
   return {
     animate:
       phase === "active"
-        ? {
-            opacity: [0, 1, 1, 1],
-            scaleX: [1, 17 / 16.6, 19 / 16.6, 17 / 16.6],
-            scaleY: [1, 17 / 16.6, 19 / 16.6, 17 / 16.6],
-          }
-        : {
-            opacity: [1, 0],
-            scaleX: [17 / 16.6, 17 / 16.6],
-            scaleY: [17 / 16.6, 17 / 16.6],
-          },
-    style: sharedStyle,
-    transition:
-      phase === "active"
-        ? {
-            duration: FLOATING_PET_LOOP_DURATION_S,
-            ease: "easeInOut" as const,
-            repeat: Number.POSITIVE_INFINITY,
-            times: EFFECT_LOOP_TIMES,
-          }
-        : {
-            duration: FLOATING_PET_EFFECT_END_DURATION_S,
-            ease: "easeInOut" as const,
-            times: EFFECT_EXIT_TIMES,
-          },
+        ? { opacity: [0, 1, 1, 1], scale: [1, 17 / 16.6, 19 / 16.6, 17 / 16.6] }
+        : { opacity: [1, 0], scale: [17 / 16.6, 17 / 16.6] },
+    assetName,
+    duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+    layout,
+    repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
+    times: EFFECT_LOOP_TIMES,
   };
 }
 
-function EffectLayer({ effectName, phase }: { effectName: FloatingPetEffectName; phase: "active" | "exit" }) {
-  const animation = renderAnimatedEffect(effectName, phase);
-  const assetName: FloatingPetAssetName = effectName === "sparkle" ? "sparkle" : effectName;
+function FloatingPetEffectLayer({ effectName, phase }: { effectName: FloatingPetEffectName; phase: "active" | "exit" }) {
+  const animation = renderBubbleAnimation(effectName, phase);
+  const groupPosition = effectName === "sparkle" ? null : floatingPetInitialLayout.bubble.position;
 
   return (
-    <motion.div
+    <motion.g
       animate={animation.animate}
-      className={cn(styles.layerShell, styles.effectLayer)}
       initial={false}
-      style={resolveAssetLayerStyle(assetName, EFFECT_TO_LAYOUT[effectName])}
-      transition={animation.transition}
+      transition={{
+        duration: animation.duration,
+        ease: "easeInOut",
+        repeat: animation.repeat,
+        times: animation.times,
+      }}
     >
-      <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={EFFECT_TO_ASSET[effectName]} />
-    </motion.div>
+      {groupPosition !== null ? (
+        <g transform={`translate(${groupPosition.x} ${groupPosition.y})`}>
+          {renderCenteredImage(animation.assetName, animation.layout)}
+        </g>
+      ) : (
+        renderCenteredImage(animation.assetName, animation.layout)
+      )}
+    </motion.g>
   );
 }
 
-function RenderIf({ children, when }: { children: ReactNode; when: boolean }) {
-  return when ? <>{children}</> : null;
+function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
+  if (mode === "happy") {
+    return {
+      animate: { rotate: [0, -4.295, 0], x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      transition: { duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", times: [0, 0.5, 1] },
+    };
+  }
+
+  if (mode === "listen") {
+    return {
+      animate: { rotate: listenLocked ? 0 : -4.295, x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      transition: { duration: 0.45, ease: "easeInOut" },
+    };
+  }
+
+  return {
+    animate: { rotate: 0, x: ROOT_BODY_BASE_X, y: ROOT_BODY_UPDOWN_Y },
+    transition: { duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: Number.POSITIVE_INFINITY, times: [0, 0.5, 1] },
+  };
+}
+
+function resolveWingMotion(mode: FloatingPetMode, listenLocked: boolean) {
+  if (mode === "happy") {
+    return {
+      left: { rotate: [104.149, 113.022, 104.149, 115.787, 104.149], repeat: 0 },
+      right: { rotate: [63.113, 48.691, 58.465, 48.212, 63.113], repeat: 0 },
+    };
+  }
+
+  if (mode === "alert" || mode === "safe" || (mode === "listen" && !listenLocked)) {
+    return {
+      left: { rotate: [104.149, 113.022, 104.149, 115.787, 104.149], repeat: Number.POSITIVE_INFINITY },
+      right: { rotate: [63.113, 48.691, 58.465, 48.212, 63.113], repeat: Number.POSITIVE_INFINITY },
+    };
+  }
+
+  return {
+    left: { rotate: [104.149, 106.587, 104.149], repeat: Number.POSITIVE_INFINITY },
+    right: { rotate: [63.113, 60.62, 63.113], repeat: Number.POSITIVE_INFINITY },
+  };
+}
+
+function resolveTailMotion(mode: FloatingPetMode, listenLocked: boolean) {
+  if (mode === "alert" || mode === "safe" || mode === "happy" || (mode === "listen" && !listenLocked)) {
+    return {
+      duration: FLOATING_PET_QUICK_TAIL_DURATION_S,
+      repeat: Number.POSITIVE_INFINITY,
+      rotate: [28.402, 22.019, 28.402],
+      times: [0, 0.5, 1],
+    };
+  }
+
+  return {
+    duration: FLOATING_PET_LOOP_DURATION_S,
+    repeat: Number.POSITIVE_INFINITY,
+    rotate: [28.402, 24.101, 28.402],
+    times: [0, 0.5, 1],
+  };
+}
+
+function resolveOpenEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
+  if (eyesClosed) {
+    return { opacity: 0, scaleY: 1, times: [0, 1], duration: 0.18, repeat: 0 };
+  }
+
+  if (mode === "happy") {
+    return { opacity: [1, 1, 0, 0, 1, 1], scaleY: [1, 2 / 14.9, 2 / 14.9, 2 / 14.9, 2 / 14.9, 1], times: HAPPY_FACE_TIMES, duration: FLOATING_PET_LOOP_DURATION_S, repeat: 0 };
+  }
+
+  return { opacity: 1, scaleY: [1, 1, 5 / 14.9, 1, 1], times: BREATH_EYE_TIMES, duration: FLOATING_PET_EYE_BREATH_DURATION_S, repeat: Number.POSITIVE_INFINITY };
+}
+
+function resolveClosedEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
+  if (eyesClosed) {
+    return { opacity: 1, rotate: 180, times: [0, 1], duration: 0.18, repeat: 0 };
+  }
+
+  if (mode === "happy") {
+    return { opacity: [0, 0, 1, 1, 0, 0], rotate: 180, times: HAPPY_FACE_TIMES, duration: FLOATING_PET_LOOP_DURATION_S, repeat: 0 };
+  }
+
+  return { opacity: 0, rotate: 180, times: [0, 1], duration: 0.18, repeat: 0 };
+}
+
+function resolveBeakAnimation(mode: FloatingPetMode) {
+  if (mode === "happy") {
+    return {
+      closed: { opacity: [1, 1, 0, 0, 1, 1], duration: FLOATING_PET_LOOP_DURATION_S, times: HAPPY_FACE_TIMES },
+      open: { opacity: [0, 0, 1, 1, 0, 0], duration: FLOATING_PET_LOOP_DURATION_S, times: HAPPY_FACE_TIMES },
+    };
+  }
+
+  return {
+    closed: { opacity: 1, duration: 0.18, times: [0, 1] },
+    open: { opacity: 0, duration: 0.18, times: [0, 1] },
+  };
 }
 
 /**
- * Recreates the desktop floating pet with the PNG layer stack and motion
- * timings extracted from the original Rive layout and timelines.
- *
- * @param props Size overrides plus the current pet mode and optional eye override.
- * @returns The animated floating pet stage.
+ * Recreates the floating pet with nested SVG groups so every local x/y uses the
+ * same parent-space rules as the original Rive hierarchy.
  */
 export function FloatingPet({ className, size = "100%", mode = "idle", listenLocked = false, eyesClosed = false }: FloatingPetProps) {
-  const rootStyle: CSSProperties = {
-    height: size,
-    width: size,
-  };
-  const wingMotion = useMemo(() => resolveWingMotion(mode, listenLocked), [listenLocked, mode]);
-  const tailMotion = useMemo(() => resolveTailMotion(mode, listenLocked), [listenLocked, mode]);
-  const bodyMotion = useMemo(() => resolveBodyMotion(mode, listenLocked), [listenLocked, mode]);
-  const openEyeAnimation = useMemo(() => resolveOpenEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
-  const closedEyeAnimation = useMemo(() => resolveClosedEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
-  const beakClosedAnimation = useMemo(() => resolveBeakClosedAnimation(mode), [mode]);
-  const beakOpenAnimation = useMemo(() => resolveBeakOpenAnimation(mode), [mode]);
+  const rootStyle: CSSProperties = { height: size, width: size };
   const previousModeRef = useRef<FloatingPetMode>(mode);
   const exitTimeoutRef = useRef<number | null>(null);
   const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
   const activeEffect = MODE_TO_EFFECT[mode] ?? null;
-  const leftWingOrigin = resolveBoneTransformOrigin("leftWing", floatingPetInitialLayout.rootBody.leftBone, floatingPetInitialLayout.rootBody.leftWing);
-  const rightWingOrigin = resolveBoneTransformOrigin("rightWing", floatingPetInitialLayout.rootBody.rightBone, floatingPetInitialLayout.rootBody.rightWing);
-  const tailOrigin = resolveBoneTransformOrigin("tail", floatingPetInitialLayout.rootBody.tailBone, floatingPetInitialLayout.rootBody.tail);
+  const rootBodyMotion = useMemo(() => resolveRootBodyMotion(mode, listenLocked), [listenLocked, mode]);
+  const wingMotion = useMemo(() => resolveWingMotion(mode, listenLocked), [listenLocked, mode]);
+  const tailMotion = useMemo(() => resolveTailMotion(mode, listenLocked), [listenLocked, mode]);
+  const openEyeAnimation = useMemo(() => resolveOpenEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
+  const closedEyeAnimation = useMemo(() => resolveClosedEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
+  const beakAnimation = useMemo(() => resolveBeakAnimation(mode), [mode]);
 
   useEffect(() => {
     const previousMode = previousModeRef.current;
@@ -582,127 +313,99 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
     setExitEffect(previousEffect);
     const timeoutMs = previousEffect === "sparkle" ? FLOATING_PET_HAPPY_END_DURATION_S * 1000 : FLOATING_PET_EFFECT_END_DURATION_S * 1000;
     exitTimeoutRef.current = window.setTimeout(() => {
-      setExitEffect((currentEffect) => (currentEffect === previousEffect ? null : currentEffect));
+      setExitEffect((current) => (current === previousEffect ? null : current));
       exitTimeoutRef.current = null;
     }, timeoutMs);
   }, [activeEffect, mode]);
 
-  useEffect(() => {
-    return () => {
-      if (exitTimeoutRef.current !== null) {
-        window.clearTimeout(exitTimeoutRef.current);
-      }
-    };
+  useEffect(() => () => {
+    if (exitTimeoutRef.current !== null) {
+      window.clearTimeout(exitTimeoutRef.current);
+    }
   }, []);
 
   return (
     <div className={cn(styles.root, className)} style={rootStyle}>
-      <div className={styles.stage}>
+      <motion.svg className={styles.svgStage} initial={false} viewBox={`0 0 ${FLOATING_PET_STAGE_SIZE} ${FLOATING_PET_STAGE_SIZE}`} xmlns="http://www.w3.org/2000/svg">
         <AnimatePresence initial={false} mode="sync">
-          <RenderIf when={activeEffect !== null}>
-            <EffectLayer effectName={activeEffect!} phase="active" />
-          </RenderIf>
-          <RenderIf when={exitEffect !== null && exitEffect !== activeEffect}>
-            <EffectLayer effectName={exitEffect!} phase="exit" />
-          </RenderIf>
+          {activeEffect ? <FloatingPetEffectLayer effectName={activeEffect} key={`active-${activeEffect}`} phase="active" /> : null}
+          {exitEffect && exitEffect !== activeEffect ? <FloatingPetEffectLayer effectName={exitEffect} key={`exit-${exitEffect}`} phase="exit" /> : null}
         </AnimatePresence>
 
-        <motion.div animate={bodyMotion.animate} className={styles.rootBody} initial={false} transition={bodyMotion.transition}>
-          <motion.div
-            animate={{ rotate: tailMotion.animate }}
-            className={cn(styles.layerShell, styles.tailLayer)}
+        <motion.g animate={rootBodyMotion.animate} initial={false} transition={rootBodyMotion.transition}>
+          <motion.g
+            animate={{ rotate: tailMotion.rotate }}
             initial={false}
-            style={{ ...resolveAssetLayerStyle("tail", floatingPetInitialLayout.rootBody.tail), transformOrigin: tailOrigin }}
-            transition={tailMotion.transition}
+            transition={{ duration: tailMotion.duration, ease: "easeInOut", repeat: tailMotion.repeat, times: tailMotion.times }}
+            transform={`translate(${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}
           >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.tail} style={{ transform: `rotate(${floatingPetInitialLayout.rootBody.tail.rotation}deg)` }} />
-          </motion.div>
+            {renderCenteredImage("tail", floatingPetInitialLayout.rootBody.tail, `rotate(${floatingPetInitialLayout.rootBody.tail.rotation})`)}
+          </motion.g>
 
-          <motion.div
-            animate={{ rotate: wingMotion.left.animate }}
-            className={cn(styles.layerShell, styles.wingLayer)}
+          <motion.g
+            animate={{ rotate: wingMotion.left.rotate }}
             initial={false}
-            style={{ ...resolveAssetLayerStyle("leftWing", floatingPetInitialLayout.rootBody.leftWing), transformOrigin: leftWingOrigin }}
-            transition={wingMotion.left.transition}
+            transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.left.repeat, times: wingMotion.left.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
+            transform={`translate(${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}
           >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.leftWing} style={{ transform: `rotate(${floatingPetInitialLayout.rootBody.leftWing.rotation}deg)` }} />
-          </motion.div>
+            {renderCenteredImage("leftWing", floatingPetInitialLayout.rootBody.leftWing, `rotate(${floatingPetInitialLayout.rootBody.leftWing.rotation})`)}
+          </motion.g>
 
-          <motion.div
-            animate={{ rotate: wingMotion.right.animate }}
-            className={cn(styles.layerShell, styles.wingLayer)}
+          <motion.g
+            animate={{ rotate: wingMotion.right.rotate }}
             initial={false}
-            style={{ ...resolveAssetLayerStyle("rightWing", floatingPetInitialLayout.rootBody.rightWing), transformOrigin: rightWingOrigin }}
-            transition={wingMotion.right.transition}
+            transition={{ duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: wingMotion.right.repeat, times: wingMotion.right.rotate.length === 5 ? QUICK_CLAP_TIMES : [0, 0.5, 1] }}
+            transform={`translate(${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}
           >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.rightWing} style={{ transform: `rotate(${floatingPetInitialLayout.rootBody.rightWing.rotation}deg)` }} />
-          </motion.div>
+            {renderCenteredImage("rightWing", floatingPetInitialLayout.rootBody.rightWing, `rotate(${floatingPetInitialLayout.rootBody.rightWing.rotation})`)}
+          </motion.g>
 
-          <div className={cn(styles.layerShell, styles.bodyLayer)} style={resolveAssetLayerStyle("body", floatingPetInitialLayout.rootBody.body)}>
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.body} />
-          </div>
+          {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <div className={cn(styles.cheek, styles.cheekLeft)} style={resolveCheekStyle(floatingPetInitialLayout.rootBody.cheekLeft)} />
-          <div className={cn(styles.cheek, styles.cheekRight)} style={resolveCheekStyle(floatingPetInitialLayout.rootBody.cheekRight)} />
+          <g transform={`translate(${floatingPetInitialLayout.rootBody.face.position.x} ${floatingPetInitialLayout.rootBody.face.position.y})`}>
+            <g transform={`translate(${floatingPetInitialLayout.rootBody.cheek.position.x} ${floatingPetInitialLayout.rootBody.cheek.position.y})`}>
+              <ellipse
+                className={styles.cheek}
+                cx={floatingPetInitialLayout.rootBody.cheek.cheekLeft.position.x}
+                cy={floatingPetInitialLayout.rootBody.cheek.cheekLeft.position.y}
+                fill={floatingPetInitialLayout.rootBody.cheek.cheekLeft.fill}
+                fillOpacity={floatingPetInitialLayout.rootBody.cheek.cheekLeft.fillOpacity}
+                rx={(floatingPetInitialLayout.rootBody.cheek.cheekLeft.size.w * (floatingPetInitialLayout.rootBody.cheek.cheekLeft.scale.x / 100)) / 2}
+                ry={(floatingPetInitialLayout.rootBody.cheek.cheekLeft.size.h * (floatingPetInitialLayout.rootBody.cheek.cheekLeft.scale.y / 100)) / 2}
+              />
+              <ellipse
+                className={styles.cheek}
+                cx={floatingPetInitialLayout.rootBody.cheek.cheekRight.position.x}
+                cy={floatingPetInitialLayout.rootBody.cheek.cheekRight.position.y}
+                fill={floatingPetInitialLayout.rootBody.cheek.cheekRight.fill}
+                fillOpacity={floatingPetInitialLayout.rootBody.cheek.cheekRight.fillOpacity}
+                rx={(floatingPetInitialLayout.rootBody.cheek.cheekRight.size.w * (floatingPetInitialLayout.rootBody.cheek.cheekRight.scale.x / 100)) / 2}
+                ry={(floatingPetInitialLayout.rootBody.cheek.cheekRight.size.h * (floatingPetInitialLayout.rootBody.cheek.cheekRight.scale.y / 100)) / 2}
+              />
+            </g>
 
-          <motion.div
-            animate={openEyeAnimation.animate}
-            className={cn(styles.layerShell, styles.eyeLayer)}
-            initial={false}
-            style={resolveAssetLayerStyle("eyeOpen", floatingPetInitialLayout.rootBody.eyeOpenLeft)}
-            transition={openEyeAnimation.transition}
-          >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.eyeOpen} />
-          </motion.div>
-          <motion.div
-            animate={openEyeAnimation.animate}
-            className={cn(styles.layerShell, styles.eyeLayer)}
-            initial={false}
-            style={resolveAssetLayerStyle("eyeOpen", floatingPetInitialLayout.rootBody.eyeOpenRight)}
-            transition={openEyeAnimation.transition}
-          >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.eyeOpen} />
-          </motion.div>
+            <g transform={`translate(${floatingPetInitialLayout.rootBody.eyes.position.x} ${floatingPetInitialLayout.rootBody.eyes.position.y})`}>
+              <motion.g animate={{ opacity: openEyeAnimation.opacity, scaleY: openEyeAnimation.scaleY }} initial={false} transition={{ duration: openEyeAnimation.duration, ease: "easeInOut", repeat: openEyeAnimation.repeat, times: openEyeAnimation.times }}>
+                {renderCenteredImage("eyeOpen", floatingPetInitialLayout.rootBody.eyes.eyeOpenLeft)}
+                {renderCenteredImage("eyeOpen", floatingPetInitialLayout.rootBody.eyes.eyeOpenRight)}
+              </motion.g>
+              <motion.g animate={{ opacity: closedEyeAnimation.opacity, rotate: closedEyeAnimation.rotate }} initial={false} transition={{ duration: closedEyeAnimation.duration, ease: "easeInOut", repeat: closedEyeAnimation.repeat, times: closedEyeAnimation.times }}>
+                {renderCenteredImage("eyeClosed", floatingPetInitialLayout.rootBody.eyes.eyeClosedLeft)}
+                {renderCenteredImage("eyeClosed", floatingPetInitialLayout.rootBody.eyes.eyeClosedRight)}
+              </motion.g>
+            </g>
 
-          <motion.div
-            animate={closedEyeAnimation.animate}
-            className={cn(styles.layerShell, styles.eyeLayer)}
-            initial={false}
-            style={resolveAssetLayerStyle("eyeClosed", floatingPetInitialLayout.rootBody.eyeClosedLeft)}
-            transition={closedEyeAnimation.transition}
-          >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.eyeClosed} />
-          </motion.div>
-          <motion.div
-            animate={closedEyeAnimation.animate}
-            className={cn(styles.layerShell, styles.eyeLayer)}
-            initial={false}
-            style={resolveAssetLayerStyle("eyeClosed", floatingPetInitialLayout.rootBody.eyeClosedRight)}
-            transition={closedEyeAnimation.transition}
-          >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.eyeClosed} />
-          </motion.div>
-
-          <motion.div
-            animate={beakClosedAnimation.animate}
-            className={cn(styles.layerShell, styles.beakLayer)}
-            initial={false}
-            style={resolveAssetLayerStyle("beakClosed", floatingPetInitialLayout.rootBody.beakClosed)}
-            transition={beakClosedAnimation.transition}
-          >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.beakClosed} />
-          </motion.div>
-          <motion.div
-            animate={beakOpenAnimation.animate}
-            className={cn(styles.layerShell, styles.beakLayer)}
-            initial={false}
-            style={resolveAssetLayerStyle("beakOpen", floatingPetInitialLayout.rootBody.beakOpen)}
-            transition={beakOpenAnimation.transition}
-          >
-            <img alt="" aria-hidden="true" className={styles.asset} draggable={false} src={floatingPetAssets.beakOpen} />
-          </motion.div>
-        </motion.div>
-      </div>
+            <g transform={`translate(${floatingPetInitialLayout.rootBody.beak.position.x} ${floatingPetInitialLayout.rootBody.beak.position.y})`}>
+              <motion.g animate={{ opacity: beakAnimation.closed.opacity }} initial={false} transition={{ duration: beakAnimation.closed.duration, ease: "easeInOut", times: beakAnimation.closed.times }}>
+                {renderCenteredImage("beakClosed", floatingPetInitialLayout.rootBody.beak.beakClosed)}
+              </motion.g>
+              <motion.g animate={{ opacity: beakAnimation.open.opacity }} initial={false} transition={{ duration: beakAnimation.open.duration, ease: "easeInOut", times: beakAnimation.open.times }}>
+                {renderCenteredImage("beakOpen", floatingPetInitialLayout.rootBody.beak.beakOpen)}
+              </motion.g>
+            </g>
+          </g>
+        </motion.g>
+      </motion.svg>
     </div>
   );
 }
