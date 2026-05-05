@@ -99,7 +99,7 @@ func (s *Service) collectExecutionLogRecords(taskID, source string) ([]execution
 		items = append(items, executionLogRecordsFromToolCalls(toolCalls)...)
 	}
 	if source == "" || source == "audit" {
-		audits, _, err := s.storage.AuditStore().ListAuditRecords(ctx, taskID, 0, 0)
+		audits, _, err := s.storage.AuditStore().ListAuditRecords(ctx, taskID, "", 0, 0)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}

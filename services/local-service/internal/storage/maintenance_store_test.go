@@ -244,19 +244,19 @@ func TestServiceDeleteAllTaskHistory(t *testing.T) {
 			if items, total, err := service.LoopRuntimeStore().ListEvents(ctx, "task_001", "", "", "", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared events, got total=%d items=%+v err=%v", total, items, err)
 			}
-			if items, total, err := service.LoopRuntimeStore().ListDeliveryResults(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
+			if items, total, err := service.LoopRuntimeStore().ListDeliveryResults(ctx, "task_001", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared delivery results, got total=%d items=%+v err=%v", total, items, err)
 			}
-			if items, err := service.LoopRuntimeStore().ListTaskCitations(ctx, "task_001"); err != nil || len(items) != 0 {
+			if items, err := service.LoopRuntimeStore().ListTaskCitations(ctx, "task_001", ""); err != nil || len(items) != 0 {
 				t.Fatalf("expected cleared citations, got %+v err=%v", items, err)
 			}
 			if items, total, err := service.ToolCallStore().ListToolCalls(ctx, "task_001", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared tool calls, got total=%d items=%+v err=%v", total, items, err)
 			}
-			if items, total, err := service.ArtifactStore().ListArtifacts(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
+			if items, total, err := service.ArtifactStore().ListArtifacts(ctx, "task_001", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared artifacts, got total=%d items=%+v err=%v", total, items, err)
 			}
-			if items, total, err := service.AuditStore().ListAuditRecords(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
+			if items, total, err := service.AuditStore().ListAuditRecords(ctx, "task_001", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared audit records, got total=%d items=%+v err=%v", total, items, err)
 			}
 			if items, total, err := service.RecoveryPointStore().ListRecoveryPoints(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
@@ -265,7 +265,7 @@ func TestServiceDeleteAllTaskHistory(t *testing.T) {
 			if items, total, err := service.ApprovalRequestStore().ListApprovalRequests(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared approval requests, got total=%d items=%+v err=%v", total, items, err)
 			}
-			if items, total, err := service.AuthorizationRecordStore().ListAuthorizationRecords(ctx, "task_001", 20, 0); err != nil || total != 0 || len(items) != 0 {
+			if items, total, err := service.AuthorizationRecordStore().ListAuthorizationRecords(ctx, "task_001", "", 20, 0); err != nil || total != 0 || len(items) != 0 {
 				t.Fatalf("expected cleared authorization records, got total=%d items=%+v err=%v", total, items, err)
 			}
 			if items, total, err := service.MirrorConversationStore().ListMirrorConversations(ctx, "task_001", "", "", 20, 0); err != nil || total != 0 || len(items) != 0 {

@@ -164,7 +164,7 @@ func TestServiceSecurityRespondDeletesTaskHistory(t *testing.T) {
 	if recoveryTotal != 1 || len(recoveryPoints) != 1 {
 		t.Fatalf("expected task-history cleanup to preserve maintenance recovery point, got total=%d items=%+v", recoveryTotal, recoveryPoints)
 	}
-	authorizations, authTotal, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, 20, 0)
+	authorizations, authTotal, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListAuthorizationRecords returned error: %v", err)
 	}
