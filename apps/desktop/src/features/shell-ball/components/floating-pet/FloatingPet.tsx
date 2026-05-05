@@ -258,13 +258,6 @@ function renderCenteredImageAtOrigin(assetName: FloatingPetAssetName, scale: Flo
   );
 }
 
-function resolveLocalPivot(centerPosition: FloatingPetLayerTransform["position"], bonePosition: FloatingPetLayerTransform["position"]) {
-  return {
-    x: bonePosition.x - centerPosition.x,
-    y: bonePosition.y - centerPosition.y,
-  };
-}
-
 type BoneRotatedLayerProps = {
   animatedRotate: number | number[];
   assetName: FloatingPetAssetName;
@@ -284,22 +277,15 @@ function BoneRotatedLayer({
   times,
   transitionDuration,
 }: BoneRotatedLayerProps) {
-  const localPivot = resolveLocalPivot(layer.position, bonePosition);
-
   return (
-    <g transform={`translate(${layer.position.x} ${layer.position.y})`}>
-      <g transform={`translate(${localPivot.x} ${localPivot.y})`}>
-        <motion.g
-          animate={{ rotate: animatedRotate }}
-          initial={false}
-          style={{ transformBox: "fill-box", transformOrigin: "0px 0px" }}
-          transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
-        >
-          <g transform={`translate(${-localPivot.x} ${-localPivot.y})`}>
-            {renderCenteredImageAtOrigin(assetName, layer.scale, layer.rotation)}
-          </g>
-        </motion.g>
-      </g>
+    <g transform={`translate(${bonePosition.x} ${bonePosition.y})`}>
+      <motion.g
+        animate={{ rotate: animatedRotate }}
+        initial={false}
+        transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
+      >
+        {renderCenteredImage(assetName, layer, layer.rotation)}
+      </motion.g>
     </g>
   );
 }
