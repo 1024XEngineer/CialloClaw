@@ -42,6 +42,7 @@ import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { FloatingPet } from "./components/floating-pet/FloatingPet";
 import { getShellBallMascotHotspotGestureAction } from "./components/ShellBallMascot";
+import { getShellBallMascotPetState } from "./components/ShellBallMascot";
 import { getShellBallMascotPointerPhaseAction } from "./components/ShellBallMascot";
 import { shouldSuppressShellBallMascotHotspotGestures } from "./components/ShellBallMascot";
 import { extractShellBallDroppedText, resolveShellBallTextDropEffect, ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
@@ -3187,19 +3188,42 @@ test("shell-ball mascot shows a selection marker above the ball when text select
   assert.match(markup, /shell-ball-mascot__selection-marker-glyph/);
 });
 
-test("floating pet renders the open-face layer by default", () => {
+test("floating pet renders the open-eye and closed-beak layers by default", () => {
   const markup = renderToStaticMarkup(createElement(FloatingPet, { size: 128 }));
 
-  assert.equal(markup.match(/<img/g)?.length ?? 0, 6);
-  assert.match(markup, /face_open\.png/);
-  assert.doesNotMatch(markup, /face_closed\.png/);
+  assert.match(markup, /eye_open\.png/);
+  assert.match(markup, /beak_closed\.png/);
+  assert.doesNotMatch(markup, /bubble_safe\.png/);
 });
 
-test("floating pet swaps to the closed-face layer when requested", () => {
+test("floating pet swaps to the closed-eye layer when requested", () => {
   const markup = renderToStaticMarkup(createElement(FloatingPet, { eyesClosed: true, size: 128 }));
 
-  assert.match(markup, /face_closed\.png/);
-  assert.doesNotMatch(markup, /face_open\.png/);
+  assert.match(markup, /eye_closed\.png/);
+  assert.match(markup, /beak_closed\.png/);
+});
+
+test("floating pet renders the matching effect layer for processing and auth modes", () => {
+  const thinkingMarkup = renderToStaticMarkup(createElement(FloatingPet, { mode: "think", size: 128 }));
+  const safeMarkup = renderToStaticMarkup(createElement(FloatingPet, { mode: "safe", size: 128 }));
+
+  assert.match(thinkingMarkup, /bubble_thinking\.png/);
+  assert.match(safeMarkup, /bubble_safe\.png/);
+});
+
+test("shell-ball mascot pet mapping keeps happy as a local override and voice lock explicit", () => {
+  assert.deepEqual(getShellBallMascotPetState({ visualState: "processing", happyActive: false }), {
+    listenLocked: false,
+    mode: "think",
+  });
+  assert.deepEqual(getShellBallMascotPetState({ visualState: "voice_locked", happyActive: false }), {
+    listenLocked: true,
+    mode: "listen",
+  });
+  assert.deepEqual(getShellBallMascotPetState({ visualState: "waiting_auth", happyActive: true }), {
+    listenLocked: false,
+    mode: "happy",
+  });
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

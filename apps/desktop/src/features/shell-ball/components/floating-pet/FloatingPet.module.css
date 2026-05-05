@@ -8,13 +8,65 @@
   width: 100%;
 }
 
-.layer {
-  display: block;
+.stage,
+.rootBody {
   height: 100%;
   inset: 0;
-  object-fit: contain;
+  position: absolute;
+  width: 100%;
+}
+
+.stage {
+  overflow: visible;
+}
+
+.layerShell {
   pointer-events: none;
   position: absolute;
+  transform: translate(-50%, -50%);
+  transform-origin: center center;
+  will-change: transform, opacity;
+}
+
+.asset {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
   user-select: none;
   width: 100%;
+}
+
+.effectLayer {
+  z-index: 8;
+}
+
+.tailLayer {
+  z-index: 1;
+}
+
+.wingLayer {
+  z-index: 2;
+}
+
+.bodyLayer {
+  z-index: 3;
+}
+
+.feetLayer {
+  z-index: 4;
+}
+
+.eyeLayer,
+.beakLayer,
+.cheek {
+  z-index: 5;
+}
+
+.cheek {
+  border-radius: 999px;
+  filter: blur(0.35px);
+  pointer-events: none;
+  position: absolute;
+  transform: translate(-50%, -50%);
 }
