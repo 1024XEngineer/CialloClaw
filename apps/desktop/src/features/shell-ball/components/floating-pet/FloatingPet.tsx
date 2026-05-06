@@ -119,11 +119,13 @@ function renderAnimatedCenteredImage(
 }
 
 function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active" | "exit") {
+  const activeRepeatType = "reverse" as const;
   const layout = effectName === "sparkle" ? floatingPetInitialLayout.sparkle : floatingPetInitialLayout.bubble.effects[effectName];
   const assetName = EFFECT_TO_ASSET[effectName];
 
   if (effectName === "sparkle") {
     return {
+      initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
       animate:
         phase === "active"
           ? { opacity: [0, 1, 1, 1], scale: [1, 22 / 19, 24 / 19, 22 / 19] }
@@ -132,12 +134,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_HAPPY_END_DURATION_S,
       layout,
       repeat: phase === "active" ? 0 : 0,
-      times: EFFECT_LOOP_TIMES,
+      repeatType: undefined,
+      times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
     };
   }
 
   if (effectName === "bubbleListening") {
     return {
+      initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
       animate:
         phase === "active"
           ? { opacity: [0, 1, 1, 1], scale: [1, 1, 18 / 16.9, 1] }
@@ -146,12 +150,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
       layout,
       repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-      times: LISTEN_EFFECT_TIMES,
+      repeatType: phase === "active" ? activeRepeatType : undefined,
+      times: phase === "active" ? LISTEN_EFFECT_TIMES : [0, 1],
     };
   }
 
   if (effectName === "bubbleSafe") {
     return {
+      initial: phase === "active" ? { opacity: 0, scaleX: 1, scaleY: 1 } : undefined,
       animate:
         phase === "active"
           ? { opacity: [0, 1, 1, 1], scaleX: [1, 12.4 / 12.3, 14 / 12.3, 12.4 / 12.3], scaleY: [1, 12.4 / 12, 14 / 12, 12.4 / 12] }
@@ -160,12 +166,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
       layout,
       repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-      times: EFFECT_LOOP_TIMES,
+      repeatType: phase === "active" ? activeRepeatType : undefined,
+      times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
     };
   }
 
   if (effectName === "bubbleThinking") {
     return {
+      initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
       animate:
         phase === "active"
           ? { opacity: [0, 1, 1, 1], scale: [1, 21.7 / 21.6, 24 / 21.6, 21.7 / 21.6] }
@@ -174,11 +182,13 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
       layout,
       repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-      times: EFFECT_LOOP_TIMES,
+      repeatType: phase === "active" ? activeRepeatType : undefined,
+      times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
     };
   }
 
   return {
+    initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
     animate:
       phase === "active"
         ? { opacity: [0, 1, 1, 1], scale: [1, 17 / 16.6, 19 / 16.6, 17 / 16.6] }
@@ -187,7 +197,8 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
     duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
     layout,
     repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-    times: EFFECT_LOOP_TIMES,
+    repeatType: phase === "active" ? activeRepeatType : undefined,
+    times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
   };
 }
 
@@ -198,11 +209,12 @@ function FloatingPetEffectLayer({ effectName, phase }: { effectName: FloatingPet
   return (
     <motion.g
       animate={animation.animate}
-      initial={false}
+      initial={animation.initial ?? false}
       transition={{
         duration: animation.duration,
         ease: "easeInOut",
         repeat: animation.repeat,
+        repeatType: animation.repeatType,
         times: animation.times,
       }}
     >
@@ -453,33 +465,42 @@ function useRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
 }
 
 function useFloatingPetEffectState(mode: FloatingPetMode) {
-  const previousModeRef = useRef<FloatingPetMode>(mode);
+  const activeEffectRef = useRef<FloatingPetEffectName | null>(MODE_TO_EFFECT[mode] ?? null);
   const timeoutRef = useRef<number | null>(null);
+  const [activeEffect, setActiveEffect] = useState<FloatingPetEffectName | null>(MODE_TO_EFFECT[mode] ?? null);
   const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
-  const activeEffect = MODE_TO_EFFECT[mode] ?? null;
+  const requestedEffect = MODE_TO_EFFECT[mode] ?? null;
 
   useEffect(() => {
-    const previousMode = previousModeRef.current;
-    previousModeRef.current = mode;
-
     if (timeoutRef.current !== null) {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
 
-    const previousEffect = MODE_TO_EFFECT[previousMode] ?? null;
-    if (previousEffect === null || previousEffect === activeEffect) {
+    const previousEffect = activeEffectRef.current;
+    if (previousEffect === requestedEffect) {
+      setActiveEffect(requestedEffect);
       setExitEffect(null);
       return;
     }
 
+    if (previousEffect === null) {
+      activeEffectRef.current = requestedEffect;
+      setActiveEffect(requestedEffect);
+      setExitEffect(null);
+      return;
+    }
+
+    setActiveEffect(null);
     setExitEffect(previousEffect);
     const timeoutMs = previousEffect === "sparkle" ? FLOATING_PET_HAPPY_END_DURATION_S * 1000 : FLOATING_PET_EFFECT_END_DURATION_S * 1000;
     timeoutRef.current = window.setTimeout(() => {
       setExitEffect((current) => (current === previousEffect ? null : current));
+      activeEffectRef.current = requestedEffect;
+      setActiveEffect(requestedEffect);
       timeoutRef.current = null;
     }, timeoutMs);
-  }, [activeEffect, mode]);
+  }, [requestedEffect]);
 
   useEffect(() => () => {
     if (timeoutRef.current !== null) {

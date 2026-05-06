@@ -10,6 +10,7 @@ import { FloatingPet } from "./floating-pet/FloatingPet";
 type ShellBallMascotProps = {
   edgeDockRevealed?: boolean;
   edgeDockSide?: "left" | "right" | null;
+  hasPendingAgentLoading?: boolean;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -109,9 +110,17 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
 }
 
 export function getShellBallMascotPetState(input: {
+  hasPendingAgentLoading?: boolean;
   happyActive: boolean;
   visualState: ShellBallVisualState;
 }): ShellBallMascotPetState {
+  if (input.hasPendingAgentLoading) {
+    return {
+      listenLocked: false,
+      mode: "think",
+    };
+  }
+
   if (input.happyActive) {
     return {
       listenLocked: false,
@@ -158,6 +167,7 @@ export function getShellBallMascotPetState(input: {
 export function ShellBallMascot({
   edgeDockRevealed = false,
   edgeDockSide = null,
+  hasPendingAgentLoading = false,
   visualState,
   voicePreview = null,
   showVoiceHints = true,
@@ -198,6 +208,7 @@ export function ShellBallMascot({
   const showSelectionMarker = selectionIndicatorVisible && !showVoiceMarker;
   const shouldRouteHotspotDrag = visualState !== "voice_listening" && visualState !== "voice_locked";
   const petState = getShellBallMascotPetState({
+    hasPendingAgentLoading,
     happyActive,
     visualState,
   });

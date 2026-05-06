@@ -345,6 +345,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
   const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
+  const hasPendingAgentLoading = visibleBubbleItems.some((item) => item.role === "agent" && item.desktop.presentationHint === "loading");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -983,6 +984,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
       floatingBallSize={floatingBallSize}
+      hasPendingAgentLoading={hasPendingAgentLoading}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
