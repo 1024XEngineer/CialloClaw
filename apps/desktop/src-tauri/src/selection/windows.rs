@@ -17,8 +17,8 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT,
-    VK_SHIFT, VK_UP,
+    GetAsyncKeyState, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_LEFT,
+    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
@@ -173,6 +173,9 @@ unsafe extern "system" fn shell_ball_selection_mouse_hook(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
+    // Right click should keep the current selection affordance alive. The next
+    // left click will re-probe the selection and clear shell-ball alert state
+    // if the user no longer has a live selection.
     if n_code >= 0 && w_param.0 as u32 == WM_LBUTTONUP {
         schedule_selection_probe(SHELL_BALL_SELECTION_MOUSE_DELAY_MS);
     }
@@ -198,6 +201,10 @@ unsafe extern "system" fn shell_ball_selection_keyboard_hook(
 fn should_probe_selection_from_key_event(vk_code: u32) -> bool {
     let ctrl_down = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 };
     let shift_down = unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 };
+
+    if vk_code == VK_BACK.0 as u32 || vk_code == VK_DELETE.0 as u32 {
+        return true;
+    }
 
     if ctrl_down && vk_code == b'A' as u32 {
         return true;

@@ -7301,6 +7301,7 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const providersSource = readFileSync(resolve(desktopRoot, "src/features/shared/AppProviders.tsx"), "utf8");
   const selectionProviderSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/selection/selection.provider.tsx"), "utf8");
+  const selectionHostSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/windows.rs"), "utf8");
 
   assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
@@ -7312,6 +7313,9 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
   assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
   assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
+  assert.match(selectionHostSource, /w_param\.0 as u32 == WM_LBUTTONUP/);
+  assert.doesNotMatch(selectionHostSource, /WM_RBUTTONUP/);
+  assert.match(selectionHostSource, /vk_code == VK_BACK\.0 as u32 \|\| vk_code == VK_DELETE\.0 as u32/);
   assert.doesNotMatch(selectionProviderSource, /readShellBallSelectionSnapshot/);
   assert.doesNotMatch(selectionProviderSource, /useInterval\(/);
   assert.equal(
