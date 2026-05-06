@@ -13108,6 +13108,47 @@ func TestServicePluginDetailGetFallsBackToStaticCatalogWhenPluginRuntimeServiceM
 	}
 }
 
+func TestServicePluginDetailGetIncludesBrowserToolMetadata(t *testing.T) {
+	service := newTestService()
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "playwright",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail get failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "playwright" {
+		t.Fatalf("expected playwright plugin detail header, got %+v", pluginValue)
+	}
+	tools := result["tools"].([]map[string]any)
+	if len(tools) != 10 {
+		t.Fatalf("expected playwright plugin detail to expose ten tools, got %+v", tools)
+	}
+	for _, toolName := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
+		item := pluginToolItemByName(tools, toolName)
+		if item == nil {
+			t.Fatalf("expected playwright plugin detail to include %q, got %+v", toolName, tools)
+		}
+		deliveryMapping := item["delivery_mapping"].(map[string]any)
+		citationSources := deliveryMapping["citation_source_types"].([]string)
+		if len(citationSources) != 1 || citationSources[0] != "web" {
+			t.Fatalf("expected browser tool %q to retain web citation mapping, got %+v", toolName, deliveryMapping)
+		}
+	}
+}
+
+func pluginToolItemByName(items []map[string]any, toolName string) map[string]any {
+	for _, item := range items {
+		if item["tool_name"] == toolName {
+			return item
+		}
+	}
+	return nil
+}
+
 func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
 	service := newTestService()
 	snapshot := service.Snapshot()
