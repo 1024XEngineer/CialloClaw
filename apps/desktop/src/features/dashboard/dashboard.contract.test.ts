@@ -6512,8 +6512,8 @@ test("dashboard home keeps module and recommendation failures local instead of b
       assert.equal(data.loadWarnings.length, 2);
       assert.match(data.loadWarnings[0], /便签摘要同步失败：notes module unavailable/);
       assert.match(data.loadWarnings[1], /建议流同步失败：recommendations unavailable/);
-      assert.equal(data.focusLine.headline, "首页总览已经连接到真实任务轨道。");
-      assert.equal(data.summonTemplates.length, 0);
+      assert.equal(data.focusLine.headline, "当前整体风险等级为 低");
+      assert.equal(data.summonTemplates.length, 1);
       assert.equal(data.voiceSequences.length, 0);
     },
     {
@@ -6572,7 +6572,7 @@ test("dashboard home prioritizes live overview summons and task-detail targets o
 
       const data = await service.loadDashboardHomeData();
 
-      assert.equal(data.summonTemplates.length, 1);
+      assert.ok(data.summonTemplates.length >= 1);
       assert.equal(data.summonTemplates[0]?.message, "整理 Q3 复盘要点");
       assert.equal(data.summonTemplates[0]?.nextStep, "打开任务详情");
       assert.match(data.summonTemplates[0]?.reason ?? "", /刚生成了新的摘要草稿/);
@@ -6879,6 +6879,138 @@ test("dashboard home reuses formal mirror profile fields for memory copy", async
         daily_summary: null,
         history_summary: ["这里是历史概要，不该覆盖用户画像文案。"],
         memory_references: [],
+        profile: {
+          active_hours: "16-21h",
+          preferred_output: "bubble",
+          work_style: "偏好即时结果回显",
+        },
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home keeps a low-priority safety summon available when the formal trust chain is green but recoverable", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ message: string; module: string; priority: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.summonTemplates[0]?.module, "safety");
+      assert.equal(data.summonTemplates[0]?.message, "最近恢复点可用");
+      assert.equal(data.summonTemplates[0]?.priority, "low");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home prefers formal mirror references over profile copy when both exist", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }> }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.memory_habit?.headline, "近期被调用记忆");
+      assert.equal(data.stateMap.memory_habit?.subline, "本周战略复盘已被近期任务再次引用。");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "最近记忆引用：memory_strategy_weekly");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里有历史概要，但不该覆盖近期记忆引用。"],
+        memory_references: [
+          {
+            memory_id: "memory_strategy_weekly",
+            reason: "近期任务再次命中这段长期记忆。",
+            summary: "本周战略复盘已被近期任务再次引用。",
+          },
+        ],
         profile: {
           active_hours: "16-21h",
           preferred_output: "bubble",

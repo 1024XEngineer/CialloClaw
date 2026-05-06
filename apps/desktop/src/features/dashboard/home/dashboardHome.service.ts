@@ -841,6 +841,27 @@ function buildMemorySubline(highlights: string[]) {
 }
 
 function buildFormalMirrorState(overview: AgentMirrorOverviewGetResult) {
+  const latestReference = overview.memory_references[0] ?? null;
+  if (latestReference) {
+    return {
+      context: [
+        {
+          iconKey: "brain",
+          text: `最近记忆引用：${latestReference.memory_id}`,
+          type: "active" as const,
+        },
+        {
+          iconKey: "repeat",
+          text: latestReference.summary || latestReference.reason,
+          type: "hint" as const,
+        },
+      ],
+      headline: "近期被调用记忆",
+      insights: buildFormalMirrorInsights(overview),
+      subline: latestReference.summary || latestReference.reason,
+    };
+  }
+
   const profile = overview.profile;
   if (profile) {
     return {
@@ -864,27 +885,6 @@ function buildFormalMirrorState(overview: AgentMirrorOverviewGetResult) {
       headline: "用户画像",
       insights: buildFormalMirrorInsights(overview),
       subline: `工作风格：${profile.work_style}`,
-    };
-  }
-
-  const latestReference = overview.memory_references[0] ?? null;
-  if (latestReference) {
-    return {
-      context: [
-        {
-          iconKey: "brain",
-          text: `最近记忆引用：${latestReference.memory_id}`,
-          type: "active" as const,
-        },
-        {
-          iconKey: "repeat",
-          text: latestReference.summary || latestReference.reason,
-          type: "hint" as const,
-        },
-      ],
-      headline: "近期被调用记忆",
-      insights: buildFormalMirrorInsights(overview),
-      subline: latestReference.summary || latestReference.reason,
     };
   }
 
@@ -1062,7 +1062,9 @@ function buildOverviewSummons(
 
   // Keep the first summon anchored to formal overview fields so the home orb
   // surfaces live task/security signals before softer recommendation copy.
-  if (trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green") {
+  const hasUrgentSafetySignal = trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green";
+
+  if (hasUrgentSafetySignal) {
     templates.push({
       duration: 6_200,
       message: highValueSignals[0] ?? safetyState.headline,
@@ -1084,6 +1086,18 @@ function buildOverviewSummons(
       priority: getSummonPriority("tasks", stateKeys.tasks),
       reason: [focusSummary.current_step, focusSummary.next_action, overflowSignal].filter(Boolean).join(" · "),
       stateKey: stateKeys.tasks,
+    });
+  }
+
+  if (!hasUrgentSafetySignal && (trustSummary.has_restore_point || safetyState.subline.trim() !== "")) {
+    templates.push({
+      duration: 5_600,
+      message: trustSummary.has_restore_point ? "最近恢复点可用" : safetyState.headline,
+      module: "safety",
+      nextStep: getSummonNextStep(quickActions, safetyState),
+      priority: "low",
+      reason: safetyState.subline,
+      stateKey: stateKeys.safety,
     });
   }
 
