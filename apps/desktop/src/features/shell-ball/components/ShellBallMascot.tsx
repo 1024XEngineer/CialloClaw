@@ -255,7 +255,7 @@ export function ShellBallMascot({
     }
 
     if (happyTimeoutRef.current !== null) {
-      window.clearTimeout(happyTimeoutRef.current);
+      return;
     }
 
     setHappyActive(true);

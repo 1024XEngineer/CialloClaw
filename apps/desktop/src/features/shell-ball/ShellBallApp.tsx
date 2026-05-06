@@ -66,6 +66,7 @@ type ShellBallWindowAnchor = {
 type ShellBallFloatingSize = "small" | "medium" | "large";
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
+const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_SELECTION_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
 
@@ -947,8 +948,12 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           selectionPromptClearTimeoutRef.current = null;
         }
 
-        // Keep the last actionable selection alive until its 10-second alert
-        // window expires, even if the platform snapshot stream briefly clears.
+        // Clearing a real selection can briefly race with UIA updates, so keep
+        // a short debounce before retiring the alert opportunity.
+        selectionPromptClearTimeoutRef.current = window.setTimeout(() => {
+          selectionPromptClearTimeoutRef.current = null;
+          setSelectionPrompt(null);
+        }, SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS);
       })
       .then((unlisten) => {
         if (disposed) {
