@@ -1770,6 +1770,15 @@ test("dashboard home no longer replays mock summon or voice presets when live re
   assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
 });
 
+test("dashboard event panel routes task-detail actions through the shared navigation helper", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEventPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /navigateToDashboardTaskDetail/);
+  assert.match(panelSource, /target\?\.kind === "task_detail"/);
+  assert.match(panelSource, /resolvePrimaryActionLabel/);
+  assert.match(panelSource, /activeState\.navigationTarget\?\.label/);
+});
+
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
 
@@ -6521,6 +6530,89 @@ test("dashboard home keeps module and recommendation failures local instead of b
       getRecommendations: async () => {
         throw new Error("recommendations unavailable");
       },
+    },
+  );
+});
+
+test("dashboard home prioritizes live overview summons and task-detail targets over recommendation-only fallback copy", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { navigationTarget?: { kind: string; label: string; module: string; taskId?: string } }>;
+          summonTemplates: Array<{ message: string; nextStep?: string; reason: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.summonTemplates.length, 1);
+      assert.equal(data.summonTemplates[0]?.message, "整理 Q3 复盘要点");
+      assert.equal(data.summonTemplates[0]?.nextStep, "打开任务详情");
+      assert.match(data.summonTemplates[0]?.reason ?? "", /刚生成了新的摘要草稿/);
+      assert.equal(data.summonTemplates[0]?.stateKey, "task_working");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.taskId, "task_focus_001");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              focus_runtime_summary: {
+                active_steering_count: 0,
+                events_count: 1,
+                latest_event_type: null,
+                loop_stop_reason: null,
+                observation_signals: [],
+              },
+              focus_task_id: "task_focus_001",
+              processing_tasks: 1,
+              waiting_auth_tasks: 0,
+            },
+            tab: "focus",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["刚生成了新的摘要草稿。"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
     },
   );
 });

@@ -60,6 +60,19 @@ export type DashboardHomeAnomaly = {
   severity: "warn" | "error" | "info";
 };
 
+export type DashboardHomeNavigationTarget =
+  | {
+      kind: "module";
+      label: string;
+      module: DashboardHomeModuleKey;
+    }
+  | {
+      kind: "task_detail";
+      label: string;
+      module: "tasks";
+      taskId: string;
+    };
+
 export type DashboardHomeStateData = {
   key: DashboardHomeEventStateKey;
   module: DashboardHomeModuleKey;
@@ -79,6 +92,7 @@ export type DashboardHomeStateData = {
   insights?: DashboardHomeInsightItem[];
   signals?: DashboardHomeSignalItem[];
   anomaly?: DashboardHomeAnomaly;
+  navigationTarget?: DashboardHomeNavigationTarget;
   breathSpeed: number;
 };
 

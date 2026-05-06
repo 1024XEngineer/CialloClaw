@@ -21,6 +21,7 @@ import type {
   DashboardHomeContextItem,
   DashboardHomeEventStateKey,
   DashboardHomeInsightItem,
+  DashboardHomeNavigationTarget,
   DashboardHomeModuleKey,
   DashboardHomeNoteItem,
   DashboardHomeSignalItem,
@@ -42,6 +43,13 @@ const dashboardModuleTabs: Record<DashboardHomeModuleKey, string> = {
   notes: "queue",
   safety: "guard",
   tasks: "focus",
+};
+
+const dashboardModuleActionLabels: Record<DashboardHomeModuleKey, string> = {
+  memory: "打开镜子页",
+  notes: "打开便签页",
+  safety: "打开安全页",
+  tasks: "打开任务页",
 };
 
 const dashboardModuleNextSteps: Record<DashboardHomeModuleKey, string> = {
@@ -108,6 +116,7 @@ function cloneStateData(state: DashboardHomeStateData): DashboardHomeStateData {
     anomaly: state.anomaly ? { ...state.anomaly } : undefined,
     context: state.context.map((item) => ({ ...item })),
     insights: state.insights?.map((item) => ({ ...item })),
+    navigationTarget: state.navigationTarget ? { ...state.navigationTarget } : undefined,
     notes: state.notes?.map((item) => ({ ...item })),
     progressSteps: state.progressSteps?.map((item) => ({ ...item })),
     signals: state.signals?.map((item) => ({ ...item })),
@@ -197,6 +206,70 @@ function getSignalLevel(riskLevel: RiskLevel): DashboardHomeSignalItem["level"] 
   }
 
   return "normal";
+}
+
+function buildModuleNavigationTarget(
+  module: DashboardHomeModuleKey,
+  label = dashboardModuleActionLabels[module],
+): DashboardHomeNavigationTarget {
+  return {
+    kind: "module",
+    label,
+    module,
+  };
+}
+
+function buildTaskDetailNavigationTarget(taskId: string, label = "打开任务详情"): DashboardHomeNavigationTarget {
+  return {
+    kind: "task_detail",
+    label,
+    module: "tasks",
+    taskId,
+  };
+}
+
+function buildTaskNavigationTarget(
+  focusSummary: NonNullable<AgentDashboardOverviewGetResult["overview"]["focus_summary"]>,
+): DashboardHomeNavigationTarget {
+  if (focusSummary.status === "waiting_auth") {
+    return buildModuleNavigationTarget("safety", "前往授权");
+  }
+
+  if (focusSummary.status === "completed") {
+    return buildTaskDetailNavigationTarget(focusSummary.task_id, "查看交付结果");
+  }
+
+  return buildTaskDetailNavigationTarget(focusSummary.task_id);
+}
+
+function getOverviewSignals(overview: AgentDashboardOverviewGetResult) {
+  return Array.isArray(overview.overview.high_value_signal)
+    ? overview.overview.high_value_signal.filter((signal): signal is string => typeof signal === "string" && signal.trim() !== "")
+    : [];
+}
+
+function getOverviewQuickActions(overview: AgentDashboardOverviewGetResult) {
+  return Array.isArray(overview.overview.quick_actions)
+    ? overview.overview.quick_actions.filter((action): action is string => typeof action === "string" && action.trim() !== "")
+    : [];
+}
+
+function getSummonNextStep(quickActions: string[], state: DashboardHomeStateData) {
+  return quickActions[0] ?? state.navigationTarget?.label ?? dashboardModuleNextSteps[state.module];
+}
+
+function dedupeSummonTemplates(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
+  const seen = new Set<string>();
+
+  return templates.filter((template) => {
+    const key = `${template.stateKey}::${template.message}::${template.reason}`;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
 }
 
 function getModuleHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
@@ -417,6 +490,7 @@ function buildTaskState(
   const state = cloneStateData(dashboardHomeStates[stateKey]);
   const focusSummary = overview.overview.focus_summary;
   const runtimeSummary = getTaskModuleRuntimeSummary(taskModule, focusSummary?.task_id).focusRuntimeSummary;
+  state.navigationTarget = buildModuleNavigationTarget("tasks");
 
   if (!focusSummary) {
     const highlights = getModuleHighlights(taskModule);
@@ -440,6 +514,7 @@ function buildTaskState(
   state.tag = formatTaskTag(focusSummary.status);
   state.progressLabel = runtimeSummary.active_steering_count > 0 ? `待消费要求 ${runtimeSummary.active_steering_count} 条` : focusSummary.next_action;
   state.context = buildTaskContext(overview, taskModule);
+  state.navigationTarget = buildTaskNavigationTarget(focusSummary);
 
   if (focusSummary.status === "confirming_intent") {
     state.anomaly = {
@@ -519,6 +594,7 @@ function buildNotesState(
     },
   ];
   state.notes = noteItems.length > 0 ? noteItems : state.notes;
+  state.navigationTarget = buildModuleNavigationTarget("notes");
 
   return state;
 }
@@ -550,6 +626,7 @@ function buildMemoryState(stateKey: DashboardHomeEventStateKey, memoryModule: Ag
     text: item,
     type: index === 0 ? "active" : "hint",
   }));
+  state.navigationTarget = buildModuleNavigationTarget("memory");
 
   return state;
 }
@@ -559,6 +636,10 @@ function buildSafetyState(stateKey: DashboardHomeEventStateKey, overview: AgentD
   const trustSummary = overview.overview.trust_summary;
   const highlights = getModuleHighlights(safetyModule);
   const riskLabel = formatRiskLabel(trustSummary.risk_level);
+  state.navigationTarget = buildModuleNavigationTarget(
+    "safety",
+    trustSummary.pending_authorizations > 0 ? "处理待授权操作" : "查看安全详情",
+  );
 
   state.headline =
     trustSummary.pending_authorizations > 0
@@ -658,6 +739,62 @@ function getSummonPriority(module: DashboardHomeModuleKey, stateKey: DashboardHo
   return "normal";
 }
 
+function buildOverviewSummons(
+  overview: AgentDashboardOverviewGetResult,
+  stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
+  stateMap: Record<DashboardHomeEventStateKey, DashboardHomeStateData>,
+): Array<Omit<DashboardHomeSummonEvent, "id">> {
+  const quickActions = getOverviewQuickActions(overview);
+  const highValueSignals = getOverviewSignals(overview);
+  const focusSummary = overview.overview.focus_summary;
+  const trustSummary = overview.overview.trust_summary;
+  const safetyState = stateMap[stateKeys.safety];
+  const taskState = stateMap[stateKeys.tasks];
+  const templates: Array<Omit<DashboardHomeSummonEvent, "id">> = [];
+
+  // Keep the first summon anchored to formal overview fields so the home orb
+  // surfaces live task/security signals before softer recommendation copy.
+  if (trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green") {
+    templates.push({
+      duration: 6_200,
+      message: highValueSignals[0] ?? safetyState.headline,
+      nextStep: getSummonNextStep(quickActions, safetyState),
+      priority: "urgent",
+      reason: safetyState.subline,
+      stateKey: stateKeys.safety,
+    });
+  }
+
+  if (focusSummary) {
+    const overflowSignal = highValueSignals.find((signal) => signal !== templates[0]?.message);
+    templates.push({
+      duration: 6_000,
+      message: focusSummary.title,
+      nextStep: getSummonNextStep(quickActions, taskState),
+      priority: getSummonPriority("tasks", stateKeys.tasks),
+      reason: [focusSummary.current_step, focusSummary.next_action, overflowSignal].filter(Boolean).join(" · "),
+      stateKey: stateKeys.tasks,
+    });
+  }
+
+  if (templates.length === 0 && highValueSignals[0]) {
+    const targetState = trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green"
+      ? safetyState
+      : taskState;
+
+    templates.push({
+      duration: 5_800,
+      message: highValueSignals[0],
+      nextStep: getSummonNextStep(quickActions, targetState),
+      priority: targetState.module === "safety" ? "urgent" : getSummonPriority(targetState.module, targetState.key),
+      reason: targetState.subline,
+      stateKey: targetState.key,
+    });
+  }
+
+  return dedupeSummonTemplates(templates);
+}
+
 function buildRecommendationSummons(
   recommendations: RecommendationItem[],
   stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
@@ -678,7 +815,7 @@ function buildRecommendationSummons(
     } satisfies Omit<DashboardHomeSummonEvent, "id">;
   });
 
-  return templates;
+  return dedupeSummonTemplates(templates);
 }
 
 function buildVoiceSequences(
@@ -711,12 +848,14 @@ function buildFocusLine(
 ) {
   if (overview.overview.focus_summary) {
     const runtimeSummary = getTaskModuleRuntimeSummary(taskModule, overview.overview.focus_summary.task_id).focusRuntimeSummary;
+    const overviewSignals = getOverviewSignals(overview);
+
     return {
       headline: overview.overview.focus_summary.title,
       reason: [
         overview.overview.focus_summary.current_step,
         overview.overview.focus_summary.next_action,
-        runtimeSummary.latest_event_type ?? runtimeSummary.loop_stop_reason,
+        runtimeSummary.latest_event_type ?? runtimeSummary.loop_stop_reason ?? overviewSignals[0],
       ]
         .filter(Boolean)
         .join(" · "),
@@ -750,7 +889,9 @@ function buildDashboardHomeData(input: {
   stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory);
   stateMap[stateKeys.safety] = buildSafetyState(stateKeys.safety, input.overview, input.moduleResults.safety);
 
-  const summonTemplates = buildRecommendationSummons(input.recommendations.items, stateKeys, input.moduleResults);
+  const overviewSummons = buildOverviewSummons(input.overview, stateKeys, stateMap);
+  const recommendationSummons = buildRecommendationSummons(input.recommendations.items, stateKeys, input.moduleResults);
+  const summonTemplates = dedupeSummonTemplates([...overviewSummons, ...recommendationSummons]);
 
   return {
     focusLine: buildFocusLine(input.overview, input.moduleResults.tasks, summonTemplates),

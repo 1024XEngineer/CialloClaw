@@ -3,6 +3,7 @@ import { Archive, ArrowRight, BadgeAlert, BarChart3, BellOff, BrainCircuit, Cale
 import { AnimatePresence, motion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import type { DashboardHomeContextItem, DashboardHomeEventStateKey, DashboardHomeModuleKey, DashboardHomeSignalItem, DashboardHomeStateData, DashboardHomeStateGroup } from "../dashboardHome.types";
 
@@ -96,13 +97,26 @@ function modulePrimaryLabel(module: DashboardHomeModuleKey) {
   return labels[module];
 }
 
+function resolvePrimaryActionLabel(activeState: DashboardHomeStateData) {
+  return activeState.navigationTarget?.label ?? modulePrimaryLabel(activeState.module);
+}
+
 export function DashboardEventPanel({ activeState, onClose, onStateChange, stateGroups, stateMap }: DashboardEventPanelProps) {
   const navigate = useNavigate();
 
   function handleOpenModule(module: DashboardHomeModuleKey) {
     onClose();
     window.setTimeout(() => {
-      navigate(resolveDashboardModuleRoutePath(module));
+      const target = activeState?.navigationTarget;
+
+      // Home states can promote a task-detail deep link without changing the
+      // formal dashboard overview contract, so keep task routing local here.
+      if (target?.kind === "task_detail") {
+        navigateToDashboardTaskDetail(navigate, target.taskId);
+        return;
+      }
+
+      navigate(resolveDashboardModuleRoutePath(target?.module ?? module));
     }, 0);
   }
 
@@ -260,7 +274,7 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
 
             <div className="dashboard-orbit-panel__footer">
               <Button className="dashboard-orbit-panel__primary-button" onClick={() => handleOpenModule(activeState.module)} onPointerDown={(event) => event.stopPropagation()} type="button">
-                {modulePrimaryLabel(activeState.module)}
+                {resolvePrimaryActionLabel(activeState)}
                 <ArrowRight className="h-4 w-4" />
               </Button>
               <div className="dashboard-orbit-panel__footer-note">
