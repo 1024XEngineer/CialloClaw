@@ -1470,30 +1470,6 @@ body[data-app-window="shell-ball"],
   border-color: rgba(234, 242, 255, 0.76);
 }
 
-.shell-ball-mascot__selection-marker {
-  align-items: center;
-  background: rgba(195, 42, 42, 0.98);
-  border: 1px solid rgba(255, 226, 226, 0.84);
-  border-radius: 999px;
-  box-shadow: 0 16px 26px -20px rgba(144, 23, 23, 0.56);
-  color: #fff7f7;
-  display: inline-flex;
-  height: 2rem;
-  justify-content: center;
-  left: 50%;
-  position: absolute;
-  top: -1.5rem;
-  transform: translateX(-50%);
-  width: 2rem;
-  z-index: 5;
-}
-
-.shell-ball-mascot__selection-marker-glyph {
-  font-size: 1.2rem;
-  font-weight: 800;
-  line-height: 1;
-}
-
 .shell-ball-mascot__voice-arrow,
 .shell-ball-mascot__voice-icon {
   height: 1.18rem;

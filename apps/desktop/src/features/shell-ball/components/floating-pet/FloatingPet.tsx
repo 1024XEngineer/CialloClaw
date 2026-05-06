@@ -118,10 +118,25 @@ function renderAnimatedCenteredImage(
   );
 }
 
+function toPingPongKeyframes(values: readonly number[], times: readonly number[]) {
+  return {
+    times: [...times.map((time) => time / 2), ...times.slice(0, -1).reverse().map((time) => 1 - time / 2)],
+    values: [...values, ...values.slice(0, -1).reverse()],
+  };
+}
+
 function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active" | "exit") {
-  const activeRepeatType = "reverse" as const;
   const layout = effectName === "sparkle" ? floatingPetInitialLayout.sparkle : floatingPetInitialLayout.bubble.effects[effectName];
   const assetName = EFFECT_TO_ASSET[effectName];
+  const alertOpacity = toPingPongKeyframes([0, 1, 1, 1], EFFECT_LOOP_TIMES);
+  const alertScale = toPingPongKeyframes([1, 17 / 16.6, 19 / 16.6, 17 / 16.6], EFFECT_LOOP_TIMES);
+  const listenOpacity = toPingPongKeyframes([0, 1, 1, 1], LISTEN_EFFECT_TIMES);
+  const listenScale = toPingPongKeyframes([1, 1, 18 / 16.9, 1], LISTEN_EFFECT_TIMES);
+  const safeOpacity = toPingPongKeyframes([0, 1, 1, 1], EFFECT_LOOP_TIMES);
+  const safeScaleX = toPingPongKeyframes([1, 12.4 / 12.3, 14 / 12.3, 12.4 / 12.3], EFFECT_LOOP_TIMES);
+  const safeScaleY = toPingPongKeyframes([1, 12.4 / 12, 14 / 12, 12.4 / 12], EFFECT_LOOP_TIMES);
+  const thinkOpacity = toPingPongKeyframes([0, 1, 1, 1], EFFECT_LOOP_TIMES);
+  const thinkScale = toPingPongKeyframes([1, 21.7 / 21.6, 24 / 21.6, 21.7 / 21.6], EFFECT_LOOP_TIMES);
 
   if (effectName === "sparkle") {
     return {
@@ -144,14 +159,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
       animate:
         phase === "active"
-          ? { opacity: [0, 1, 1, 1], scale: [1, 1, 18 / 16.9, 1] }
+          ? { opacity: listenOpacity.values, scale: listenScale.values }
           : { opacity: [1, 0], scale: [1, 1] },
       assetName,
-      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S * 2 : FLOATING_PET_EFFECT_END_DURATION_S,
       layout,
       repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-      repeatType: phase === "active" ? activeRepeatType : undefined,
-      times: phase === "active" ? LISTEN_EFFECT_TIMES : [0, 1],
+      repeatType: undefined,
+      times: phase === "active" ? listenOpacity.times : [0, 1],
     };
   }
 
@@ -160,14 +175,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       initial: phase === "active" ? { opacity: 0, scaleX: 1, scaleY: 1 } : undefined,
       animate:
         phase === "active"
-          ? { opacity: [0, 1, 1, 1], scaleX: [1, 12.4 / 12.3, 14 / 12.3, 12.4 / 12.3], scaleY: [1, 12.4 / 12, 14 / 12, 12.4 / 12] }
+          ? { opacity: safeOpacity.values, scaleX: safeScaleX.values, scaleY: safeScaleY.values }
           : { opacity: [1, 0], scaleX: [1, 1], scaleY: [1, 1] },
       assetName,
-      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S * 2 : FLOATING_PET_EFFECT_END_DURATION_S,
       layout,
       repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-      repeatType: phase === "active" ? activeRepeatType : undefined,
-      times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
+      repeatType: undefined,
+      times: phase === "active" ? safeOpacity.times : [0, 1],
     };
   }
 
@@ -176,14 +191,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
       initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
       animate:
         phase === "active"
-          ? { opacity: [0, 1, 1, 1], scale: [1, 21.7 / 21.6, 24 / 21.6, 21.7 / 21.6] }
+          ? { opacity: thinkOpacity.values, scale: thinkScale.values }
           : { opacity: [1, 0], scale: [1, 1] },
       assetName,
-      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+      duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S * 2 : FLOATING_PET_EFFECT_END_DURATION_S,
       layout,
       repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-      repeatType: phase === "active" ? activeRepeatType : undefined,
-      times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
+      repeatType: undefined,
+      times: phase === "active" ? thinkOpacity.times : [0, 1],
     };
   }
 
@@ -191,14 +206,14 @@ function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active
     initial: phase === "active" ? { opacity: 0, scale: 1 } : undefined,
     animate:
       phase === "active"
-        ? { opacity: [0, 1, 1, 1], scale: [1, 17 / 16.6, 19 / 16.6, 17 / 16.6] }
+        ? { opacity: alertOpacity.values, scale: alertScale.values }
         : { opacity: [1, 0], scale: [17 / 16.6, 17 / 16.6] },
     assetName,
-    duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S : FLOATING_PET_EFFECT_END_DURATION_S,
+    duration: phase === "active" ? FLOATING_PET_LOOP_DURATION_S * 2 : FLOATING_PET_EFFECT_END_DURATION_S,
     layout,
     repeat: phase === "active" ? Number.POSITIVE_INFINITY : 0,
-    repeatType: phase === "active" ? activeRepeatType : undefined,
-    times: phase === "active" ? EFFECT_LOOP_TIMES : [0, 1],
+    repeatType: undefined,
+    times: phase === "active" ? alertOpacity.times : [0, 1],
   };
 }
 

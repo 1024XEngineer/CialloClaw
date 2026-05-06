@@ -14,6 +14,7 @@ type ShellBallSurfaceProps = {
   edgeDockSide?: "left" | "right" | null;
   fileDropActive?: boolean;
   floatingBallSize?: ShellBallFloatingSize;
+  hasAlertOpportunity?: boolean;
   hasPendingAgentLoading?: boolean;
   hasPendingApproval?: boolean;
   mascotRef?: RefObject<HTMLDivElement>;
@@ -93,6 +94,7 @@ export function ShellBallSurface({
   edgeDockSide = null,
   fileDropActive = false,
   floatingBallSize = "medium",
+  hasAlertOpportunity = false,
   hasPendingAgentLoading = false,
   hasPendingApproval = false,
   mascotRef,
@@ -189,6 +191,7 @@ export function ShellBallSurface({
                     <ShellBallMascot
                       edgeDockRevealed={edgeDockRevealed}
                       edgeDockSide={edgeDockSide}
+                      hasAlertOpportunity={hasAlertOpportunity}
                       hasPendingAgentLoading={hasPendingAgentLoading}
                       hasPendingApproval={hasPendingApproval}
                       visualState={visualState}

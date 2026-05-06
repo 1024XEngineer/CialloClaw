@@ -10,6 +10,7 @@ import { FloatingPet } from "./floating-pet/FloatingPet";
 type ShellBallMascotProps = {
   edgeDockRevealed?: boolean;
   edgeDockSide?: "left" | "right" | null;
+  hasAlertOpportunity?: boolean;
   hasPendingAgentLoading?: boolean;
   hasPendingApproval?: boolean;
   visualState: ShellBallVisualState;
@@ -57,6 +58,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
   visualState: ShellBallVisualState;
   gesture: ShellBallMascotHotspotGesture;
   suppressed: boolean;
+  alertOpportunityAvailable?: boolean;
   selectionIndicatorVisible?: boolean;
 }): ShellBallMascotHotspotGestureAction {
   if (input.suppressed) {
@@ -64,7 +66,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
   }
 
   if (input.gesture === "single_click") {
-    return input.selectionIndicatorVisible ? "primary_click" : "noop";
+    return input.selectionIndicatorVisible || input.alertOpportunityAvailable ? "primary_click" : "noop";
   }
 
   if (canTriggerShellBallMascotSecondaryGestures(input.visualState)) {
@@ -111,9 +113,11 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
 }
 
 export function getShellBallMascotPetState(input: {
+  hasAlertOpportunity?: boolean;
   hasPendingAgentLoading?: boolean;
   hasPendingApproval?: boolean;
   happyActive: boolean;
+  selectionIndicatorVisible?: boolean;
   visualState: ShellBallVisualState;
 }): ShellBallMascotPetState {
   if (input.hasPendingAgentLoading || input.visualState === "processing") {
@@ -151,6 +155,13 @@ export function getShellBallMascotPetState(input: {
     };
   }
 
+  if (input.selectionIndicatorVisible || input.hasAlertOpportunity) {
+    return {
+      listenLocked: false,
+      mode: "alert",
+    };
+  }
+
   if (input.happyActive) {
     return {
       listenLocked: false,
@@ -167,6 +178,7 @@ export function getShellBallMascotPetState(input: {
 export function ShellBallMascot({
   edgeDockRevealed = false,
   edgeDockSide = null,
+  hasAlertOpportunity = false,
   hasPendingAgentLoading = false,
   hasPendingApproval = false,
   visualState,
@@ -206,12 +218,13 @@ export function ShellBallMascot({
   const showVoiceHoldRing = voiceHoldProgress > 0 && visualState !== "voice_listening" && visualState !== "voice_locked";
   const shouldRenderVoiceHints = showVoiceHints && (visualState === "voice_listening" || visualState === "voice_locked");
   const showVoiceMarker = visualState === "voice_listening" || visualState === "voice_locked";
-  const showSelectionMarker = selectionIndicatorVisible && !showVoiceMarker;
   const shouldRouteHotspotDrag = visualState !== "voice_listening" && visualState !== "voice_locked";
   const petState = getShellBallMascotPetState({
+    hasAlertOpportunity,
     hasPendingAgentLoading,
     hasPendingApproval,
     happyActive,
+    selectionIndicatorVisible,
     visualState,
   });
 
@@ -380,6 +393,7 @@ export function ShellBallMascot({
 
   function handleClick(_event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
+      alertOpportunityAvailable: hasAlertOpportunity,
       visualState,
       gesture: "single_click",
       suppressed: suppressGestureRef.current,
@@ -455,12 +469,6 @@ export function ShellBallMascot({
           <div className="shell-ball-mascot__pet-shell">
             <FloatingPet className="shell-ball-mascot__pet" listenLocked={petState.listenLocked} mode={petState.mode} />
           </div>
-
-          {showSelectionMarker ? (
-            <div className="shell-ball-mascot__selection-marker" aria-hidden="true">
-              <span className="shell-ball-mascot__selection-marker-glyph">!</span>
-            </div>
-          ) : null}
 
           {showVoiceMarker ? (
             <div className={cn("shell-ball-mascot__voice-marker", visualState === "voice_locked" && "is-locked")} aria-hidden="true">

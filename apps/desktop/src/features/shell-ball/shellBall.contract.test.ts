@@ -3179,7 +3179,7 @@ test("shell-ball mascot surfaces a microphone marker while voice capture is acti
   assert.doesNotMatch(idleMarkup, /shell-ball-mascot__voice-marker/);
 });
 
-test("shell-ball mascot shows a selection marker above the ball when text selection is available", () => {
+test("shell-ball mascot no longer renders the legacy selection marker when text selection is available", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallMascot, {
       visualState: "idle",
@@ -3188,8 +3188,8 @@ test("shell-ball mascot shows a selection marker above the ball when text select
     }),
   );
 
-  assert.match(markup, /shell-ball-mascot__selection-marker/);
-  assert.match(markup, /shell-ball-mascot__selection-marker-glyph/);
+  assert.doesNotMatch(markup, /shell-ball-mascot__selection-marker/);
+  assert.doesNotMatch(markup, /shell-ball-mascot__selection-marker-glyph/);
 });
 
 test("floating pet renders the open-eye and closed-beak layers by default", () => {

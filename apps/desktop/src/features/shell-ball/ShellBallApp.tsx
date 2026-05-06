@@ -66,7 +66,7 @@ type ShellBallWindowAnchor = {
 type ShellBallFloatingSize = "small" | "medium" | "large";
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
-const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
+const SHELL_BALL_SELECTION_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
 
 export function normalizeShellBallFloatingSize(size: string | null | undefined): ShellBallFloatingSize {
@@ -140,6 +140,32 @@ export function shouldShowShellBallSelectionIndicator(input: {
   visualState: ShellBallVisualState;
 }) {
   return input.selection !== null && (input.visualState === "idle" || input.visualState === "hover_input");
+}
+
+function resolveShellBallSelectionUpdatedAtMs(updatedAt: string) {
+  const numericTimestamp = Number(updatedAt);
+  if (Number.isFinite(numericTimestamp)) {
+    return numericTimestamp;
+  }
+
+  const parsedTimestamp = Date.parse(updatedAt);
+  return Number.isNaN(parsedTimestamp) ? null : parsedTimestamp;
+}
+
+function isShellBallSelectionPromptActive(
+  selection: ShellBallSelectionSnapshot | null,
+  now = Date.now(),
+) {
+  if (selection === null) {
+    return false;
+  }
+
+  const updatedAtMs = resolveShellBallSelectionUpdatedAtMs(selection.updated_at);
+  if (updatedAtMs === null) {
+    return false;
+  }
+
+  return now - updatedAtMs < SHELL_BALL_SELECTION_PROMPT_WINDOW_MS;
 }
 
 /**
@@ -297,6 +323,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
+  const selectionPromptExpiryTimeoutRef = useRef<number | null>(null);
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
   const dragDropHandlersRef = useRef<{
@@ -345,8 +372,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
   const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
+  const selectionIndicatorVisible = shouldShowShellBallSelectionIndicator({
+    selection: selectionPrompt,
+    visualState,
+  });
   const hasPendingAgentLoading = visibleBubbleItems.some((item) => item.role === "agent" && item.desktop.presentationHint === "loading");
   const hasPendingApproval = snapshot.bubbleItems.some((item) => item.desktop.inlineApproval?.status === "idle");
+  const hasAlertOpportunity = isShellBallSelectionPromptActive(selectionPrompt) || isShellBallClipboardPromptActive(clipboardPrompt);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -827,6 +859,40 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, [visualState]);
 
   useEffect(() => {
+    if (selectionPrompt === null) {
+      if (selectionPromptExpiryTimeoutRef.current !== null) {
+        window.clearTimeout(selectionPromptExpiryTimeoutRef.current);
+        selectionPromptExpiryTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    const updatedAtMs = resolveShellBallSelectionUpdatedAtMs(selectionPrompt.updated_at);
+    if (updatedAtMs === null) {
+      setSelectionPrompt(null);
+      return;
+    }
+
+    const remainingMs = updatedAtMs + SHELL_BALL_SELECTION_PROMPT_WINDOW_MS - Date.now();
+    if (remainingMs <= 0) {
+      setSelectionPrompt(null);
+      return;
+    }
+
+    selectionPromptExpiryTimeoutRef.current = window.setTimeout(() => {
+      selectionPromptExpiryTimeoutRef.current = null;
+      setSelectionPrompt(null);
+    }, remainingMs);
+
+    return () => {
+      if (selectionPromptExpiryTimeoutRef.current !== null) {
+        window.clearTimeout(selectionPromptExpiryTimeoutRef.current);
+        selectionPromptExpiryTimeoutRef.current = null;
+      }
+    };
+  }, [selectionPrompt]);
+
+  useEffect(() => {
     if (clipboardPrompt === null) {
       if (clipboardPromptClearTimeoutRef.current !== null) {
         window.clearTimeout(clipboardPromptClearTimeoutRef.current);
@@ -878,12 +944,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
         if (selectionPromptClearTimeoutRef.current !== null) {
           window.clearTimeout(selectionPromptClearTimeoutRef.current);
+          selectionPromptClearTimeoutRef.current = null;
         }
 
-        selectionPromptClearTimeoutRef.current = window.setTimeout(() => {
-          selectionPromptClearTimeoutRef.current = null;
-          setSelectionPrompt(null);
-        }, SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS);
+        // Keep the last actionable selection alive until its 10-second alert
+        // window expires, even if the platform snapshot stream briefly clears.
       })
       .then((unlisten) => {
         if (disposed) {
@@ -942,14 +1007,24 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, []);
 
   const handleMascotPrimaryAction = useCallback(() => {
-    if (selectionPrompt !== null) {
+    if (isShellBallSelectionPromptActive(selectionPrompt)) {
       if (selectionPromptClearTimeoutRef.current !== null) {
         window.clearTimeout(selectionPromptClearTimeoutRef.current);
         selectionPromptClearTimeoutRef.current = null;
       }
 
+      const activeSelectionPrompt = selectionPrompt;
+      if (activeSelectionPrompt === null) {
+        return;
+      }
+
       setSelectionPrompt(null);
-      void handleCoordinatorSelectedTextPrompt(selectionPrompt);
+      void handleCoordinatorSelectedTextPrompt(activeSelectionPrompt);
+      return;
+    }
+
+    if (selectionPrompt !== null) {
+      setSelectionPrompt(null);
       return;
     }
 
@@ -987,6 +1062,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       floatingBallSize={floatingBallSize}
       hasPendingAgentLoading={hasPendingAgentLoading}
       hasPendingApproval={hasPendingApproval}
+      hasAlertOpportunity={hasAlertOpportunity}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
@@ -1061,10 +1137,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         visualState,
       })}
       visualState={visualState}
-      selectionIndicatorVisible={shouldShowShellBallSelectionIndicator({
-        selection: selectionPrompt,
-        visualState,
-      })}
+      selectionIndicatorVisible={selectionIndicatorVisible}
       voicePreview={voicePreview}
       voiceHoldProgress={voiceHoldProgress}
       motionConfig={motionConfig}
