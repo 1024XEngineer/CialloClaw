@@ -29,6 +29,17 @@ func attachedBrowserInputWithoutTarget() map[string]any {
 	}
 }
 
+func attachedBrowserInputWithoutBrowserKind() map[string]any {
+	return map[string]any{
+		"attach": map[string]any{
+			"mode": "cdp",
+			"target": map[string]any{
+				"url": "https://example.com/docs",
+			},
+		},
+	}
+}
+
 func attachedBrowserInputWithEndpoint(endpointURL string) map[string]any {
 	input := attachedBrowserInputWithoutTarget()
 	input["attach"].(map[string]any)["endpoint_url"] = endpointURL
@@ -471,6 +482,9 @@ func TestBrowserAttachToolsExecuteSuccess(t *testing.T) {
 func TestBrowserAttachToolsValidateAttachContract(t *testing.T) {
 	if err := NewBrowserAttachCurrentTool().Validate(map[string]any{}); err == nil {
 		t.Fatal("expected browser_attach_current validate to fail without attach")
+	}
+	if err := NewBrowserAttachCurrentTool().Validate(attachedBrowserInputWithoutBrowserKind()); err != nil {
+		t.Fatalf("expected browser_attach_current validate to allow omitted browser_kind, got %v", err)
 	}
 	if err := NewBrowserSnapshotTool().Validate(attachedBrowserInputWithoutTarget()); err != nil {
 		t.Fatalf("expected browser_snapshot validate to allow attach without target filters, got %v", err)
