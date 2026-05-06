@@ -3172,6 +3172,15 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
+	if governanceTargetObject("browser_snapshot", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs" {
+		t.Fatalf("expected browser snapshot governance target url")
+	}
+	if governanceTargetObject("browser_tab_focus", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 2}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "browser_tab:2" {
+		t.Fatalf("expected browser tab focus governance target to use page index")
+	}
+	if governanceTargetObject("browser_navigate", map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs/start" {
+		t.Fatalf("expected browser navigate governance target to prefer top-level url")
+	}
 	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
 		t.Fatalf("expected file-based governance target path")
 	}
@@ -3183,6 +3192,15 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	}
 	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
 		t.Fatalf("expected webpage intent to preserve approved url target")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}}, "/workspace") != "https://example.com/docs" {
+		t.Fatalf("expected browser attach approval target to use attached url")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 3.0}}}}, "/workspace") != "browser_tab:3" {
+		t.Fatalf("expected browser tab focus approval target to use tab index")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}}, "/workspace") != "https://example.com/docs/start" {
+		t.Fatalf("expected browser navigate approval target to prefer destination url")
 	}
 	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
 		t.Fatalf("expected media intent approval target to follow output_path")

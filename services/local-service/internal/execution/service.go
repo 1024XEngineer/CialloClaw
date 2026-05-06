@@ -3361,6 +3361,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
+	case "browser_navigate":
+		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserTargetObject(mapValue(toolInput, "attach")))
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return browserTargetObject(mapValue(toolInput, "attach"))
 	default:
 		for _, key := range governedTargetKeys(toolName) {
 			if value := stringValue(toolInput, key, ""); value != "" {
@@ -3374,6 +3378,9 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 func approvedTargetObject(intent map[string]any, workspacePath string) string {
 	intentName := stringValue(intent, "name", "")
 	arguments := mapValue(intent, "arguments")
+	if browserTarget := browserIntentTargetObject(intentName, arguments); browserTarget != "" {
+		return browserTarget
+	}
 	for _, key := range approvedTargetKeys(intentName) {
 		if value := strings.TrimSpace(stringValue(arguments, key, "")); value != "" {
 			normalized := strings.ReplaceAll(value, "\\", "/")
@@ -3418,6 +3425,46 @@ func approvedTargetKeys(intentName string) []string {
 	default:
 		return []string{"target_path", "path", "working_dir"}
 	}
+}
+
+func browserIntentTargetObject(intentName string, arguments map[string]any) string {
+	if strings.TrimSpace(intentName) == "browser_navigate" {
+		if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
+			return value
+		}
+	}
+	return browserTargetObject(mapValue(arguments, "attach"))
+}
+
+func browserTargetObject(attach map[string]any) string {
+	if len(attach) == 0 {
+		return ""
+	}
+	target := mapValue(attach, "target")
+	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
+		return value
+	}
+	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	return strings.TrimSpace(stringValue(attach, "browser_kind", ""))
+}
+
+func browserAttachPageIndex(rawValue any) (int, bool) {
+	switch typed := rawValue.(type) {
+	case int:
+		if typed >= 0 {
+			return typed, true
+		}
+	case float64:
+		if typed >= 0 && typed == float64(int(typed)) {
+			return int(typed), true
+		}
+	}
+	return 0, false
 }
 
 func requireAuthorizationFlag(intent map[string]any) bool {
