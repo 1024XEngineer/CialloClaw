@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 import ts from "typescript";
 import type {
+  AgentDeliveryOpenParams,
   AgentDeliveryOpenResult,
   AgentNotepadConvertToTaskParams,
   AgentNotepadConvertToTaskResult,
@@ -12,7 +13,9 @@ import type {
   AgentSettingsGetParams,
   AgentNotepadUpdateParams,
   AgentNotepadUpdateResult,
+  AgentTaskArtifactListParams,
   AgentTaskArtifactListResult,
+  AgentTaskArtifactOpenParams,
   AgentTaskArtifactOpenResult,
   AgentTaskControlParams,
   AgentTaskControlResult,
@@ -167,11 +170,11 @@ function loadConversationSessionServiceModule() {
 function loadTaskPageQueryModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.query.js")) as {
-      buildDashboardTaskArtifactQueryKey: (dataMode: "rpc" | "mock", taskId: string) => unknown;
-      buildDashboardTaskBucketQueryKey: (dataMode: "rpc" | "mock", group: "unfinished" | "finished", limit: number) => unknown;
-      buildDashboardTaskDetailQueryKey: (dataMode: "rpc" | "mock", taskId: string) => unknown;
-      getDashboardTaskSecurityRefreshPlan: (dataMode: "rpc" | "mock") => unknown;
-      resolveDashboardTaskSafetyOpenPlan: (detailSource: "rpc" | "mock" | "fallback") => unknown;
+      buildDashboardTaskArtifactQueryKey: (dataMode: "rpc", taskId: string) => unknown;
+      buildDashboardTaskBucketQueryKey: (dataMode: "rpc", group: "unfinished" | "finished", limit: number) => unknown;
+      buildDashboardTaskDetailQueryKey: (dataMode: "rpc", taskId: string) => unknown;
+      getDashboardTaskSecurityRefreshPlan: (dataMode: "rpc") => unknown;
+      resolveDashboardTaskSafetyOpenPlan: (detailState: "loading" | "error" | "ready") => unknown;
       shouldEnableDashboardTaskDetailQuery: (selectedTaskId: string | null, detailOpen: boolean) => boolean;
       dashboardTaskArtifactQueryPrefix: unknown;
       dashboardTaskBucketQueryPrefix: unknown;
@@ -183,9 +186,9 @@ function loadTaskPageQueryModule() {
 function loadNotePageQueryModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/notes/notePage.query.js")) as {
-      buildDashboardNoteBucketInvalidateKeys: (dataMode: "rpc" | "mock", groups: ReadonlyArray<"upcoming" | "later" | "recurring_rule" | "closed">) => unknown;
-      buildDashboardNoteBucketQueryKey: (dataMode: "rpc" | "mock", group: "upcoming" | "later" | "recurring_rule" | "closed") => unknown;
-      getDashboardNoteRefreshPlan: (dataMode: "rpc" | "mock") => unknown;
+      buildDashboardNoteBucketInvalidateKeys: (dataMode: "rpc", groups: ReadonlyArray<"upcoming" | "later" | "recurring_rule" | "closed">) => unknown;
+      buildDashboardNoteBucketQueryKey: (dataMode: "rpc", group: "upcoming" | "later" | "recurring_rule" | "closed") => unknown;
+      getDashboardNoteRefreshPlan: (dataMode: "rpc") => unknown;
       dashboardNoteBucketGroups: unknown;
       dashboardNoteBucketQueryPrefix: unknown;
     },
@@ -207,6 +210,25 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildSourceNoteFallbackItems: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }) => Array<{
+        experience: {
+          canConvertToTask: boolean;
+          detailStatus: string;
+          previewStatus: string;
+          repeatRule: string | null;
+        };
+        item: {
+          bucket: string;
+          status: string;
+        };
+      }>;
       isAllowedNoteOpenUrl: (url: string) => boolean;
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
@@ -253,9 +275,9 @@ function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktop
     return requireFn(modulePath) as {
       describeTaskOpenResultForCurrentTask: (plan: { mode: string; taskId: string | null }, currentTaskId: string | null) => string | null;
       isAllowedTaskOpenUrl: (url: string) => boolean;
-      loadTaskArtifactPage: (taskId: string, source: "rpc" | "mock") => Promise<AgentTaskArtifactListResult>;
-      openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc" | "mock") => Promise<AgentTaskArtifactOpenResult>;
-      openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc" | "mock") => Promise<AgentDeliveryOpenResult>;
+      loadTaskArtifactPage: (taskId: string, source: "rpc") => Promise<AgentTaskArtifactListResult>;
+      openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc") => Promise<AgentTaskArtifactOpenResult>;
+      openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc") => Promise<AgentDeliveryOpenResult>;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
         mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
@@ -288,6 +310,7 @@ function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktop
 function loadTaskPageMapperModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.mapper.js")) as {
+      canTaskAcceptSteering: (task: Task) => boolean;
       getTaskPrimaryActions: (task: Task, detail: AgentTaskDetailGetResult) => Array<{ action: string; label: string; tooltip: string }>;
     },
   );
@@ -301,6 +324,11 @@ function loadSettingsServiceModule(desktopHost?: DashboardContractDesktopHostOve
     delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
+      loadDesktopRuntimeDefaultsSnapshot: () => Promise<{
+        data_path: string;
+        workspace_path: string;
+        task_sources: string[];
+      } | null>;
       loadHydratedSettings: () => Promise<{
         settings: {
           general: {
@@ -388,14 +416,264 @@ function loadNoteSourceServiceModule(
   );
 }
 
-function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
+function loadControlPanelServiceModule(
+  rpcMethods?: DashboardContractRpcMethodOverrides,
+  desktopHost?: DashboardContractDesktopHostOverrides,
+) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/controlPanelService.ts");
+    const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[settingsModulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
+      buildControlPanelRestoreDefaultsData: (data: {
+        source: "rpc";
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        providerApiKeyInput: string;
+        securitySummary: {
+          security_status: string;
+          pending_authorizations: number;
+          latest_restore_point: null;
+          token_cost_summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          };
+        };
+        warnings?: string[];
+      }, persisted: {
+        source: "rpc";
+        providerApiKeyInput: string;
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        securitySummary: {
+          security_status: string;
+          pending_authorizations: number;
+          latest_restore_point: null;
+          token_cost_summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          };
+        };
+        warnings?: string[];
+      }) => {
+        source: "rpc";
+        providerApiKeyInput: string;
+        settings: {
+          general: {
+            language: string;
+            auto_launch: boolean;
+            theme_mode: string;
+            voice_notification_enabled: boolean;
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          task_automation: {
+            task_sources: string[];
+            inspect_on_file_change: boolean;
+            inspect_on_startup: boolean;
+            remind_before_deadline: boolean;
+            remind_when_stale: boolean;
+            inspection_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+            stronghold: {
+              backend: string;
+              available: boolean;
+              fallback: boolean;
+              initialized: boolean;
+              formal_store: boolean;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        warnings?: string[];
+      };
       loadControlPanelData: () => Promise<{
         source: "rpc";
+        runtimeWorkspacePath: string | null;
         settings: {
           general: {
             voice_type: string;
@@ -513,13 +791,17 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
         tool_calling_ready: boolean;
       }>;
     };
-  }, rpcMethods);
+  }, rpcMethods, undefined, desktopHost);
 }
 
-function loadControlPanelAboutServiceModule() {
+function loadControlPanelAboutServiceModule(desktopHost?: DashboardContractDesktopHostOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, "src/services/controlPanelAboutService.ts");
+    const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+    const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
     delete requireFn.cache[modulePath];
+    delete requireFn.cache[settingsModulePath];
+    delete requireFn.cache[runtimeDefaultsModulePath];
 
     return requireFn(modulePath) as {
       getControlPanelAboutFeedbackChannels: () => Array<
@@ -544,11 +826,17 @@ function loadControlPanelAboutServiceModule() {
       getControlPanelAboutFallbackSnapshot: () => {
         appName: string;
         appVersion: string;
+        localDataPath: string | null;
       };
+      loadControlPanelAboutSnapshot: () => Promise<{
+        appName: string;
+        appVersion: string;
+        localDataPath: string | null;
+      }>;
       copyControlPanelAboutValue: (value: string, successMessage: string) => Promise<string>;
-      runControlPanelAboutAction: (action: "share") => Promise<string>;
+      runControlPanelAboutAction: (action: "open_data_directory" | "share") => Promise<string>;
     };
-  });
+  }, undefined, undefined, desktopHost);
 }
 
 function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
@@ -560,13 +848,24 @@ function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMe
     delete requireFn.cache[snapshotModulePath];
 
     return requireFn(modulePath) as {
-      updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc" | "mock") => Promise<{
+      formatDashboardSettingsMutationFeedback: (result: {
         applyMode: string;
         needRestart: boolean;
         persisted: boolean;
+        readbackWarning: string | null;
+      }, subject: string) => string;
+      updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc") => Promise<{
+        applyMode: string;
+        needRestart: boolean;
+        persisted: boolean;
+        readbackWarning: string | null;
         source: string;
         updatedKeys: string[];
         snapshot: {
+          rpcContext: {
+            serverTime: string | null;
+            warnings: string[];
+          };
           source: string;
           settings: {
             models: {
@@ -598,7 +897,7 @@ function loadDashboardSettingsSnapshotModule(rpcMethods?: Pick<DashboardContract
 
     return requireFn(modulePath) as {
       loadDashboardSettingsSnapshot: (
-        source?: "rpc" | "mock",
+        source?: "rpc",
         scope?: AgentSettingsGetParams["scope"],
       ) => Promise<{
         source: string;
@@ -658,7 +957,7 @@ function loadMirrorServiceModule() {
               };
             };
           };
-          source: "rpc" | "mock";
+          source: "rpc";
           conversations: Array<{ id: string }>;
         },
         settingsSnapshot: {
@@ -701,7 +1000,7 @@ function loadMirrorServiceModule() {
             };
           };
         };
-        source: "rpc" | "mock";
+          source: "rpc";
         conversations: Array<{ id: string }>;
       };
     };
@@ -743,16 +1042,29 @@ function findRenderedElement(
 }
 
 type DashboardContractRpcMethodOverrides = {
+  applySecurityRestoreDetailed?: (params: unknown) => Promise<unknown>;
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
+  getDashboardModule?: (params: unknown) => Promise<unknown>;
+  getDashboardOverview?: (params: unknown) => Promise<unknown>;
+  getRecommendations?: (params: unknown) => Promise<unknown>;
+  getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
+  getSecuritySummaryDetailed?: (params: unknown) => Promise<unknown>;
   getSettings?: (params: unknown) => Promise<unknown>;
   updateSettings?: (params: unknown) => Promise<unknown>;
   getSettingsDetailed?: (params: unknown) => Promise<unknown>;
   getTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
+  listSecurityAuditDetailed?: (params: unknown) => Promise<unknown>;
+  listSecurityPendingDetailed?: (params: unknown) => Promise<unknown>;
+  listSecurityRestorePointsDetailed?: (params: unknown) => Promise<unknown>;
+  listTaskArtifacts?: (params: AgentTaskArtifactListParams) => Promise<AgentTaskArtifactListResult>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
+  openDelivery?: (params: AgentDeliveryOpenParams) => Promise<AgentDeliveryOpenResult>;
+  openTaskArtifact?: (params: AgentTaskArtifactOpenParams) => Promise<AgentTaskArtifactOpenResult>;
+  respondSecurityDetailed?: (params: unknown) => Promise<unknown>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
   validateSettingsModel?: (params: unknown) => Promise<unknown>;
   updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
@@ -872,28 +1184,64 @@ function withDesktopAliasRuntime<T>(
         getSecuritySummary:
           rpcMethods?.getSecuritySummary ??
           (() => Promise.reject(new Error("getSecuritySummary should not run in dashboard contract tests"))),
+        getDashboardModule:
+          rpcMethods?.getDashboardModule ??
+          (() => Promise.reject(new Error("getDashboardModule should not run in dashboard contract tests"))),
+        getDashboardOverview:
+          rpcMethods?.getDashboardOverview ??
+          (() => Promise.reject(new Error("getDashboardOverview should not run in dashboard contract tests"))),
+        getRecommendations:
+          rpcMethods?.getRecommendations ??
+          (() => Promise.reject(new Error("getRecommendations should not run in dashboard contract tests"))),
+        getMirrorOverviewDetailed:
+          rpcMethods?.getMirrorOverviewDetailed ??
+          (() => Promise.reject(new Error("getMirrorOverviewDetailed should not run in dashboard contract tests"))),
+        getSecuritySummaryDetailed:
+          rpcMethods?.getSecuritySummaryDetailed ??
+          (() => Promise.reject(new Error("getSecuritySummaryDetailed should not run in dashboard contract tests"))),
         getSettings:
           rpcMethods?.getSettings ??
           (() => Promise.reject(new Error("getSettings should not run in dashboard contract tests"))),
+        listSecurityPendingDetailed:
+          rpcMethods?.listSecurityPendingDetailed ??
+          (() => Promise.reject(new Error("listSecurityPendingDetailed should not run in dashboard contract tests"))),
         listNotepad:
           rpcMethods?.listNotepad ??
           (() => {
             throw new Error("listNotepad should not run in dashboard contract tests");
           }),
-        listTaskArtifacts() {
-          throw new Error("listTaskArtifacts should not run in dashboard contract tests");
-        },
+        listSecurityAuditDetailed:
+          rpcMethods?.listSecurityAuditDetailed ??
+          (() => Promise.reject(new Error("listSecurityAuditDetailed should not run in dashboard contract tests"))),
+        listSecurityRestorePointsDetailed:
+          rpcMethods?.listSecurityRestorePointsDetailed ??
+          (() => Promise.reject(new Error("listSecurityRestorePointsDetailed should not run in dashboard contract tests"))),
+        listTaskArtifacts:
+          rpcMethods?.listTaskArtifacts ??
+          (() => {
+            throw new Error("listTaskArtifacts should not run in dashboard contract tests");
+          }),
         listTasks:
           rpcMethods?.listTasks ??
           (() => {
             throw new Error("listTasks should not run in dashboard contract tests");
           }),
-        openDelivery() {
-          throw new Error("openDelivery should not run in dashboard contract tests");
-        },
-        openTaskArtifact() {
-          throw new Error("openTaskArtifact should not run in dashboard contract tests");
-        },
+        openDelivery:
+          rpcMethods?.openDelivery ??
+          (() => {
+            throw new Error("openDelivery should not run in dashboard contract tests");
+          }),
+        openTaskArtifact:
+          rpcMethods?.openTaskArtifact ??
+          (() => {
+            throw new Error("openTaskArtifact should not run in dashboard contract tests");
+          }),
+        respondSecurityDetailed:
+          rpcMethods?.respondSecurityDetailed ??
+          (() => Promise.reject(new Error("respondSecurityDetailed should not run in dashboard contract tests"))),
+        applySecurityRestoreDetailed:
+          rpcMethods?.applySecurityRestoreDetailed ??
+          (() => Promise.reject(new Error("applySecurityRestoreDetailed should not run in dashboard contract tests"))),
         updateNotepad:
           rpcMethods?.updateNotepad ??
           (() => {
@@ -1334,20 +1682,13 @@ test("task page query helpers expose stable prefixes and keys", () => {
   assert.deepEqual(dashboardTaskDetailQueryPrefix, ["dashboard", "tasks", "detail"]);
   assert.deepEqual(buildDashboardTaskArtifactQueryKey("rpc", "task_dashboard_001"), ["dashboard", "tasks", "artifacts", "rpc", "task_dashboard_001"]);
   assert.deepEqual(buildDashboardTaskBucketQueryKey("rpc", "unfinished", 12), ["dashboard", "tasks", "bucket", "rpc", "unfinished", 12]);
-  assert.deepEqual(buildDashboardTaskDetailQueryKey("mock", "task_dashboard_001"), ["dashboard", "tasks", "detail", "mock", "task_dashboard_001"]);
+  assert.deepEqual(buildDashboardTaskDetailQueryKey("rpc", "task_dashboard_001"), ["dashboard", "tasks", "detail", "rpc", "task_dashboard_001"]);
   assert.deepEqual(getDashboardTaskSecurityRefreshPlan("rpc"), {
     invalidatePrefixes: [
       ["dashboard", "tasks", "bucket"],
       ["dashboard", "tasks", "detail"],
     ],
     refetchOnMount: true,
-  });
-  assert.deepEqual(getDashboardTaskSecurityRefreshPlan("mock"), {
-    invalidatePrefixes: [
-      ["dashboard", "tasks", "bucket"],
-      ["dashboard", "tasks", "detail"],
-    ],
-    refetchOnMount: false,
   });
 });
 
@@ -1363,17 +1704,13 @@ test("note page query helpers expose stable prefixes, bucket order, and refresh-
   assert.deepEqual(dashboardNoteBucketQueryPrefix, ["dashboard", "notes", "bucket"]);
   assert.deepEqual(dashboardNoteBucketGroups, ["upcoming", "later", "recurring_rule", "closed"]);
   assert.deepEqual(buildDashboardNoteBucketQueryKey("rpc", "upcoming"), ["dashboard", "notes", "bucket", "rpc", "upcoming"]);
-  assert.deepEqual(buildDashboardNoteBucketInvalidateKeys("mock", ["upcoming", "closed", "upcoming"]), [
-    ["dashboard", "notes", "bucket", "mock", "upcoming"],
-    ["dashboard", "notes", "bucket", "mock", "closed"],
+  assert.deepEqual(buildDashboardNoteBucketInvalidateKeys("rpc", ["upcoming", "closed", "upcoming"]), [
+    ["dashboard", "notes", "bucket", "rpc", "upcoming"],
+    ["dashboard", "notes", "bucket", "rpc", "closed"],
   ]);
   assert.deepEqual(getDashboardNoteRefreshPlan("rpc"), {
     invalidatePrefixes: [["dashboard", "notes", "bucket"]],
     refetchOnMount: true,
-  });
-  assert.deepEqual(getDashboardNoteRefreshPlan("mock"), {
-    invalidatePrefixes: [["dashboard", "notes", "bucket"]],
-    refetchOnMount: false,
   });
 });
 
@@ -1387,6 +1724,71 @@ test("task page no longer exposes edit guidance and uses 安全总览 without an
   assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
+test("task page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+
+  assert.match(taskPageSource, /const dataMode: TaskPageDataMode = "rpc";/);
+  assert.doesNotMatch(taskPageSource, /DashboardMockToggle/);
+  assert.doesNotMatch(taskPageSource, /loadDashboardDataMode\("tasks"\)/);
+  assert.doesNotMatch(taskPageSource, /saveDashboardDataMode\("tasks"\)/);
+  assert.doesNotMatch(taskPageSource, /setDataMode\(/);
+});
+
+test("note page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const dataMode: NotePageDataMode = "rpc";/);
+  assert.doesNotMatch(notePageSource, /DashboardMockToggle/);
+  assert.doesNotMatch(notePageSource, /loadDashboardDataMode\("notes"\)/);
+  assert.doesNotMatch(notePageSource, /saveDashboardDataMode\("notes"\)/);
+  assert.doesNotMatch(notePageSource, /setDataMode\(/);
+});
+
+test("dashboard root no longer falls back to mock home data when the live query is unavailable", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+  const dashboardHomeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.doesNotMatch(dashboardRootSource, /getDashboardHomeFallbackData/);
+  assert.match(dashboardRootSource, /const dashboardHomeData = dashboardHomeQuery\.data \?\? null;/);
+  assert.match(dashboardRootSource, /DashboardHomeStatusShell/);
+  assert.match(dashboardRootSource, /sequences=\{dashboardHomeData\?\.voiceSequences \?\? \[\]\}/);
+  assert.match(dashboardRootSource, /dashboardHomeStatusShellModules/);
+  assert.match(dashboardRootSource, /to=\{module\.route\}/);
+  assert.doesNotMatch(dashboardRootSource, /clearDashboardResultPageRecoveryForSearch/);
+  assert.doesNotMatch(dashboardHomeServiceSource, /export function getDashboardHomeFallbackData/);
+  assert.match(dashboardHomeServiceSource, /Promise\.allSettled/);
+});
+
+test("dashboard home no longer replays mock summon or voice presets when live recommendations are empty", () => {
+  const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
+  const dashboardHomeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.doesNotMatch(dashboardHomeServiceSource, /dashboardHome\.mocks/);
+  assert.doesNotMatch(dashboardHomeServiceSource, /return templates.length > 0 \? templates : dashboardSummonTemplates\.map/);
+  assert.doesNotMatch(dashboardHomeServiceSource, /return sequences.length > 0 \? sequences : dashboardVoiceSequences\.map/);
+  assert.match(dashboardHomeSource, /if \(data\.summonTemplates\.length === 0\) \{/);
+  assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
+});
+
+test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+
+  assert.match(mirrorAppSource, /const dataMode: MirrorOverviewSource = "rpc";/);
+  assert.doesNotMatch(mirrorAppSource, /DashboardMockToggle/);
+  assert.doesNotMatch(mirrorAppSource, /loadDashboardDataMode\("memory"\)/);
+  assert.doesNotMatch(mirrorAppSource, /saveDashboardDataMode\("memory"\)/);
+  assert.doesNotMatch(mirrorAppSource, /setDataMode\(/);
+});
+
+test("safety page stays RPC-only instead of exposing a page-level mock toggle", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const dataMode = "rpc" as const;/);
+  assert.doesNotMatch(securityAppSource, /DashboardMockToggle/);
+  assert.doesNotMatch(securityAppSource, /loadDashboardDataMode\("safety"\)/);
+  assert.doesNotMatch(securityAppSource, /saveDashboardDataMode\("safety"\)/);
+  assert.doesNotMatch(securityAppSource, /setDataMode\(/);
+});
 test("dashboard home entrance labels stay hidden until hover or focus", () => {
   const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
   const entranceOrbSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEntranceOrb.tsx"), "utf8");
@@ -1530,13 +1932,19 @@ test("task context links back into mirror detail state instead of plain text dea
 });
 
 test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
-  const { getTaskPrimaryActions } = loadTaskPageMapperModule();
+  const { canTaskAcceptSteering, getTaskPrimaryActions } = loadTaskPageMapperModule();
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
+  const processingPromptTask = createTask({ status: "processing", current_step: "generate_output", intent: { name: "agent_loop", arguments: {} } });
+  const processingLoopTask = createTask({ status: "processing", current_step: "agent_loop", intent: { name: "agent_loop", arguments: {} } });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
   const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
+  assert.equal(canTaskAcceptSteering(waitingAuthTask), true);
+  assert.equal(canTaskAcceptSteering(waitingInputTask), false);
+  assert.equal(canTaskAcceptSteering(processingPromptTask), false);
+  assert.equal(canTaskAcceptSteering(processingLoopTask), true);
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
     getTaskPrimaryActions(waitingInputTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingInputTask })).map((action) => action.action),
@@ -1544,7 +1952,8 @@ test("task page keeps waiting-auth anchors and routes follow-up steering through
   );
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
-  assert.match(taskDetailPanelSource, /placeholder=\{canSteerTask \? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"\}/);
+  assert.match(taskDetailPanelSource, /const canSteerTask = canTaskAcceptSteering\(task\)/);
+  assert.match(taskDetailPanelSource, /placeholder=\{steeringPlaceholder\}/);
 });
 
 test("settings service normalizes legacy stored snapshots before returning and saving", () => {
@@ -1780,6 +2189,104 @@ test("settings service hydrates runtime defaults before loading fallback snapsho
 
     assert.equal(hydrated.settings.general.download.workspace_path, "/Users/runtime/CialloClaw/workspace");
     assert.deepEqual(hydrated.settings.task_automation.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service exposes the trusted runtime data directory snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const settingsService = loadSettingsServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          data_path: "/Users/runtime/CialloClaw/data",
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+
+    const runtimeDefaults = await settingsService.loadDesktopRuntimeDefaultsSnapshot();
+
+    assert.deepEqual(runtimeDefaults, {
+      data_path: "/Users/runtime/CialloClaw/data",
+      workspace_path: "/Users/runtime/CialloClaw/workspace",
+      task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("settings service rejects cached runtime workspace snapshots when host hydration fails", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.runtime-defaults",
+      JSON.stringify({
+        workspace_path: "/cached/runtime/workspace",
+        task_sources: ["/cached/runtime/workspace/todos"],
+      }),
+    );
+    const settingsService = loadSettingsServiceModule({
+      invoke: async () => {
+        throw new Error("desktop runtime defaults unavailable");
+      },
+    });
+
+    const runtimeDefaults = await settingsService.loadDesktopRuntimeDefaultsSnapshot();
+
+    assert.equal(runtimeDefaults, null);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -2265,6 +2772,7 @@ test("control panel about service exposes fallback metadata and feedback channel
   assert.deepEqual(fallback, {
     appName: "CialloClaw",
     appVersion: "0.1.0",
+    localDataPath: null,
   });
   assert.deepEqual(feedbackChannels, [
     {
@@ -2295,11 +2803,66 @@ test("control panel about service exposes fallback metadata and feedback channel
   ]);
 });
 
-test("control panel about helpers copy feedback and share links", async () => {
-  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
+test("control panel about snapshot reuses the trusted runtime data directory", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadControlPanelAboutSnapshot } = loadControlPanelAboutServiceModule({
+      invoke: async (command) => {
+        assert.equal(command, "desktop_get_runtime_defaults");
+        return {
+          data_path: "/Users/runtime/CialloClaw/data",
+          workspace_path: "/Users/runtime/CialloClaw/workspace",
+          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+        };
+      },
+    });
+
+    const snapshot = await loadControlPanelAboutSnapshot();
+
+    assert.equal(snapshot.appName, "CialloClaw");
+    assert.equal(snapshot.appVersion, "0.1.0");
+    assert.equal(snapshot.localDataPath, "/Users/runtime/CialloClaw/data");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel about helpers open the data directory and share links", async () => {
   const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
   const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const copiedValues: string[] = [];
+  const invokedCommands: string[] = [];
+
+  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule({
+    invoke: async (command) => {
+      invokedCommands.push(command);
+      return undefined;
+    },
+  });
 
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
@@ -2312,12 +2875,22 @@ test("control panel about helpers copy feedback and share links", async () => {
     },
   });
 
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      __TAURI_INTERNALS__: {},
+    },
+  });
+
   try {
     const feedbackCopy = await copyControlPanelAboutValue("https://github.com/1024XEngineer/CialloClaw/issues", "已复制反馈渠道链接。");
+    const openFeedback = await runControlPanelAboutAction("open_data_directory");
     const shareFeedback = await runControlPanelAboutAction("share");
 
     assert.equal(feedbackCopy, "已复制反馈渠道链接。");
+    assert.equal(openFeedback, "已在系统中打开本地存储目录。");
     assert.equal(shareFeedback, "已复制分享链接。");
+    assert.deepEqual(invokedCommands, ["desktop_open_runtime_data_path"]);
     assert.deepEqual(copiedValues, [
       "https://github.com/1024XEngineer/CialloClaw/issues",
       "https://github.com/1024XEngineer/CialloClaw",
@@ -2344,8 +2917,13 @@ test("control panel app wires the about navigation without update-only fields", 
   assert.match(controlPanelAppSource, /type ControlPanelSectionId = .*"about"/);
   assert.match(controlPanelAppSource, /navLabel: "关于"/);
   assert.match(controlPanelAppSource, /case "about":/);
+  assert.match(controlPanelAppSource, /title="本地存储位置"/);
   assert.match(controlPanelAppSource, /title="帮助与反馈"/);
   assert.match(controlPanelAppSource, /title="版本信息"/);
+  assert.match(controlPanelAppSource, /title="恢复默认设置"/);
+  assert.match(controlPanelAppSource, /数据目录/);
+  assert.match(controlPanelAppSource, /打开目录/);
+  assert.match(controlPanelAppSource, /恢复默认设置/);
   assert.match(controlPanelAppSource, /应用内新手引导/);
   assert.match(controlPanelAppSource, /反馈渠道/);
   assert.match(controlPanelAppSource, /CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS/);
@@ -2369,14 +2947,309 @@ test("control panel app surfaces about action feedback in local UI state", () =>
   assert.match(controlPanelAppSource, /const \[aboutActionFeedback, setAboutActionFeedback\] = useState<string \| null>\(null\);/);
   assert.match(controlPanelAppSource, /const feedback = await runControlPanelAboutAction\(action\);[\s\S]*setAboutActionFeedback\(feedback\);/);
   assert.match(controlPanelAppSource, /const feedback = await copyControlPanelAboutValue\(url, "已复制反馈渠道链接。"\);[\s\S]*setAboutActionFeedback\(feedback\);/);
+  assert.match(controlPanelAppSource, /const localDataPath = normalizeDisplayPath\(aboutSnapshot\.localDataPath \?\? ""\);/);
+  assert.match(controlPanelAppSource, /handleAboutAction\("open_data_directory"\)/);
+  assert.match(controlPanelAppSource, /const \[isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming\] = useState\(false\);/);
+  assert.match(controlPanelAppSource, /const restoreDraft = buildControlPanelRestoreDefaultsData\(draft, persistedPanelData\);/);
+  assert.match(controlPanelAppSource, /validateModel: false/);
+  assert.match(controlPanelAppSource, /不会删除任务历史、记忆内容、本地文件/);
+  assert.match(controlPanelAppSource, /恢复默认设置/);
   assert.match(controlPanelAppSource, /aboutActionFeedback \? \([\s\S]*aria-live="polite"[\s\S]*\{aboutActionFeedback\}/);
   assert.match(controlPanelAppSource, /const settings = \(await loadHydratedSettings\(\)\)\.settings;/);
   assert.match(controlPanelAppSource, /const fallbackData = await buildLocalControlPanelSnapshot\(\);/);
 });
 
-test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
+test("dashboard settings mutation persists rpc-effective settings into the local snapshot", async () => {
   const { loadSettings } = loadSettingsServiceModule();
-  const { updateDashboardSettings } = loadDashboardSettingsMutationModule();
+  const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
+    updateSettings: async () => ({
+      apply_mode: "immediate",
+      need_restart: false,
+      updated_keys: ["general.download.ask_before_save_each_file", "memory.enabled", "memory.lifecycle", "models.budget_auto_downgrade"],
+      effective_settings: {
+        general: {
+          download: {
+            ask_before_save_each_file: false,
+          },
+        },
+        memory: {
+          enabled: false,
+          lifecycle: "session",
+        },
+        models: {
+          budget_auto_downgrade: false,
+        },
+      },
+    }),
+    getSettingsDetailed: async () => ({
+      data: {
+        settings: {
+          general: {
+            download: {
+              ask_before_save_each_file: false,
+            },
+          },
+          memory: {
+            enabled: false,
+            lifecycle: "session",
+          },
+          models: {
+            budget_auto_downgrade: false,
+          },
+        },
+      },
+      meta: {
+        server_time: "2026-04-28T09:30:00Z",
+      },
+      warnings: [],
+    }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+  try {
+    const result = await updateDashboardSettings({
+      models: {
+        budget_auto_downgrade: false,
+      },
+      general: {
+        download: {
+          ask_before_save_each_file: false,
+        },
+      },
+      memory: {
+        enabled: false,
+        lifecycle: "session",
+      },
+    });
+    assert.equal(result.source, "rpc");
+    assert.equal(result.applyMode, "immediate");
+    assert.equal(result.needRestart, false);
+    assert.equal(result.persisted, true);
+    assert.equal(result.readbackWarning, null);
+    assert.deepEqual(result.updatedKeys.sort(), [
+      "general.download.ask_before_save_each_file",
+      "memory.enabled",
+      "memory.lifecycle",
+      "models.budget_auto_downgrade",
+    ]);
+    assert.equal(result.snapshot.settings.memory.enabled, false);
+    assert.equal(result.snapshot.settings.memory.lifecycle, "session");
+    assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, false);
+    assert.equal(result.snapshot.settings.models.credentials.budget_auto_downgrade, false);
+    const persisted = loadSettings();
+    assert.equal(persisted.settings.memory.enabled, false);
+    assert.equal(persisted.settings.memory.lifecycle, "session");
+    assert.equal(persisted.settings.general.download.ask_before_save_each_file, false);
+    assert.equal(persisted.settings.models.budget_auto_downgrade, false);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+test("control panel workspace section opens the trusted runtime directory instead of editing draft paths", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+  assert.match(controlPanelAppSource, /loadDesktopRuntimeDefaultsSnapshot/);
+  assert.match(controlPanelAppSource, /openDesktopLocalPath/);
+  assert.match(controlPanelAppSource, /const handleOpenCurrentWorkspaceDirectory = async \(\) =>/);
+  assert.match(controlPanelAppSource, /runtimeWorkspacePathLabel/);
+  assert.match(controlPanelAppSource, /打开当前目录/);
+  assert.doesNotMatch(controlPanelAppSource, /value=\{draft\.settings\.general\.download\.workspace_path\}/);
+  assert.doesNotMatch(controlPanelAppSource, /workspace_path: event\.target\.value/);
+});
+test("control panel keeps budget rows in the safety page instead of duplicating them", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+  assert.match(controlPanelAppSource, /title="模型与安全摘要"/);
+  assert.match(controlPanelAppSource, /label="安全状态"/);
+  assert.match(controlPanelAppSource, /label="待确认授权"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="今日成本"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="单任务上限"/);
+  assert.doesNotMatch(controlPanelAppSource, /label="当日上限"/);
+});
+test("control panel restore-default helper preserves the persisted workspace, task-source, and model-route boundaries", () => {
+  const { buildControlPanelRestoreDefaultsData } = loadControlPanelServiceModule();
+  const persisted: Parameters<typeof buildControlPanelRestoreDefaultsData>[1] = {
+    source: "rpc",
+    providerApiKeyInput: "",
+    settings: {
+      general: {
+        language: "en-US",
+        auto_launch: false,
+        theme_mode: "dark",
+        voice_notification_enabled: false,
+        voice_type: "custom_voice",
+        download: {
+          workspace_path: "D:/SavedWorkspace",
+          ask_before_save_each_file: false,
+        },
+      },
+      floating_ball: {
+        auto_snap: false,
+        idle_translucent: false,
+        position_mode: "fixed",
+        size: "large",
+      },
+      memory: {
+        enabled: false,
+        lifecycle: "7d",
+        work_summary_interval: {
+          unit: "hour",
+          value: 4,
+        },
+        profile_refresh_interval: {
+          unit: "day",
+          value: 3,
+        },
+      },
+      task_automation: {
+        task_sources: ["D:/saved-todos"],
+        inspection_interval: {
+          unit: "hour",
+          value: 2,
+        },
+        inspect_on_file_change: false,
+        inspect_on_startup: false,
+        remind_before_deadline: false,
+        remind_when_stale: true,
+      },
+      models: {
+        provider: "anthropic",
+        provider_api_key_configured: true,
+        budget_auto_downgrade: false,
+        base_url: "https://api.anthropic.com",
+        model: "claude-3-7-sonnet",
+        stronghold: {
+          backend: "stronghold",
+          available: true,
+          fallback: false,
+          initialized: true,
+          formal_store: true,
+        },
+      },
+    },
+    inspector: {
+      task_sources: ["D:/saved-todos"],
+      inspection_interval: {
+        unit: "hour",
+        value: 2,
+      },
+      inspect_on_file_change: false,
+      inspect_on_startup: false,
+      remind_before_deadline: false,
+      remind_when_stale: true,
+    },
+    securitySummary: {
+      security_status: "normal",
+      pending_authorizations: 0,
+      latest_restore_point: null,
+      token_cost_summary: {
+        current_task_tokens: 0,
+        current_task_cost: 0,
+        today_tokens: 0,
+        today_cost: 0,
+        single_task_limit: 50000,
+        daily_limit: 300000,
+        budget_auto_downgrade: false,
+      },
+    },
+    warnings: ["stale warning"],
+  };
+  const draft: Parameters<typeof buildControlPanelRestoreDefaultsData>[0] = {
+    ...persisted,
+    providerApiKeyInput: "sk-unsaved-secret",
+    settings: {
+      ...persisted.settings,
+      general: {
+        ...persisted.settings.general,
+        download: {
+          ...persisted.settings.general.download,
+          workspace_path: "D:/UnsavedWorkspace",
+        },
+      },
+      task_automation: {
+        ...persisted.settings.task_automation,
+        task_sources: ["D:/unsaved-todos"],
+      },
+      models: {
+        ...persisted.settings.models,
+        provider: "openai-compatible",
+        base_url: "https://draft.example.com/v1",
+        model: "draft-model",
+      },
+    },
+    inspector: {
+      ...persisted.inspector,
+      task_sources: ["D:/unsaved-todos"],
+    },
+  };
+  const restored = buildControlPanelRestoreDefaultsData(
+    draft,
+    persisted,
+  );
+  assert.equal(restored.providerApiKeyInput, "");
+  assert.equal(restored.settings.general.language, "zh-CN");
+  assert.equal(restored.settings.general.download.workspace_path, "D:/SavedWorkspace");
+  assert.equal(restored.settings.general.download.ask_before_save_each_file, true);
+  assert.equal(restored.settings.floating_ball.size, "medium");
+  assert.equal(restored.settings.memory.enabled, true);
+  assert.equal(restored.settings.memory.lifecycle, "30d");
+  assert.equal(restored.settings.models.provider, "anthropic");
+  assert.equal(restored.settings.models.base_url, "https://api.anthropic.com");
+  assert.equal(restored.settings.models.model, "claude-3-7-sonnet");
+  assert.equal(restored.settings.models.budget_auto_downgrade, true);
+  assert.equal(restored.settings.models.provider_api_key_configured, true);
+  assert.deepEqual(restored.settings.models.stronghold, {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  });
+  assert.deepEqual(restored.settings.task_automation.task_sources, ["D:/saved-todos"]);
+  assert.deepEqual(restored.inspector.task_sources, ["D:/saved-todos"]);
+  assert.deepEqual(restored.inspector.inspection_interval, { unit: "minute", value: 15 });
+  assert.equal(restored.inspector.inspect_on_startup, true);
+  assert.equal(restored.inspector.inspect_on_file_change, true);
+  assert.equal(restored.inspector.remind_before_deadline, true);
+  assert.equal(restored.inspector.remind_when_stale, false);
+  assert.deepEqual(restored.warnings, []);
+});
+
+test("dashboard settings mutation keeps successful writes visible when settings readback fails", async () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const { formatDashboardSettingsMutationFeedback, updateDashboardSettings } = loadDashboardSettingsMutationModule({
+    updateSettings: async () => ({
+      apply_mode: "immediate",
+      need_restart: false,
+      updated_keys: ["memory.enabled"],
+      effective_settings: {
+        memory: {
+          enabled: false,
+        },
+      },
+    }),
+    getSettingsDetailed: async () => {
+      throw new Error("settings readback timed out");
+    },
+  });
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
   const localStorage = {
@@ -2398,40 +3271,22 @@ test("dashboard settings mutation updates the local snapshot in mock mode", asyn
   });
 
   try {
-    const result = await updateDashboardSettings(
-      {
-        models: {
-          budget_auto_downgrade: false,
-        },
-        general: {
-          download: {
-            ask_before_save_each_file: false,
-          },
-        },
-        memory: {
-          enabled: false,
-          lifecycle: "session",
-        },
+    const result = await updateDashboardSettings({
+      memory: {
+        enabled: false,
       },
-      "mock",
-    );
+    });
 
-    assert.equal(result.source, "mock");
-    assert.equal(result.applyMode, "immediate");
-    assert.equal(result.needRestart, false);
     assert.equal(result.persisted, true);
-    assert.deepEqual(result.updatedKeys.sort(), ["general", "memory", "models"]);
+    assert.equal(result.source, "rpc");
+    assert.equal(result.readbackWarning, "settings readback timed out");
     assert.equal(result.snapshot.settings.memory.enabled, false);
-    assert.equal(result.snapshot.settings.memory.lifecycle, "session");
-    assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, false);
-    assert.equal(result.snapshot.settings.models.credentials.budget_auto_downgrade, false);
-
-    const persisted = loadSettings();
-
-    assert.equal(persisted.settings.memory.enabled, false);
-    assert.equal(persisted.settings.memory.lifecycle, "session");
-    assert.equal(persisted.settings.general.download.ask_before_save_each_file, false);
-    assert.equal(persisted.settings.models.budget_auto_downgrade, false);
+    assert.deepEqual(result.snapshot.rpcContext.warnings, ["settings readback timed out"]);
+    assert.equal(loadSettings().settings.memory.enabled, false);
+    assert.match(
+      formatDashboardSettingsMutationFeedback(result, "记忆开关"),
+      /设置已写入，但 settings\.get 回读失败：settings readback timed out。当前先展示刚保存的本地快照。/,
+    );
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -2520,6 +3375,108 @@ test("dashboard settings snapshot merges scoped memory payloads onto the local b
   }
 });
 
+test("dashboard settings snapshot hydrates runtime defaults before merging scoped rpc payloads", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          general: {
+            download: {
+              workspace_path: "workspace",
+            },
+          },
+          task_automation: {
+            task_sources: ["workspace/todos"],
+          },
+        },
+      }),
+    );
+
+    const snapshot = await withDesktopAliasRuntime(
+      async (requireFn) => {
+        const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
+        const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
+        delete requireFn.cache[modulePath];
+        delete requireFn.cache[runtimeDefaultsModulePath];
+
+        const moduleExports = requireFn(modulePath) as {
+          loadDashboardSettingsSnapshot: (source?: "rpc", scope?: AgentSettingsGetParams["scope"]) => Promise<{
+            settings: {
+              general: { download: { workspace_path: string } };
+              memory: { enabled: boolean; lifecycle: string };
+              task_automation: { task_sources: string[] };
+            };
+          }>;
+        };
+
+        return moduleExports.loadDashboardSettingsSnapshot("rpc", "memory");
+      },
+      {
+        getSettingsDetailed: async () => ({
+          data: {
+            settings: {
+              memory: {
+                enabled: false,
+                lifecycle: "session",
+              },
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T09:30:00Z",
+          },
+          warnings: [],
+        }),
+      },
+      undefined,
+      {
+        invoke: async () => ({
+          workspace_path: "/runtime/workspace",
+          task_sources: ["/runtime/workspace/todos"],
+        }),
+      },
+    ) as {
+      settings: {
+        general: { download: { workspace_path: string } };
+        memory: { enabled: boolean; lifecycle: string };
+        task_automation: { task_sources: string[] };
+      };
+    };
+
+    assert.equal(snapshot.settings.general.download.workspace_path, "/runtime/workspace");
+    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["/runtime/workspace/todos"]);
+    assert.equal(snapshot.settings.memory.enabled, false);
+    assert.equal(snapshot.settings.memory.lifecycle, "session");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("dashboard settings mutation reloads only the touched memory scope after rpc writes", async () => {
   const requestedScopes: string[] = [];
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
@@ -2593,6 +3550,275 @@ test("dashboard settings mutation reloads only the touched memory scope after rp
     assert.equal(result.source, "rpc");
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel data keeps the trusted runtime workspace separate from the formal settings snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadControlPanelData } = loadControlPanelServiceModule(
+      {
+        getSecuritySummary: async () => ({
+          summary: {
+            security_status: "normal",
+            pending_authorizations: 0,
+            latest_restore_point: null,
+            token_cost_summary: {
+              current_task_tokens: 0,
+              current_task_cost: 0,
+              today_tokens: 0,
+              today_cost: 0,
+              single_task_limit: 50000,
+              daily_limit: 300000,
+              budget_auto_downgrade: true,
+            },
+          },
+        }),
+        getSettings: async () => ({
+          settings: {
+            general: {
+              language: "zh-CN",
+              auto_launch: true,
+              theme_mode: "follow_system",
+              voice_notification_enabled: true,
+              voice_type: "default_female",
+              download: {
+                workspace_path: "D:/pending-workspace",
+                ask_before_save_each_file: true,
+              },
+            },
+            floating_ball: {
+              auto_snap: true,
+              idle_translucent: true,
+              position_mode: "draggable",
+              size: "medium",
+            },
+            memory: {
+              enabled: true,
+              lifecycle: "30d",
+              work_summary_interval: { unit: "day", value: 7 },
+              profile_refresh_interval: { unit: "week", value: 2 },
+            },
+            task_automation: {
+              inspect_on_startup: true,
+              inspect_on_file_change: true,
+              inspection_interval: { unit: "minute", value: 15 },
+              task_sources: ["D:/pending-workspace/todos"],
+              remind_before_deadline: true,
+              remind_when_stale: false,
+            },
+            models: {
+              provider: "openai",
+              credentials: {
+                budget_auto_downgrade: true,
+                provider_api_key_configured: false,
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-4.1-mini",
+                stronghold: {
+                  backend: "stronghold",
+                  available: true,
+                  fallback: false,
+                  initialized: true,
+                  formal_store: true,
+                },
+              },
+            },
+          },
+        }),
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["D:/pending-workspace/todos"],
+          inspection_interval: { unit: "minute", value: 15 },
+          inspect_on_file_change: true,
+          inspect_on_startup: true,
+          remind_before_deadline: true,
+          remind_when_stale: false,
+        }),
+      },
+      {
+        invoke: async (command) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime-workspace",
+              task_sources: ["D:/runtime-workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop host command: ${command}`);
+        },
+      },
+    );
+
+    const loaded = await loadControlPanelData();
+
+    assert.equal(loaded.runtimeWorkspacePath, "D:/runtime-workspace");
+    assert.equal(loaded.settings.general.download.workspace_path, "D:/pending-workspace");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel data clears stale runtime workspace paths when host verification fails", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.runtime-defaults",
+      JSON.stringify({
+        workspace_path: "D:/stale-runtime-workspace",
+        task_sources: ["D:/stale-runtime-workspace/todos"],
+      }),
+    );
+
+    const { loadControlPanelData } = loadControlPanelServiceModule(
+      {
+        getSecuritySummary: async () => ({
+          summary: {
+            security_status: "normal",
+            pending_authorizations: 0,
+            latest_restore_point: null,
+            token_cost_summary: {
+              current_task_tokens: 0,
+              current_task_cost: 0,
+              today_tokens: 0,
+              today_cost: 0,
+              single_task_limit: 50000,
+              daily_limit: 300000,
+              budget_auto_downgrade: true,
+            },
+          },
+        }),
+        getSettings: async () => ({
+          settings: {
+            general: {
+              language: "zh-CN",
+              auto_launch: true,
+              theme_mode: "follow_system",
+              voice_notification_enabled: true,
+              voice_type: "default_female",
+              download: {
+                workspace_path: "D:/pending-workspace",
+                ask_before_save_each_file: true,
+              },
+            },
+            floating_ball: {
+              auto_snap: true,
+              idle_translucent: true,
+              position_mode: "draggable",
+              size: "medium",
+            },
+            memory: {
+              enabled: true,
+              lifecycle: "30d",
+              work_summary_interval: { unit: "day", value: 7 },
+              profile_refresh_interval: { unit: "week", value: 2 },
+            },
+            task_automation: {
+              inspect_on_startup: true,
+              inspect_on_file_change: true,
+              inspection_interval: { unit: "minute", value: 15 },
+              task_sources: ["D:/pending-workspace/todos"],
+              remind_before_deadline: true,
+              remind_when_stale: false,
+            },
+            models: {
+              provider: "openai",
+              credentials: {
+                budget_auto_downgrade: true,
+                provider_api_key_configured: false,
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-4.1-mini",
+                stronghold: {
+                  backend: "stronghold",
+                  available: true,
+                  fallback: false,
+                  initialized: true,
+                  formal_store: true,
+                },
+              },
+            },
+          },
+        }),
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["D:/pending-workspace/todos"],
+          inspection_interval: { unit: "minute", value: 15 },
+          inspect_on_file_change: true,
+          inspect_on_startup: true,
+          remind_before_deadline: true,
+          remind_when_stale: false,
+        }),
+      },
+      {
+        invoke: async (command) => {
+          if (command === "desktop_get_runtime_defaults") {
+            throw new Error("desktop runtime defaults unavailable");
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop host command: ${command}`);
+        },
+      },
+    );
+
+    const loaded = await loadControlPanelData();
+
+    assert.equal(loaded.runtimeWorkspacePath, null);
+    assert.equal(loaded.settings.general.download.workspace_path, "D:/pending-workspace");
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -3605,15 +4831,18 @@ test("mirror overview can reuse a refreshed settings snapshot without reloading 
 
 test("mirror app reuses the mutation snapshot instead of triggering a second mirror overview reload", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+  const mirrorDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorDetailContent.tsx"), "utf8");
 
   assert.match(mirrorAppSource, /applyMirrorSettingsSnapshot\(current, result\.snapshot\)/);
   assert.doesNotMatch(
     mirrorAppSource,
     /const handleSettingsUpdate = useCallback\([\s\S]*loadMirrorOverviewData\(dataMode\)/,
   );
+  assert.match(mirrorDetailSource, /settingsSnapshotUsesWarningBaseline/);
+  assert.match(mirrorDetailSource, /本地回退快照/);
 });
 
-test("dashboard settings mutation keeps fallback snapshots read-only when the RPC transport is unavailable", async () => {
+test("dashboard settings mutation keeps transport failures visible and does not mutate local settings", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const { updateDashboardSettings } = loadDashboardSettingsMutationModule({
     updateSettings: async () => {
@@ -3642,19 +4871,14 @@ test("dashboard settings mutation keeps fallback snapshots read-only when the RP
 
   try {
     const before = loadSettings();
-    const result = await updateDashboardSettings({
+    await assert.rejects(() => updateDashboardSettings({
       memory: {
         enabled: false,
         lifecycle: "session",
       },
-    });
+    }), /transport is not wired/i);
     const after = loadSettings();
 
-    assert.equal(result.source, "mock");
-    assert.equal(result.persisted, false);
-    assert.deepEqual(result.updatedKeys, []);
-    assert.equal(result.snapshot.settings.memory.enabled, before.settings.memory.enabled);
-    assert.equal(result.snapshot.settings.memory.lifecycle, before.settings.memory.lifecycle);
     assert.equal(after.settings.memory.enabled, before.settings.memory.enabled);
     assert.equal(after.settings.memory.lifecycle, before.settings.memory.lifecycle);
   } finally {
@@ -3861,10 +5085,13 @@ test("SecurityApp keeps snapshot-only approval detail renderable when live cards
 test("TaskPage wiring helpers require real detail for safety focus and keep detail query task-id centric", () => {
   const { resolveDashboardTaskSafetyOpenPlan, shouldEnableDashboardTaskDetailQuery } = loadTaskPageQueryModule();
 
-  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("fallback"), {
+  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("loading"), {
     shouldRefetchDetail: true,
   });
-  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("rpc"), {
+  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("error"), {
+    shouldRefetchDetail: true,
+  });
+  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("ready"), {
     shouldRefetchDetail: false,
   });
   assert.equal(shouldEnableDashboardTaskDetailQuery("task_dashboard_001", true), true);
@@ -3972,34 +5199,113 @@ test("task output helpers normalize open actions from existing rpc contracts", a
   );
 });
 
-test("task output service exposes artifact list and open flows in mock mode", async () => {
-  const outputService = loadTaskOutputServiceModule();
+test("task output service exposes artifact list and open flows through formal RPC payloads", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js");
+      delete requireFn.cache[modulePath];
 
-  const artifactPage = await outputService.loadTaskArtifactPage("task_done_001", "mock");
-  assert.ok(artifactPage.items.length > 0);
-  assert.equal(artifactPage.page.offset, 0);
+      const outputService = requireFn(modulePath) as {
+        describeTaskOpenResultForCurrentTask: (plan: { mode: string; taskId: string | null }, currentTaskId: string | null) => string | null;
+        isAllowedTaskOpenUrl: (url: string) => boolean;
+        loadTaskArtifactPage: (taskId: string) => Promise<AgentTaskArtifactListResult>;
+        openTaskArtifactForTask: (taskId: string, artifactId: string) => Promise<AgentTaskArtifactOpenResult>;
+        openTaskDeliveryForTask: (taskId: string, artifactId?: string) => Promise<AgentDeliveryOpenResult>;
+      };
 
-  const artifactOpen = await outputService.openTaskArtifactForTask("task_done_001", "artifact_done_003", "mock");
-  assert.equal(artifactOpen.open_action, "reveal_in_folder");
+      const artifactPage = await outputService.loadTaskArtifactPage("task_done_001");
+      assert.ok(artifactPage.items.length > 0);
+      assert.equal(artifactPage.page.offset, 0);
 
-  const deliveryOpen = await outputService.openTaskDeliveryForTask("task_done_001", undefined, "mock");
-  assert.equal(deliveryOpen.delivery_result.payload.task_id, "task_done_001");
+      const artifactOpen = await outputService.openTaskArtifactForTask("task_done_001", "artifact_done_003");
+      assert.equal(artifactOpen.open_action, "reveal_in_folder");
 
-  assert.equal(
-    outputService.describeTaskOpenResultForCurrentTask(
-      {
-        mode: "task_detail",
-        taskId: "task_done_001",
-      },
-      "task_done_001",
-    ),
-    "当前任务没有独立可打开结果，请先查看成果区。",
+      const deliveryOpen = await outputService.openTaskDeliveryForTask("task_done_001");
+      assert.equal(deliveryOpen.delivery_result.payload.task_id, "task_done_001");
+
+      assert.equal(
+        outputService.describeTaskOpenResultForCurrentTask(
+          {
+            mode: "task_detail",
+            taskId: "task_done_001",
+          },
+          "task_done_001",
+        ),
+        "当前任务没有独立可打开结果，请先查看成果区。",
+      );
+
+      assert.equal(outputService.isAllowedTaskOpenUrl("https://example.test/result"), true);
+      assert.equal(outputService.isAllowedTaskOpenUrl("http://example.test/result"), true);
+      assert.equal(outputService.isAllowedTaskOpenUrl("javascript:alert(1)"), false);
+      assert.equal(outputService.isAllowedTaskOpenUrl("file:///tmp/out.txt"), false);
+    },
+    {
+      listTaskArtifacts: async () => ({
+        items: [
+          {
+            artifact_id: "artifact_done_003",
+            artifact_type: "reveal_in_folder",
+            created_at: "2026-04-28T08:00:00.000Z",
+            mime_type: "application/pdf",
+            path: "workspace/reports/q3-review.pdf",
+            task_id: "task_done_001",
+            title: "q3-review.pdf",
+          },
+        ],
+        page: {
+          has_more: false,
+          limit: 1,
+          offset: 0,
+          total: 1,
+        },
+      }),
+      openDelivery: async () => ({
+        delivery_result: {
+          payload: {
+            path: null,
+            task_id: "task_done_001",
+            url: "https://example.test/result",
+          },
+          preview_text: "结果页",
+          title: "结果页",
+          type: "result_page",
+        },
+        open_action: "result_page",
+        resolved_payload: {
+          path: null,
+          task_id: "task_done_001",
+          url: "https://example.test/result",
+        },
+      }),
+      openTaskArtifact: async () => ({
+        artifact: {
+          artifact_id: "artifact_done_003",
+          artifact_type: "reveal_in_folder",
+          created_at: "2026-04-28T08:00:00.000Z",
+          mime_type: "application/pdf",
+          path: "workspace/reports/q3-review.pdf",
+          task_id: "task_done_001",
+          title: "q3-review.pdf",
+        },
+        delivery_result: {
+          payload: {
+            path: "workspace/reports/q3-review.pdf",
+            task_id: "task_done_001",
+            url: null,
+          },
+          preview_text: "定位文件",
+          title: "q3-review.pdf",
+          type: "reveal_in_folder",
+        },
+        open_action: "reveal_in_folder",
+        resolved_payload: {
+          path: "workspace/reports/q3-review.pdf",
+          task_id: "task_done_001",
+          url: null,
+        },
+      }),
+    },
   );
-
-  assert.equal(outputService.isAllowedTaskOpenUrl("https://example.test/result"), true);
-  assert.equal(outputService.isAllowedTaskOpenUrl("http://example.test/result"), true);
-  assert.equal(outputService.isAllowedTaskOpenUrl("javascript:alert(1)"), false);
-  assert.equal(outputService.isAllowedTaskOpenUrl("file:///tmp/out.txt"), false);
 });
 
 test("note resource open helpers normalize task, url, local open, and copy flows", () => {
@@ -4598,7 +5904,50 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.match(notePageSource, /getDashboardNoteRefreshPlan/);
   assert.doesNotMatch(notePageSource, /\["dashboard", "notes", "bucket", dataMode/);
   assert.match(noteServiceSource, /isAllowedNoteOpenUrl/);
+  assert.match(noteServiceSource, /if \(payload\?\.url\) \{/);
   assert.match(noteServiceSource, /mode === "open_url"/);
+});
+
+test("source-note fallback cards stay local instead of inferring formal todo bucket and due status", () => {
+  const noteService = loadNotePageServiceModule();
+  const items = noteService.buildSourceNoteFallbackItems({
+    content: [
+      "- [ ] 复查仪表盘文案",
+      "due: 2024-04-30T10:00:00.000Z",
+      "note: 保留这一条给巡检同步。",
+    ].join("\n"),
+    fileName: "review.md",
+    modifiedAtMs: 1714300000000,
+    path: "D:/notes/review.md",
+    sourceRoot: "D:/notes",
+    title: "review",
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].item.bucket, "later");
+  assert.equal(items[0].item.status, "normal");
+  assert.equal(items[0].experience.canConvertToTask, false);
+  assert.equal(items[0].experience.detailStatus, "等待巡检同步");
+  assert.equal(items[0].experience.previewStatus, "待巡检");
+  assert.equal(items[0].experience.repeatRule, null);
+});
+
+test("note page no longer guesses source-note paths from duplicated titles", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function resolveNoteItemSourceNotePath\(/);
+  assert.doesNotMatch(notePageSource, /sourceNotesByTitle\.get\(item\.item\.title/);
+  assert.match(notePageSource, /return null;/);
+});
+
+test("note service no longer invents related resources from title keywords", () => {
+  const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+
+  assert.match(noteServiceSource, /function createResourceHints\(item: TodoItem\)/);
+  assert.doesNotMatch(noteServiceSource, /normalizedTitle\.includes\("template"\)/);
+  assert.doesNotMatch(noteServiceSource, /normalizedTitle\.includes\("report"\)/);
+  assert.doesNotMatch(noteServiceSource, /normalizedTitle\.includes\("design"\)/);
+  assert.match(noteServiceSource, /return \[\];/);
 });
 
 test("task fallback copy no longer claims backend output actions are missing", () => {
@@ -4610,10 +5959,9 @@ test("task fallback copy no longer claims backend output actions are missing", (
   assert.doesNotMatch(taskTabsSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
 });
 
-test("task detail normalization rejects string restore points in rpc mode and keeps null approval fallback", () => {
+test("task detail normalization rejects string restore points in rpc mode and keeps runtime summary defaults", () => {
   withDesktopAliasRuntime((requireFn) => {
     const service = requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.service.js")) as {
-      buildFallbackTaskDetailData: (item: { experience: ReturnType<typeof createFallbackExperience>; task: Task }) => { detail: AgentTaskDetailGetResult };
       normalizeTaskDetailResult: (detail: AgentTaskDetailGetResult) => AgentTaskDetailGetResult;
     };
 
@@ -4632,24 +5980,8 @@ test("task detail normalization rejects string restore points in rpc mode and ke
       /restore point/i,
     );
 
-    const fallback = service.buildFallbackTaskDetailData({
-      experience: createFallbackExperience(),
-      task: createTask({ status: "waiting_auth" }),
-    });
-
-    assert.equal(fallback.detail.approval_request, null);
-    assert.deepEqual(fallback.detail.runtime_summary, {
-      active_steering_count: 0,
-      events_count: 0,
-      latest_failure_code: null,
-      latest_failure_category: null,
-      latest_failure_summary: null,
-      latest_event_type: null,
-      loop_stop_reason: null,
-      observation_signals: [],
-    });
-    assert.equal(fallback.detail.security_summary.pending_authorizations, 0);
-    assert.equal(fallback.detail.security_summary.security_status, "normal");
+    const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
+    assert.doesNotMatch(taskServiceSource, /buildFallbackTaskDetailData/);
   });
 });
 
@@ -4884,9 +6216,9 @@ test("task rpc service keeps transport failures visible instead of switching to 
       delete requireFn.cache[modulePath];
 
       const service = requireFn(modulePath) as {
-        controlTaskByAction: (taskId: string, action: "pause" | "resume" | "cancel" | "restart", source?: "rpc" | "mock") => Promise<unknown>;
-        loadTaskBucketPage: (group: "unfinished" | "finished", options?: { limit?: number; offset?: number; source?: "rpc" | "mock" }) => Promise<unknown>;
-        loadTaskDetailData: (taskId: string, source?: "rpc" | "mock") => Promise<unknown>;
+        controlTaskByAction: (taskId: string, action: "pause" | "resume" | "cancel" | "restart", source?: "rpc") => Promise<unknown>;
+        loadTaskBucketPage: (group: "unfinished" | "finished", options?: { limit?: number; offset?: number; source?: "rpc" }) => Promise<unknown>;
+        loadTaskDetailData: (taskId: string, source?: "rpc") => Promise<unknown>;
       };
 
       await assert.rejects(() => service.loadTaskBucketPage("unfinished", { source: "rpc" }), /transport is not wired/i);
@@ -4901,6 +6233,19 @@ test("task rpc service keeps transport failures visible instead of switching to 
   );
 });
 
+test("task rpc service builds protocol-only experience instead of reusing mock task fixtures", () => {
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
+  const taskOutputSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskOutput.service.ts"), "utf8");
+
+  assert.match(taskServiceSource, /function buildProtocolTaskExperience\(task: Task, detail\?: AgentTaskDetailGetResult\)/);
+  assert.doesNotMatch(taskServiceSource, /getTaskExperience\(/);
+  assert.doesNotMatch(taskServiceSource, /createFallbackExperience\(/);
+  assert.doesNotMatch(taskServiceSource, /getMockTaskBuckets\(/);
+  assert.doesNotMatch(taskServiceSource, /getMockTaskDetail\(/);
+  assert.doesNotMatch(taskServiceSource, /runMockTaskControl\(/);
+  assert.doesNotMatch(taskOutputSource, /getMockTaskDetail\(/);
+});
+
 test("note rpc service keeps transport failures visible instead of switching to mock data", async () => {
   const transportError = new Error("Named Pipe transport is not wired.");
 
@@ -4910,9 +6255,9 @@ test("note rpc service keeps transport failures visible instead of switching to 
       delete requireFn.cache[modulePath];
 
       const service = requireFn(modulePath) as {
-        convertNoteToTask: (itemId: string, source?: "rpc" | "mock") => Promise<unknown>;
-        loadNoteBucket: (group: "upcoming" | "later" | "recurring_rule" | "closed", source?: "rpc" | "mock") => Promise<unknown>;
-        updateNote: (itemId: string, action: "complete" | "cancel" | "move_upcoming" | "toggle_recurring" | "cancel_recurring" | "restore" | "delete", source?: "rpc" | "mock") => Promise<unknown>;
+        convertNoteToTask: (itemId: string, source?: "rpc") => Promise<unknown>;
+        loadNoteBucket: (group: "upcoming" | "later" | "recurring_rule" | "closed", source?: "rpc") => Promise<unknown>;
+        updateNote: (itemId: string, action: "complete" | "cancel" | "move_upcoming" | "toggle_recurring" | "cancel_recurring" | "restore" | "delete", source?: "rpc") => Promise<unknown>;
       };
 
       await assert.rejects(() => service.loadNoteBucket("upcoming", "rpc"), /transport is not wired/i);
@@ -4927,11 +6272,378 @@ test("note rpc service keeps transport failures visible instead of switching to 
   );
 });
 
-test("TaskDetailPanel defers the entire fallback security summary until formal detail arrives", () => {
+test("note rpc service derives experience from protocol note data instead of mock fixtures", () => {
+  const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+
+  assert.match(noteServiceSource, /function mapItems\(items: TodoItem\[\]\)/);
+  assert.doesNotMatch(noteServiceSource, /getMockNoteExperience\(/);
+  assert.doesNotMatch(noteServiceSource, /getMockNoteBuckets\(/);
+  assert.doesNotMatch(noteServiceSource, /runMockConvertNoteToTask\(/);
+  assert.doesNotMatch(noteServiceSource, /runMockUpdateNote\(/);
+});
+
+test("security rpc service keeps transport failures visible instead of switching to mock governance data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityModuleData: (source?: "rpc") => Promise<unknown>;
+        loadSecurityModuleRpcData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityModuleData("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityModuleRpcData(), /transport is not wired/i);
+    },
+    {
+      getSecuritySummaryDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("security detail rpc reads keep transport failures visible instead of switching to mock detail lists", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityAuditRecords: (source: "rpc", taskId?: string | null, options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityPendingApprovals: (source: "rpc", options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityRestorePoints: (source: "rpc", options?: { limit?: number; offset?: number; taskId?: string | null }) => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityPendingApprovals("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityRestorePoints("rpc", { taskId: "task_dashboard_001" }), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityAuditRecords("rpc", "task_dashboard_001"), /transport is not wired/i);
+    },
+    {
+      listSecurityAuditDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
+      listSecurityRestorePointsDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("dashboard home rpc service keeps transport failures visible instead of switching to mock orbit data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadDashboardHomeData(), /transport is not wired/i);
+    },
+    {
+      getDashboardModule: () => Promise.reject(transportError),
+      getDashboardOverview: () => Promise.reject(transportError),
+      getRecommendations: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("mirror overview keeps rendering when memory settings snapshot falls back to a warning snapshot", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    await withDesktopAliasRuntime(
+      async (requireFn) => {
+        const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/memory/mirrorService.js");
+        const snapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
+        delete requireFn.cache[modulePath];
+        delete requireFn.cache[snapshotModulePath];
+
+        const service = requireFn(modulePath) as {
+          loadMirrorOverviewData: () => Promise<{
+            overview: { history_summary: string[] };
+            rpcContext: { warnings: string[] };
+            settingsSnapshot: {
+              rpcContext: { warnings: string[] };
+              settings: { memory: { enabled: boolean } };
+              source: string;
+            };
+          }>;
+        };
+
+        const result = await service.loadMirrorOverviewData();
+
+        assert.equal(result.overview.history_summary[0], "memory overview");
+        assert.equal(result.settingsSnapshot.source, "rpc");
+        assert.equal(result.settingsSnapshot.settings.memory.enabled, true);
+        assert.deepEqual(result.settingsSnapshot.rpcContext.warnings, ["settings-context: memory settings unavailable"]);
+        assert.ok(result.rpcContext.warnings.includes("settings-context: memory settings unavailable"));
+      },
+      {
+        getMirrorOverviewDetailed: async () => ({
+          data: {
+            daily_summary: null,
+            history_summary: ["memory overview"],
+            memory_references: [],
+            profile: null,
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        getSettingsDetailed: async () => {
+          throw new Error("memory settings unavailable");
+        },
+        getSecuritySummaryDetailed: async () => ({
+          data: {
+            summary: {
+              latest_restore_point: null,
+              pending_authorizations: 0,
+              risk_level: "green",
+              security_status: "normal",
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        listSecurityPendingDetailed: async () => ({
+          data: {
+            items: [],
+            page: {
+              has_more: false,
+              limit: 20,
+              offset: 0,
+              total: 0,
+            },
+          },
+          meta: {
+            server_time: "2026-04-28T10:00:00Z",
+          },
+          warnings: [],
+        }),
+        listTasks: async () => ({
+          items: [],
+          page: {
+            has_more: false,
+            limit: 20,
+            offset: 0,
+            total: 0,
+          },
+        }),
+      },
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard home keeps module and recommendation failures local instead of blanking the full orbit", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          focusLine: { headline: string; reason: string };
+          loadWarnings: string[];
+          stateGroups: Array<{ key: string; states: string[] }>;
+          summonTemplates: Array<unknown>;
+          voiceSequences: Array<unknown>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateGroups.length, 4);
+      assert.equal(data.loadWarnings.length, 2);
+      assert.match(data.loadWarnings[0], /便签摘要同步失败：notes module unavailable/);
+      assert.match(data.loadWarnings[1], /建议流同步失败：recommendations unavailable/);
+      assert.equal(data.focusLine.headline, "首页总览已经连接到真实任务轨道。");
+      assert.equal(data.summonTemplates.length, 0);
+      assert.equal(data.voiceSequences.length, 0);
+    },
+    {
+      getDashboardModule: async (params) => {
+        const moduleName = (params as { module?: string }).module;
+        if (moduleName === "notes") {
+          throw new Error("notes module unavailable");
+        }
+
+        return {
+          highlights: moduleName === "tasks" ? ["继续处理 task focus"] : [],
+          module: moduleName ?? "unknown",
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => {
+        throw new Error("recommendations unavailable");
+      },
+    },
+  );
+});
+
+test("security service no longer imports governance mocks into product runtime", () => {
+  const securityServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityService.ts"), "utf8");
+
+  assert.doesNotMatch(securityServiceSource, /securitySummaryMock/);
+  assert.doesNotMatch(securityServiceSource, /securityPendingMock/);
+  assert.doesNotMatch(securityServiceSource, /securityRestorePointsMock/);
+  assert.doesNotMatch(securityServiceSource, /securityAuditMock/);
+  assert.doesNotMatch(securityServiceSource, /buildMockRespondResult/);
+  assert.doesNotMatch(securityServiceSource, /buildMockRestoreApplyResult/);
+  assert.doesNotMatch(securityServiceSource, /getInitialSecurityModuleData/);
+});
+
+test("security detail rpc reads keep transport failures visible instead of switching to mock detail lists", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/safety/securityService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadSecurityAuditRecords: (source: "rpc", taskId?: string | null, options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityPendingApprovals: (source: "rpc", options?: { limit?: number; offset?: number }) => Promise<unknown>;
+        loadSecurityRestorePoints: (source: "rpc", options?: { limit?: number; offset?: number; taskId?: string | null }) => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadSecurityPendingApprovals("rpc"), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityRestorePoints("rpc", { taskId: "task_dashboard_001" }), /transport is not wired/i);
+      await assert.rejects(() => service.loadSecurityAuditRecords("rpc", "task_dashboard_001"), /transport is not wired/i);
+    },
+    {
+      listSecurityAuditDetailed: () => Promise.reject(transportError),
+      listSecurityPendingDetailed: () => Promise.reject(transportError),
+      listSecurityRestorePointsDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("mirror rpc service keeps transport failures visible instead of switching to mock overview data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/memory/mirrorService.js");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadMirrorOverviewData: (source?: "rpc") => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadMirrorOverviewData("rpc"), /transport is not wired/i);
+    },
+    {
+      getMirrorOverviewDetailed: () => Promise.reject(transportError),
+    },
+  );
+});
+
+test("mirror service no longer imports overview mock data into product runtime", () => {
+  const mirrorServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirrorService.ts"), "utf8");
+
+  assert.doesNotMatch(mirrorServiceSource, /mirrorOverviewMock/);
+  assert.doesNotMatch(mirrorServiceSource, /buildFallbackOverview/);
+  assert.doesNotMatch(mirrorServiceSource, /getInitialMirrorOverviewData/);
+});
+
+test("dashboard home rpc service keeps transport failures visible instead of switching to mock orbit data", async () => {
+  const transportError = new Error("Named Pipe transport is not wired.");
+
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<unknown>;
+      };
+
+      await assert.rejects(() => service.loadDashboardHomeData(), /transport is not wired/i);
+    },
+    {
+      getDashboardModule: () => Promise.reject(transportError),
+      getDashboardOverview: () => Promise.reject(transportError),
+      getRecommendations: () => Promise.reject(transportError),
+    },
+  );
+});
+test("TaskDetailPanel defers the security summary until formal detail arrives", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
-  assert.match(panelSource, /detailData\.source === "fallback" \|\| detailState !== "ready"/);
+  assert.match(panelSource, /detailState !== "ready" \|\| detail === null/);
   assert.match(panelSource, /等待详情同步后展示风险、授权与恢复点/);
+});
+
+test("task detail fallback keeps operator controls available from preview tasks and routed task ids", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+  const actionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskActionBar.tsx"), "utf8");
+  const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
+
+  assert.match(taskPageSource, /const selectedTask = selectedTaskPreview\?\.task \?\? null;/);
+  assert.match(taskPageSource, /const selectedTaskControlTargetId = selectedTask\?\.task_id \?\? selectedTaskId;/);
+  assert.match(taskPageSource, /taskControlMutation\.mutate\(\{ action, taskId: selectedTaskControlTargetId \}\)/);
+  assert.match(taskPageSource, /taskSteerMutation\.mutate\(\{ message, taskId: selectedTaskControlTargetId \}\)/);
+  assert.match(taskPageSource, /taskId: selectedTaskControlTargetId/);
+  assert.match(taskPageSource, /fallbackDetailActions: TaskPrimaryAction\[\] \| null/);
+  assert.match(taskPageSource, /const fallbackOutputAccess = !selectedTaskPreview && Boolean\(selectedTaskId\);/);
+  assert.doesNotMatch(taskPageSource, /detailData && artifactListQuery\.isError/);
+  assert.match(panelSource, /task \? <TaskActionBar detail=\{detail\} onAction=\{onAction\} task=\{task\} \/> : null/);
+  assert.match(panelSource, /fallbackActions && fallbackActions.length > 0 \? <TaskActionBar actionsOverride=\{fallbackActions\} detail=\{null\} onAction=\{onAction\} task=\{null\} \/> : null/);
+  assert.match(panelSource, /fallbackOutputAccess \? \(/);
+  assert.doesNotMatch(panelSource, /detailData \? <TaskActionBar/);
+  assert.match(panelSource, /<h3 className="task-detail-card__title">已生成的结果<\/h3>/);
+  assert.match(panelSource, /结果详情仍在同步，稍后可重试详情或直接尝试打开最新结果。/);
+  assert.match(actionBarSource, /actionsOverride\?: TaskPrimaryAction\[\] \| null;/);
+  assert.match(actionBarSource, /task: Task \| null;/);
+  assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
+  assert.match(mapperSource, /const hasAnchor = detail !== null/);
+  assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);
 });
 
 test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
@@ -4959,7 +6671,7 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
 test("TaskDetailPanel separates formal delivery from structured evidence metadata", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
-  assert.match(panelSource, /const formalDeliveryResult = detail\.delivery_result;/);
+  assert.match(panelSource, /const formalDeliveryResult = detail\?\.delivery_result \?\? null;/);
   assert.match(panelSource, /Formal Delivery/);
   assert.match(panelSource, /该区域只消费正式 `delivery_result`/);
   assert.match(panelSource, /citation\.evidence_role/);
@@ -4970,8 +6682,8 @@ test("TaskDetailPanel separates formal delivery from structured evidence metadat
 test("TaskDetailPanel renders a formal screen governance section only for screen tasks with synced detail", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
-  assert.match(panelSource, /const isScreenTask = task\.source_type === "screen_capture" \|\| detail\.task\.intent\?\.name === "screen_analyze"/);
-  assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary\) \{/);
+  assert.match(panelSource, /const isScreenTask = task\?\.source_type === "screen_capture" \|\| detail\?\.task\.intent\?\.name === "screen_analyze"/);
+  assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary \|\| !runtimeSummary \|\| detail === null\) \{/);
   assert.match(panelSource, /Screen Governance/);
   assert.match(panelSource, /屏幕授权、恢复与失败收口/);
   assert.match(panelSource, /该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段/);
@@ -5047,29 +6759,3 @@ test("dashboard voice submit only reuses browser page context when a real URL is
   assert.match(voiceFieldSource, /trigger: "voice_commit",[\s\S]*includeForegroundBrowserPageContext: true,/);
   assert.doesNotMatch(voiceFieldSource, /includeForegroundWindowContext: true/);
 });
-
-function createFallbackExperience() {
-  return {
-    acceptance: [],
-    assistantState: {
-      hint: "fallback",
-      label: "fallback",
-    },
-    background: "fallback",
-    constraints: [],
-    dueAt: null,
-    goal: "fallback",
-    nextAction: "fallback",
-    noteDraft: "fallback",
-    noteEntries: [],
-    outputs: [],
-    phase: "fallback",
-    priority: "steady" as const,
-    progressHint: "fallback",
-    quickContext: [],
-    recentConversation: [],
-    relatedFiles: [],
-    stepTargets: {},
-    suggestedNext: "fallback",
-  };
-}

@@ -48,7 +48,7 @@ static WINDOW_CONTEXT_ACTIVITY_STATE: Lazy<Mutex<WindowContextActivityState>> =
 struct CachedWindowContext {
     hwnd: isize,
     context: ActiveWindowContextPayload,
-    cached_at: Instant,
+    observed_at: Instant,
 }
 
 #[derive(Default)]
@@ -105,7 +105,7 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
     }
 
     if is_internal_app_window(hwnd) {
-        return Ok(read_cached_window_context_with_url());
+        return Ok(read_cached_window_context_for_internal_window());
     }
 
     let context = read_window_context_for_hwnd(hwnd);
@@ -172,7 +172,8 @@ fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPa
 fn read_lightweight_window_context_for_hwnd(
     hwnd: HWND,
 ) -> Result<ActiveWindowContextPayload, String> {
-    let process_path = get_process_path(hwnd);
+    let process_id = get_process_id(hwnd);
+    let process_path = process_id.and_then(get_process_path);
     let app_name = process_path
         .as_deref()
         .and_then(extract_process_stem)
@@ -183,6 +184,7 @@ fn read_lightweight_window_context_for_hwnd(
     Ok(ActiveWindowContextPayload {
         app_name,
         process_path,
+        process_id,
         title,
         url: None,
         browser_kind: browser_kind.to_string(),
@@ -196,6 +198,7 @@ fn read_window_context_for_hwnd(hwnd: HWND) -> ActiveWindowContextPayload {
         read_lightweight_window_context_for_hwnd(hwnd).unwrap_or(ActiveWindowContextPayload {
             app_name: "unknown".to_string(),
             process_path: None,
+            process_id: None,
             title: None,
             url: None,
             browser_kind: BROWSER_KIND_NON_BROWSER.to_string(),
@@ -296,7 +299,7 @@ fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
         *cached_context = Some(CachedWindowContext {
             hwnd: hwnd.0 as isize,
             context: context.clone(),
-            cached_at: Instant::now(),
+            observed_at: Instant::now(),
         });
     }
 }
@@ -308,7 +311,7 @@ fn read_fresh_cached_window_context() -> Option<CachedWindowContext> {
     let mut cached_context = LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok()?;
     let cached = cached_context.clone()?;
 
-    if cached.cached_at.elapsed()
+    if cached.observed_at.elapsed()
         > Duration::from_millis(INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS)
     {
         *cached_context = None;
@@ -321,6 +324,21 @@ fn read_fresh_cached_window_context() -> Option<CachedWindowContext> {
 fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
     read_fresh_cached_window_context()
         .map(|cached| with_window_context_activity_counts(cached.context))
+}
+
+fn read_cached_window_context_for_internal_window() -> Option<ActiveWindowContextPayload> {
+    let cached = read_fresh_cached_window_context()?;
+    let cached_context = with_window_context_activity_counts(cached.context.clone());
+
+    // Internal desktop activations can happen after the last external browser
+    // page kept navigating without another foreground-window event. Re-read the
+    // cached HWND on demand so task input sees the freshest page URL, but keep
+    // the cached snapshot as a fallback when the refresh path cannot resolve.
+    if !should_refresh_cached_shell_ball_window_context(&cached.context) {
+        return Some(cached_context);
+    }
+
+    read_cached_window_context_with_url().or(Some(cached_context))
 }
 
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
@@ -471,6 +489,10 @@ fn should_refresh_window_context_url(context: &ActiveWindowContextPayload) -> bo
     )
 }
 
+fn should_refresh_cached_shell_ball_window_context(context: &ActiveWindowContextPayload) -> bool {
+    should_refresh_window_context_url(context)
+}
+
 fn create_window_context_fingerprint(context: &ActiveWindowContextPayload) -> String {
     format!(
         "{}|{}|{}",
@@ -498,19 +520,7 @@ fn classify_browser_kind(app_name: &str) -> &'static str {
     }
 }
 
-fn get_process_path(hwnd: HWND) -> Option<String> {
-    let process_handle = open_process(hwnd)?;
-    let path = get_module_file_name(process_handle)
-        .or_else(|| get_query_process_image_name(process_handle));
-
-    unsafe {
-        let _ = CloseHandle(process_handle);
-    }
-
-    path
-}
-
-fn open_process(hwnd: HWND) -> Option<HANDLE> {
+fn get_process_id(hwnd: HWND) -> Option<u32> {
     let process_id = unsafe {
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
@@ -521,6 +531,22 @@ fn open_process(hwnd: HWND) -> Option<HANDLE> {
         return None;
     }
 
+    Some(process_id)
+}
+
+fn get_process_path(process_id: u32) -> Option<String> {
+    let process_handle = open_process(process_id)?;
+    let path = get_module_file_name(process_handle)
+        .or_else(|| get_query_process_image_name(process_handle));
+
+    unsafe {
+        let _ = CloseHandle(process_handle);
+    }
+
+    path
+}
+
+fn open_process(process_id: u32) -> Option<HANDLE> {
     unsafe {
         OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
@@ -560,6 +586,72 @@ fn get_query_process_image_name(process: HANDLE) -> Option<String> {
     }
 
     Some(String::from_utf16_lossy(&buffer[..size as usize]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_browser_kind, should_refresh_cached_shell_ball_window_context,
+        should_refresh_window_context_url, ActiveWindowContextPayload, BROWSER_KIND_CHROME,
+        BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER, BROWSER_KIND_OTHER_BROWSER,
+    };
+
+    fn build_context(browser_kind: &str) -> ActiveWindowContextPayload {
+        ActiveWindowContextPayload {
+            app_name: "browser".to_string(),
+            process_path: Some("C:/browser.exe".to_string()),
+            process_id: Some(42),
+            title: Some("Title".to_string()),
+            url: None,
+            browser_kind: browser_kind.to_string(),
+            window_switch_count: None,
+            page_switch_count: None,
+        }
+    }
+
+    fn build_cached_context(browser_kind: &str, url: Option<&str>) -> ActiveWindowContextPayload {
+        let mut context = build_context(browser_kind);
+        context.url = url.map(ToString::to_string);
+        context
+    }
+
+    #[test]
+    fn classify_browser_kind_distinguishes_supported_and_unsupported_targets() {
+        assert_eq!(classify_browser_kind("chrome"), BROWSER_KIND_CHROME);
+        assert_eq!(classify_browser_kind("msedge"), BROWSER_KIND_EDGE);
+        assert_eq!(classify_browser_kind("firefox"), BROWSER_KIND_OTHER_BROWSER);
+        assert_eq!(classify_browser_kind("brave"), BROWSER_KIND_OTHER_BROWSER);
+        assert_eq!(classify_browser_kind("notepad"), BROWSER_KIND_NON_BROWSER);
+    }
+
+    #[test]
+    fn refreshable_browser_kinds_match_the_supported_takeover_boundary() {
+        assert!(should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_CHROME
+        )));
+        assert!(should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_EDGE
+        )));
+        assert!(should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_OTHER_BROWSER,
+        )));
+        assert!(!should_refresh_window_context_url(&build_context(
+            BROWSER_KIND_NON_BROWSER
+        )));
+    }
+
+    #[test]
+    fn shell_ball_cached_context_refreshes_browser_context_even_with_recent_urls() {
+        assert!(should_refresh_cached_shell_ball_window_context(
+            &build_cached_context(BROWSER_KIND_CHROME, Some("https://example.com/build"))
+        ));
+        assert!(should_refresh_cached_shell_ball_window_context(
+            &build_cached_context(BROWSER_KIND_EDGE, None)
+        ));
+        assert!(!should_refresh_cached_shell_ball_window_context(
+            &build_cached_context(BROWSER_KIND_NON_BROWSER, None)
+        ));
+    }
 }
 
 fn extract_process_stem(path: &str) -> Option<String> {

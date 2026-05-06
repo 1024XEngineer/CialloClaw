@@ -44,6 +44,7 @@ type TaskRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	PrimaryRunID      string
 	RequestSource     string
 	RequestTrigger    string
 	ExecutionAttempt  int
@@ -321,6 +322,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		TaskID:            taskID,
 		SessionID:         firstNonEmpty(input.SessionID, e.nextIdentifier("sess")),
 		RunID:             runID,
+		PrimaryRunID:      runID,
 		RequestSource:     strings.TrimSpace(input.RequestSource),
 		RequestTrigger:    strings.TrimSpace(input.RequestTrigger),
 		ExecutionAttempt:  1,
@@ -524,6 +526,31 @@ func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRec
 	defer e.mu.Unlock()
 
 	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "processing"
+	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	record.UpdatedAt = e.now()
+	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", outputSummary)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// BeginPreparedExecution atomically replaces the live runtime record with a
+// prepared restart attempt and then starts execution. This keeps restart
+// visibility aligned with the first real processing state instead of exposing a
+// transient preflight snapshot to concurrent readers.
+func (e *Engine) BeginPreparedExecution(task TaskRecord, stepName, outputSummary string) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.commitPreparedTaskLocked(task)
 	if !ok {
 		return TaskRecord{}, false
 	}
@@ -970,6 +997,44 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 	return record.clone(), true
 }
 
+// BlockPreparedTaskByPolicy atomically publishes a prepared restart attempt as
+// cancelled when governance denies the new run before execution begins.
+func (e *Engine) BlockPreparedTaskByPolicy(task TaskRecord, riskLevel, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.commitPreparedTaskLocked(task)
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "cancelled"
+	record.CurrentStep = "risk_blocked"
+	record.UpdatedAt = now
+	record.FinishedAt = &now
+	record.PendingExecution = nil
+	record.ApprovalRequest = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.ImpactScope = cloneMap(impactScope)
+	if riskLevel != "" {
+		record.RiskLevel = riskLevel
+	}
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
+		"security_status":        "intercepted",
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   latestRestorePointFromSummary(record.SecuritySummary),
+	}, record.SecuritySummary)
+	record.Timeline = advanceTimeline(record.Timeline, "risk_blocked", "cancelled", firstNonEmpty(outputSummary, "高风险操作已被策略拦截"))
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // CompleteTask collapses a task into completed and records its formal delivery,
 // artifacts, and recovery-point summary. The completion write also emits
 // delivery.ready so transports and dashboard queries observe the same formal
@@ -1117,30 +1182,11 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		if !record.isFinished() {
 			return TaskRecord{}, ErrTaskStatusInvalid
 		}
-		// Restart begins a fresh execution attempt for the same task, so it must
-		// allocate a new run identifier before any loop/runtime rows are emitted.
-		record.RunID = e.nextIdentifier("run")
-		record.ExecutionAttempt++
+		// The generic engine path still reopens restart directly into processing.
+		// The orchestrator uses PrepareRestart to stage the fresh run in memory
+		// until queue/governance preflight decides the first persisted state.
+		e.prepareRestartRecordLocked(record, now, bubbleMessage)
 		record.Status = "processing"
-		record.FinishedAt = nil
-		record.CurrentStep = "generate_output"
-		record.DeliveryResult = nil
-		record.Artifacts = nil
-		record.BubbleMessage = nil
-		record.ApprovalRequest = nil
-		record.PendingExecution = nil
-		record.Authorization = nil
-		record.ImpactScope = nil
-		record.StorageWritePlan = nil
-		record.ArtifactPlans = nil
-		record.MemoryReadPlans = nil
-		record.MemoryWritePlans = nil
-		record.MirrorReferences = nil
-		record.LoopStopReason = ""
-		record.SecuritySummary = mergePreservedSecuritySummary(
-			buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
-			record.SecuritySummary,
-		)
 		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
 	default:
 		return TaskRecord{}, ErrTaskStatusInvalid
@@ -1161,6 +1207,72 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 	return record.clone(), nil
 }
 
+// PrepareRestart builds a fresh restart attempt snapshot without mutating the
+// live runtime record yet. The orchestrator runs session queue and governance
+// preflight against this copy first so readers never observe a half-prepared
+// run_id before the first durable restart state is known.
+func (e *Engine) PrepareRestart(taskID string, bubbleMessage map[string]any) (TaskRecord, TaskRecord, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, TaskRecord{}, ErrTaskNotFound
+	}
+	if !record.isFinished() {
+		return TaskRecord{}, TaskRecord{}, ErrTaskStatusInvalid
+	}
+
+	previous := record.clone()
+	prepared := previous.clone()
+	e.prepareRestartRecordLocked(&prepared, e.now(), bubbleMessage)
+	return previous, prepared, nil
+}
+
+func (e *Engine) prepareRestartRecordLocked(record *TaskRecord, now time.Time, bubbleMessage map[string]any) {
+	// Restart begins a fresh execution attempt for the same task, so it must
+	// allocate a new run identifier before any loop/runtime rows are emitted.
+	record.RunID = e.nextIdentifier("run")
+	record.ExecutionAttempt++
+	record.FinishedAt = nil
+	record.CurrentStep = "generate_output"
+	record.UpdatedAt = now
+	record.DeliveryResult = nil
+	record.Artifacts = nil
+	record.Citations = nil
+	record.AuditRecords = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.ApprovalRequest = nil
+	record.PendingExecution = nil
+	record.Authorization = nil
+	record.ImpactScope = nil
+	record.TokenUsage = nil
+	record.StorageWritePlan = nil
+	record.ArtifactPlans = nil
+	record.MemoryReadPlans = nil
+	record.MemoryWritePlans = nil
+	record.MirrorReferences = nil
+	record.Notifications = nil
+	record.LatestToolCall = nil
+	record.LoopStopReason = ""
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+		record.SecuritySummary,
+	)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = nil
+}
+
+func (e *Engine) commitPreparedTaskLocked(task TaskRecord) (*TaskRecord, bool) {
+	record, ok := e.tasks[task.TaskID]
+	if !ok {
+		return nil, false
+	}
+	prepared := task.clone()
+	*record = prepared
+	return record, true
+}
+
 // MarkWaitingApproval is the shorthand entrypoint for moving a task into the
 // waiting_auth state.
 func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
@@ -1177,6 +1289,48 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 	defer e.mu.Unlock()
 
 	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "waiting_auth"
+	record.CurrentStep = "waiting_authorization"
+	record.UpdatedAt = now
+	record.ApprovalRequest = cloneMap(approvalRequest)
+	record.PendingExecution = cloneMap(pendingExecution)
+	if riskLevel, ok := approvalRequest["risk_level"].(string); ok && riskLevel != "" {
+		record.RiskLevel = riskLevel
+	}
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	latestRestorePoint := latestRestorePointFromSummary(record.SecuritySummary)
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
+		"security_status":        "pending_confirmation",
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 1,
+		"latest_restore_point":   latestRestorePoint,
+	}, record.SecuritySummary)
+	record.Timeline = advanceTimeline(record.Timeline, "waiting_authorization", "running", "等待用户授权")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "approval.pending")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	record.queueNotification("approval.pending", map[string]any{
+		"task_id":          record.TaskID,
+		"approval_request": cloneMap(record.ApprovalRequest),
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// MarkPreparedTaskWaitingApprovalWithPlan atomically publishes a prepared
+// restart attempt as waiting_auth after governance preflight decides that the
+// new run must stop at authorization before any execution can begin.
+func (e *Engine) MarkPreparedTaskWaitingApprovalWithPlan(task TaskRecord, approvalRequest map[string]any, pendingExecution map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.commitPreparedTaskLocked(task)
 	if !ok {
 		return TaskRecord{}, false
 	}
@@ -1364,6 +1518,38 @@ func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessag
 	return record.clone(), true
 }
 
+// QueuePreparedTaskForSession atomically publishes a prepared restart attempt
+// as the queued runtime state so query readers never observe the intermediate
+// restart snapshot before the session gate decides its first visible status.
+func (e *Engine) QueuePreparedTaskForSession(task TaskRecord, blockingTaskID string, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.commitPreparedTaskLocked(task)
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "blocked"
+	record.CurrentStep = "session_queue"
+	record.UpdatedAt = e.now()
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.Timeline = advanceTimeline(record.Timeline, "session_queue", "pending", "等待同一会话中的前序任务完成")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEventWithPayload(record, "task.session_queued", map[string]any{
+		"status":           record.Status,
+		"blocking_task_id": blockingTaskID,
+	})
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	record.queueNotification("task.session_queued", map[string]any{
+		"task_id":          record.TaskID,
+		"blocking_task_id": blockingTaskID,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // EscalateHumanLoop blocks one task for structured human review while keeping
 // the pending escalation payload available for later resume/cancel handling.
 // The escalation payload stays in PendingExecution because resume decisions must
@@ -1407,6 +1593,11 @@ func (r TaskRecord) isBlockedHumanLoop() bool {
 func resumeStepForTask(record *TaskRecord) string {
 	if record == nil {
 		return "generate_output"
+	}
+	if currentStep := strings.TrimSpace(record.CurrentStep); currentStep != "" && currentStep != "human_in_loop" {
+		// Pause/resume must preserve the step that was actually running. Intent
+		// alone can overstate agent-loop capability after prompt fallback.
+		return currentStep
 	}
 	if stringValue(record.Intent, "name", "") == "agent_loop" {
 		return "agent_loop"
@@ -3280,6 +3471,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		PrimaryRunID:      record.RunID,
 		RequestSource:     firstNonEmpty(record.RequestSource, record.Snapshot.Source),
 		RequestTrigger:    firstNonEmpty(record.RequestTrigger, record.Snapshot.Trigger),
 		ExecutionAttempt:  maxInt(record.ExecutionAttempt, 1),

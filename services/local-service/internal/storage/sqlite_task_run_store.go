@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,16 +42,12 @@ type SQLiteTaskRunStore struct {
 
 // NewSQLiteTaskRunStore opens and initializes the SQLite task/run store.
 func NewSQLiteTaskRunStore(databasePath string) (*SQLiteTaskRunStore, error) {
-	databasePath = strings.TrimSpace(databasePath)
-	if databasePath == "" {
-		return nil, ErrDatabasePathRequired
+	cleanedPath, err := prepareSQLiteDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("prepare sqlite directory: %w", err)
-	}
-
-	db, err := sql.Open(sqliteDriverName, databasePath)
+	db, err := sql.Open(sqliteDriverName, cleanedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -67,12 +61,12 @@ func NewSQLiteTaskRunStore(databasePath string) (*SQLiteTaskRunStore, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	taskStore, err := NewSQLiteTaskStore(databasePath)
+	taskStore, err := NewSQLiteTaskStore(cleanedPath)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
-	stepStore, err := NewSQLiteTaskStepStore(databasePath)
+	stepStore, err := NewSQLiteTaskStepStore(cleanedPath)
 	if err != nil {
 		_ = taskStore.Close()
 		_ = store.Close()

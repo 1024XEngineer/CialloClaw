@@ -833,7 +833,7 @@ export function useShellBallInteraction() {
               trigger: "hover_text_input",
               inputMode: "text",
             });
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
       return result;
@@ -864,7 +864,7 @@ export function useShellBallInteraction() {
         inputMode: "voice",
       });
 
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
 

@@ -12,8 +12,6 @@ import { AnimatePresence, motion } from "motion/react";
 import type { NotepadAction } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
-import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
@@ -167,7 +165,6 @@ function findReplacementItemIdForSourceNote(
 function resolveNoteItemSourceNotePath(
   item: NoteListItem,
   sourceNotesByPath: Map<string, SourceNoteDocument>,
-  sourceNotesByTitle: Map<string, SourceNoteDocument>,
 ) {
   const sourcePath = readTodoSourcePath(item.item);
   if (sourcePath) {
@@ -185,16 +182,15 @@ function resolveNoteItemSourceNotePath(
     return resourceMatch.path;
   }
 
-  return sourceNotesByTitle.get(item.item.title.trim().toLowerCase())?.path ?? null;
+  return null;
 }
 
 function matchesSourceNotePath(
   item: NoteListItem,
   sourceNotePath: string,
   sourceNotesByPath: Map<string, SourceNoteDocument>,
-  sourceNotesByTitle: Map<string, SourceNoteDocument>,
 ) {
-  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
   return matchedPath !== null && normalizeSourceNoteKey(matchedPath) === normalizeSourceNoteKey(sourceNotePath);
 }
 
@@ -224,7 +220,7 @@ export function NotePage() {
   const [draggingBoardItemId, setDraggingBoardItemId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [boardLayerSize, setBoardLayerSize] = useState<{ height: number; width: number } | null>(null);
-  const [dataMode, setDataMode] = useState<NotePageDataMode>(() => loadDashboardDataMode("notes") as NotePageDataMode);
+  const dataMode: NotePageDataMode = "rpc";
   const [selectedSourceNotePath, setSelectedSourceNotePath] = useState<string | null>(null);
   const [sourceNoteDraft, setSourceNoteDraft] = useState<SourceNoteEditorDraft>(() => createEmptySourceNoteEditorDraft());
   const [sourceNoteBaseline, setSourceNoteBaseline] = useState(() => createSourceNoteEditorDraftSignature(createEmptySourceNoteEditorDraft()));
@@ -266,12 +262,8 @@ export function NotePage() {
     startY: number;
     width: number;
   } | null>(null);
-  const noteRefreshPlan = useMemo(() => getDashboardNoteRefreshPlan(dataMode), [dataMode]);
+  const noteRefreshPlan = getDashboardNoteRefreshPlan(dataMode);
   const desktopSourceNotesAvailable = useMemo(() => areDesktopSourceNotesAvailable(), []);
-
-  useEffect(() => {
-    saveDashboardDataMode("notes", dataMode);
-  }, [dataMode]);
 
   const [upcomingQuery, laterQuery, recurringQuery, closedQuery] = useQueries({
     queries: [
@@ -356,15 +348,11 @@ export function NotePage() {
     () => new Map(sourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note])),
     [sourceNotes],
   );
-  const sourceNotesByTitle = useMemo(
-    () => new Map(sourceNotes.map((note) => [note.title.trim().toLowerCase(), note])),
-    [sourceNotes],
-  );
   const representedSourceNoteBlocks = useMemo(() => {
     const representedBlocks = new Set<string>();
 
     [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
       if (!matchedPath) {
         return;
       }
@@ -379,7 +367,7 @@ export function NotePage() {
     });
 
     return representedBlocks;
-  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
+  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath]);
   const sourceNoteFallbackItems = useMemo(
     () =>
       sourceNotes
@@ -425,14 +413,14 @@ export function NotePage() {
     const itemPathMap = new Map<string, string>();
 
     allItems.forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
       if (matchedPath) {
         itemPathMap.set(item.item.item_id, matchedPath);
       }
     });
 
     return itemPathMap;
-  }, [allItems, sourceNotesByPath, sourceNotesByTitle]);
+  }, [allItems, sourceNotesByPath]);
   const noteItemIdsBySourcePath = useMemo(() => {
     const pathItemMap = new Map<string, string[]>();
 
@@ -560,7 +548,6 @@ export function NotePage() {
     const latestSourceNotesResult = await sourceNotesQuery.refetch();
     const latestSourceNotes = latestSourceNotesResult.data?.notes ?? sourceNotes;
     const latestSourceNotesByPath = new Map(latestSourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note]));
-    const latestSourceNotesByTitle = new Map(latestSourceNotes.map((note) => [note.title.trim().toLowerCase(), note]));
     const normalizedExpectedPath = normalizeSourceNoteKey(sourceIdentity.path);
     const normalizedExpectedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
     const refetchedItems = await refetchAllNoteBuckets();
@@ -569,7 +556,7 @@ export function NotePage() {
         return false;
       }
 
-      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath, latestSourceNotesByTitle);
+      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath);
       if (!matchedPath || normalizeSourceNoteKey(matchedPath) !== normalizedExpectedPath) {
         return false;
       }
@@ -584,7 +571,7 @@ export function NotePage() {
         (item) =>
           !item.sourceNote?.localOnly
           && normalizeSourceNoteTitleKey(item.item.title) === normalizedExpectedTitle
-          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath, latestSourceNotesByTitle),
+          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath),
       );
 
     if (!matchedItem) {
@@ -671,7 +658,7 @@ export function NotePage() {
   }
 
   function resolveSourceNotePathForItem(item: NoteListItem) {
-    return resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+    return resolveNoteItemSourceNotePath(item, sourceNotesByPath);
   }
 
   function openSourceStudioForItem(item: NoteListItem) {
@@ -2057,14 +2044,6 @@ export function NotePage() {
             ) : null}
         </AnimatePresence>
 
-        <DashboardMockToggle
-          enabled={dataMode === "mock"}
-          onToggle={() => {
-            setFeedback(null);
-            setSourceNoteSyncMessage(null);
-            setDataMode((current) => (current === "rpc" ? "mock" : "rpc"));
-          }}
-        />
       </>
     </main>
   );

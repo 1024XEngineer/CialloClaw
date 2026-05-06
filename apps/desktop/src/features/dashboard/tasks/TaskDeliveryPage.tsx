@@ -5,8 +5,6 @@ import { AlertTriangle, ArrowLeft, ArrowUpRight, FolderOutput, Link2, RefreshCcw
 import { Link, NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
-import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { buildDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
@@ -49,7 +47,7 @@ export function TaskDeliveryPage() {
       return encodedTaskId;
     }
   }, [encodedTaskId]);
-  const [dataMode, setDataMode] = useState<TaskPageDataMode>(() => loadDashboardDataMode("tasks") as TaskPageDataMode);
+  const dataMode: TaskPageDataMode = "rpc";
   const [feedback, setFeedback] = useState<string | null>(null);
   const feedbackTimeoutRef = useRef<number | null>(null);
 
@@ -135,10 +133,6 @@ export function TaskDeliveryPage() {
     (formalDeliveryResult.type !== "task_detail" || Boolean(formalDeliveryResult.payload.path) || Boolean(formalDeliveryResult.payload.url));
 
   useEffect(() => {
-    saveDashboardDataMode("tasks", dataMode);
-  }, [dataMode]);
-
-  useEffect(() => {
     return () => {
       if (feedbackTimeoutRef.current !== null) {
         window.clearTimeout(feedbackTimeoutRef.current);
@@ -147,7 +141,7 @@ export function TaskDeliveryPage() {
   }, []);
 
   useEffect(() => {
-    if (dataMode === "mock" || taskId.length === 0) {
+    if (taskId.length === 0) {
       return;
     }
 
@@ -542,14 +536,6 @@ export function TaskDeliveryPage() {
           </div>
         </section>
       </section>
-
-      <DashboardMockToggle
-        enabled={dataMode === "mock"}
-        onToggle={() => {
-          setFeedback(null);
-          setDataMode((current) => (current === "rpc" ? "mock" : "rpc"));
-        }}
-      />
     </main>
   );
 }

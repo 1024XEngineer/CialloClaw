@@ -35,6 +35,7 @@
 - 对外统一围绕 `task`
 - 对内执行兼容对象保留 `run / step / event / tool_call`
 - 正式结果统一走 `delivery_result / artifact / citation`
+- 无任务锚点的纯社交 / 闲聊输入不属于正式执行路径，可只返回脱离 `task` 的轻量气泡；一旦输入需要执行、确认、授权、交付或持续追踪，必须回到 `task` 主链路。
 - 高风险动作统一进入 `approval_request / authorization_record / audit_record / recovery_point`
 
 ### 2.3 协议与工程口径

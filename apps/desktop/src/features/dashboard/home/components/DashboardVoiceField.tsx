@@ -185,16 +185,26 @@ export function DashboardVoiceField({ isOpen, onClose, onRecommendationConfirm, 
         return;
       }
 
-      setSubmittedTaskStatus(result.task.status);
-      setSubmittedTaskId(result.task.task_id);
       setSubmittedMessage(result.bubble_message?.text?.trim() || null);
       setStage("completed");
       clearCompletionTimer();
+      const task = result.task;
+      if (!task) {
+        setSubmittedTaskStatus(null);
+        setSubmittedTaskId(null);
+        completionTimerRef.current = window.setTimeout(() => {
+          onClose();
+        }, 720);
+        return;
+      }
+
+      setSubmittedTaskStatus(task.status);
+      setSubmittedTaskId(task.task_id);
       completionTimerRef.current = window.setTimeout(() => {
-        navigate(getDashboardVoiceTaskRoute(result.task.status), {
-          state: result.task.status === "waiting_auth"
+        navigate(getDashboardVoiceTaskRoute(task.status), {
+          state: task.status === "waiting_auth"
             ? undefined
-            : buildDashboardTaskDetailRouteState(result.task.task_id),
+            : buildDashboardTaskDetailRouteState(task.task_id),
         });
         onClose();
       }, 720);

@@ -1,4 +1,4 @@
-// 该测试文件验证存储层的数据行为。
+// These tests verify storage service behavior and capability wiring.
 package storage
 
 import (
@@ -16,7 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// stubAdapter 定义当前模块的数据结构。
+// stubAdapter provides the minimal adapter contract used by storage tests.
 type stubAdapter struct {
 	databasePath string
 }
@@ -30,12 +30,12 @@ type stubStrongholdProvider struct {
 	openCalls   int
 }
 
-// DatabasePath 处理当前模块的相关逻辑。
+// DatabasePath returns the configured database path for the test adapter.
 func (s stubAdapter) DatabasePath() string {
 	return s.databasePath
 }
 
-// SecretStorePath 处理当前模块的相关逻辑。
+// SecretStorePath returns the derived Stronghold path for the test adapter.
 func (s stubAdapter) SecretStorePath() string {
 	if s.databasePath == "" {
 		return ""
@@ -154,7 +154,7 @@ func TestNewServiceWithStrongholdBootstrapFillsMissingFactories(t *testing.T) {
 	})
 }
 
-// TestBackendReturnsSQLiteWAL 验证BackendReturnsSQLiteWAL。
+// TestBackendReturnsSQLiteWAL verifies the reported storage backend.
 func TestBackendReturnsSQLiteWAL(t *testing.T) {
 	service := NewService(nil)
 
@@ -163,7 +163,7 @@ func TestBackendReturnsSQLiteWAL(t *testing.T) {
 	}
 }
 
-// TestDatabasePathReturnsEmptyWhenAdapterMissing 验证DatabasePathReturnsEmptyWhenAdapterMissing。
+// TestDatabasePathReturnsEmptyWhenAdapterMissing verifies empty adapter paths.
 func TestDatabasePathReturnsEmptyWhenAdapterMissing(t *testing.T) {
 	service := NewService(nil)
 
@@ -172,7 +172,7 @@ func TestDatabasePathReturnsEmptyWhenAdapterMissing(t *testing.T) {
 	}
 }
 
-// TestDatabasePathTrimsWhitespace 验证DatabasePathTrimsWhitespace。
+// TestDatabasePathTrimsWhitespace verifies whitespace trimming for paths.
 func TestDatabasePathTrimsWhitespace(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "  D:/CialloClaw/data.db  "})
 
@@ -181,7 +181,7 @@ func TestDatabasePathTrimsWhitespace(t *testing.T) {
 	}
 }
 
-// TestConfiguredReturnsFalseWhenAdapterMissing 验证ConfiguredReturnsFalseWhenAdapterMissing。
+// TestConfiguredReturnsFalseWhenAdapterMissing verifies missing adapter state.
 func TestConfiguredReturnsFalseWhenAdapterMissing(t *testing.T) {
 	service := NewService(nil)
 
@@ -190,7 +190,7 @@ func TestConfiguredReturnsFalseWhenAdapterMissing(t *testing.T) {
 	}
 }
 
-// TestConfiguredReturnsFalseWhenPathEmpty 验证ConfiguredReturnsFalseWhenPathEmpty。
+// TestConfiguredReturnsFalseWhenPathEmpty verifies empty path handling.
 func TestConfiguredReturnsFalseWhenPathEmpty(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "   "})
 
@@ -199,7 +199,7 @@ func TestConfiguredReturnsFalseWhenPathEmpty(t *testing.T) {
 	}
 }
 
-// TestConfiguredReturnsTrueWhenAdapterAndPathPresent 验证ConfiguredReturnsTrueWhenAdapterAndPathPresent。
+// TestConfiguredReturnsTrueWhenAdapterAndPathPresent verifies configured state.
 func TestConfiguredReturnsTrueWhenAdapterAndPathPresent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "configured.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -210,7 +210,7 @@ func TestConfiguredReturnsTrueWhenAdapterAndPathPresent(t *testing.T) {
 	}
 }
 
-// TestValidateReturnsErrorWhenAdapterMissing 验证ValidateReturnsErrorWhenAdapterMissing。
+// TestValidateReturnsErrorWhenAdapterMissing verifies adapter validation.
 func TestValidateReturnsErrorWhenAdapterMissing(t *testing.T) {
 	service := NewService(nil)
 
@@ -220,7 +220,7 @@ func TestValidateReturnsErrorWhenAdapterMissing(t *testing.T) {
 	}
 }
 
-// TestValidateReturnsErrorWhenPathMissing 验证ValidateReturnsErrorWhenPathMissing。
+// TestValidateReturnsErrorWhenPathMissing verifies path validation.
 func TestValidateReturnsErrorWhenPathMissing(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "   "})
 
@@ -230,7 +230,7 @@ func TestValidateReturnsErrorWhenPathMissing(t *testing.T) {
 	}
 }
 
-// TestValidatePassesWhenAdapterConfigured 验证ValidatePassesWhenAdapterConfigured。
+// TestValidatePassesWhenAdapterConfigured verifies the success path.
 func TestValidatePassesWhenAdapterConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "validate.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -241,7 +241,7 @@ func TestValidatePassesWhenAdapterConfigured(t *testing.T) {
 	}
 }
 
-// TestDescriptorReturnsTypedSnapshot 验证DescriptorReturnsTypedSnapshot。
+// TestDescriptorReturnsTypedSnapshot verifies descriptor projection.
 func TestDescriptorReturnsTypedSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "descriptor.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -262,7 +262,8 @@ func TestDescriptorReturnsTypedSnapshot(t *testing.T) {
 	}
 }
 
-// TestCapabilitiesReturnsConfiguredStructuredStorageOnly 验证CapabilitiesReturnsConfiguredStructuredStorageOnly。
+// TestCapabilitiesReturnsConfiguredStructuredStorageOnly verifies capability
+// reporting for the configured structured-storage path.
 func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capabilities.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -379,7 +380,8 @@ func TestResolveModelAPIKeyFailsWhenSecretStoreMissing(t *testing.T) {
 	}
 }
 
-// TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing 验证CapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing。
+// TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing verifies the
+// unconfigured capability snapshot.
 func TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "   "})
 
@@ -389,7 +391,7 @@ func TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing(t *testing.T) {
 	}
 }
 
-// TestMemoryStoreReturnsWorkingImplementation 验证MemoryStoreReturnsWorkingImplementation。
+// TestMemoryStoreReturnsWorkingImplementation verifies memory store wiring.
 func TestMemoryStoreReturnsWorkingImplementation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -455,6 +457,7 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_001",
 		TaskID:                "task_approval_001",
+		RunID:                 "run_approval_001",
 		ApprovalID:            "appr_001",
 		Decision:              "allow_once",
 		Operator:              "user",
@@ -471,7 +474,7 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	if approvalItems[0].OperationName != "screen_capture" || approvalItems[0].Status != "pending" {
 		t.Fatalf("unexpected approval record: %+v", approvalItems[0])
 	}
-	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", "", 10, 0)
 	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
 		t.Fatalf("unexpected authorization records total=%d len=%d err=%v", authorizationTotal, len(authorizationItems), err)
 	}
@@ -495,6 +498,7 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_002",
 		TaskID:                "task_approval_001",
+		RunID:                 "run_approval_002",
 		ApprovalID:            "appr_001",
 		Decision:              "deny_once",
 		Operator:              "user",
@@ -504,12 +508,19 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	if err != nil {
 		t.Fatalf("write second authorization record failed: %v", err)
 	}
-	updatedAuthorizationItems, updatedAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	updatedAuthorizationItems, updatedAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", "", 10, 0)
 	if err != nil || updatedAuthorizationTotal != 2 || len(updatedAuthorizationItems) != 2 {
 		t.Fatalf("expected full authorization history total=%d len=%d err=%v items=%+v", updatedAuthorizationTotal, len(updatedAuthorizationItems), err, updatedAuthorizationItems)
 	}
 	if updatedAuthorizationItems[0].AuthorizationRecordID != "auth_002" || updatedAuthorizationItems[1].AuthorizationRecordID != "auth_001" {
 		t.Fatalf("expected authorization history ordering to preserve both records, got %+v", updatedAuthorizationItems)
+	}
+	filteredAuthorizationItems, filteredAuthorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", "run_approval_001", 10, 0)
+	if err != nil || filteredAuthorizationTotal != 1 || len(filteredAuthorizationItems) != 1 {
+		t.Fatalf("expected run-scoped authorization history total=%d len=%d err=%v items=%+v", filteredAuthorizationTotal, len(filteredAuthorizationItems), err, filteredAuthorizationItems)
+	}
+	if filteredAuthorizationItems[0].AuthorizationRecordID != "auth_001" {
+		t.Fatalf("expected run-scoped authorization history to keep the matching attempt, got %+v", filteredAuthorizationItems)
 	}
 }
 
@@ -608,6 +619,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	if err := service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_atomic_001",
 		TaskID:                "task_atomic_001",
+		RunID:                 "run_atomic_001",
 		ApprovalID:            "appr_atomic_001",
 		Decision:              "allow_once",
 		Operator:              "user",
@@ -628,6 +640,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	err = service.AuthorizationRecordStore().WriteAuthorizationDecision(context.Background(), AuthorizationRecordRecord{
 		AuthorizationRecordID: "auth_atomic_missing",
 		TaskID:                "task_atomic_missing",
+		RunID:                 "run_atomic_missing",
 		ApprovalID:            "appr_missing",
 		Decision:              "deny_once",
 		Operator:              "user",
@@ -637,7 +650,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 		t.Fatalf("expected missing approval to fail atomic authorization write, got %v", err)
 	}
 
-	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "", 10, 0)
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "", "", 10, 0)
 	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
 		t.Fatalf("expected failed atomic authorization write to leave history unchanged total=%d len=%d err=%v items=%+v", authorizationTotal, len(authorizationItems), err, authorizationItems)
 	}
@@ -646,7 +659,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	}
 }
 
-// TestCloseIsSafeWithoutConfiguredStore 验证CloseIsSafeWithoutConfiguredStore。
+// TestCloseIsSafeWithoutConfiguredStore verifies noop close behavior.
 func TestCloseIsSafeWithoutConfiguredStore(t *testing.T) {
 	service := NewService(nil)
 	if err := service.Close(); err != nil {
@@ -822,14 +835,14 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
 	}
-	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001")
+	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001", "")
 	if err != nil {
 		t.Fatalf("GetLatestDeliveryResult returned error: %v", err)
 	}
 	if !ok || deliveryResult.DeliveryResultID != "delivery_result_001" || deliveryResult.PreviewText != "loop preview" {
 		t.Fatalf("unexpected latest delivery_result: ok=%v record=%+v", ok, deliveryResult)
 	}
-	citations, err := store.ListTaskCitations(context.Background(), "task_loop_001")
+	citations, err := store.ListTaskCitations(context.Background(), "task_loop_001", "")
 	if err != nil {
 		t.Fatalf("ListTaskCitations returned error: %v", err)
 	}
@@ -945,6 +958,7 @@ func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 	err := writer.WriteAuditRecord(context.Background(), audit.Record{
 		AuditID:   "audit_001",
 		TaskID:    "task_001",
+		RunID:     "run_001",
 		Type:      "file",
 		Action:    "write_file",
 		Summary:   "write result file",
@@ -960,6 +974,13 @@ func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 		t.Fatalf("expected sqlite audit store, got %T", service.auditStore)
 	}
 	assertAuditCount(t, sqliteWriter.db, 1)
+	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", "", 20, 0)
+	if err != nil {
+		t.Fatalf("ListAuditRecords returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].RunID != "run_001" {
+		t.Fatalf("expected audit run_id to round-trip, total=%d items=%+v", total, items)
+	}
 }
 
 func TestRecoveryPointWriterReturnsWorkingImplementation(t *testing.T) {
@@ -997,7 +1018,7 @@ func TestAuditStoreListsRecords(t *testing.T) {
 	_ = writer.WriteAuditRecord(context.Background(), audit.Record{AuditID: "audit_001", TaskID: "task_001", Type: "file", Action: "write_file", Summary: "write one", Target: "workspace/one.md", Result: "success", CreatedAt: "2026-04-08T10:00:00Z"})
 	_ = writer.WriteAuditRecord(context.Background(), audit.Record{AuditID: "audit_002", TaskID: "task_002", Type: "file", Action: "write_file", Summary: "write two", Target: "workspace/two.md", Result: "success", CreatedAt: "2026-04-08T10:01:00Z"})
 
-	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", 20, 0)
+	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListAuditRecords returned error: %v", err)
 	}
@@ -1076,7 +1097,7 @@ func TestArtifactStoreReturnsWorkingImplementation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveArtifacts returned error: %v", err)
 	}
-	items, total, err := store.ListArtifacts(context.Background(), "task_001", 20, 0)
+	items, total, err := store.ListArtifacts(context.Background(), "task_001", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListArtifacts returned error: %v", err)
 	}
