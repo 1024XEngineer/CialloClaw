@@ -210,6 +210,19 @@ export function ShellBallMascot({
     };
   }, []);
 
+  useEffect(() => {
+    if (canTriggerShellBallMascotHappyPulse(visualState)) {
+      return;
+    }
+
+    if (happyTimeoutRef.current !== null) {
+      window.clearTimeout(happyTimeoutRef.current);
+      happyTimeoutRef.current = null;
+    }
+
+    setHappyActive(false);
+  }, [visualState]);
+
   function triggerHappyPulse() {
     if (!canTriggerShellBallMascotHappyPulse(visualState)) {
       return;

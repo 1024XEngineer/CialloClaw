@@ -217,10 +217,39 @@ function FloatingPetEffectLayer({ effectName, phase }: { effectName: FloatingPet
   );
 }
 
-function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean, playListenTiltEnd: boolean) {
+type NumericKeyframeMotion = {
+  durationMs: number;
+  repeat: boolean;
+  times: readonly number[];
+  values: readonly number[];
+};
+
+type RootBodyMotion = {
+  animate: {
+    rotate: number | number[];
+    x: number;
+    y: number | number[];
+  };
+  initial: {
+    rotate: number;
+    x: number;
+    y: number;
+  };
+  transition: {
+    duration: number;
+    ease: "easeInOut";
+    repeat?: number;
+    times?: readonly number[];
+  };
+};
+
+function resolveRootBodyMotionConfig(mode: FloatingPetMode, listenLocked: boolean, playListenTiltEnd: boolean): RootBodyMotion {
+  const initial = { rotate: 0, x: ROOT_BODY_BASE_X, y: ROOT_BODY_UPDOWN_Y[0] };
+
   if (playListenTiltEnd) {
     return {
       animate: { rotate: [-4.295, 0], x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      initial,
       transition: { duration: 1, ease: "easeInOut", times: [0, 1] },
     };
   }
@@ -228,6 +257,7 @@ function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean, pla
   if (mode === "happy") {
     return {
       animate: { rotate: [0, -4.295, 0], x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      initial,
       transition: { duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", times: [0, 0.5, 1] },
     };
   }
@@ -235,52 +265,87 @@ function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean, pla
   if (mode === "listen" && !listenLocked) {
     return {
       animate: { rotate: -4.295, x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      initial,
       transition: { duration: 0.45, ease: "easeInOut" },
     };
   }
 
   return {
     animate: { rotate: 0, x: ROOT_BODY_BASE_X, y: ROOT_BODY_UPDOWN_Y },
+    initial,
     transition: { duration: FLOATING_PET_LOOP_DURATION_S, ease: "easeInOut", repeat: Number.POSITIVE_INFINITY, times: [0, 0.5, 1] },
   };
 }
 
-function resolveWingMotion(mode: FloatingPetMode, listenLocked: boolean) {
+function resolveLeftWingMotion(mode: FloatingPetMode, listenLocked: boolean): NumericKeyframeMotion {
   if (mode === "happy") {
     return {
-      left: { rotate: [0, 8.873, 0, 11.638, 0], repeat: 0 },
-      right: { rotate: [0, -14.422, -4.648, -14.901, 0], repeat: 0 },
+      durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+      repeat: false,
+      times: QUICK_CLAP_TIMES,
+      values: [0, 8.873, 0, 11.638, 0],
     };
   }
 
   if (mode === "alert" || mode === "safe" || (mode === "listen" && !listenLocked)) {
     return {
-      left: { rotate: [0, 8.873, 0, 11.638, 0], repeat: Number.POSITIVE_INFINITY },
-      right: { rotate: [0, -14.422, -4.648, -14.901, 0], repeat: Number.POSITIVE_INFINITY },
+      durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+      repeat: true,
+      times: QUICK_CLAP_TIMES,
+      values: [0, 8.873, 0, 11.638, 0],
     };
   }
 
   return {
-    left: { rotate: [0, 2.438, 0], repeat: Number.POSITIVE_INFINITY },
-    right: { rotate: [0, -2.493, 0], repeat: Number.POSITIVE_INFINITY },
+    durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+    repeat: true,
+    times: [0, 0.5, 1],
+    values: [0, 2.438, 0],
   };
 }
 
-function resolveTailMotion(mode: FloatingPetMode, listenLocked: boolean) {
-  if (mode === "alert" || mode === "safe" || mode === "happy" || (mode === "listen" && !listenLocked)) {
+function resolveRightWingMotion(mode: FloatingPetMode, listenLocked: boolean): NumericKeyframeMotion {
+  if (mode === "happy") {
     return {
-      duration: FLOATING_PET_QUICK_TAIL_DURATION_S,
-      repeat: Number.POSITIVE_INFINITY,
-      rotate: [0, -6.383, 0],
-      times: [0, 0.5, 1],
+      durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+      repeat: false,
+      times: QUICK_CLAP_TIMES,
+      values: [0, -14.422, -4.648, -14.901, 0],
+    };
+  }
+
+  if (mode === "alert" || mode === "safe" || (mode === "listen" && !listenLocked)) {
+    return {
+      durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+      repeat: true,
+      times: QUICK_CLAP_TIMES,
+      values: [0, -14.422, -4.648, -14.901, 0],
     };
   }
 
   return {
-    duration: FLOATING_PET_LOOP_DURATION_S,
-    repeat: Number.POSITIVE_INFINITY,
-    rotate: [0, -4.301, 0],
+    durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+    repeat: true,
     times: [0, 0.5, 1],
+    values: [0, -2.493, 0],
+  };
+}
+
+function resolveTailMotion(mode: FloatingPetMode, listenLocked: boolean): NumericKeyframeMotion {
+  if (mode === "alert" || mode === "safe" || mode === "happy" || (mode === "listen" && !listenLocked)) {
+    return {
+      durationMs: FLOATING_PET_QUICK_TAIL_DURATION_S * 1000,
+      repeat: true,
+      times: [0, 0.5, 1],
+      values: [0, -6.383, 0],
+    };
+  }
+
+  return {
+    durationMs: FLOATING_PET_LOOP_DURATION_S * 1000,
+    repeat: true,
+    times: [0, 0.5, 1],
+    values: [0, -4.301, 0],
   };
 }
 
@@ -311,6 +376,133 @@ function interpolateKeyframeValue(values: number[], times: number[], progress: n
   }
 
   return values[values.length - 1] ?? 0;
+}
+
+function useKeyframedMotionValue(motion: NumericKeyframeMotion) {
+  const [value, setValue] = useState(motion.values[0] ?? 0);
+
+  useEffect(() => {
+    setValue(motion.values[0] ?? 0);
+
+    if (motion.values.length <= 1) {
+      return;
+    }
+
+    let frame = 0;
+    const startTime = performance.now();
+
+    const tick = (time: number) => {
+      const elapsed = time - startTime;
+      const progress = motion.repeat ? (elapsed % motion.durationMs) / motion.durationMs : Math.min(elapsed / motion.durationMs, 1);
+
+      setValue(interpolateKeyframeValue([...motion.values], [...motion.times], progress));
+
+      if (motion.repeat || progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+      }
+    };
+
+    frame = window.requestAnimationFrame(tick);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [motion.durationMs, motion.repeat, motion.times, motion.values]);
+
+  return value;
+}
+
+function useRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
+  const previousModeRef = useRef<FloatingPetMode>(mode);
+  const previousListenLockedRef = useRef(listenLocked);
+  const timeoutRef = useRef<number | null>(null);
+  const [playListenTiltEnd, setPlayListenTiltEnd] = useState(false);
+
+  useLayoutEffect(() => {
+    const previousMode = previousModeRef.current;
+    const previousListenLocked = previousListenLockedRef.current;
+
+    previousModeRef.current = mode;
+    previousListenLockedRef.current = listenLocked;
+
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
+    setPlayListenTiltEnd(false);
+
+    // Body decides locally whether leaving the unlocked listen pose requires a
+    // single tilt_end before returning to the shared bobbing motion.
+    if (previousMode === "listen" && previousListenLocked === false && (mode === "idle" || (mode === "listen" && listenLocked))) {
+      setPlayListenTiltEnd(true);
+      timeoutRef.current = window.setTimeout(() => {
+        setPlayListenTiltEnd(false);
+        timeoutRef.current = null;
+      }, 1_000);
+    }
+  }, [listenLocked, mode]);
+
+  useEffect(() => () => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+    }
+  }, []);
+
+  return useMemo(() => resolveRootBodyMotionConfig(mode, listenLocked, playListenTiltEnd), [listenLocked, mode, playListenTiltEnd]);
+}
+
+function useFloatingPetEffectState(mode: FloatingPetMode) {
+  const previousModeRef = useRef<FloatingPetMode>(mode);
+  const timeoutRef = useRef<number | null>(null);
+  const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
+  const activeEffect = MODE_TO_EFFECT[mode] ?? null;
+
+  useEffect(() => {
+    const previousMode = previousModeRef.current;
+    previousModeRef.current = mode;
+
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
+    const previousEffect = MODE_TO_EFFECT[previousMode] ?? null;
+    if (previousEffect === null || previousEffect === activeEffect) {
+      setExitEffect(null);
+      return;
+    }
+
+    setExitEffect(previousEffect);
+    const timeoutMs = previousEffect === "sparkle" ? FLOATING_PET_HAPPY_END_DURATION_S * 1000 : FLOATING_PET_EFFECT_END_DURATION_S * 1000;
+    timeoutRef.current = window.setTimeout(() => {
+      setExitEffect((current) => (current === previousEffect ? null : current));
+      timeoutRef.current = null;
+    }, timeoutMs);
+  }, [activeEffect, mode]);
+
+  useEffect(() => () => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+    }
+  }, []);
+
+  return { activeEffect, exitEffect };
+}
+
+function useLeftWingAngle(mode: FloatingPetMode, listenLocked: boolean) {
+  const motion = useMemo(() => resolveLeftWingMotion(mode, listenLocked), [listenLocked, mode]);
+  return useKeyframedMotionValue(motion);
+}
+
+function useRightWingAngle(mode: FloatingPetMode, listenLocked: boolean) {
+  const motion = useMemo(() => resolveRightWingMotion(mode, listenLocked), [listenLocked, mode]);
+  return useKeyframedMotionValue(motion);
+}
+
+function useTailAngle(mode: FloatingPetMode, listenLocked: boolean) {
+  const motion = useMemo(() => resolveTailMotion(mode, listenLocked), [listenLocked, mode]);
+  return useKeyframedMotionValue(motion);
 }
 
 
@@ -358,159 +550,14 @@ function resolveBeakAnimation(mode: FloatingPetMode) {
  */
 export function FloatingPet({ className, size = "100%", mode = "idle", listenLocked = false, eyesClosed = false }: FloatingPetProps) {
   const rootStyle: CSSProperties = { height: size, width: size };
-  const previousModeRef = useRef<FloatingPetMode>(mode);
-  const previousBodyModeRef = useRef<FloatingPetMode>(mode);
-  const previousBodyListenLockedRef = useRef(listenLocked);
-  const exitTimeoutRef = useRef<number | null>(null);
-  const bodyExitTimeoutRef = useRef<number | null>(null);
-  const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
-  const [playListenTiltEnd, setPlayListenTiltEnd] = useState(false);
-  const [leftWingDebugAngle, setLeftWingDebugAngle] = useState(0);
-  const [rightWingDebugAngle, setRightWingDebugAngle] = useState(0);
-  const [tailDebugAngle, setTailDebugAngle] = useState(0);
-  const activeEffect = MODE_TO_EFFECT[mode] ?? null;
-  const rootBodyMotion = useMemo(() => resolveRootBodyMotion(mode, listenLocked, playListenTiltEnd), [listenLocked, mode, playListenTiltEnd]);
-  const wingMotion = useMemo(() => resolveWingMotion(mode, listenLocked), [listenLocked, mode]);
-  const tailMotion = useMemo(() => resolveTailMotion(mode, listenLocked), [listenLocked, mode]);
+  const { activeEffect, exitEffect } = useFloatingPetEffectState(mode);
+  const rootBodyMotion = useRootBodyMotion(mode, listenLocked);
+  const leftWingAngle = useLeftWingAngle(mode, listenLocked);
+  const rightWingAngle = useRightWingAngle(mode, listenLocked);
+  const tailAngle = useTailAngle(mode, listenLocked);
   const openEyeAnimation = useMemo(() => resolveOpenEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
   const closedEyeAnimation = useMemo(() => resolveClosedEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
   const beakAnimation = useMemo(() => resolveBeakAnimation(mode), [mode]);
-
-  useLayoutEffect(() => {
-    const previousMode = previousBodyModeRef.current;
-    const previousListenLocked = previousBodyListenLockedRef.current;
-
-    previousBodyModeRef.current = mode;
-    previousBodyListenLockedRef.current = listenLocked;
-
-    if (bodyExitTimeoutRef.current !== null) {
-      window.clearTimeout(bodyExitTimeoutRef.current);
-      bodyExitTimeoutRef.current = null;
-    }
-
-    setPlayListenTiltEnd(false);
-
-    // Leaving the unlocked listen pose should play one tilt_end before the
-    // idle or locked-listen updown motion takes over.
-    if (previousMode === "listen" && previousListenLocked === false && (mode === "idle" || (mode === "listen" && listenLocked))) {
-      setPlayListenTiltEnd(true);
-      bodyExitTimeoutRef.current = window.setTimeout(() => {
-        setPlayListenTiltEnd(false);
-        bodyExitTimeoutRef.current = null;
-      }, 1_000);
-    }
-  }, [listenLocked, mode]);
-
-  useEffect(() => {
-    const previousMode = previousModeRef.current;
-    previousModeRef.current = mode;
-
-    if (exitTimeoutRef.current !== null) {
-      window.clearTimeout(exitTimeoutRef.current);
-      exitTimeoutRef.current = null;
-    }
-
-    const previousEffect = MODE_TO_EFFECT[previousMode] ?? null;
-    if (previousEffect === null || previousEffect === activeEffect) {
-      setExitEffect(null);
-      return;
-    }
-
-    setExitEffect(previousEffect);
-    const timeoutMs = previousEffect === "sparkle" ? FLOATING_PET_HAPPY_END_DURATION_S * 1000 : FLOATING_PET_EFFECT_END_DURATION_S * 1000;
-    exitTimeoutRef.current = window.setTimeout(() => {
-      setExitEffect((current) => (current === previousEffect ? null : current));
-      exitTimeoutRef.current = null;
-    }, timeoutMs);
-  }, [activeEffect, mode]);
-
-  useEffect(() => () => {
-    if (exitTimeoutRef.current !== null) {
-      window.clearTimeout(exitTimeoutRef.current);
-    }
-
-    if (bodyExitTimeoutRef.current !== null) {
-      window.clearTimeout(bodyExitTimeoutRef.current);
-    }
-  }, []);
-
-  useEffect(() => {
-    const rotateValues = wingMotion.left.rotate;
-    const rotateTimes = rotateValues.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1];
-    const durationMs = FLOATING_PET_LOOP_DURATION_S * 1000;
-    const looping = wingMotion.left.repeat !== 0;
-    let frame = 0;
-    const startTime = performance.now();
-
-    const tick = (time: number) => {
-      const elapsed = time - startTime;
-      const progress = looping ? (elapsed % durationMs) / durationMs : Math.min(elapsed / durationMs, 1);
-
-      setLeftWingDebugAngle(interpolateKeyframeValue(rotateValues, rotateTimes, progress));
-
-      if (looping || progress < 1) {
-        frame = window.requestAnimationFrame(tick);
-      }
-    };
-
-    frame = window.requestAnimationFrame(tick);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [wingMotion.left.repeat, wingMotion.left.rotate]);
-
-  useEffect(() => {
-    const rotateValues = wingMotion.right.rotate;
-    const rotateTimes = rotateValues.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1];
-    const durationMs = FLOATING_PET_LOOP_DURATION_S * 1000;
-    const looping = wingMotion.right.repeat !== 0;
-    let frame = 0;
-    const startTime = performance.now();
-
-    const tick = (time: number) => {
-      const elapsed = time - startTime;
-      const progress = looping ? (elapsed % durationMs) / durationMs : Math.min(elapsed / durationMs, 1);
-
-      setRightWingDebugAngle(interpolateKeyframeValue(rotateValues, rotateTimes, progress));
-
-      if (looping || progress < 1) {
-        frame = window.requestAnimationFrame(tick);
-      }
-    };
-
-    frame = window.requestAnimationFrame(tick);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [wingMotion.right.repeat, wingMotion.right.rotate]);
-
-  useEffect(() => {
-    const rotateValues = tailMotion.rotate;
-    const rotateTimes = tailMotion.times;
-    const durationMs = tailMotion.duration * 1000;
-    const looping = tailMotion.repeat !== 0;
-    let frame = 0;
-    const startTime = performance.now();
-
-    const tick = (time: number) => {
-      const elapsed = time - startTime;
-      const progress = looping ? (elapsed % durationMs) / durationMs : Math.min(elapsed / durationMs, 1);
-
-      setTailDebugAngle(interpolateKeyframeValue(rotateValues, rotateTimes, progress));
-
-      if (looping || progress < 1) {
-        frame = window.requestAnimationFrame(tick);
-      }
-    };
-
-    frame = window.requestAnimationFrame(tick);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [tailMotion.duration, tailMotion.repeat, tailMotion.rotate, tailMotion.times]);
 
   return (
     <div className={cn(styles.root, className)} style={rootStyle}>
@@ -520,8 +567,8 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
           {exitEffect && exitEffect !== activeEffect ? <FloatingPetEffectLayer effectName={exitEffect} key={`exit-${exitEffect}`} phase="exit" /> : null}
         </AnimatePresence>
 
-        <motion.g animate={rootBodyMotion.animate} initial={{ rotate: 0, x: ROOT_BODY_BASE_X, y: ROOT_BODY_UPDOWN_Y[0] }} transition={rootBodyMotion.transition}>
-          <g transform={`rotate(${tailDebugAngle} ${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}>
+        <motion.g animate={rootBodyMotion.animate} initial={rootBodyMotion.initial} transition={rootBodyMotion.transition}>
+          <g transform={`rotate(${tailAngle} ${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}>
             {renderCenteredImage(
               "tail",
               floatingPetInitialLayout.rootBody.tail,
@@ -530,7 +577,7 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             )}
           </g>
 
-          <g transform={`rotate(${leftWingDebugAngle} ${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}>
+          <g transform={`rotate(${leftWingAngle} ${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}>
             {renderCenteredImage(
               "leftWing",
               floatingPetInitialLayout.rootBody.leftWing,
@@ -541,7 +588,7 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <g transform={`rotate(${rightWingDebugAngle} ${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}>
+          <g transform={`rotate(${rightWingAngle} ${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}>
             {renderCenteredImage(
               "rightWing",
               floatingPetInitialLayout.rootBody.rightWing,
