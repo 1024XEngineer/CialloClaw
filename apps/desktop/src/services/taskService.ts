@@ -12,7 +12,6 @@ import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
 import {
   getConversationPageContextForSession,
-  getCurrentConversationSessionId,
   rememberConversationPageContextFromTask,
   rememberConversationSessionFromTask,
 } from "./conversationSessionService";
@@ -123,7 +122,9 @@ async function resolveTaskPageContext(pageContext: PageContext | undefined, sess
 }
 
 function resolveTaskSessionId(sessionId: string | undefined) {
-  return sessionId?.trim() || getCurrentConversationSessionId();
+  // Task-entry helpers start fresh unless a caller deliberately pins a backend
+  // session for an explicit continuation flow.
+  return sessionId?.trim() || undefined;
 }
 
 export async function startTaskFromSelectedText(text: string, context: StartTaskContext = {}) {
