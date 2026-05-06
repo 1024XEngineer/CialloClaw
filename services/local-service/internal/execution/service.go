@@ -3394,7 +3394,7 @@ func pageAttachInput(urlValue string, arguments map[string]any, snapshot context
 	// can request a page tool, but it must not steer browser kind or CDP endpoint
 	// away from the observed foreground session.
 	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
-	if browserKind != "chrome" && browserKind != "edge" {
+	if browserKind != "" && browserKind != "chrome" && browserKind != "edge" {
 		return nil
 	}
 	pageURL := comparablePageURL(snapshot.PageURL)
@@ -3407,9 +3407,11 @@ func pageAttachInput(urlValue string, arguments map[string]any, snapshot context
 		target["title_contains"] = pageTitle
 	}
 	attach := map[string]any{
-		"mode":         string(tools.BrowserAttachModeCDP),
-		"browser_kind": browserKind,
-		"target":       target,
+		"mode":   string(tools.BrowserAttachModeCDP),
+		"target": target,
+	}
+	if browserKind != "" {
+		attach["browser_kind"] = browserKind
 	}
 	return attach
 }

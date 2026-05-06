@@ -1858,6 +1858,30 @@ func TestResolvePageToolInputMatchesEquivalentRootURLs(t *testing.T) {
 	}
 }
 
+func TestResolvePageToolInputAllowsWorkerDetectedBrowserKind(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{
+		PageURL:     "https://example.com/current",
+		PageTitle:   "Current Tab",
+		ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+		WindowTitle: "Current Tab - Google Chrome",
+	}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/current", "browser_kind": "edge"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve when browser kind is omitted from snapshot")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach hints with worker-detected browser kind fallback, got %+v", input)
+	}
+	if _, exists := attach["browser_kind"]; exists {
+		t.Fatalf("expected attach hints to omit browser_kind when snapshot does not classify it, got %+v", attach)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["url"] != "https://example.com/current" || target["title_contains"] != "Current Tab" {
+		t.Fatalf("expected attach target to remain based on the trusted page snapshot, got %+v", attach)
+	}
+}
+
 func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
