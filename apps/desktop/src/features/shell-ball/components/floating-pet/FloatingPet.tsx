@@ -205,20 +205,20 @@ function resolveWingMotion(mode: FloatingPetMode, listenLocked: boolean) {
   if (mode === "happy") {
     return {
       left: { rotate: [0, 8.873, 0, 11.638, 0], repeat: 0 },
-      right: { rotate: [63.113, 48.691, 58.465, 48.212, 63.113], repeat: 0 },
+      right: { rotate: [0, -14.422, -4.648, -14.901, 0], repeat: 0 },
     };
   }
 
   if (mode === "alert" || mode === "safe" || (mode === "listen" && !listenLocked)) {
     return {
       left: { rotate: [0, 8.873, 0, 11.638, 0], repeat: Number.POSITIVE_INFINITY },
-      right: { rotate: [63.113, 48.691, 58.465, 48.212, 63.113], repeat: Number.POSITIVE_INFINITY },
+      right: { rotate: [0, -14.422, -4.648, -14.901, 0], repeat: Number.POSITIVE_INFINITY },
     };
   }
 
   return {
     left: { rotate: [0, 2.438, 0], repeat: Number.POSITIVE_INFINITY },
-    right: { rotate: [63.113, 60.62, 63.113], repeat: Number.POSITIVE_INFINITY },
+    right: { rotate: [0, -2.493, 0], repeat: Number.POSITIVE_INFINITY },
   };
 }
 
@@ -227,7 +227,7 @@ function resolveTailMotion(mode: FloatingPetMode, listenLocked: boolean) {
     return {
       duration: FLOATING_PET_QUICK_TAIL_DURATION_S,
       repeat: Number.POSITIVE_INFINITY,
-      rotate: [28.402, 22.019, 28.402],
+      rotate: [0, -6.383, 0],
       times: [0, 0.5, 1],
     };
   }
@@ -235,32 +235,8 @@ function resolveTailMotion(mode: FloatingPetMode, listenLocked: boolean) {
   return {
     duration: FLOATING_PET_LOOP_DURATION_S,
     repeat: Number.POSITIVE_INFINITY,
-    rotate: [28.402, 24.101, 28.402],
+    rotate: [0, -4.301, 0],
     times: [0, 0.5, 1],
-  };
-}
-
-function renderCenteredImageAtOrigin(assetName: FloatingPetAssetName, scale: FloatingPetLayerTransform["scale"], rotationDeg = 0) {
-  const size = resolveAssetSize(assetName, scale);
-
-  return (
-    <image
-      className={styles.svgAsset}
-      height={size.height}
-      href={floatingPetAssets[assetName]}
-      preserveAspectRatio="xMidYMid meet"
-      transform={rotationDeg === 0 ? undefined : `rotate(${rotationDeg} 0 0)`}
-      width={size.width}
-      x={-size.width / 2}
-      y={-size.height / 2}
-    />
-  );
-}
-
-function resolveLocalPivot(centerPosition: FloatingPetLayerTransform["position"], bonePosition: FloatingPetLayerTransform["position"]) {
-  return {
-    x: bonePosition.x - centerPosition.x,
-    y: bonePosition.y - centerPosition.y,
   };
 }
 
@@ -293,43 +269,6 @@ function interpolateKeyframeValue(values: number[], times: number[], progress: n
   return values[values.length - 1] ?? 0;
 }
 
-type BoneRotatedLayerProps = {
-  animatedRotate: number | number[];
-  assetName: FloatingPetAssetName;
-  bonePosition: FloatingPetLayerTransform["position"];
-  layer: FloatingPetLayerTransform;
-  repeat: number;
-  times: number[];
-  transitionDuration: number;
-};
-
-function BoneRotatedLayer({
-  animatedRotate,
-  assetName,
-  bonePosition,
-  layer,
-  repeat,
-  times,
-  transitionDuration,
-}: BoneRotatedLayerProps) {
-  const localPivot = resolveLocalPivot(layer.position, bonePosition);
-
-  return (
-    <g transform={`translate(${layer.position.x} ${layer.position.y})`}>
-      <g transform={`translate(${localPivot.x} ${localPivot.y})`}>
-        <motion.g
-          animate={{ rotate: animatedRotate }}
-          initial={false}
-          transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
-        >
-          <g transform={`translate(${-localPivot.x} ${-localPivot.y})`}>
-            {renderCenteredImageAtOrigin(assetName, layer.scale, layer.rotation)}
-          </g>
-        </motion.g>
-      </g>
-    </g>
-  );
-}
 
 function resolveOpenEyeAnimation(eyesClosed: boolean, mode: FloatingPetMode) {
   if (eyesClosed) {
@@ -379,6 +318,8 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
   const exitTimeoutRef = useRef<number | null>(null);
   const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
   const [leftWingDebugAngle, setLeftWingDebugAngle] = useState(0);
+  const [rightWingDebugAngle, setRightWingDebugAngle] = useState(0);
+  const [tailDebugAngle, setTailDebugAngle] = useState(0);
   const activeEffect = MODE_TO_EFFECT[mode] ?? null;
   const rootBodyMotion = useMemo(() => resolveRootBodyMotion(mode, listenLocked), [listenLocked, mode]);
   const wingMotion = useMemo(() => resolveWingMotion(mode, listenLocked), [listenLocked, mode]);
@@ -442,6 +383,58 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
     };
   }, [wingMotion.left.repeat, wingMotion.left.rotate]);
 
+  useEffect(() => {
+    const rotateValues = wingMotion.right.rotate;
+    const rotateTimes = rotateValues.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1];
+    const durationMs = FLOATING_PET_LOOP_DURATION_S * 1000;
+    const looping = wingMotion.right.repeat !== 0;
+    let frame = 0;
+    const startTime = performance.now();
+
+    const tick = (time: number) => {
+      const elapsed = time - startTime;
+      const progress = looping ? (elapsed % durationMs) / durationMs : Math.min(elapsed / durationMs, 1);
+
+      setRightWingDebugAngle(interpolateKeyframeValue(rotateValues, rotateTimes, progress));
+
+      if (looping || progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+      }
+    };
+
+    frame = window.requestAnimationFrame(tick);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [wingMotion.right.repeat, wingMotion.right.rotate]);
+
+  useEffect(() => {
+    const rotateValues = tailMotion.rotate;
+    const rotateTimes = tailMotion.times;
+    const durationMs = tailMotion.duration * 1000;
+    const looping = tailMotion.repeat !== 0;
+    let frame = 0;
+    const startTime = performance.now();
+
+    const tick = (time: number) => {
+      const elapsed = time - startTime;
+      const progress = looping ? (elapsed % durationMs) / durationMs : Math.min(elapsed / durationMs, 1);
+
+      setTailDebugAngle(interpolateKeyframeValue(rotateValues, rotateTimes, progress));
+
+      if (looping || progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+      }
+    };
+
+    frame = window.requestAnimationFrame(tick);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [tailMotion.duration, tailMotion.repeat, tailMotion.rotate, tailMotion.times]);
+
   return (
     <div className={cn(styles.root, className)} style={rootStyle}>
       <motion.svg className={styles.svgStage} initial={false} viewBox={`0 0 ${FLOATING_PET_STAGE_SIZE} ${FLOATING_PET_STAGE_SIZE}`} xmlns="http://www.w3.org/2000/svg">
@@ -451,36 +444,34 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
         </AnimatePresence>
 
         <motion.g animate={rootBodyMotion.animate} initial={false} transition={rootBodyMotion.transition}>
-          <BoneRotatedLayer
-            animatedRotate={tailMotion.rotate}
-            assetName="tail"
-            bonePosition={floatingPetInitialLayout.rootBody.tailBone.position}
-            layer={floatingPetInitialLayout.rootBody.tail}
-            repeat={tailMotion.repeat}
-            times={tailMotion.times}
-            transitionDuration={tailMotion.duration}
-          />
+          <g transform={`rotate(${tailDebugAngle} ${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}>
+            {renderCenteredImage(
+              "tail",
+              floatingPetInitialLayout.rootBody.tail,
+              //floatingPetInitialLayout.rootBody.tailBone.rotation + floatingPetInitialLayout.rootBody.tail.rotation
+              0
+            )}
+          </g>
 
           <g transform={`rotate(${leftWingDebugAngle} ${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}>
             {renderCenteredImage(
               "leftWing",
               floatingPetInitialLayout.rootBody.leftWing,
               //floatingPetInitialLayout.rootBody.leftBone.rotation + floatingPetInitialLayout.rootBody.leftWing.rotation
-              0
+              2
             )}
           </g>
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
-          <BoneRotatedLayer
-            animatedRotate={wingMotion.right.rotate}
-            assetName="rightWing"
-            bonePosition={floatingPetInitialLayout.rootBody.rightBone.position}
-            layer={floatingPetInitialLayout.rootBody.rightWing}
-            repeat={wingMotion.right.repeat}
-            times={wingMotion.right.rotate.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1]}
-            transitionDuration={FLOATING_PET_LOOP_DURATION_S}
-          />
+          <g transform={`rotate(${rightWingDebugAngle} ${floatingPetInitialLayout.rootBody.rightBone.position.x} ${floatingPetInitialLayout.rootBody.rightBone.position.y})`}>
+            {renderCenteredImage(
+              "rightWing",
+              floatingPetInitialLayout.rootBody.rightWing,
+              floatingPetInitialLayout.rootBody.rightBone.rotation + floatingPetInitialLayout.rootBody.rightWing.rotation
+              //0
+            )}
+          </g>
 
           <g transform={`translate(${floatingPetInitialLayout.rootBody.face.position.x} ${floatingPetInitialLayout.rootBody.face.position.y})`}>
             <g transform={`translate(${floatingPetInitialLayout.rootBody.cheek.position.x} ${floatingPetInitialLayout.rootBody.cheek.position.y})`}>
