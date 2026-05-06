@@ -3330,7 +3330,6 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	}
 	return result, nil
 }
-
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
@@ -3341,7 +3340,6 @@ func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []ma
 	}
 	return result, nil
 }
-
 func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
 	if s.err != nil {
 		return tools.BrowserStructuredDOMResult{}, s.err

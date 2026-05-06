@@ -410,6 +410,12 @@ func validateLoopbackEndpointURL(raw string) error {
 	if err != nil {
 		return fmt.Errorf("attach.endpoint_url must be a valid URL")
 	}
+	scheme := strings.TrimSpace(strings.ToLower(parsed.Scheme))
+	switch scheme {
+	case "http", "https", "ws", "wss":
+	default:
+		return fmt.Errorf("attach.endpoint_url must use http, https, ws, or wss")
+	}
 	hostname := strings.TrimSpace(strings.ToLower(parsed.Hostname()))
 	if hostname == "" {
 		return fmt.Errorf("attach.endpoint_url must include a host")
